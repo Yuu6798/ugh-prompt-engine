@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from voice_genesis.calibration import approvals, c0_freeze, c0_validate
+from voice_genesis.calibration.candidates import registry as candidate_registry
 from voice_genesis.calibration.splitter import realize_split, verify_split
 
 _REPO_ROOT = c0_freeze._REPO_ROOT
@@ -572,31 +573,33 @@ def test_detect_orphans_removes_leftover_marker_on_paired_dirs(tmp_path: Path) -
 
 
 def _write_valid_e_use_table(path: Path) -> None:
-    """A single UNJUSTIFIED row (no gate1 dependency at all)."""
+    """全 `(construct_id, unit, domain)` キーを 1 行ずつ UNJUSTIFIED（no gate1
+    dependency）でカバーする完全な E_use table（第 9 巡採用: `validate_e_use_table()`
+    のキー集合完全一致チェックにより、単一行の table はもはや『valid』では
+    ない — registry から機械導出した全キーを揃える）。"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            [
-                {
-                    "construct_id": "x",
-                    "unit": "hz",
-                    "domain": "d",
-                    "intended_use": "u",
-                    "maximum_claim": "m",
-                    "e_use_value": None,
-                    "derivation_rule": "r",
-                    "evidence_class": "UNJUSTIFIED",
-                    "source_id_or_url": "s",
-                    "source_checked_at": "t",
-                    "source_hash_or_version": "v",
-                    "applicability_argument": "a",
-                    "review_status": "r",
-                    "e_use_mode": "absolute",
-                }
-            ]
-        ),
-        encoding="utf-8",
-    )
+    rows = [
+        {
+            "construct_id": construct,
+            "unit": unit,
+            "domain": domain,
+            "intended_use": "u",
+            "maximum_claim": "m",
+            "e_use_value": None,
+            "derivation_rule": "r",
+            "evidence_class": "UNJUSTIFIED",
+            "source_id_or_url": "s",
+            "source_checked_at": "t",
+            "source_hash_or_version": "v",
+            "applicability_argument": "a",
+            "review_status": "r",
+            "e_use_mode": "absolute",
+        }
+        for construct, unit, domain in c0_freeze.e_use_table.unique_construct_unit_domain(
+            candidate_registry.ALL_CANDIDATES
+        )
+    ]
+    path.write_text(json.dumps(rows), encoding="utf-8")
 
 
 def _write_invalid_e_use_table(path: Path) -> None:
@@ -1154,6 +1157,59 @@ def test_armed_freeze_system_exit_on_first_rename_rolls_back_and_propagates(
     ]
     assert remaining_secret == []
     assert remaining_campaign == []
+
+
+def test_armed_freeze_keyboard_interrupt_before_first_rename_preserves_existing_campaign_dir(
+    tmp_path: Path, clean_checkout: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """第 9 巡改訂 regression guard: the `except BaseException` rollback must
+    remove only destinations *this call itself* published — never a
+    pre-existing, unrelated directory that happens to already sit at
+    `campaigns_dir/<campaign_id>` (e.g. left over from a previous, entirely
+    different run). Pre-seed such a directory, then inject `KeyboardInterrupt`
+    *before* the first `os.replace` call (secret-side) ever runs — since this
+    call never published anything, the pre-existing campaign dir must survive
+    completely untouched."""
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+
+    dry = c0_freeze.dry_run(_REPO_ROOT, approval_dir, env)
+    campaign_id = dry.campaign_id
+
+    campaigns_dir.mkdir(parents=True, exist_ok=True)
+    existing_campaign_dir = campaigns_dir / campaign_id
+    existing_campaign_dir.mkdir()
+    sentinel = existing_campaign_dir / "sentinel.txt"
+    sentinel.write_text("pre-existing, must survive", encoding="utf-8")
+
+    def always_raise(src: object, dst: object) -> None:
+        raise KeyboardInterrupt("injected interrupt before the first rename ever runs")
+
+    monkeypatch.setattr(c0_freeze.os, "replace", always_raise)
+
+    with pytest.raises(KeyboardInterrupt):
+        c0_freeze.armed_freeze(
+            _REPO_ROOT,
+            cli_armed=True,
+            env=env,
+            approval_dir=approval_dir,
+            secret_dir=secret_dir,
+            campaigns_dir=campaigns_dir,
+        )
+
+    # The pre-existing campaign dir (never touched by this call) must be
+    # completely untouched — the bug this guards against unconditionally
+    # `_rmtree_if_exists()`'d `campaign_final`/`secret_final` on any
+    # exception, which would have deleted it even though this call never
+    # renamed anything into it.
+    assert existing_campaign_dir.exists()
+    assert sentinel.exists()
+    assert sentinel.read_text(encoding="utf-8") == "pre-existing, must survive"
+    # No secret dir was ever published by this call either.
+    remaining_secret = [
+        p for p in (secret_dir.iterdir() if secret_dir.exists() else [])
+        if p.name != c0_freeze._PUBLISH_LOCK_NAME
+    ]
+    assert remaining_secret == []
 
 
 # ---------------------------------------------------------------------------

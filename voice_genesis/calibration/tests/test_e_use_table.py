@@ -31,6 +31,40 @@ def _unjustified_row(construct_id: str = "formant_frequency") -> EUseEvidenceRow
     )
 
 
+def _unjustified_row_for(construct_id: str, unit: str, domain: str) -> EUseEvidenceRow:
+    """`_unjustified_row()` の unit/domain も指定できる版（第 9 巡採用のキー
+    集合完全一致チェック向け: 特定の `(construct_id, unit, domain)` を持つ
+    baseline 行を組み立てるのに使う）。"""
+    return EUseEvidenceRow(
+        construct_id=construct_id,
+        unit=unit,
+        domain=domain,
+        intended_use="UNFILLED",
+        maximum_claim="UNFILLED",
+        e_use_value=None,
+        derivation_rule="UNFILLED",
+        evidence_class=EvidenceClass.UNJUSTIFIED,
+        source_id_or_url="UNFILLED",
+        source_checked_at="UNFILLED",
+        source_hash_or_version="UNFILLED",
+        applicability_argument="UNFILLED",
+        review_status="UNFILLED",
+    )
+
+
+def _full_unjustified_rows() -> list[EUseEvidenceRow]:
+    """`registry.ALL_CANDIDATES` が宣言する全 `(construct_id, unit, domain)`
+    キーを 1 行ずつ UNJUSTIFIED でカバーする baseline テーブル（第 9 巡採用の
+    キー集合完全一致チェックを満たす — 単一行の table はもはや『valid』では
+    ない）。"""
+    return [
+        _unjustified_row_for(construct, unit, domain)
+        for construct, unit, domain in e_use_table.unique_construct_unit_domain(
+            candidate_registry.ALL_CANDIDATES
+        )
+    ]
+
+
 def test_generate_template_has_no_numeric_e_use_placeholder(tmp_path: Path) -> None:
     path = tmp_path / "e_use_table.json"
     rows = e_use_table.generate_template(path, candidate_registry.ALL_CANDIDATES)
@@ -105,10 +139,18 @@ def test_unjustified_row_with_numeric_value_rejected_at_construction() -> None:
 
 
 def test_validate_e_use_table_flags_user_accepted_without_gate1() -> None:
-    row = EUseEvidenceRow(
-        construct_id="harmonic_to_noise_ratio",
-        unit="db",
-        domain="d",
+    """第 9 巡採用のキー集合完全一致チェックを満たすため、対象行以外は
+    `_full_unjustified_rows()` の baseline で埋め、対象キーの行だけ
+    `USER_ACCEPTED_USE_BOUND` に差し替える（この行単体の完全な `[]`
+    アサーションを保つには registry の全キーを揃える必要がある）。"""
+    rows = _full_unjustified_rows()
+    target_idx = next(
+        i for i, r in enumerate(rows) if r.construct_id == "harmonic_to_noise_ratio" and r.unit == "db"
+    )
+    accepted_row = EUseEvidenceRow(
+        construct_id=rows[target_idx].construct_id,
+        unit=rows[target_idx].unit,
+        domain=rows[target_idx].domain,
         intended_use="u",
         maximum_claim="DIRECTIONAL",
         e_use_value=2.0,
@@ -120,16 +162,33 @@ def test_validate_e_use_table_flags_user_accepted_without_gate1() -> None:
         applicability_argument="a",
         review_status="ACCEPTED",
     )
-    violations = e_use_table.validate_e_use_table([row], gate1_e_use_bound_accepted=False)
+    rows[target_idx] = accepted_row
+
+    violations = e_use_table.validate_e_use_table(rows, gate1_e_use_bound_accepted=False)
     assert any("USER_ACCEPTED_USE_BOUND" in v for v in violations)
 
-    violations_ok = e_use_table.validate_e_use_table([row], gate1_e_use_bound_accepted=True)
+    violations_ok = e_use_table.validate_e_use_table(rows, gate1_e_use_bound_accepted=True)
     assert violations_ok == []
 
 
 def test_validate_e_use_table_accepts_clean_unjustified_row() -> None:
+    """単一行だけでは（第 9 巡採用のキー集合完全一致チェックにより）もはや
+    『valid』にならない — `_full_unjustified_rows()` の完全な baseline で
+    アサーションする。単一行版の意図（clean UNJUSTIFIED 行に行単位の違反が
+    無いこと）は次のテストで別途カバーする。"""
+    rows = _full_unjustified_rows()
+    assert e_use_table.validate_e_use_table(rows, gate1_e_use_bound_accepted=False) == []
+
+
+def test_validate_e_use_table_clean_unjustified_row_has_no_row_level_violation() -> None:
+    """単一の clean UNJUSTIFIED 行には行単位の違反が出ない、という元の意図を
+    キー集合完全一致チェックと分離して確認する（完全一致由来の
+    missing/unexpected 違反が出ることは許容し、それら以外の violation が
+    無いことだけを見る）。"""
     row = _unjustified_row()
-    assert e_use_table.validate_e_use_table([row], gate1_e_use_bound_accepted=False) == []
+    violations = e_use_table.validate_e_use_table([row], gate1_e_use_bound_accepted=False)
+    assert not any("must have e_use_value=null" in v for v in violations)
+    assert not any("USER_ACCEPTED_USE_BOUND" in v for v in violations)
 
 
 def test_auto_ceiling_non_unjustified_row_returns_none() -> None:
@@ -232,3 +291,73 @@ def test_load_save_round_trip_preserves_e_use_mode(tmp_path: Path) -> None:
     loaded = e_use_table.load_e_use_table(path)
     assert loaded == rows
     assert loaded[1].e_use_mode == "relative"
+
+
+# ---------------------------------------------------------------------------
+# 第 9 巡採用 #1 — validate_e_use_table: (construct_id, unit, domain) キー
+# 集合が unique_construct_unit_domain(registry.ALL_CANDIDATES) と厳密一致する
+# ことを要求する（欠落/余剰/重複をそれぞれ個別の違反として列挙）
+# ---------------------------------------------------------------------------
+
+
+def test_repo_e_use_table_v1_key_set_matches_registry_exactly() -> None:
+    """`config/e_use_table_v1.json`（実運用テーブル）は現状のまま registry と
+    厳密一致し、キー集合完全一致チェックによる新規違反を一切出さないことを
+    確認する（第 9 巡指示: 通らなければ表を修正せず理由を報告する対象。実測は
+    通っている）。"""
+    repo_root = Path(__file__).resolve().parents[3]
+    table_path = repo_root / "voice_genesis" / "calibration" / "config" / "e_use_table_v1.json"
+    rows = e_use_table.load_e_use_table(table_path)
+    violations = e_use_table.validate_e_use_table(rows, gate1_e_use_bound_accepted=True)
+    key_set_violations = [
+        v for v in violations if v.startswith(("missing row", "unexpected row", "duplicate row"))
+    ]
+    assert key_set_violations == [], key_set_violations
+
+
+def test_validate_e_use_table_flags_one_missing_row() -> None:
+    rows = _full_unjustified_rows()
+    dropped = rows.pop()  # remove exactly one row -> exactly one missing-key violation
+    violations = e_use_table.validate_e_use_table(rows, gate1_e_use_bound_accepted=False)
+    missing = [v for v in violations if v.startswith("missing row")]
+    assert len(missing) == 1
+    assert dropped.construct_id in missing[0]
+    assert not any(v.startswith("unexpected row") for v in violations)
+    assert not any(v.startswith("duplicate row") for v in violations)
+
+
+def test_validate_e_use_table_flags_an_extra_row() -> None:
+    rows = _full_unjustified_rows()
+    # A (construct_id, unit, domain) triple no candidate in the registry declares.
+    rows.append(_unjustified_row_for("nonexistent_construct", "nonexistent_unit", "nonexistent_domain"))
+    violations = e_use_table.validate_e_use_table(rows, gate1_e_use_bound_accepted=False)
+    extra = [v for v in violations if v.startswith("unexpected row")]
+    assert len(extra) == 1
+    assert "nonexistent_construct" in extra[0]
+    assert not any(v.startswith("missing row") for v in violations)
+    assert not any(v.startswith("duplicate row") for v in violations)
+
+
+def test_validate_e_use_table_flags_a_duplicate_row() -> None:
+    rows = _full_unjustified_rows()
+    rows.append(_unjustified_row_for(rows[0].construct_id, rows[0].unit, rows[0].domain))
+    violations = e_use_table.validate_e_use_table(rows, gate1_e_use_bound_accepted=False)
+    duplicate = [v for v in violations if v.startswith("duplicate row")]
+    assert len(duplicate) == 1
+    assert rows[0].construct_id in duplicate[0]
+    assert "appears 2 times" in duplicate[0]
+    assert not any(v.startswith("missing row") for v in violations)
+    assert not any(v.startswith("unexpected row") for v in violations)
+
+
+def test_validate_e_use_table_key_set_violations_are_independent_of_each_other() -> None:
+    """欠落/余剰/重複が同時に発生しても、それぞれ個別の violation として
+    列挙される（互いに隠蔽しない）ことを確認する。"""
+    rows = _full_unjustified_rows()
+    rows.pop()  # missing
+    rows.append(_unjustified_row_for("x", "y", "z"))  # unexpected
+    rows.append(_unjustified_row_for(rows[0].construct_id, rows[0].unit, rows[0].domain))  # duplicate
+    violations = e_use_table.validate_e_use_table(rows, gate1_e_use_bound_accepted=False)
+    assert any(v.startswith("missing row") for v in violations)
+    assert any(v.startswith("unexpected row") for v in violations)
+    assert any(v.startswith("duplicate row") for v in violations)

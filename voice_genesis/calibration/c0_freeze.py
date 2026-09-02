@@ -1267,24 +1267,36 @@ def armed_freeze(
                 )
 
             (secret_staging / _PUBLISHING_MARKER_NAME).write_text("", encoding="utf-8")
+            # bug fix P2 #2 (第 9 巡改訂): track, per rename, whether *this*
+            # call is the one that actually published `secret_final`/
+            # `campaign_final` — the `except BaseException` handler below must
+            # roll back only destinations this invocation itself created,
+            # never a pre-existing (already-valid) campaign/secret dir that
+            # happens to share the same final path (e.g. `campaign_id`
+            # collides with something already published out-of-band). Without
+            # this tracking, an interrupt landing *before* either rename even
+            # ran would otherwise `_rmtree_if_exists()` — and delete — dirs
+            # this call never touched.
+            secret_final_published_by_this_call = False
+            campaign_final_published_by_this_call = False
             try:
-                # bug fix P2 #2: this outer `try`/`except BaseException` is the
-                # authoritative rollback for the publication transaction. The
-                # two `except OSError` clauses immediately below remain the
+                # This outer `try`/`except BaseException` is the authoritative
+                # rollback for the publication transaction. The two
+                # `except OSError` clauses immediately below remain the
                 # normal, expected-failure path (they return
                 # `PUBLICATION_FAILED` with a specific detail message and
                 # never reach the outer handler, since `return` inside a
                 # `try` does not raise). Anything else — most importantly
-                # `KeyboardInterrupt`/`SystemExit` landing between the
-                # secret-side rename and the campaign-side rename (or during
-                # the final marker cleanup) — used to bypass rollback
-                # entirely (only `OSError` was caught), which could leave a
-                # published secret dir with no matching campaign dir. The
-                # outer handler below restores "nothing published" for
-                # *every* exception type and then re-raises, so
-                # interrupts/exits still propagate.
+                # `KeyboardInterrupt`/`SystemExit` landing before/between the
+                # secret-side rename and the campaign-side rename — used to
+                # bypass rollback entirely (only `OSError` was caught), which
+                # could leave a published secret dir with no matching
+                # campaign dir. The outer handler below restores "nothing
+                # published *by this call*" for every exception type and then
+                # re-raises, so interrupts/exits still propagate.
                 try:
                     os.replace(str(secret_staging), str(secret_final))
+                    secret_final_published_by_this_call = True
                 except OSError as exc:
                     _rmtree_if_exists(secret_staging)
                     _rmtree_if_exists(campaign_staging)
@@ -1302,10 +1314,11 @@ def armed_freeze(
 
                 try:
                     os.replace(str(campaign_staging), str(campaign_final))
+                    campaign_final_published_by_this_call = True
                 except OSError as exc:
-                    # Secret already published; roll back to "nothing published"
-                    # so the two publications never disagree (no orphan secret
-                    # dir left behind).
+                    # Secret already published *by this call*; roll back to
+                    # "nothing published" so the two publications never
+                    # disagree (no orphan secret dir left behind).
                     _rmtree_if_exists(secret_final)
                     _rmtree_if_exists(campaign_staging)
                     return ArmedFreezeResult(
@@ -1326,13 +1339,26 @@ def armed_freeze(
                 if marker.exists():
                     marker.unlink()
             except BaseException:
-                # Restore "nothing published" regardless of which stage the
-                # exception landed in — `_rmtree_if_exists()` is a no-op for
-                # any path that was never created/renamed, so it is safe to
-                # attempt cleanup of all four candidate paths unconditionally.
-                _rmtree_if_exists(secret_final)
+                if campaign_final_published_by_this_call:
+                    # Both roots were fully, successfully published by *this*
+                    # call before the exception landed (e.g. during the
+                    # trailing marker cleanup) — that is a valid,
+                    # self-consistent publication. Undoing it would destroy a
+                    # real, already-verified publish just because a cosmetic
+                    # cleanup step was interrupted; leave it published (any
+                    # leftover marker is tidied up later by
+                    # `detect_orphans()`) and simply propagate.
+                    raise
+                if secret_final_published_by_this_call:
+                    # Secret published by this call, campaign not yet: a
+                    # genuine partial state — roll back the secret dir this
+                    # call itself just created (never a pre-existing one).
+                    _rmtree_if_exists(secret_final)
+                # Staging dirs are always created fresh by this call
+                # (`mkdir(..., exist_ok=False)` above), so removing them is
+                # always safe regardless of which stage the exception landed
+                # in.
                 _rmtree_if_exists(secret_staging)
-                _rmtree_if_exists(campaign_final)
                 _rmtree_if_exists(campaign_staging)
                 raise
 

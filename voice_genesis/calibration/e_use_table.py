@@ -18,7 +18,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from voice_genesis.calibration.candidates.registry import Candidate
+from voice_genesis.calibration.candidates.registry import ALL_CANDIDATES, Candidate
 from voice_genesis.calibration.gates import EUseEvidenceRow, auto_ceiling_for_unjustified
 from voice_genesis.calibration.vocab import ClaimCeiling, EvidenceClass
 
@@ -112,7 +112,7 @@ def validate_e_use_table(
     rows: Sequence[EUseEvidenceRow], *, gate1_e_use_bound_accepted: bool
 ) -> list[str]:
     """(1) 13 列 shape は `EUseEvidenceRow` 型そのものが保証する（load 時点で
-    fail-closed 済み）。ここでは残る 2 つの横断制約を検査する:
+    fail-closed 済み）。ここでは残る横断制約を検査する:
 
     - `evidence_class == UNJUSTIFIED` の行は `e_use_value is None`
       （`EUseEvidenceRow.__post_init__` が既に構築時点で enforce しているため、
@@ -121,6 +121,14 @@ def validate_e_use_table(
     - `evidence_class == USER_ACCEPTED_USE_BOUND` の行は Gate 1 承認の
       `e_use_bound_accepted=True` を伴わなければならない（設計正本 §10.2:
       「USER_ACCEPTED_USE_BOUND はユーザー判断1へ統合」）。
+    - （第 9 巡採用）表の `(construct_id, unit, domain)` キー集合は
+      `unique_construct_unit_domain(registry.ALL_CANDIDATES)`（現在の候補
+      registry から機械導出される期待キー集合）と **厳密に一致**しなければ
+      ならない。欠落キー（登録候補にはあるが表に無い）・余剰キー（表には
+      あるがどの登録候補にも対応しない）・重複キー（同一キーが複数行に
+      現れる）はそれぞれ個別の違反として列挙する。fail-closed: 候補の
+      追加/削除に E_use table の更新が追随していない状態を静かに見逃さない
+      （行単位の shape/evidence 検査だけでは検出できない）。
     """
     violations: list[str] = []
     for i, row in enumerate(rows):
@@ -134,6 +142,31 @@ def validate_e_use_table(
                 f"row[{i}] ({row.construct_id}): evidence_class=USER_ACCEPTED_USE_BOUND "
                 "requires Gate 1 approval e_use_bound_accepted=true"
             )
+
+    expected_key_set = set(unique_construct_unit_domain(ALL_CANDIDATES))
+    table_keys = [(row.construct_id, row.unit, row.domain) for row in rows]
+    table_key_set = set(table_keys)
+
+    for key in sorted(expected_key_set - table_key_set):
+        violations.append(
+            f"missing row for (construct_id, unit, domain)={key!r} "
+            "(declared by the candidates registry but absent from the E_use table)"
+        )
+    for key in sorted(table_key_set - expected_key_set):
+        violations.append(
+            f"unexpected row for (construct_id, unit, domain)={key!r} "
+            "(not declared by any candidate in the registry)"
+        )
+
+    key_counts: dict[tuple[str, str, str], int] = {}
+    for key in table_keys:
+        key_counts[key] = key_counts.get(key, 0) + 1
+    for key in sorted(k for k, count in key_counts.items() if count > 1):
+        violations.append(
+            f"duplicate row(s) for (construct_id, unit, domain)={key!r}: "
+            f"appears {key_counts[key]} times in the table (must appear exactly once)"
+        )
+
     return violations
 
 
