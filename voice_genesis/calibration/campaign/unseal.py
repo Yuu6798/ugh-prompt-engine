@@ -14,9 +14,11 @@ selection_rule_sha + selected_candidate_sha + selection_freeze_event_sha
    event（承認ファイルの content sha256 を記録）を **unseal より前に** 記帳
    する（memo §6.4「seal 保護水準の受容」承認）。
 3. `holdout_unseal` event を記帳する（`selection_freeze_event_sha` +
-   `selection_frozen` と同一の 4 前提 sha を copy）。これは
-   `provenance.Ledger.check_leakage` が使う暗号学的な unseal 境界そのもの
-   （`provenance._verified_holdout_unseal_seq`）を満たす。
+   `selection_frozen` と同一の 4 前提 sha を copy、加えて 2 の `gate3_accepted`
+   event を参照する `gate3_accepted_sha`）。これは `provenance.Ledger.check_leakage`
+   が使う暗号学的な unseal 境界そのもの（`provenance._verified_holdout_unseal_seq`）
+   を満たす — `gate3_accepted_sha` は round 22 採用（`UNDERSPEC-CAL-D50`）で検証側
+   （`_references_prior_gate3_acceptance`）が必須参照として要求するようになった。
 
 Gate 3 承認・5-sha いずれかが欠ければ `UnsealError` を送出し、ledger には
 何も追記しない（fail-closed。1 でも欠けた状態で部分的な event を残さない

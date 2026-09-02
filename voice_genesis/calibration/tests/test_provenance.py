@@ -489,12 +489,22 @@ def test_check_leakage_post_unseal_access_is_allowed(tmp_path) -> None:
         "selection_rule_sha": ledger.append({"kind": "selection_rule", "artifact_sha": "c" * 64}).entry_sha,
         "selected_candidate_sha": ledger.append({"kind": "selected_candidate", "artifact_sha": "d" * 64, "candidate_id": "candidate-test"}).entry_sha,
     }
+    gate3 = ledger.append(
+        {
+            "kind": "gate3_accepted",
+            "approval_content_sha256": "f" * 64,
+            "seal_protection_level_accepted": True,
+            "approver": "test-approver",
+            "approved_at_utc": "2026-09-02T00:00:00Z",
+        }
+    )
     frozen = ledger.append({"kind": "selection_frozen", **commitments})
     unseal = ledger.append(
         {
             "kind": "holdout_unseal",
             **commitments,
             "selection_freeze_event_sha": frozen.entry_sha,
+            "gate3_accepted_sha": gate3.entry_sha,
         }
     )
     ledger.append({"kind": "meter_call", "row_id": "holdout-1"})

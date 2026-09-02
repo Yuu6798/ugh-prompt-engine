@@ -233,10 +233,18 @@ class MalformedLedgerLine:
 class LeakageCheckResult:
     """`Ledger.check_leakage` の戻り値。`control_excluded_count` が非 0 なら
     control 共有契約（IMPLEMENTATION_MAP_v1.md §2.7）による除外が実際に
-    適用されたことを判別できる。"""
+    適用されたことを判別できる。
+
+    `reason`（round 22 ADOPT, `UNDERSPEC-CAL-D50`）: `blocked` は
+    `vocab.BlockedCode` の閉語彙（§3.3、事後追加禁止）に縛られるため、その
+    語彙を拡張せずに `BLOCKED_LEAKAGE` の内訳を区別する補助フィールド。既定は
+    `None`（従来どおりの汎用 `BLOCKED_LEAKAGE`）。`holdout_unseal` の選択チェーン
+    参照は正当だが Gate 3 参照（`gate3_accepted_sha`）の検証に失敗した場合のみ
+    `"UNSEAL_GATE3_UNVERIFIED"` を持つ。"""
 
     blocked: BlockedCode | None
     control_excluded_count: int
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -437,6 +445,15 @@ _UNSEAL_PREREQUISITE_KINDS: Mapping[str, str] = {
 }
 _UNSEAL_COMMITMENT_KEYS: tuple[str, ...] = tuple(_UNSEAL_PREREQUISITE_KINDS)
 
+#: round 22 ADOPT (`UNDERSPEC-CAL-D50`): `holdout_unseal` must also reference a
+#: prior chain-valid `gate3_accepted` event by entry-SHA (the same
+#: `gate3_accepted_sha` field `campaign/unseal.py` already emits). Before this,
+#: `_verified_holdout_unseal_seq` never inspected `gate3_accepted_sha` at all,
+#: so a crafted/legacy `holdout_unseal` row with correct selection-chain
+#: references but a missing or arbitrary Gate 3 reference was accepted as an
+#: authorized boundary by `Ledger.check_leakage`.
+_GATE3_ACCEPTED_KIND = "gate3_accepted"
+
 
 def _is_sha256_hex(value: object) -> bool:
     return (
@@ -469,6 +486,50 @@ def _valid_unseal_prerequisite_payload(
     return True
 
 
+def _valid_gate3_accepted_payload(payload: Mapping[str, Any]) -> bool:
+    """Validate the minimum frozen event envelope for the Gate 3 acceptance
+    event a `holdout_unseal` must reference (round 22 ADOPT, `UNDERSPEC-CAL-D50`).
+
+    Mirrors the schema `approvals._parse_gate3_payload` enforces on the
+    approval file and that `campaign.unseal.unseal_campaign` copies verbatim
+    into the `gate3_accepted` ledger event it emits: when
+    `seal_protection_level_accepted` is present it must be a bool, and
+    `unseal_campaign` never appends a `gate3_accepted` event unless that bool
+    is `True` (it raises `UnsealError` first). A row claiming `kind ==
+    "gate3_accepted"` with the field absent or not `True` therefore cannot be
+    a legitimately emitted acceptance and is rejected.
+    """
+    if payload.get("kind") != _GATE3_ACCEPTED_KIND:
+        return False
+    return payload.get("seal_protection_level_accepted") is True
+
+
+def _references_prior_gate3_acceptance(
+    payload: Mapping[str, Any],
+    prior_entries_by_sha: Mapping[str, LedgerEntry],
+) -> bool:
+    """Resolve `holdout_unseal.gate3_accepted_sha` to a prior chain-valid
+    `gate3_accepted` event (round 22 ADOPT, `UNDERSPEC-CAL-D50`).
+
+    `prior_entries_by_sha` is populated only from entries that precede the
+    `holdout_unseal` payload being validated (see `_verified_holdout_unseal_seq`),
+    so this simultaneously proves existence, ordering (the Gate 3 event must
+    appear *before* the unseal event), and cryptographic linkage into the
+    already-verified chain — the same mechanism `_references_prior_prerequisites`
+    uses for the four §7 selection prerequisites.
+    """
+    ref = payload.get("gate3_accepted_sha")
+    if not _is_sha256_hex(ref):
+        return False
+    prerequisite = prior_entries_by_sha.get(ref)
+    if prerequisite is None:
+        return False
+    prerequisite_payload = prerequisite.payload
+    if not isinstance(prerequisite_payload, Mapping):
+        return False
+    return _valid_gate3_accepted_payload(prerequisite_payload)
+
+
 def _references_prior_prerequisites(
     payload: Mapping[str, Any],
     prior_entries_by_sha: Mapping[str, LedgerEntry],
@@ -496,27 +557,41 @@ def _references_prior_prerequisites(
     return True
 
 
-def _verified_holdout_unseal_seq(ledger_entries: Sequence[LedgerEntry]) -> int | None:
-    """Return the first valid holdout-unseal boundary, or None fail-closed.
+def _verified_holdout_unseal_detail(
+    ledger_entries: Sequence[LedgerEntry],
+) -> tuple[int | None, bool]:
+    """Return `(verified_seq, gate3_candidate_unverified)`, fail-closed.
 
     A valid unseal is in a fully verified ledger chain and has the strict order:
-    four canonical prerequisite events -> `selection_frozen` -> `holdout_unseal`.
-    Both selection and unseal must carry the same four entry-SHA references, and
-    `holdout_unseal` must reference the prior selection event by entry SHA.  A
+    four canonical prerequisite events -> `selection_frozen` -> `holdout_unseal`,
+    with the `holdout_unseal` event additionally referencing a prior chain-valid
+    `gate3_accepted` event via `gate3_accepted_sha` (round 22 ADOPT,
+    `UNDERSPEC-CAL-D50`; see `_references_prior_gate3_acceptance`). Both
+    selection and unseal must carry the same four entry-SHA references, and
+    `holdout_unseal` must reference the prior selection event by entry SHA. A
     caller-supplied integer or four merely well-formed 64-hex strings can never
     create an unseal boundary.
+
+    `gate3_candidate_unverified` is `True` when a `holdout_unseal` event was
+    found whose selection-chain linkage (four prerequisites + commitment match
+    against a valid `selection_frozen`) was otherwise valid but whose Gate 3
+    reference failed verification — i.e. the sole reason no unseal boundary was
+    returned is the Gate 3 check. Callers use this to attach a distinct
+    fail-closed reason (`UNSEAL_GATE3_UNVERIFIED`) instead of the generic
+    `BLOCKED_LEAKAGE`.
     """
     prev_sha = GENESIS_PREV_SHA
     for expected_seq, entry in enumerate(ledger_entries):
         if entry.seq != expected_seq or entry.prev_sha != prev_sha:
-            return None
+            return None, False
         expected_sha = _entry_sha(entry.seq, entry.prev_sha, entry.payload)
         if entry.entry_sha != expected_sha:
-            return None
+            return None, False
         prev_sha = entry.entry_sha
 
     prior_entries_by_sha: dict[str, LedgerEntry] = {}
     frozen_by_sha: dict[str, Mapping[str, Any]] = {}
+    gate3_candidate_unverified = False
     for entry in ledger_entries:
         payload = entry.payload
         if not isinstance(payload, Mapping):
@@ -540,9 +615,22 @@ def _verified_holdout_unseal_seq(ledger_entries: Sequence[LedgerEntry]) -> int |
                         for key in _UNSEAL_COMMITMENT_KEYS
                     )
                 ):
-                    return entry.seq
+                    if _references_prior_gate3_acceptance(payload, prior_entries_by_sha):
+                        return entry.seq, False
+                    gate3_candidate_unverified = True
         prior_entries_by_sha[entry.entry_sha] = entry
-    return None
+    return None, gate3_candidate_unverified
+
+
+def _verified_holdout_unseal_seq(ledger_entries: Sequence[LedgerEntry]) -> int | None:
+    """Return the first valid holdout-unseal boundary, or None fail-closed.
+
+    Thin wrapper over `_verified_holdout_unseal_detail()` that drops the Gate 3
+    diagnostic flag; kept as a stable, narrowly-scoped entry point for callers
+    (and tests) that only need the verified sequence number.
+    """
+    verified_seq, _gate3_candidate_unverified = _verified_holdout_unseal_detail(ledger_entries)
+    return verified_seq
 
 
 def _verified_split_freeze_commitment(
@@ -848,8 +936,15 @@ class Ledger:
 
         The authoritative unseal boundary is derived from a cryptographically
         verified `holdout_unseal` ledger event with matching frozen prerequisite
-        references.  `unseal_seq` is retained only as an optional expected-sequence
-        assertion for compatibility; it can never grant access by itself.
+        references *and* a prior chain-valid `gate3_accepted` reference
+        (`gate3_accepted_sha`; round 22 ADOPT, `UNDERSPEC-CAL-D50`).  A
+        `holdout_unseal` row lacking a verifiable Gate 3 reference is not an
+        authorized boundary even if its selection-chain references are
+        otherwise valid, and `blocked=BLOCKED_LEAKAGE` results carry the
+        distinct `reason="UNSEAL_GATE3_UNVERIFIED"` in that case (see
+        `LeakageCheckResult`).  `unseal_seq` is retained only as an optional
+        expected-sequence assertion for compatibility; it can never grant
+        access by itself.
 
         The protected row set is derived only after four independent checks agree:
         (1) the verification rows contain the complete canonical frozen matrix row-id
@@ -860,9 +955,12 @@ class Ledger:
         can shrink the seal.  `holdout_row_ids` is only an equality assertion against
         the authenticated map.
         """
-        verified_unseal_seq = _verified_holdout_unseal_seq(ledger_entries)
+        verified_unseal_seq, gate3_candidate_unverified = _verified_holdout_unseal_detail(
+            ledger_entries
+        )
         if unseal_seq is not None and unseal_seq != verified_unseal_seq:
             verified_unseal_seq = None
+            gate3_candidate_unverified = False
 
         declared_holdout_set = set(holdout_row_ids)
         if (
@@ -998,5 +1096,6 @@ class Ledger:
                 return LeakageCheckResult(
                     blocked=BlockedCode.BLOCKED_LEAKAGE,
                     control_excluded_count=control_excluded_count,
+                    reason="UNSEAL_GATE3_UNVERIFIED" if gate3_candidate_unverified else None,
                 )
         return LeakageCheckResult(blocked=None, control_excluded_count=control_excluded_count)
