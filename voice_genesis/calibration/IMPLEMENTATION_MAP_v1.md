@@ -382,6 +382,12 @@ round 13/14 の duplicate-key 再構成 fail-closed（`StaleMeasurementError` �
 ような呼び出し方の下では、照合後にファイルが書き換わってもプロセスが
 再 import しない限り検出できない）。
 
+**変更禁止の運用契約**（round 18 finding 2 件見送り・境界宣言。
+`[UNDERSPEC-CAL-D41]`/`[UNDERSPEC-CAL-D42]`、README 参照）: armed stage の実行中は
+checkout（凍結済み generator/candidate ファイル）も campaign dir 配下の artifact
+（render 済み PCM 等）も一切変更してはならない。canonical な変更は新規 campaign を
+要する。
+
 - 手続 Gate 単位のサブコマンド: `c1-fixtures`（**calibration + selection split の行と
   negative control 行のみ** render + determinism 検査（同部分集合）+ ledger。**negative
   control 行の render 済み artifact は sha256 で ledger へ pin し、`c4-holdout` 段では
