@@ -17,6 +17,8 @@ from voice_genesis.calibration.campaign.caps import (
     CapCounters,
     CostCapExceededError,
     CountersCorruptError,
+    cap_counters_from_ledger,
+    cost_caps_from_manifest,
     counters_path,
     save_cap_counters,
 )
@@ -800,6 +802,101 @@ def test_canonical_path_mismatch_refuses_every_mutating_subcommand(
     assert any(e.get("reason") == "BLOCKED_CANONICAL_MUTATION_REQUIRED" for e in stop_events)
 
 
+# ---------------------------------------------------------------------------
+# round 17 finding #2 (`[UNDERSPEC-CAL-D38]`): environment drift refusal
+# ---------------------------------------------------------------------------
+
+
+def _current_dependencies_manifest_section() -> dict[str, str]:
+    import platform as _platform
+    from importlib import metadata as _importlib_metadata
+
+    section = {"python_version": _platform.python_version()}
+    for key, package_name in cli._DEPENDENCY_PACKAGE_BY_MANIFEST_KEY.items():
+        try:
+            section[key] = _importlib_metadata.version(package_name)
+        except _importlib_metadata.PackageNotFoundError:
+            section[key] = "ABSENT:not_installed"
+    return section
+
+
+def test_environment_drift_violations_empty_when_no_dependencies_section() -> None:
+    """`build_tiny_campaign()`'s default fixture manifest carries no
+    `dependencies` key at all — this must not be treated as a mismatch
+    (that would spuriously block every existing CLI unit test)."""
+    campaign = type("_C", (), {"manifest": {}})()
+    assert cli._environment_drift_violations(campaign) == ()
+
+
+def test_environment_drift_violations_empty_when_manifest_matches_runtime() -> None:
+    campaign = type(
+        "_C", (), {"manifest": {"dependencies": _current_dependencies_manifest_section()}}
+    )()
+    assert cli._environment_drift_violations(campaign) == ()
+
+
+def test_environment_drift_violations_detects_python_and_package_mismatch() -> None:
+    dependencies = _current_dependencies_manifest_section()
+    dependencies["python_version"] = "0.0.0"
+    dependencies["numpy_version"] = "0.0.0"
+    campaign = type("_C", (), {"manifest": {"dependencies": dependencies}})()
+    violations = cli._environment_drift_violations(campaign)
+    assert any(v.startswith("python_version: manifest=0.0.0") for v in violations)
+    assert any(v.startswith("numpy_version: manifest=0.0.0") for v in violations)
+    # untouched deps must not spuriously appear.
+    assert not any(v.startswith("scipy_version") for v in violations)
+
+
+def test_environment_drift_armed_dispatch_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dependencies = _current_dependencies_manifest_section()
+    dependencies["numpy_version"] = "0.0.0-drifted"
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, dependencies=dependencies)
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    exit_code = cli.main(
+        [
+            "c1-fixtures",
+            "--campaign-dir",
+            str(campaign_dir),
+            "--secret-dir",
+            str(secret_root),
+            "--approval-dir",
+            str(approval_dir),
+            "--armed",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert '"result": "BLOCKED_ENVIRONMENT_DRIFT"' in out
+    assert "numpy_version" in out
+
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    stop_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "stop_event"
+    ]
+    assert any(e.get("reason") == "BLOCKED_ENVIRONMENT_DRIFT" for e in stop_events)
+
+
+def test_environment_drift_matching_dependencies_is_not_blocked(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """対照実験: 実行環境と一致する `dependencies` は block しない（過剰検出で
+    ないことの確認）。unarmed `plan` は drift 無しを報告する。"""
+    dependencies = _current_dependencies_manifest_section()
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, dependencies=dependencies)
+
+    plan_exit = cli.main(
+        ["plan", "--campaign-dir", str(campaign_dir), "--secret-dir", str(secret_root)]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert plan_exit == 0
+    assert out["environment_drift"] == []
+
+
 @pytest.mark.slow
 def test_canonical_path_match_is_not_blocked(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
@@ -1340,3 +1437,51 @@ def test_close_post_close_residual_breach_still_records_close_but_fails(
     assert len(stop_events) == 1
     assert stop_events[0].get("reason") == "COST_CAP_EXCEEDED"
     assert stop_events[0].get("post_close_breach") is True
+
+
+def test_close_stage_summary_records_full_dispatch_cpu_across_checkpoint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 17 finding #3 (`[UNDERSPEC-CAL-D39]`): extends the round 15/16
+    persisted-vs-ledger-derived equality check (see
+    `test_parent_cpu_charged_and_persisted_on_normal_dispatch_exit`) to a
+    stage with a mid-dispatch checkpoint (`close`, via
+    `_checkpoint_parent_cpu_before_transition()`). Before this fix, the
+    `stage_summary` ledger event recorded only the post-checkpoint residual,
+    so `cap_counters_from_ledger()` under-counted relative to the persisted
+    `counters.json` cache by exactly the checkpoint's own delta."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    _seed_closable_holdout(campaign)
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    # call 1: dispatch-start parent_cpu_t0 = 0.0. call 2: the pre-transition
+    # checkpoint inside `_run_close` (before `campaign_closed` is appended)
+    # = 3.0 (checkpoint delta = 3.0). call 3: the `finally` block's residual
+    # charge = 5.0 (residual = 2.0). Full dispatch delta = 5.0.
+    monkeypatch.setattr(cli, "_process_cpu_seconds", _fake_clock([0.0, 3.0, 5.0]))
+
+    exit_code = cli.main(_armed_close_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+
+    persisted = json.loads(counters_path(campaign_dir).read_text(encoding="utf-8"))
+    assert persisted["compute_used"] == pytest.approx(5.0)
+
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    stage_summaries = [
+        e.payload
+        for e in reloaded.ledger.entries
+        if isinstance(e.payload, dict) and e.payload.get("kind") == "stage_summary"
+    ]
+    assert len(stage_summaries) == 1
+    # the FULL dispatch delta (checkpoint delta + residual), not just the
+    # 2.0 post-checkpoint residual.
+    assert stage_summaries[0]["parent_cpu_seconds"] == pytest.approx(5.0)
+
+    cost_caps_obj = cost_caps_from_manifest(reloaded.manifest)
+    derived = cap_counters_from_ledger(reloaded.ledger.entries, cost_caps_obj)
+    assert derived.compute_used == pytest.approx(persisted["compute_used"])

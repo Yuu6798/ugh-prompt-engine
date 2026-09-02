@@ -286,9 +286,10 @@ def truth_value_for_row(row: FixtureRow) -> float | None:
 # ---------------------------------------------------------------------------
 
 #: fail filter 名の閉集合（`candidates.adapter` の 5 種、設計正本 §8、+
-#: `candidate_fail_filter_report()` 自身が定義する `positive_rows_absent`
-#: の計 6 種）。`candidate_fail_filter_report()` が返す dict のキーと
-#: 1:1 対応する。
+#: `candidate_fail_filter_report()` 自身が定義する `positive_rows_absent`/
+#: `negative_controls_incomplete` の計 7 種。round 17 finding #1 採用で
+#: `negative_controls_incomplete` を追加）。`candidate_fail_filter_report()`
+#: が返す dict のキーと 1:1 対応する。
 FAIL_FILTER_NAMES: tuple[str, ...] = (
     "schema_violation",
     "unexplained_nonfinite",
@@ -296,6 +297,7 @@ FAIL_FILTER_NAMES: tuple[str, ...] = (
     "negative_control_false_fire",
     "positive_control_non_fire",
     "positive_rows_absent",
+    "negative_controls_incomplete",
 )
 
 
@@ -324,7 +326,7 @@ def candidate_fail_filter_report(
     """finding #8: `candidates.adapter` の共通 5 fail filter（schema 違反 /
     無説明非有限 / within-process と fresh-process の不一致 / negative
     control 偽検出 / positive control 不発火）を `candidate` の全 record へ
-    適用し、`{filter_name: 発火したか}` を返す（`FAIL_FILTER_NAMES` の 6 キー
+    適用し、`{filter_name: 発火したか}` を返す（`FAIL_FILTER_NAMES` の 7 キー
     すべてを必ず持つ）。`eligible_after_fail_filters()` と組み合わせて使う。
 
     `negative_control_row_ids`/`positive_control_row_ids` が空（対象 family
@@ -343,6 +345,19 @@ def candidate_fail_filter_report(
     split に home split を持たない、または record 収集が不完全）。これを
     黙って non-failure 扱いすると fail-open になるため、`positive_rows_absent`
     filter として別途発火させ ineligible にする（`[UNDERSPEC-CAL-D25]`）。
+
+    round 17 finding #1 採用: 負 control 側にも同型の欠陥があった —
+    `negative_control_row_ids` **引数自体が非空**（呼び出し側は family の
+    negative control 母集団を宣言した）にもかかわらず、宣言された行の一部
+    または全部に `records` 側の該当 record が無い場合（例: home split が
+    CALIBRATION/HOLDOUT で当該 instance が測定対象集合から漏れていた —
+    round 17 finding #1 が `workunits.c3a_f0_selection_instances`/
+    `c3b_family_selection_instances` 側で修正済み）、旧実装は
+    `neg_detections` が単に空または部分集合になるだけで `negative_control_false_fire`
+    が発火せず「偽検出なし」と誤判定していた（fail-open）。`positive_rows_absent`
+    を鏡写しし、宣言された negative control 行のうち 1 件でも record を
+    欠けば `negative_controls_incomplete` を発火させ ineligible にする
+    （`[UNDERSPEC-CAL-D37]`）。
     """
     own_records = [r for r in records if r.candidate_id == candidate.candidate_id]
 
@@ -378,6 +393,16 @@ def candidate_fail_filter_report(
     # yields zero matching records is a failure, not "not applicable" — see
     # the docstring section above (`[UNDERSPEC-CAL-D25]`).
     positive_rows_absent = bool(positive_control_row_ids) and not pos_detections
+    # round 17 finding #1 (mirrors round 13 finding #1 on the negative side,
+    # `[UNDERSPEC-CAL-D37]`): a *declared* (non-empty) negative-control
+    # population must have a record for *every* declared row, not merely a
+    # non-empty intersection — a partial population (some declared rows
+    # missing) silently under-counts `neg_detections` and can hide a false
+    # fire that only occurs on the missing row.
+    seen_negative_row_ids = {r.row_id for r in own_records if r.row_id in negative_control_row_ids}
+    negative_controls_incomplete = bool(negative_control_row_ids) and not (
+        negative_control_row_ids <= seen_negative_row_ids
+    )
 
     return {
         "schema_violation": schema_violated,
@@ -386,12 +411,13 @@ def candidate_fail_filter_report(
         "negative_control_false_fire": neg_fire,
         "positive_control_non_fire": pos_non_fire,
         "positive_rows_absent": positive_rows_absent,
+        "negative_controls_incomplete": negative_controls_incomplete,
     }
 
 
 def eligible_after_fail_filters(report: Mapping[str, bool]) -> bool:
     """`candidate_fail_filter_report()` の戻り値から eligibility を導出する:
-    6 filter のいずれか 1 つでも発火（True）していれば ineligible。"""
+    7 filter のいずれか 1 つでも発火（True）していれば ineligible。"""
     return not any(report.get(name, False) for name in FAIL_FILTER_NAMES)
 
 

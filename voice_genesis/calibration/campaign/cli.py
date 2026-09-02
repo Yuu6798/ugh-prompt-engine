@@ -13,8 +13,8 @@
 検査しない — 「まだ実行するつもりがない」ことを表明する経路であり拒否理由の
 提示は不要なため）。
 
-三要素武装が揃った後、キャンペーンを読み込んでからさらに 3 段の fail-closed
-検査を通す（第 8/9 巡採用）:
+三要素武装が揃った後、キャンペーンを読み込んでからさらに 4 段の fail-closed
+検査を通す（第 8/9/17 巡採用）:
 
 - **canonical path 照合**（`_canonical_path_violations`。finding #7,
   第 9 巡採用）: 凍結 manifest の `candidates.{meter,generator,schema,
@@ -33,7 +33,22 @@
   実際に保証するのは「照合が通らない限り、それらのモジュールが提供する
   **実行時の測定・生成ロジックを呼び出さない**」こと（`build_matrix()`
   呼び出し・stage dispatch は本照合の後に置く）である
-  （`[UNDERSPEC-CAL-D23]`）。
+  （`[UNDERSPEC-CAL-D23]`）。**運用契約**（round 17 finding #4 見送り・境界
+  宣言、`[UNDERSPEC-CAL-D40]`）: 本照合が意味を持つのは「stage 呼び出し毎に
+  新規 `python -m voice_genesis.calibration.campaign` プロセスを起動し、
+  各プロセスがディスクから再 import する」運用を前提とした場合のみ
+  （プロセス起動時にこの照合が走ってから import 済みモジュールを使う）。
+  同一プロセス内で長時間 `main()` を繰り返し呼ぶ・モジュールを再利用する
+  形の呼び出し方は本契約の対象外。
+- **environment drift 照合**（`_environment_drift_violations`。round 17
+  finding #2 採用）: 凍結 manifest の `dependencies.{python,numpy,scipy,
+  librosa,soundfile,pyworld}_version` を、現在の実行環境から
+  `importlib.metadata.version()`/`platform.python_version()` で再取得した
+  値と照合する。1 件でも不一致があれば `BLOCKED_ENVIRONMENT_DRIFT`
+  （`vocab.BlockedCode` の閉語彙とは別軸。定義は `ENVIRONMENT_DRIFT_CODE`
+  参照）ledger `stop_event` を記帳し fail-closed 終了する。`plan`
+  （unarmed）はこの照合結果を `environment_drift` キーで報告のみ行い
+  block しない。
 - **Gate 1 承認の凍結 manifest への束縛**（`_gate1_frozen_binding_violation`）:
   現在ロードした Gate 1 承認ファイルの content sha256 / `authorization_nonce`
   が、このキャンペーンを凍結した時点で manifest に刻まれた
@@ -61,8 +76,10 @@ import dataclasses
 import hashlib
 import json
 import os
+import platform
 import resource
 import sys
+from importlib import metadata as importlib_metadata
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -231,7 +248,77 @@ def build_plan_report(
     }
     if stage is not None:
         report["stage"] = stage
+    # round 17 finding #2 (採用): `plan`（unarmed）は drift を報告のみ行い
+    # block しない — armed dispatch のみが `main()` 内の
+    # `_environment_drift_violations()` チェックで fail-closed に拒否する。
+    environment_violations = _environment_drift_violations(campaign)
+    report["environment_drift"] = list(environment_violations)
     return report
+
+
+# ---------------------------------------------------------------------------
+# environment drift 照合（round 17 finding #2 採用）
+# ---------------------------------------------------------------------------
+
+#: `manifest["dependencies"]`（`c0_freeze._dependencies_section()` が書き込む
+#: キー）のうち、実行時に `importlib.metadata.version()` で再取得・比較できる
+#: フィールド（key -> package name）。`pyworld_wheel_hash` はこの環境からは
+#: 安価に再取得できない wheel バイト列ハッシュ（`c0_freeze.
+#: _pyworld_dependency_fields()` docstring 参照）のため比較対象から除外する。
+_DEPENDENCY_PACKAGE_BY_MANIFEST_KEY: dict[str, str] = {
+    "numpy_version": "numpy",
+    "scipy_version": "scipy",
+    "librosa_version": "librosa",
+    "soundfile_version": "soundfile",
+    "pyworld_version": "pyworld",
+}
+
+#: `BLOCKED_ENVIRONMENT_DRIFT` は `vocab.BlockedCode`（設計正本 §3.3 の閉
+#: 語彙。C0 で列挙済み・事後追加禁止、`tests/test_vocab.py::
+#: test_blocked_code_closed_vocab` が `len(BlockedCode) == 6` で enforce）
+#: には **含めない** — `AUTHORIZATION_REQUIRED`/`PHASE_ORDER_VIOLATION`/
+#: `BUDGET_ACCOUNTING_UNDECLARED`/`COUNTERS_CORRUPT` と同様、閉語彙とは別軸の
+#: pre-dispatch 拒否コードとして扱う（IMPLEMENTATION_MAP_v1.md §6.1 の
+#: `AUTHORIZATION_REQUIRED` 注記と同型）。
+ENVIRONMENT_DRIFT_CODE = "BLOCKED_ENVIRONMENT_DRIFT"
+
+
+def _current_dependency_value(package_name: str) -> str:
+    try:
+        return importlib_metadata.version(package_name)
+    except importlib_metadata.PackageNotFoundError:
+        # `c0_freeze._pyworld_dependency_fields()` と同じ ABSENT 記法。
+        return "ABSENT:not_installed"
+
+
+def _environment_drift_violations(campaign: FrozenCampaign) -> tuple[str, ...]:
+    """round 17 finding #2（採用）: dispatch 前に、凍結 manifest
+    `manifest["dependencies"]`（Python 本体 + numpy/scipy/librosa/soundfile/
+    pyworld の各バージョン）を現在の実行環境から再取得した値と照合する。
+    不一致項目 1 件につき `"<key>: manifest=<frozen> runtime=<current>"`
+    形式の 1 行を返す（全て一致すれば空 tuple）。`manifest["dependencies"]`
+    が無い（想定外の manifest 形状）場合は照合不能として空 tuple を返す —
+    本検査は dependencies セクションの記録形式そのものの欠落までは扱わない
+    （それは `c0_validate` の REQUIRED_MANIFEST_KEYS が別途担当する）。
+    比較対象パッケージの選定・ABSENT 記法・`vocab.BlockedCode` の閉語彙に
+    含めない設計判断は `[UNDERSPEC-CAL-D38]`。"""
+    dependencies = campaign.manifest.get("dependencies")
+    if not isinstance(dependencies, Mapping):
+        return ()
+    violations: list[str] = []
+    frozen_python = dependencies.get("python_version")
+    if isinstance(frozen_python, str):
+        current_python = platform.python_version()
+        if current_python != frozen_python:
+            violations.append(f"python_version: manifest={frozen_python} runtime={current_python}")
+    for key, package_name in _DEPENDENCY_PACKAGE_BY_MANIFEST_KEY.items():
+        frozen_value = dependencies.get(key)
+        if not isinstance(frozen_value, str):
+            continue
+        current_value = _current_dependency_value(package_name)
+        if current_value != frozen_value:
+            violations.append(f"{key}: manifest={frozen_value} runtime={current_value}")
+    return tuple(violations)
 
 
 # ---------------------------------------------------------------------------
@@ -574,7 +661,15 @@ def _run_c3a(
         cap_counters=cap_counters,
         cost_caps=cost_caps,
     )
-    neg_ids = negative_control_row_ids(matrix_rows)
+    # round 17 finding #1: scope the declared negative-control population to
+    # F0_CONTROL's own rows, matching c3b's per-family scoping below — the
+    # unscoped full-matrix set previously "declared" every family's negative
+    # controls to the F0_CONTROL candidate, which the new
+    # `negative_controls_incomplete` completeness check would then always
+    # fail (F0_CONTROL's C3a instance set never includes other families'
+    # control rows).
+    f0_rows = [mr for mr in matrix_rows if mr.row.family == FixtureFamily.F0_CONTROL.value]
+    neg_ids = negative_control_row_ids(f0_rows)
     pos_ids = _positive_row_ids_for_selection(
         matrix_rows, assignment, FixtureFamily.F0_CONTROL.value
     )
@@ -1248,6 +1343,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
+    # round 17 finding #2 (採用): the frozen Python/dependency versions
+    # recorded at freeze time (`manifest["dependencies"]`) must still match
+    # the runtime environment before any stage dispatch — a silent version
+    # drift (e.g. a different librosa/numpy build) could change meter output
+    # without leaving any other trace. Placed right after the canonical path
+    # check: both are pre-dispatch integrity checks over `campaign.manifest`.
+    environment_violations = _environment_drift_violations(campaign)
+    if environment_violations:
+        campaign.ledger.append(
+            {
+                "kind": "stop_event",
+                "reason": ENVIRONMENT_DRIFT_CODE,
+                "differences": list(environment_violations),
+            }
+        )
+        _print(
+            {
+                "result": ENVIRONMENT_DRIFT_CODE,
+                "differences": list(environment_violations),
+            }
+        )
+        return 1
+
     # finding #5: the 3-factor arming above proves *a* valid, currently-armed
     # Gate 1 approval exists — it does not prove it is the *same* approval
     # this campaign was frozen against. Bind it explicitly.
@@ -1388,16 +1506,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:  # pragma: no cover - argparse choices already constrains this
             out = {"result": "ERROR", "detail": f"unknown subcommand {args.subcommand!r}"}
     finally:
-        parent_cpu_seconds = _process_cpu_seconds() - parent_cpu_checkpoint[0]
-        if parent_cpu_seconds < 0.0:  # pragma: no cover - defensive only
-            parent_cpu_seconds = 0.0
-        cap_counters.add(compute=parent_cpu_seconds)
+        # round 17 finding #3 (採用, `[UNDERSPEC-CAL-D39]`): `cap_counters`
+        # (persisted `counters.json`) must be charged only the *residual*
+        # CPU since the last mid-stage checkpoint — the checkpoint delta(s)
+        # were already added to `cap_counters` in-memory by
+        # `_checkpoint_parent_cpu_before_transition()` — but the
+        # `stage_summary` *ledger* event must record the FULL dispatch
+        # parent-CPU delta (pre-transition checkpoint delta(s) + this
+        # residual), because `_checkpoint_parent_cpu_before_transition()`
+        # itself appends no ledger event of its own for the CPU it charges.
+        # Recording only the residual here (the pre-round-17 behaviour) made
+        # `cap_counters_from_ledger()` permanently under-count relative to
+        # the persisted cache for any stage that checkpoints mid-dispatch
+        # (`c3a`/`c3b`/`c4`/`close`) — the checkpoint delta was charged to
+        # `counters.json` but never appeared anywhere in the ledger.
+        now_cpu = _process_cpu_seconds()
+        residual_cpu_seconds = now_cpu - parent_cpu_checkpoint[0]
+        if residual_cpu_seconds < 0.0:  # pragma: no cover - defensive only
+            residual_cpu_seconds = 0.0
+        cap_counters.add(compute=residual_cpu_seconds)
         save_cap_counters(campaign.campaign_dir, cap_counters)
+        full_dispatch_parent_cpu_seconds = now_cpu - parent_cpu_t0
+        if full_dispatch_parent_cpu_seconds < 0.0:  # pragma: no cover - defensive only
+            full_dispatch_parent_cpu_seconds = 0.0
         campaign.ledger.append(
             {
                 "kind": "stage_summary",
                 "stage": args.subcommand,
-                "parent_cpu_seconds": parent_cpu_seconds,
+                "parent_cpu_seconds": full_dispatch_parent_cpu_seconds,
             }
         )
         # round 16 finding #2 (`[UNDERSPEC-CAL-D34]`) — the base fix:

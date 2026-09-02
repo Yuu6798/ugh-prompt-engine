@@ -13,9 +13,16 @@ stage 別集合（§6.4 render 会計 union 式・§9 selection 実行範囲）:
   済みの artifact を再利用し再 render しない）
 - C2 baseline = CALIBRATION split の全 instance（B0 は診断参照であり control
   除外の対象ではない）
-- C3a (F0 selection) = F0_CONTROL family の SELECTION split instance
-- C3b (他 family selection) = 各 family の SELECTION split instance
-  （F0_CONTROL を除く。§9「selection は各候補 × 自 family selection 行のみ」）
+- C3a (F0 selection) = F0_CONTROL family の SELECTION split instance ∪
+  F0_CONTROL family の**全** negative control instance（home split に依らない。
+  round 17 finding #1 採用、§2.7 control 共有契約）
+- C3b (他 family selection) = 各 family の SELECTION split instance ∪
+  当該 family の**全** negative control instance（home split に依らない）
+  （F0_CONTROL を除く。§9「selection は各候補 × 自 family selection 行のみ」。
+  round 17 finding #1 採用: selection 行のみでは HOLDOUT/CALIBRATION に home
+  する negative control が C3 で測定されず fail filter の判定材料から漏れて
+  いたため、C1 で「全 control」としてすでに render 済みの negative control
+  instance を測定対象へ合流させる）
 
 `plan_counts()` は §6/§14 の設計値（instances 2,280 / renders 4,560 /
 meter calls 13,680 per implementation）を実 matrix 定数から再導出し、
@@ -28,7 +35,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from voice_genesis.calibration.fixtures.axes import FixtureFamily, TOTAL_LOGICAL_CELLS
-from voice_genesis.calibration.fixtures.controls import PROBE_REPEATS, control_row_ids
+from voice_genesis.calibration.fixtures.controls import (
+    PROBE_REPEATS,
+    control_row_ids,
+    negative_control_instances,
+)
 from voice_genesis.calibration.fixtures.matrix import MatrixRow
 from voice_genesis.calibration.vocab import Split
 
@@ -140,19 +151,29 @@ def c2_baseline_instances(
 def c3a_f0_selection_instances(
     matrix_rows: Sequence[MatrixRow], assignment: Mapping[str, Split]
 ) -> tuple[Instance, ...]:
-    """C3a = F0_CONTROL family の SELECTION split instance。"""
-    return _instances_for(
+    """C3a = F0_CONTROL family の SELECTION split instance ∪ F0_CONTROL family
+    の全 negative control instance（round 17 finding #1 採用: home split が
+    CALIBRATION/HOLDOUT の negative control も §2.7 control 共有契約により C3a
+    の測定・fail filter 対象に含める。これらは C1 で「全 control」として
+    render 済みのため追加 render は発生しない）。"""
+    selection = _instances_for(
         matrix_rows, assignment, split=Split.SELECTION, family=FixtureFamily.F0_CONTROL.value
     )
+    controls = negative_control_instances(matrix_rows, family=FixtureFamily.F0_CONTROL.value)
+    return tuple(sorted(set(selection) | controls))
 
 
 def c3b_family_selection_instances(
     matrix_rows: Sequence[MatrixRow], assignment: Mapping[str, Split], family: str
 ) -> tuple[Instance, ...]:
-    """C3b = 指定 family（F0_CONTROL を除く）の SELECTION split instance。"""
+    """C3b = 指定 family（F0_CONTROL を除く）の SELECTION split instance ∪
+    当該 family の全 negative control instance（round 17 finding #1 採用。
+    c3a と同じ理由 — §2.7 control 共有契約・C1 で render 済み）。"""
     if family == FixtureFamily.F0_CONTROL.value:
         raise ValueError("c3b_family_selection_instances: F0_CONTROL uses c3a, not c3b")
-    return _instances_for(matrix_rows, assignment, split=Split.SELECTION, family=family)
+    selection = _instances_for(matrix_rows, assignment, split=Split.SELECTION, family=family)
+    controls = negative_control_instances(matrix_rows, family=family)
+    return tuple(sorted(set(selection) | controls))
 
 
 def c4_holdout_instances(

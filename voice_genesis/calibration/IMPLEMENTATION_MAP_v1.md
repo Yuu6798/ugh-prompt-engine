@@ -371,6 +371,17 @@ round 13/14 の duplicate-key 再構成 fail-closed（`StaleMeasurementError` �
 `[UNDERSPEC-CAL-D31]`（round 15 finding #3。counters を ledger 由来に束縛）により
 過小計上を防ぐ形で運用契約違反を検出する）。
 
+**プロセス境界の運用契約**（round 17 finding #4 見送り・境界宣言。
+`[UNDERSPEC-CAL-D40]`、README 参照）: `cli.py` の canonical path 照合
+（`_canonical_path_violations`。§6.4 上記の finding #7）が保証するのは
+「stage 呼び出しごとに新規 `python -m voice_genesis.calibration.campaign`
+プロセスを起動し、各プロセスが自身の起動時に path-hash 照合を実行してから
+（同一プロセス内で既に import 済みの）モジュールを使う」運用を前提とした
+場合に限る。in-process で `main()` を長時間・繰り返し呼ぶ、またはモジュールを
+プロセスをまたいで再利用するような呼び出し方は本運用契約の対象外（その
+ような呼び出し方の下では、照合後にファイルが書き換わってもプロセスが
+再 import しない限り検出できない）。
+
 - 手続 Gate 単位のサブコマンド: `c1-fixtures`（**calibration + selection split の行と
   negative control 行のみ** render + determinism 検査（同部分集合）+ ledger。**negative
   control 行の render 済み artifact は sha256 で ledger へ pin し、`c4-holdout` 段では
@@ -379,11 +390,18 @@ round 13/14 の duplicate-key 再構成 fail-closed（`StaleMeasurementError` �
   行の render は行わない — `unseal` 後の `c4-holdout` 段で行う。これは §7 leakage
   契約（holdout 非 control 行の unseal 前 render は `BLOCKED_LEAKAGE`）と整合させる
   ための制約（PR #343 第 1 巡採用））→ `c2-baseline`（B0 × calibration split・
-  tolerance 導出）→ `c3a-f0-selection`（**F0_CONTROL candidates × selection 行 →
+  tolerance 導出）→ `c3a-f0-selection`（**F0_CONTROL candidates × (selection 行 ∪
+  F0_CONTROL の全 negative control instance、home split に依らない) →
   F0 selection → `F0_SELECTION_FROZEN` event**。F0_CONTROL は唯一 F0 を出力する
   meter であり、F0 依存候補の入力を確定させるため他の selection に**先立って**完了
-  させなければならない）→ `c3b-selection`（**F0_CONTROL を除く**全候補 × 自 family
-  selection 行・fail filter・lexicographic・`SELECTION_FROZEN` event。**F0 依存候補
+  させなければならない）→ `c3b-selection`（**F0_CONTROL を除く**全候補 × (自 family
+  selection 行 ∪ 当該 family の全 negative control instance、home split に依らない)・
+  fail filter・lexicographic・`SELECTION_FROZEN` event（round 17 finding #1 採用:
+  §2.7 control 共有契約により negative control は home split が CALIBRATION/
+  HOLDOUT でも C3a/C3b の測定・fail filter 対象に含める——C1 で「全 control」として
+  既に render 済みのため追加 render は発生しない。宣言された negative control 行の
+  一部でも record を欠けば `negative_controls_incomplete` fail filter で
+  ineligible とする。`[UNDERSPEC-CAL-D37]`）。**F0 依存候補
   （D4C・harmonic-residual）は fixture の truth F0 ではなく `c3a-f0-selection` で
   選択された F0 candidate の実測出力を instance 単位で入力とする**（fixture truth F0
   を直接使うことは絶対にない。設計正本 §8）。`c3a-f0-selection` 完了（`F0_SELECTION_FROZEN`

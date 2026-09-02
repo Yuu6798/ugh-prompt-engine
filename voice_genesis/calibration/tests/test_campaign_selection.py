@@ -307,3 +307,99 @@ def test_empty_declared_positive_population_is_not_a_failure() -> None:
     )
     assert report["positive_rows_absent"] is False
     assert report["positive_control_non_fire"] is False
+
+
+# ---------------------------------------------------------------------------
+# round 17 finding #1 (`[UNDERSPEC-CAL-D37]`): negative_controls_incomplete —
+# mirrors round 13 finding #1's `positive_rows_absent` on the negative side.
+# A declared (non-empty) negative-control population must have a record for
+# EVERY declared row, not merely a non-empty intersection — this is what lets
+# `workunits.c3a_f0_selection_instances()`/`c3b_family_selection_instances()`
+# widening the C3 measurement set (round 17 finding #1) actually matter: a
+# candidate that false-fires only on a control row homed outside SELECTION
+# (e.g. HOLDOUT) is now measured and can be caught.
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_false_fires_on_holdout_homed_negative_control_is_rejected() -> None:
+    """A negative control row conceptually homed in HOLDOUT (its split is
+    not tracked by `candidate_fail_filter_report()` itself — that's
+    `workunits`' job, covered by `test_campaign_workunits.py` — but the
+    round 17 finding #1 fix ensures such a row's instance is actually
+    measured at C3, producing a record here) that the candidate fires on
+    (a false positive on sweep-truth-free fixture) must reject the
+    candidate via `negative_control_false_fire`, exactly like a
+    SELECTION-homed one would."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [
+        _record("row-negctl-selection-homed", 0, detected=False),
+        _record("row-negctl-holdout-homed", 0, detected=True),  # false fire
+    ]
+    negative_ids = frozenset({"row-negctl-selection-homed", "row-negctl-holdout-homed"})
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=negative_ids,
+    )
+    assert report["negative_control_false_fire"] is True
+    assert report["negative_controls_incomplete"] is False  # both declared rows have records
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+def test_missing_negative_control_record_is_reported_as_incomplete() -> None:
+    """If the declared negative-control population is non-empty but at
+    least one declared row has no matching record (e.g. its home split
+    wasn't included in the measurement set — the exact bug round 17
+    finding #1 fixed at the `workunits` layer), the candidate must be
+    reported ineligible via `negative_controls_incomplete` — not silently
+    treated as "no evidence, no failure" (fail-closed, mirrors
+    `positive_rows_absent`)."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [_record("row-negctl-present", 0, detected=False)]
+    negative_ids = frozenset({"row-negctl-present", "row-negctl-missing"})
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=negative_ids,
+    )
+    assert report["negative_controls_incomplete"] is True
+    assert report["negative_control_false_fire"] is False  # the one present record didn't fire
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+def test_empty_declared_negative_population_is_not_a_failure() -> None:
+    """Distinguish "no negative-control population declared for this
+    family" (a legitimate no-op) from a declared-but-incomplete population
+    (above)."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [_record("row-some-other-instance", 0, detected=True)]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset(),
+    )
+    assert report["negative_controls_incomplete"] is False
+    assert report["negative_control_false_fire"] is False
+
+
+def test_all_negative_control_records_present_is_complete() -> None:
+    """Complete coverage (every declared row has >=1 record) must not
+    trigger `negative_controls_incomplete`, regardless of detection
+    outcome."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [
+        _record("row-a", 0, detected=False),
+        _record("row-b", 0, detected=False),
+    ]
+    negative_ids = frozenset({"row-a", "row-b"})
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=negative_ids,
+    )
+    # only the two filters under test — not full eligibility, since
+    # `within_fresh_process_mismatch` needs its own dedicated within+fresh
+    # pairing per instance (covered elsewhere) and is orthogonal to negative
+    # control coverage.
+    assert report["negative_controls_incomplete"] is False
+    assert report["negative_control_false_fire"] is False

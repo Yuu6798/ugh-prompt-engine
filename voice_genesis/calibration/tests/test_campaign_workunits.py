@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from voice_genesis.calibration.campaign import workunits
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
-from voice_genesis.calibration.fixtures.controls import control_row_ids
+from voice_genesis.calibration.fixtures.controls import control_row_ids, negative_control_instances
 from voice_genesis.calibration.fixtures.matrix import build_matrix
 from voice_genesis.calibration.splitter import RowInput, realize_split
 
@@ -67,6 +67,9 @@ def test_c1_c4_render_union_covers_all_instances_exactly_once_on_full_matrix() -
 
 
 def test_c2_c3a_c3b_c4_instance_sets_are_split_correct() -> None:
+    """round 17 finding #1: C3a/C3b instance sets = (SELECTION split rows of
+    the family) ∪ (ALL negative-control instances of the family, regardless
+    of home split) — §2.7 control 共有契約."""
     matrix_rows, realized = _full_realized_split()
     assignment = realized.assignment
 
@@ -85,7 +88,17 @@ def test_c2_c3a_c3b_c4_instance_sets_are_split_correct() -> None:
         if mr.row.family == FixtureFamily.F0_CONTROL.value
         and assignment.get(mr.row_id) == Split.SELECTION
     }
-    assert {row_id for row_id, _p in c3a} == f0_sel_row_ids
+    f0_neg_control_instances = negative_control_instances(
+        matrix_rows, family=FixtureFamily.F0_CONTROL.value
+    )
+    expected_c3a = {(rid, p) for rid in f0_sel_row_ids for p in range(5)} | f0_neg_control_instances
+    assert set(c3a) == expected_c3a
+    # every F0_CONTROL negative control instance is present regardless of
+    # its home split (in particular, ones NOT homed in SELECTION).
+    non_selection_f0_controls = {
+        (rid, p) for rid, p in f0_neg_control_instances if assignment.get(rid) != Split.SELECTION
+    }
+    assert non_selection_f0_controls <= set(c3a)
 
     for family in FixtureFamily:
         if family is FixtureFamily.F0_CONTROL:
@@ -96,7 +109,17 @@ def test_c2_c3a_c3b_c4_instance_sets_are_split_correct() -> None:
             for mr in matrix_rows
             if mr.row.family == family.value and assignment.get(mr.row_id) == Split.SELECTION
         }
-        assert {row_id for row_id, _p in c3b} == expected_row_ids
+        family_neg_control_instances = negative_control_instances(matrix_rows, family=family.value)
+        expected_c3b = (
+            {(rid, p) for rid in expected_row_ids for p in range(5)} | family_neg_control_instances
+        )
+        assert set(c3b) == expected_c3b
+        non_selection_controls = {
+            (rid, p)
+            for rid, p in family_neg_control_instances
+            if assignment.get(rid) != Split.SELECTION
+        }
+        assert non_selection_controls <= set(c3b)
 
     c4 = workunits.c4_holdout_instances(matrix_rows, assignment)
     control_ids = control_row_ids(matrix_rows)

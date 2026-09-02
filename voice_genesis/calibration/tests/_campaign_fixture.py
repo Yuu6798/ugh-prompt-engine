@@ -135,6 +135,7 @@ def build_tiny_campaign(
     gate1_cost_caps: Mapping[str, object] | None = None,
     canonical_candidates_section: Mapping[str, Mapping[str, str]] | None = None,
     max_claim_scope: Sequence[str] | None = None,
+    dependencies: Mapping[str, str] | None = None,
 ) -> tuple[Path, Path]:
     """`(campaign_dir, secret_dir_root)` を組み立てて返す。
 
@@ -150,7 +151,11 @@ def build_tiny_campaign(
     変更せず、この引数へ細工した mapping を渡して検証する。`max_claim_scope`
     （既定は `_all_constructs()` — 全 construct が scope 内、finding #11:
     scope 制限そのものを検証したいテストだけ明示的に狭い値を渡す）は
-    manifest `frozen_design.max_claim_scope` へ埋め込まれる。"""
+    manifest `frozen_design.max_claim_scope` へ埋め込まれる。`dependencies`
+    （round 17 finding #2, `[UNDERSPEC-CAL-D38]`: `cli._environment_drift_violations()`
+    のテスト専用。既定 `None` は manifest に `dependencies` キー自体を
+    持たせない — 既存の CLI 単体テストは drift 照合の対象外のまま）は
+    manifest `dependencies` へそのまま埋め込まれる。"""
     subset = subset if subset is not None else small_matrix_subset()
     row_inputs = [
         RowInput(
@@ -211,6 +216,8 @@ def build_tiny_campaign(
             ).items()
         },
     }
+    if dependencies is not None:
+        manifest["dependencies"] = dict(dependencies)
 
     campaigns_dir = tmp_path / "campaigns"
     secret_root = tmp_path / "secrets"

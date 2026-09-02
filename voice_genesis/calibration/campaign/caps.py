@@ -283,6 +283,17 @@ def cap_counters_from_ledger(
       hashing, subprocess orchestration overhead) — summed 1:1 per event
       so that finding #3's reconstruction and finding #5's charging stay
       consistent (a lost `counters.json` does not silently drop this).
+      round 17 finding #3 (`[UNDERSPEC-CAL-D39]`): "for the whole stage"
+      means the **full** dispatch-start-to-dispatch-end parent CPU delta,
+      including any pre-transition checkpoint delta(s)
+      `_checkpoint_parent_cpu_before_transition()` charges to
+      `cap_counters` mid-stage (`c3a`/`c3b`/`c4`/`close`) — `cli.py`
+      `main()`'s `finally` block now writes that full delta to this field
+      (previously it wrote only the post-checkpoint residual, which
+      under-counted this reconstruction relative to the persisted cache
+      for any stage with a mid-dispatch checkpoint; the persisted cache
+      itself was already correct, since the checkpoint's own delta was
+      separately charged to `cap_counters` in-memory when it ran).
     - `budget`: reconstructed as `budget_charge_per_work_unit() ×
       (completed render units + completed meter-call work units)` per the
       frozen `budget_accounting_mode` (round 13 finding #3). `None`
