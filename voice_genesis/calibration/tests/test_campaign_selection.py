@@ -5,16 +5,17 @@ measurement 不要のため高速）。
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
 
-from voice_genesis.calibration.campaign import measure_stage, selection_stage
+from voice_genesis.calibration.campaign import holdout_stage, measure_stage, selection_stage
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import candidate_by_id
 from voice_genesis.calibration.selection import CandidateCriteria, select_across_ceilings
-from voice_genesis.calibration.vocab import ClaimCeiling, MissingReason
+from voice_genesis.calibration.vocab import ClaimCeiling, Domain, MissingReason
 
 from ._campaign_fixture import build_tiny_campaign
 
@@ -234,9 +235,10 @@ def _record(
     repeat_kind: str = "within",
     repeat_index: int = 0,
     process_id: str = "p0",
+    value: float = 220.0,
 ) -> measure_stage.MeasurementRecord:
     output = (
-        MeterOutput(values={"f0_hz": 220.0})
+        MeterOutput(values={"f0_hz": value})
         if detected
         else MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
     )
@@ -403,3 +405,192 @@ def test_all_negative_control_records_present_is_complete() -> None:
     # control coverage.
     assert report["negative_controls_incomplete"] is False
     assert report["negative_control_false_fire"] is False
+
+
+# ---------------------------------------------------------------------------
+# round 19 finding #1 (`[UNDERSPEC-CAL-D43]`): build_candidate_criteria must
+# aggregate repeats with the frozen §10.1 two-stage median, not a flat mean
+# ("Aggregate repeats with the frozen two-stage median" — Codex round 19
+# PR #343 finding #1).
+# ---------------------------------------------------------------------------
+
+
+def test_build_candidate_criteria_uses_two_stage_median_not_mean() -> None:
+    """design quote (§10.1): `m[i] = median_p( median_r( x_hat[i,p,r] ) )`
+    （二段 median。process 間 repeat 不均等時の支配を防ぐ）. An outlier
+    fresh-process repeat (1000.0, vs. every other repeat at 100.0) must be
+    fully suppressed: within-process median=100.0, fresh-process-0/1
+    medians=100.0, fresh-process-2 median=1000.0 -> outer median over
+    [100.0, 100.0, 100.0, 1000.0] = 100.0, exactly matching truth. A flat
+    mean over the same 6 raw values would instead be
+    (100*3 + 100 + 100 + 1000) / 6 = 250.0 -- a 150.0 gap from truth that
+    must not leak into signed_bias / q95(AE) / normalized MAE."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    row_id, probe_index = "row-a", 0
+    records = [
+        _record(
+            row_id, probe_index, repeat_kind="within", repeat_index=0,
+            process_id="within-process", value=100.0,
+        ),
+        _record(
+            row_id, probe_index, repeat_kind="within", repeat_index=1,
+            process_id="within-process", value=100.0,
+        ),
+        _record(
+            row_id, probe_index, repeat_kind="within", repeat_index=2,
+            process_id="within-process", value=100.0,
+        ),
+        _record(
+            row_id, probe_index, repeat_kind="fresh", repeat_index=0,
+            process_id="fresh-process-0", value=100.0,
+        ),
+        _record(
+            row_id, probe_index, repeat_kind="fresh", repeat_index=1,
+            process_id="fresh-process-1", value=100.0,
+        ),
+        _record(
+            row_id, probe_index, repeat_kind="fresh", repeat_index=2,
+            process_id="fresh-process-2", value=1000.0,
+        ),
+    ]
+    truth_by_instance = {(row_id, probe_index): 100.0}
+    criteria = selection_stage.build_candidate_criteria(candidate, records, truth_by_instance)
+    assert criteria.eligible is True
+    # mean-based aggregation would have produced signed_bias/q95(AE) ~150.0;
+    # the two-stage median suppresses the outlier entirely.
+    assert criteria.signed_bias == pytest.approx(0.0, abs=1e-9)
+    assert criteria.primary_q95_ae == pytest.approx(0.0, abs=1e-9)
+    assert criteria.primary_normalized_mae == pytest.approx(0.0, abs=1e-9)
+
+
+def test_selection_aggregation_matches_holdout_two_stage_median() -> None:
+    """C3 selection and C4 holdout must agree on the aggregated per-instance
+    observation for identical repeat data (both are §10.1 `m[i]` consumers):
+    selection's `signed_bias`/`primary_q95_ae` (raw-error based, round 19
+    finding #2) must equal the `e`/`ae` that
+    `holdout_stage.build_instance_margins` derives from the exact same
+    `per_process_repeats`."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    row_id, probe_index = "row-a", 0
+    per_process = {
+        "within-process": [101.0, 99.0, 100.0],
+        "fresh-process-0": [102.0],
+        "fresh-process-1": [98.0],
+        "fresh-process-2": [500.0],  # outlier fresh repeat
+    }
+    truth = 100.0
+    records = [
+        _record(
+            row_id, probe_index, repeat_kind="within", repeat_index=i,
+            process_id="within-process", value=v,
+        )
+        for i, v in enumerate(per_process["within-process"])
+    ] + [
+        _record(
+            row_id, probe_index, repeat_kind="fresh", repeat_index=i,
+            process_id=f"fresh-process-{i}", value=per_process[f"fresh-process-{i}"][0],
+        )
+        for i in range(3)
+    ]
+    truth_by_instance = {(row_id, probe_index): truth}
+    criteria = selection_stage.build_candidate_criteria(candidate, records, truth_by_instance)
+
+    obs = holdout_stage.RawInstanceObservation(
+        instance_id=f"{row_id}:{probe_index}",
+        domain=Domain.PRIMARY,
+        truth=truth,
+        per_process_repeats=per_process,
+        u_gt=0.0,
+        u_num=0.0,
+        e_use=1.0,
+    )
+    margin = holdout_stage.build_instance_margins([obs])[0]
+
+    assert criteria.signed_bias == pytest.approx(margin.e, abs=1e-9)
+    assert criteria.primary_q95_ae == pytest.approx(margin.ae, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# round 19 finding #2 (`[UNDERSPEC-CAL-D44]`): BIAS/q95(AE) must use raw
+# error `e[i]`/`AE[i]` per §10.1, not the relative error `RE[i]` reused from
+# normalized MAE ("Compute bias and q95 from absolute errors" — Codex round
+# 19 PR #343 finding #2).
+# ---------------------------------------------------------------------------
+
+
+def test_build_candidate_criteria_bias_and_q95_use_raw_not_relative_error() -> None:
+    """Hand-computed unit test for all three ABSOLUTE statistics, 1 candidate
+    x 2 instances (truth=1000, truth=1):
+
+    - relative errors: RE = (+0.5, -0.5) -> normalized MAE = mean(|RE|)
+      = (0.5 + 0.5) / 2 = 0.5
+    - raw errors: e = RE * truth = (+500.0, -0.5) -> raw BIAS = mean(e)
+      = (500.0 + (-0.5)) / 2 = 249.75
+    - raw AE = (500.0, 0.5); q95 (numpy method="linear", n=2): sorted =
+      [0.5, 500.0], index = 0.95 * (2-1) = 0.95 ->
+      0.5 + 0.95 * (500.0 - 0.5) = 475.025
+
+    The pre-fix implementation reused the relative-error array for all three
+    stats: it would have reported signed_bias == mean(RE) == 0.0 and
+    primary_q95_ae == q95(|RE|) == 0.5 -- both wrong under the ruling.
+    """
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [
+        _record("row-big", 0, process_id="p", value=1500.0),  # truth=1000, e=+500.0
+        _record("row-small", 0, process_id="p", value=0.5),  # truth=1, e=-0.5
+    ]
+    truth_by_instance = {("row-big", 0): 1000.0, ("row-small", 0): 1.0}
+    criteria = selection_stage.build_candidate_criteria(candidate, records, truth_by_instance)
+
+    assert criteria.primary_normalized_mae == pytest.approx(0.5, abs=1e-9)
+    assert criteria.signed_bias == pytest.approx(249.75, abs=1e-9)
+    assert criteria.primary_q95_ae == pytest.approx(475.025, abs=1e-6)
+    # the pre-fix relative-error reuse this replaces would have produced
+    # these instead -- confirm the fix actually diverges from it.
+    assert criteria.signed_bias != pytest.approx(0.0, abs=1e-6)
+    assert criteria.primary_q95_ae != pytest.approx(0.5, abs=1e-6)
+
+
+def test_selection_winner_flips_between_raw_and_relative_bias() -> None:
+    """Two candidates tied on normalized MAE (lexicographic item 1, §9) but
+    disagreeing on raw-vs-relative BIAS (item 2) -- the ruling (raw BIAS)
+    must decide the winner, not a reuse of the relative error already tied
+    for item 1.
+
+    Candidate P: truth=1000 -> RE=+0.5 (e=+500.0); truth=1 -> RE=-0.5
+    (e=-0.5). mean(|RE|) = 0.5. raw BIAS = mean(500.0, -0.5) = 249.75.
+
+    Candidate Q: truth=1000 -> RE=+0.01 (e=+10.0); truth=1 -> RE=+0.99
+    (e=+0.99). mean(|RE|) = (0.01 + 0.99) / 2 = 0.5 (tied with P).
+    raw BIAS = mean(10.0, 0.99) = 5.495.
+
+    Under the pre-fix relative-error reuse: |mean(RE)_P| = |0.0| = 0.0 <
+    |mean(RE)_Q| = |0.5| -> P would have won. Under the ruling (raw BIAS):
+    |raw_BIAS_P| = 249.75 > |raw_BIAS_Q| = 5.495 -> Q wins. The frozen
+    winner is Q.
+    """
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    p_records = [
+        _record("row-big", 0, process_id="p", value=1500.0),  # truth=1000, e=+500.0
+        _record("row-small", 0, process_id="p", value=0.5),  # truth=1, e=-0.5
+    ]
+    truth_by_instance = {("row-big", 0): 1000.0, ("row-small", 0): 1.0}
+    p_criteria = selection_stage.build_candidate_criteria(candidate, p_records, truth_by_instance)
+
+    q_records = [
+        _record("row-big", 0, process_id="p", value=1010.0),  # truth=1000, e=+10.0
+        _record("row-small", 0, process_id="p", value=1.99),  # truth=1, e=+0.99
+    ]
+    q_criteria = selection_stage.build_candidate_criteria(candidate, q_records, truth_by_instance)
+
+    # item 1 (normalized MAE) tied exactly -- the flip must come from item 2.
+    assert p_criteria.primary_normalized_mae == pytest.approx(0.5, abs=1e-9)
+    assert q_criteria.primary_normalized_mae == pytest.approx(0.5, abs=1e-9)
+
+    assert p_criteria.signed_bias == pytest.approx(249.75, abs=1e-9)
+    assert q_criteria.signed_bias == pytest.approx(5.495, abs=1e-9)
+
+    p_named = dataclasses.replace(p_criteria, candidate_id="cand-P")
+    q_named = dataclasses.replace(q_criteria, candidate_id="cand-Q")
+    outcome = select_across_ceilings([p_named, q_named])
+    assert outcome.selected_candidate_id == "cand-Q"

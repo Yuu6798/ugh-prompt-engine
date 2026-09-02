@@ -58,7 +58,7 @@ from voice_genesis.calibration.candidates import adapter
 from voice_genesis.calibration.candidates.registry import ALL_CANDIDATES, Candidate
 from voice_genesis.calibration.canonical import manifest_sha
 from voice_genesis.calibration.fixtures.matrix import FixtureRow
-from voice_genesis.calibration.observables import q95
+from voice_genesis.calibration.observables import bias, error_terms, q95, two_stage_median
 from voice_genesis.calibration.selection import CandidateCriteria, SelectionOutcome, select_across_ceilings
 from voice_genesis.calibration.vocab import ClaimCeiling
 
@@ -498,13 +498,37 @@ def build_candidate_criteria(
     zero_guard: float = 1e-9,
 ) -> CandidateCriteria:
     """`[UNDERSPEC-CAL-D16]` 実測 record 列（within+fresh 6 call/instance）
-    から `CandidateCriteria` を構築する最も単純な集計規則:
+    から `CandidateCriteria` を構築する集計規則:
 
-    - instance ごとに 6 call の主要出力（`measure_stage.primary_output_value`）
-      の平均を測定値とし、normalized error `(measured-truth)/max(|truth|,
-      zero_guard)` を作る。ABSOLUTE 系列は normalized MAE / |signed bias| /
-      q95(AE)、DIRECTIONAL 系列は `scipy.stats.kendalltau(truth, measured)`
-      と truth 順ソート上の隣接反転率を使う。
+    - instance ごとの測定値 `m[i]` は §10.1 の凍結二段 median
+      `m[i] = median_p( median_r( x_hat[i,p,r] ) )`（`observables.two_stage_median`。
+      `MeasurementRecord.process_id` で process group 化 — within-process 3
+      repeat は単一 group、fresh-process 3 repeat は各 1 repeat の独立
+      group。process 間で repeat 数が不均等でも repeat 数の多い process が
+      支配しないための規則であり、`holdout_stage.build_instance_margins`
+      と同一の入力形・同一関数を使う。round 19 finding #1（採用）:
+      旧実装は単純平均（`np.mean`）を使っており、外れ値 repeat が中央値
+      では吸収されるはずのケースでも平均値へ直接混入していた
+      （`[UNDERSPEC-CAL-D43]`）。
+    - `e[i] = m[i] - truth[i]`（raw signed error）、`AE[i] = |e[i]|`、
+      `RE[i] = AE[i]/max(|truth[i]|, zero_guard)`（`observables.error_terms`、
+      §10.1: `e[i] = m[i] - x[i]`、`AE[i] = |e[i]|`、
+      `RE[i] = AE[i]/max(|x[i]|, d[i])`）。
+    - ABSOLUTE 系列: **normalized MAE は `RE[i]` の平均**（primary-domain の
+      相対誤差指標。§9 の "primary-domain normalized MAE" 呼称に対応）、
+      **BIAS は raw `e[i]` の平均**（§10.1: `BIAS = mean_i(e[i])` — `e[i]`
+      は正規化前の raw signed error と定義されている）、**q95(AE) は raw
+      `AE[i]` の 95th percentile**（§10.1 の `AE[i] = |e[i]|` をそのまま
+      q95 する。normalized ではない）。round 19 finding #2（採用）:
+      旧実装は `RE[i]` を `errors` として BIAS/q95(AE) にも使い回しており、
+      instance 間で truth の桁が大きく異なる場合に正規化誤差ベースの
+      ranking と raw 誤差ベースの ranking が逆転し得た（`[UNDERSPEC-CAL-D44]`。
+      設計正本 §10.1 は `BIAS`/`q95` の入力が `e[i]`/`AE[i]`（raw）である
+      ことを明示するが、§9 の "normalized MAE" と地続きに読めてしまう
+      曖昧さがあったため本 UNDERSPEC で裁定を記録する）。
+      DIRECTIONAL 系列は `scipy.stats.kendalltau(truth, measured)` と
+      truth 順ソート上の隣接反転率を使う（`measured` は上記 `m[i]`
+      そのもの — ABSOLUTE/DIRECTIONAL で同じ二段 median 観測値を使う）。
     - `nuisance_sensitivity_max` は本 D2 infra では `0.0` 固定とする
       （confound axis ペアリングの実測配線 — §5.1 targeted interaction 行と
       anchor 行の対応付け — は `holdout_stage.RawInstanceObservation`/
@@ -514,7 +538,7 @@ def build_candidate_criteria(
       割合。1 件も有効な instance が無ければ `eligible=False` を返す。
     """
     own_records = [r for r in records if r.candidate_id == candidate.candidate_id]
-    per_instance_values: dict[tuple[str, int], list[float]] = {}
+    per_instance_process_values: dict[tuple[str, int], dict[str, list[float]]] = {}
     missing_count = 0
     total_count = 0
     for r in own_records:
@@ -523,23 +547,33 @@ def build_candidate_criteria(
         if value is None or not math.isfinite(value):
             missing_count += 1
             continue
-        per_instance_values.setdefault((r.row_id, r.probe_index), []).append(value)
+        slot = per_instance_process_values.setdefault((r.row_id, r.probe_index), {})
+        slot.setdefault(r.process_id, []).append(value)
 
     missing_failure_rate = (missing_count / total_count) if total_count else 1.0
 
     truths: list[float] = []
     measured: list[float] = []
-    errors: list[float] = []
-    for key in sorted(per_instance_values):
+    raw_errors: list[float] = []
+    relative_errors: list[float] = []
+    for key in sorted(per_instance_process_values):
         truth = truth_by_instance.get(key)
         if truth is None:
             continue
-        m = float(np.mean(per_instance_values[key]))
+        per_process = per_instance_process_values[key]
+        if not per_process:
+            continue
+        # round 19 finding #1 (`[UNDERSPEC-CAL-D43]`): frozen §10.1 two-stage
+        # median, grouped by MeasurementRecord.process_id (matches
+        # holdout_stage.build_instance_margins's input shape exactly).
+        m = two_stage_median(per_process)
+        et = error_terms(m, truth, zero_guard)
         truths.append(truth)
         measured.append(m)
-        errors.append((m - truth) / max(abs(truth), zero_guard))
+        raw_errors.append(et.e)
+        relative_errors.append(et.re)
 
-    if not errors:
+    if not raw_errors:
         return CandidateCriteria(
             candidate_id=candidate.candidate_id,
             eligible=False,
@@ -548,9 +582,12 @@ def build_candidate_criteria(
             ceiling=candidate.claim_ceiling,
         )
 
-    normalized_mae = float(np.mean(np.abs(errors)))
-    signed_bias = float(np.mean(errors))
-    primary_q95_ae = q95([abs(e) for e in errors])
+    # round 19 finding #2 (`[UNDERSPEC-CAL-D44]`): normalized MAE stays
+    # relative-error based (§9 "normalized MAE"); BIAS/q95(AE) use raw
+    # signed/absolute error per §10.1's `e[i]`/`AE[i]` definitions.
+    normalized_mae = float(np.mean(np.abs(relative_errors)))
+    signed_bias = bias(raw_errors)
+    primary_q95_ae = q95([abs(e) for e in raw_errors])
 
     kendall_tau = 0.0
     if len(truths) >= 2 and len(set(truths)) >= 2 and len(set(measured)) >= 2:

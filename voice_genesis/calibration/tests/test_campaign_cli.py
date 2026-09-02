@@ -1485,3 +1485,169 @@ def test_close_stage_summary_records_full_dispatch_cpu_across_checkpoint(
     cost_caps_obj = cost_caps_from_manifest(reloaded.manifest)
     derived = cap_counters_from_ledger(reloaded.ledger.entries, cost_caps_obj)
     assert derived.compute_used == pytest.approx(persisted["compute_used"])
+
+
+# ---------------------------------------------------------------------------
+# round 19 finding #3 (`[UNDERSPEC-CAL-D45]`): completed-stage retries must
+# be true no-ops (zero ledger growth); CAMPAIGN_CLOSED rejects every retry.
+# ---------------------------------------------------------------------------
+
+
+def test_c1_fixtures_retry_after_fixture_valid_is_true_noop(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retrying c1-fixtures after FIXTURE_VALID must append zero ledger
+    events (no re-appended `fixture_valid` transition event, no
+    `stage_summary`) and exit 0 with `NOOP_ALREADY_COMPLETE`."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    entries_before = len(load_frozen_campaign(campaign_dir, secret_root).ledger.entries)
+
+    exit_code = cli.main(
+        [
+            "c1-fixtures",
+            "--campaign-dir",
+            str(campaign_dir),
+            "--secret-dir",
+            str(secret_root),
+            "--approval-dir",
+            str(approval_dir),
+            "--armed",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert '"result": "NOOP_ALREADY_COMPLETE"' in out
+    assert '"stage": "c1-fixtures"' in out
+
+    entries_after = len(load_frozen_campaign(campaign_dir, secret_root).ledger.entries)
+    assert entries_after == entries_before
+
+
+def _seal_to_unsealed_for_holdout_noop_tests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path, Path]:
+    """Shared setup for the two tests below: build a tiny campaign through
+    UNSEALED (c4-holdout's prerequisite phase) without any real render/
+    measure (mirrors `test_unseal_and_close_dispatch_through_cli`)."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    entry = campaign.ledger.append(
+        {"kind": "baseline_audit", "artifact_sha": "2" * 64, "payload": {}}
+    )
+    campaign.ledger.append({"kind": "baseline_audited", "baseline_audit_sha": entry.entry_sha})
+
+    from voice_genesis.calibration.campaign import selection_stage
+    from voice_genesis.calibration.selection import CandidateCriteria
+    from voice_genesis.calibration.vocab import ClaimCeiling
+
+    selection_stage.run_c3b_selection(
+        campaign,
+        {
+            "TILT_GT": [
+                CandidateCriteria(
+                    candidate_id="M2T-HARMONIC-OLS-K4-WINhann",
+                    ceiling=ClaimCeiling.ABSOLUTE,
+                    primary_normalized_mae=0.05,
+                    signed_bias=0.01,
+                    primary_q95_ae=0.1,
+                )
+            ]
+        },
+        baseline_audit_entry_sha=entry.entry_sha,
+    )
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    from ._campaign_fixture import write_gate3_approval
+
+    write_gate3_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    exit_code = cli.main(
+        [
+            "unseal",
+            "--campaign-dir",
+            str(campaign_dir),
+            "--secret-dir",
+            str(secret_root),
+            "--approval-dir",
+            str(approval_dir),
+            "--armed",
+        ]
+    )
+    assert exit_code == 0
+
+    return campaign_dir, secret_root, approval_dir
+
+
+def _armed_c4_holdout_args(campaign_dir: Path, secret_root: Path, approval_dir: Path) -> list[str]:
+    return [
+        "c4-holdout",
+        "--campaign-dir",
+        str(campaign_dir),
+        "--secret-dir",
+        str(secret_root),
+        "--approval-dir",
+        str(approval_dir),
+        "--armed",
+    ]
+
+
+def test_c4_holdout_retry_after_holdout_executed_valid_is_true_noop(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retrying c4-holdout after HOLDOUT_EXECUTED_VALID must append zero
+    ledger events (no re-appended `holdout_executed_valid` transition event,
+    no `stage_summary`, no render/measure dispatch) and exit 0 with
+    `NOOP_ALREADY_COMPLETE`."""
+    campaign_dir, secret_root, approval_dir = _seal_to_unsealed_for_holdout_noop_tests(
+        tmp_path, monkeypatch
+    )
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    _seed_closable_holdout(campaign)
+
+    entries_before = len(load_frozen_campaign(campaign_dir, secret_root).ledger.entries)
+
+    exit_code = cli.main(_armed_c4_holdout_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert '"result": "NOOP_ALREADY_COMPLETE"' in out
+    assert '"stage": "c4-holdout"' in out
+
+    entries_after = len(load_frozen_campaign(campaign_dir, secret_root).ledger.entries)
+    assert entries_after == entries_before
+
+
+def test_c4_holdout_retry_after_campaign_closed_is_phase_order_violation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once CAMPAIGN_CLOSED is reached, retrying a resumable subcommand
+    (c4-holdout) is no longer a no-op — it must be rejected as
+    PHASE_ORDER_VIOLATION, distinct from the pre-close true no-op path, with
+    zero ledger growth either way."""
+    campaign_dir, secret_root, approval_dir = _seal_to_unsealed_for_holdout_noop_tests(
+        tmp_path, monkeypatch
+    )
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    _seed_closable_holdout(campaign)
+
+    exit_code = cli.main(_armed_close_args(campaign_dir, secret_root, approval_dir))
+    assert exit_code == 0, capsys.readouterr().out
+
+    entries_before = len(load_frozen_campaign(campaign_dir, secret_root).ledger.entries)
+
+    exit_code = cli.main(_armed_c4_holdout_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 1, out
+    assert '"result": "PHASE_ORDER_VIOLATION"' in out
+    assert "c4-holdout_after_campaign_closed" in out
+
+    entries_after = len(load_frozen_campaign(campaign_dir, secret_root).ledger.entries)
+    assert entries_after == entries_before

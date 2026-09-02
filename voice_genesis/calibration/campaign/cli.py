@@ -1196,7 +1196,14 @@ _SUBCOMMAND_PRODUCES_PHASE: Mapping[str, CampaignPhase] = {
 #: resume 判定）により、自身の `_SUBCOMMAND_PRODUCES_PHASE` 到達後の再実行が
 #: 安全（`tests/test_campaign_render.py::test_c1_render_determinism_and_resume`
 #: が module 単位で実証済み）。それ以外の subcommand は produces phase 到達後の
-#: 再実行を一律拒否する。
+#: 再実行を一律拒否する。round 19 finding #3（採用, `[UNDERSPEC-CAL-D45]`）:
+#: これら resumable subcommand が produces phase に既到達の状態で再実行された
+#: 場合、`_phase_order_violation` は違反としない（従来どおり）が、`main()` は
+#: `_stage_already_complete()` で検知して **dispatch そのものを呼ばない真の
+#: no-op**（render/measure なし・phase 遷移 event なし・`stage_summary` なし）
+#: として扱う——旧実装は render/measure を再度呼び（resume 機構により実質
+#: no-op だが）、`fixture_valid`/`holdout_executed_valid` の phase 遷移 event と
+#: `stage_summary` event を無条件に re-append していた。
 _RESUMABLE_SUBCOMMANDS: frozenset[str] = frozenset({"c1-fixtures", "c4-holdout"})
 
 
@@ -1205,23 +1212,46 @@ def _phase_order_violation(subcommand: str, campaign: FrozenCampaign) -> str | N
     `state.CampaignPhase` の到達済み集合だけから判定する（finding #6）。
     違反理由（`missing_factors` へ載せる 1 行）を返す。問題なければ `None`。
 
-    `[UNDERSPEC-CAL-D22]` 「完了済み段の再実行は pin 済み結果と同一なら
-    no-op」という厳密な byte-identical 判定は本 fix の範囲外とした（各 stage
-    の pin 済み結果を再構築して比較する専用ロジックが要る一般化困難な作業で
-    あり、誤って「同一」と判定すれば fail-closed の逆になる）。本実装は
-    `_RESUMABLE_SUBCOMMANDS`（render 系。resume 機構により再実行そのものが
-    安全と既に個別実証済み）以外について、produces phase 到達後の再実行を
-    一律拒否する — より安全な過剰拒否側に倒した近似を採用する。"""
+    round 19 finding #3（採用, `[UNDERSPEC-CAL-D45]`）: `CampaignPhase.
+    CAMPAIGN_CLOSED` に到達済みなら、`subcommand` が `_RESUMABLE_SUBCOMMANDS`
+    に属するかに関わらず（`close` 自身を含む）常に violation とする——
+    「CAMPAIGN_CLOSED 後は plan（unarmed）を除く全 stage 呼び出しを拒否する」
+    ルーリングを、resumable/non-resumable の場合分けより先に評価する。
+    それ以外は従来どおり: 非 resumable subcommand は produces phase 到達後の
+    再実行を一律拒否する（`_RESUMABLE_SUBCOMMANDS` は対象外——ただし
+    CAMPAIGN_CLOSED に達していない produces-phase-only の再実行は、ここでは
+    許可しつつ `main()` 側の `_stage_already_complete()` が真の no-op として
+    処理する。`[UNDERSPEC-CAL-D22]` の「完了済み段の再実行は pin 済み結果と
+    同一なら no-op」という厳密な byte-identical 判定は依然として本 fix の
+    範囲外——本実装は phase 到達済みという粗い basis のみで no-op 判定する）。"""
     prerequisite = _SUBCOMMAND_PREREQUISITE_PHASE.get(subcommand)
     produces = _SUBCOMMAND_PRODUCES_PHASE.get(subcommand)
     if prerequisite is None or produces is None:
         return None
     passed = campaign.phases_passed()
+    if CampaignPhase.CAMPAIGN_CLOSED in passed:
+        return f"phase_order:{subcommand}_after_campaign_closed"
     if prerequisite not in passed:
         return f"phase_order:{subcommand}_requires_{prerequisite.value}"
     if subcommand not in _RESUMABLE_SUBCOMMANDS and produces in passed:
         return f"phase_order:{subcommand}_already_{produces.value}"
     return None
+
+
+def _stage_already_complete(subcommand: str, campaign: FrozenCampaign) -> bool:
+    """round 19 finding #3（採用, `[UNDERSPEC-CAL-D45]`）: `subcommand` が
+    `_RESUMABLE_SUBCOMMANDS`（`c1-fixtures`/`c4-holdout`）に属し、かつその
+    `_SUBCOMMAND_PRODUCES_PHASE` に既に到達済みなら真の no-op として扱う。
+    CAMPAIGN_CLOSED 到達後の呼び出しは `_phase_order_violation` が先に
+    PHASE_ORDER_VIOLATION として拒否するため、ここへは到達しない（CLOSED が
+    到達済みなら PRODUCES も必ず到達済みだが、その場合は常に violation が
+    先に返る——`main()` は phase_violation チェックの後にこの関数を呼ぶ）。"""
+    if subcommand not in _RESUMABLE_SUBCOMMANDS:
+        return False
+    produces = _SUBCOMMAND_PRODUCES_PHASE.get(subcommand)
+    if produces is None:
+        return False
+    return produces in campaign.phases_passed()
 
 
 def _refuse_if_caps_already_breached(
@@ -1380,6 +1410,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if phase_violation is not None:
         _print({"result": "PHASE_ORDER_VIOLATION", "detail": phase_violation})
         return 1
+
+    # round 19 finding #3 (採用, `[UNDERSPEC-CAL-D45]`): a resumable
+    # subcommand (`c1-fixtures`/`c4-holdout`) whose produces-phase is already
+    # recorded is a true no-op — return immediately, before matrix build,
+    # cost-cap reconciliation, and the dispatch/stage_summary block below, so
+    # nothing is appended to the ledger and no cap accounting runs for this
+    # invocation (no renders/measurements, no transition event, no
+    # stage_summary).
+    if _stage_already_complete(args.subcommand, campaign):
+        _print({"result": "NOOP_ALREADY_COMPLETE", "stage": args.subcommand})
+        return 0
 
     # finding #1: frozen cost caps, loaded from the manifest Gate 1 embedded
     # at freeze time, and cumulative counters persisted across subcommands.
