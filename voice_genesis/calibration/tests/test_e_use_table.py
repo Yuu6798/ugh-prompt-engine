@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -361,3 +362,148 @@ def test_validate_e_use_table_key_set_violations_are_independent_of_each_other()
     assert any(v.startswith("missing row") for v in violations)
     assert any(v.startswith("unexpected row") for v in violations)
     assert any(v.startswith("duplicate row") for v in violations)
+
+
+# ---------------------------------------------------------------------------
+# round 20 採用 (1) (`[UNDERSPEC-CAL-D46]`): USER_ACCEPTED_USE_BOUND rows'
+# `source_hash_or_version` must actually match the cited source file's
+# sha256 — mechanical restamp CLI + fail-closed freeze-time validation.
+# ---------------------------------------------------------------------------
+
+
+def _delegation_row(
+    *, construct_id: str = "fundamental_frequency", source_hash_or_version: str
+) -> EUseEvidenceRow:
+    return EUseEvidenceRow(
+        construct_id=construct_id,
+        unit="hz",
+        domain="d",
+        intended_use="u",
+        maximum_claim="ABSOLUTE",
+        e_use_value=0.01,
+        derivation_rule="r",
+        evidence_class=EvidenceClass.USER_ACCEPTED_USE_BOUND,
+        source_id_or_url=f"{e_use_table.GATE1_DELEGATION_SOURCE_ID_PREFIX}2026-09-02 (test)",
+        source_checked_at="t",
+        source_hash_or_version=source_hash_or_version,
+        applicability_argument="a",
+        review_status="APPROVED_BY_DELEGATION",
+    )
+
+
+def test_validate_source_digests_ignores_rows_without_gate1_delegation_prefix() -> None:
+    """`UNJUSTIFIED`/その他の行（`GATE1_DELEGATION_SOURCE_ID_PREFIX` を持た
+    ない）は対象外——出典ファイルを一切読まず、常に無違反。"""
+    rows = [_unjustified_row(), _unjustified_row_for("x", "hz", "d")]
+    assert e_use_table.validate_source_digests(rows, repo_root=Path("/nonexistent")) == []
+
+
+def test_validate_source_digests_flags_mismatch(tmp_path: Path) -> None:
+    source_dir = tmp_path / "voice_genesis" / "calibration" / "approvals" / "records"
+    source_dir.mkdir(parents=True)
+    source_path = source_dir / "GATE1_DECISION_RECORD.md"
+    source_path.write_text("decision record content v1\n", encoding="utf-8")
+
+    rows = [_delegation_row(source_hash_or_version="0" * 64)]
+    violations = e_use_table.validate_source_digests(rows, repo_root=tmp_path)
+    assert len(violations) == 1
+    assert violations[0].startswith("E_USE_SOURCE_DIGEST_MISMATCH")
+    assert "row[0]" in violations[0]
+    assert "fundamental_frequency" in violations[0]
+
+
+def test_validate_source_digests_passes_when_hash_matches(tmp_path: Path) -> None:
+    source_dir = tmp_path / "voice_genesis" / "calibration" / "approvals" / "records"
+    source_dir.mkdir(parents=True)
+    source_path = source_dir / "GATE1_DECISION_RECORD.md"
+    source_path.write_text("decision record content v1\n", encoding="utf-8")
+    actual_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
+
+    rows = [_delegation_row(source_hash_or_version=actual_sha256)]
+    assert e_use_table.validate_source_digests(rows, repo_root=tmp_path) == []
+
+
+def test_validate_source_digests_missing_source_file_is_one_violation_naming_all_rows(
+    tmp_path: Path,
+) -> None:
+    rows = [
+        _delegation_row(construct_id="fundamental_frequency", source_hash_or_version="a" * 64),
+        _delegation_row(construct_id="formant_frequency", source_hash_or_version="b" * 64),
+    ]
+    violations = e_use_table.validate_source_digests(rows, repo_root=tmp_path)
+    assert len(violations) == 1
+    assert violations[0].startswith("E_USE_SOURCE_DIGEST_MISMATCH")
+    assert "fundamental_frequency" in violations[0]
+    assert "formant_frequency" in violations[0]
+
+
+def test_restamp_source_digests_rewrites_stale_rows_and_leaves_others_untouched(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "voice_genesis" / "calibration" / "approvals" / "records"
+    source_dir.mkdir(parents=True)
+    source_path = source_dir / "GATE1_DECISION_RECORD.md"
+    source_path.write_text("decision record content v1\n", encoding="utf-8")
+    actual_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
+
+    table_path = tmp_path / "e_use_table.json"
+    stale_row = _delegation_row(construct_id="fundamental_frequency", source_hash_or_version="0" * 64)
+    unaffected_row = _unjustified_row_for("formant_centroid", "hz", "d")
+    e_use_table.save_e_use_table(table_path, [stale_row, unaffected_row])
+
+    changed, new_sha256 = e_use_table.restamp_source_digests(table_path, repo_root=tmp_path)
+    assert changed == 1
+    assert new_sha256 == actual_sha256
+
+    restamped_rows = e_use_table.load_e_use_table(table_path)
+    by_construct = {r.construct_id: r for r in restamped_rows}
+    assert by_construct["fundamental_frequency"].source_hash_or_version == actual_sha256
+    # every other column on the restamped row is untouched.
+    assert by_construct["fundamental_frequency"].source_id_or_url == stale_row.source_id_or_url
+    assert by_construct["fundamental_frequency"].e_use_value == stale_row.e_use_value
+    # the non-delegation row is byte-for-byte untouched.
+    assert by_construct["formant_centroid"] == unaffected_row
+
+    # source file itself was never written to (restamp must not edit the
+    # decision record — only the table cites it).
+    assert source_path.read_text(encoding="utf-8") == "decision record content v1\n"
+
+
+def test_restamp_then_validate_source_digests_closes_the_loop(tmp_path: Path) -> None:
+    """round 20 ADOPT(1) acceptance test: mismatch -> BLOCKED; restamp ->
+    validate passes."""
+    source_dir = tmp_path / "voice_genesis" / "calibration" / "approvals" / "records"
+    source_dir.mkdir(parents=True)
+    source_path = source_dir / "GATE1_DECISION_RECORD.md"
+    source_path.write_text("decision record content v1\n", encoding="utf-8")
+
+    table_path = tmp_path / "e_use_table.json"
+    stale_row = _delegation_row(source_hash_or_version="dead" * 16)
+    e_use_table.save_e_use_table(table_path, [stale_row])
+
+    rows_before = e_use_table.load_e_use_table(table_path)
+    violations_before = e_use_table.validate_source_digests(rows_before, repo_root=tmp_path)
+    assert any(v.startswith("E_USE_SOURCE_DIGEST_MISMATCH") for v in violations_before)
+
+    e_use_table.restamp_source_digests(table_path, repo_root=tmp_path)
+
+    rows_after = e_use_table.load_e_use_table(table_path)
+    violations_after = e_use_table.validate_source_digests(rows_after, repo_root=tmp_path)
+    assert violations_after == []
+
+
+def test_repo_e_use_table_v1_source_digests_match_gate1_decision_record_at_head() -> None:
+    """`config/e_use_table_v1.json`（実運用テーブル）の全 USER_ACCEPTED_USE_BOUND
+    行が、現在の `GATE1_DECISION_RECORD.md` の sha256 と一致することを確認する
+    （round 20 ADOPT(1)(a) の再刻印が実際に適用済みであることの regression
+    guard）。"""
+    repo_root = Path(__file__).resolve().parents[3]
+    table_path = repo_root / e_use_table.DEFAULT_E_USE_TABLE_RELATIVE_PATH
+    rows = e_use_table.load_e_use_table(table_path)
+    assert e_use_table.validate_source_digests(rows, repo_root=repo_root) == []
+    matching = [
+        r
+        for r in rows
+        if r.source_id_or_url.startswith(e_use_table.GATE1_DELEGATION_SOURCE_ID_PREFIX)
+    ]
+    assert len(matching) == 9  # all USER_ACCEPTED_USE_BOUND rows currently in the table

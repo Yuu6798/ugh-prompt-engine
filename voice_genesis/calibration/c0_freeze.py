@@ -589,7 +589,7 @@ def _parse_e_use_table_bytes(path: Path, data: bytes) -> list[e_use_table.EUseEv
 
 
 def _check_e_use_table(
-    path: Path, *, gate1_e_use_bound_accepted: bool
+    path: Path, *, gate1_e_use_bound_accepted: bool, repo_root: Path
 ) -> tuple[list[str], bytes | None]:
     """E_use evidence table（設計正本 §10.2, `[UNDERSPEC-CAL-D10]`）の load +
     検証を dry-run/armed 双方が共有する。違反は `"e_use_table: <理由>"` 形式で
@@ -602,13 +602,21 @@ def _check_e_use_table(
 
     戻り値は `(violations, table_bytes)`。`table_bytes` は `path` から実際に
     読み込めた生バイト列で、読込+パースが成功した場合は常に非 None
-    （`validate_e_use_table` が横断制約違反を返した場合でも非 None のまま —
-    ファイル自体は読めているため）。`None` になるのは読込・パース自体が
-    失敗した場合のみで、そのときは `violations` が必ず非空になる。bug fix P2
-    #1: `armed_freeze()` はこの `table_bytes` を sha256 pin/staging コピーの
-    双方にそのまま再利用し、`path.read_bytes()` を再度呼ばない — 検証に使った
-    内容と実際に確定される内容が別読み取りになる TOCTOU（読込と読込の間に
-    ファイルが差し替えられても検出できない）を構造的に排除する。"""
+    （`validate_e_use_table`/`validate_source_digests` が横断制約違反を
+    返した場合でも非 None のまま — ファイル自体は読めているため）。`None`
+    になるのは読込・パース自体が失敗した場合のみで、そのときは `violations`
+    が必ず非空になる。bug fix P2 #1: `armed_freeze()` はこの `table_bytes` を
+    sha256 pin/staging コピーの双方にそのまま再利用し、`path.read_bytes()` を
+    再度呼ばない — 検証に使った内容と実際に確定される内容が別読み取りになる
+    TOCTOU（読込と読込の間にファイルが差し替えられても検出できない）を構造的
+    に排除する。
+
+    round 20 採用 (1)(b): `repo_root` は `e_use_table.validate_source_digests()`
+    へそのまま渡す — `USER_ACCEPTED_USE_BOUND` 行が引用する
+    `GATE1_DECISION_RECORD.md` の実ファイル sha256 と `source_hash_or_version`
+    列の照合に使う（`[UNDERSPEC-CAL-D46]`。stale digest は
+    `E_USE_SOURCE_DIGEST_MISMATCH` プレフィックス付きの違反として
+    `BLOCKED_C0_MANIFEST_INCOMPLETE` へ合流し fail-closed する）。"""
     try:
         data = path.read_bytes()
     except OSError as exc:
@@ -620,6 +628,7 @@ def _check_e_use_table(
     violations = e_use_table.validate_e_use_table(
         rows, gate1_e_use_bound_accepted=gate1_e_use_bound_accepted
     )
+    violations = violations + e_use_table.validate_source_digests(rows, repo_root=repo_root)
     return [f"e_use_table: {v}" for v in violations], data
 
 
@@ -737,7 +746,9 @@ def dry_run(
         e_use_table_path if e_use_table_path is not None else default_e_use_table_path(root)
     )
     e_use_violations, e_use_table_bytes = _check_e_use_table(
-        table_path, gate1_e_use_bound_accepted=_gate1_e_use_bound_accepted(all_approvals)
+        table_path,
+        gate1_e_use_bound_accepted=_gate1_e_use_bound_accepted(all_approvals),
+        repo_root=root,
     )
     e_use_table_sha256 = (
         hashlib.sha256(e_use_table_bytes).hexdigest() if e_use_table_bytes is not None else None
@@ -1222,7 +1233,9 @@ def armed_freeze(
         e_use_table_path if e_use_table_path is not None else default_e_use_table_path(root)
     )
     e_use_violations, e_use_table_bytes = _check_e_use_table(
-        table_path, gate1_e_use_bound_accepted=_gate1_e_use_bound_accepted(all_approvals)
+        table_path,
+        gate1_e_use_bound_accepted=_gate1_e_use_bound_accepted(all_approvals),
+        repo_root=root,
     )
     e_use_table_sha256 = (
         hashlib.sha256(e_use_table_bytes).hexdigest() if e_use_table_bytes is not None else None

@@ -136,6 +136,7 @@ def build_tiny_campaign(
     canonical_candidates_section: Mapping[str, Mapping[str, str]] | None = None,
     max_claim_scope: Sequence[str] | None = None,
     dependencies: Mapping[str, str] | None = None,
+    frozen_inputs: Mapping[str, object] | None = None,
 ) -> tuple[Path, Path]:
     """`(campaign_dir, secret_dir_root)` を組み立てて返す。
 
@@ -155,7 +156,11 @@ def build_tiny_campaign(
     （round 17 finding #2, `[UNDERSPEC-CAL-D38]`: `cli._environment_drift_violations()`
     のテスト専用。既定 `None` は manifest に `dependencies` キー自体を
     持たせない — 既存の CLI 単体テストは drift 照合の対象外のまま）は
-    manifest `dependencies` へそのまま埋め込まれる。"""
+    manifest `dependencies` へそのまま埋め込まれる。`frozen_inputs`
+    （round 20 採用 (2), `[UNDERSPEC-CAL-D47]`: `holdout_stage.load_e_use_rows()`
+    の sha256 pin 検証のテスト専用。既定 `None` は manifest に
+    `frozen_inputs` キー自体を持たせない）は manifest `frozen_inputs` へ
+    そのまま埋め込まれる。"""
     subset = subset if subset is not None else small_matrix_subset()
     row_inputs = [
         RowInput(
@@ -218,6 +223,8 @@ def build_tiny_campaign(
     }
     if dependencies is not None:
         manifest["dependencies"] = dict(dependencies)
+    if frozen_inputs is not None:
+        manifest["frozen_inputs"] = dict(frozen_inputs)
 
     campaigns_dir = tmp_path / "campaigns"
     secret_root = tmp_path / "secrets"

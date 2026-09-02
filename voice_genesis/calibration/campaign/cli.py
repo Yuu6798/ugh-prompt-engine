@@ -1411,23 +1411,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print({"result": "PHASE_ORDER_VIOLATION", "detail": phase_violation})
         return 1
 
-    # round 19 finding #3 (採用, `[UNDERSPEC-CAL-D45]`): a resumable
-    # subcommand (`c1-fixtures`/`c4-holdout`) whose produces-phase is already
-    # recorded is a true no-op — return immediately, before matrix build,
-    # cost-cap reconciliation, and the dispatch/stage_summary block below, so
-    # nothing is appended to the ledger and no cap accounting runs for this
-    # invocation (no renders/measurements, no transition event, no
-    # stage_summary).
-    if _stage_already_complete(args.subcommand, campaign):
-        _print({"result": "NOOP_ALREADY_COMPLETE", "stage": args.subcommand})
-        return 0
-
     # finding #1: frozen cost caps, loaded from the manifest Gate 1 embedded
     # at freeze time, and cumulative counters persisted across subcommands.
     # round 13 finding #3: a *declared* cost_caps section with a missing/
     # unknown budget_accounting_mode fails closed with a distinct code
     # rather than silently falling back to "no caps" (which would let the
     # dead `budget` dimension stay dead).
+    #
+    # round 20 採用 (3) (`[UNDERSPEC-CAL-D48]`): this loading + reconciliation
+    # now runs *before* the round 19 finding #3 no-op early-return below,
+    # not only on the normal dispatch path — a campaign already sitting in a
+    # persisted cap breach must still refuse a `c1-fixtures`/`c4-holdout`
+    # retry once its produces-phase is already recorded, rather than
+    # returning a plain `NOOP_ALREADY_COMPLETE` that silently re-legitimizes
+    # the breached state on every retry.
     try:
         cost_caps_obj = cost_caps_from_manifest(campaign.manifest)
     except BudgetAccountingUndeclaredError as exc:
@@ -1460,6 +1457,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         _print({"result": CountersCorruptError.CODE, "detail": str(exc)})
         return 1
+
+    # round 19 finding #3 (採用, `[UNDERSPEC-CAL-D45]`) + round 20 採用 (3)
+    # (`[UNDERSPEC-CAL-D48]`): a resumable subcommand (`c1-fixtures`/
+    # `c4-holdout`) whose produces-phase is already recorded is a true
+    # no-op *only if the frozen caps are not already breached* — check
+    # that first (`_refuse_if_caps_already_breached` is idempotent: a
+    # breach already recorded by an earlier invocation's `stop_event` is
+    # not appended twice, but dispatch is refused either way). Neither
+    # branch here appends `counters_reconstructed` or persists
+    # `counters.json` (unlike the normal dispatch path below) — a true
+    # no-op leaves no other trace: no renders/measurements, no transition
+    # event, no stage_summary, and (round 20) no counters cache write.
+    if _stage_already_complete(args.subcommand, campaign):
+        breach = _refuse_if_caps_already_breached(campaign, cost_caps_obj, cap_counters)
+        if breach is not None:
+            _print({"result": "COST_CAP_EXCEEDED", "detail": breach.detail})
+            return 1
+        _print({"result": "NOOP_ALREADY_COMPLETE", "stage": args.subcommand})
+        return 0
+
     if reconstructed:
         campaign.ledger.append(
             {"kind": "counters_reconstructed", "counters": cap_counters.as_dict()}

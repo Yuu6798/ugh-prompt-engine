@@ -5,8 +5,13 @@ meters are too slow"）。高速。
 
 from __future__ import annotations
 
+import hashlib
+from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
+from voice_genesis.calibration import e_use_table
 from voice_genesis.calibration.campaign import holdout_stage, selection_stage
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.gates import DirectionalPair, EUseEvidenceRow, InvariancePair
@@ -252,3 +257,146 @@ def test_out_of_scope_construct_cannot_reach_calibrated_absolute_in_holdout() ->
     capped_result = _evaluate(capped_ceiling)
     assert capped_result.terminal_status != TerminalStatus.CALIBRATED_ABSOLUTE.value
     assert capped_result.gate_detail["passed"] is True  # the gate itself still passes
+
+
+# ---------------------------------------------------------------------------
+# round 20 採用 (2) (`[UNDERSPEC-CAL-D47]`): `load_e_use_rows()` must verify
+# the frozen `e_use_table.json` bytes against the manifest's
+# `frozen_inputs.e_use_table_sha256` pin before parsing them — missing file
+# or mismatch fail closed (never an empty table).
+# ---------------------------------------------------------------------------
+
+
+def _sample_e_use_rows() -> list[EUseEvidenceRow]:
+    return [
+        EUseEvidenceRow(
+            construct_id="fundamental_frequency",
+            unit="hz",
+            domain="d",
+            intended_use="u",
+            maximum_claim="ABSOLUTE",
+            e_use_value=1.0,
+            derivation_rule="r",
+            evidence_class=EvidenceClass.USER_ACCEPTED_USE_BOUND,
+            source_id_or_url="s",
+            source_checked_at="t",
+            source_hash_or_version="v",
+            applicability_argument="a",
+            review_status="ACCEPTED",
+        )
+    ]
+
+
+def _write_frozen_e_use_table(campaign_dir: Path, rows: list[EUseEvidenceRow]) -> str:
+    """`campaign_dir/e_use_table.json` へ書き、その sha256（manifest の
+    `frozen_inputs.e_use_table_sha256` pin として使う値）を返す。"""
+    path = campaign_dir / "e_use_table.json"
+    e_use_table.save_e_use_table(path, rows)
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _stop_events(campaign) -> list[dict[str, object]]:
+    return [
+        e.payload
+        for e in campaign.ledger.entries
+        if isinstance(e.payload, dict) and e.payload.get("kind") == "stop_event"
+    ]
+
+
+def test_load_e_use_rows_passes_when_bytes_match_frozen_pin(tmp_path: Path) -> None:
+    rows = _sample_e_use_rows()
+    # `build_tiny_campaign()` writes c0_manifest.json before the table exists
+    # on disk, so compute the table's sha256 first, then freeze the manifest
+    # with that pin, then write the table into the frozen campaign dir.
+    table_path_probe = tmp_path / "_probe_e_use_table.json"
+    e_use_table.save_e_use_table(table_path_probe, rows)
+    expected_sha256 = hashlib.sha256(table_path_probe.read_bytes()).hexdigest()
+
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, frozen_inputs={"e_use_table_sha256": expected_sha256}
+    )
+    e_use_table.save_e_use_table(campaign_dir / "e_use_table.json", rows)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    loaded = holdout_stage.load_e_use_rows(campaign)
+    assert len(loaded) == 1
+    assert loaded[0].construct_id == "fundamental_frequency"
+    assert _stop_events(campaign) == []
+
+
+def test_load_e_use_rows_missing_file_fails_closed_with_stop_event(tmp_path: Path) -> None:
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, frozen_inputs={"e_use_table_sha256": "a" * 64}
+    )
+    # deliberately never write campaign_dir / "e_use_table.json".
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    with pytest.raises(holdout_stage.StaleEUseTableError):
+        holdout_stage.load_e_use_rows(campaign)
+
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    stop_events = _stop_events(reloaded)
+    assert len(stop_events) == 1
+    assert stop_events[0]["reason"] == "E_USE_TABLE_STALE_OR_MUTATED"
+
+
+def test_load_e_use_rows_mutated_file_fails_closed_with_stop_event(tmp_path: Path) -> None:
+    rows = _sample_e_use_rows()
+    table_path_probe = tmp_path / "_probe_e_use_table.json"
+    e_use_table.save_e_use_table(table_path_probe, rows)
+    stale_sha256 = hashlib.sha256(table_path_probe.read_bytes()).hexdigest()
+
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, frozen_inputs={"e_use_table_sha256": stale_sha256}
+    )
+    # write a *different* table than the one the pin was computed from —
+    # simulates the frozen file being mutated/swapped after freeze.
+    mutated_rows = _sample_e_use_rows()
+    mutated_rows[0] = replace(mutated_rows[0], e_use_value=2.0)
+    e_use_table.save_e_use_table(campaign_dir / "e_use_table.json", mutated_rows)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    with pytest.raises(holdout_stage.StaleEUseTableError):
+        holdout_stage.load_e_use_rows(campaign)
+
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    stop_events = _stop_events(reloaded)
+    assert len(stop_events) == 1
+    assert stop_events[0]["reason"] == "E_USE_TABLE_STALE_OR_MUTATED"
+
+
+def test_load_e_use_rows_missing_pin_fails_closed(tmp_path: Path) -> None:
+    """No `frozen_inputs` section at all in the manifest (e.g. a campaign
+    frozen before round 12's pin was introduced) must fail closed rather
+    than silently trusting whatever bytes are on disk."""
+    rows = _sample_e_use_rows()
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)  # no frozen_inputs
+    e_use_table.save_e_use_table(campaign_dir / "e_use_table.json", rows)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    with pytest.raises(holdout_stage.StaleEUseTableError):
+        holdout_stage.load_e_use_rows(campaign)
+
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    assert len(_stop_events(reloaded)) == 1
+
+
+def test_load_e_use_rows_stop_event_is_idempotent_across_retries(tmp_path: Path) -> None:
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, frozen_inputs={"e_use_table_sha256": "a" * 64}
+    )
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    for _ in range(2):
+        with pytest.raises(holdout_stage.StaleEUseTableError):
+            holdout_stage.load_e_use_rows(campaign)
+        campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    # both attempts hit the exact same missing-file detail string, so the
+    # dedup used elsewhere in this codebase (`_refuse_if_caps_already_breached`)
+    # is not required here — this fix always appends (round 20 ADOPT(2) does
+    # not require idempotent stop_event recording, unlike ADOPT(3)); assert
+    # the reason code is stable across both.
+    stop_events = _stop_events(campaign)
+    assert len(stop_events) == 2
+    assert all(e["reason"] == "E_USE_TABLE_STALE_OR_MUTATED" for e in stop_events)

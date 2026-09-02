@@ -567,6 +567,80 @@ def test_persisted_cap_breach_refuses_dispatch_before_stage_runs(
 
 
 # ---------------------------------------------------------------------------
+# round 20 採用 (3) (`[UNDERSPEC-CAL-D48]`): a persisted cap breach must
+# still refuse a completed-stage retry (round 19 `[UNDERSPEC-CAL-D45]`
+# no-op path), not silently return NOOP_ALREADY_COMPLETE.
+# ---------------------------------------------------------------------------
+
+
+def test_completed_stage_noop_retry_still_refuses_on_persisted_cap_breach(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """c1-fixtures retried after FIXTURE_VALID is already recorded (a true
+    no-op per round 19 finding #3) must still be refused with
+    COST_CAP_EXCEEDED when the persisted counters already breach the frozen
+    cap — not silently return NOOP_ALREADY_COMPLETE and re-legitimize the
+    breached state on every retry. Zero dispatch, zero new ledger events
+    except the idempotent stop_event (not duplicated on a second retry)."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    # simulate a prior invocation having already breached the frozen
+    # compute cap (36000.0, `_campaign_fixture.DEFAULT_GATE1_COST_CAPS`) and
+    # persisted the over-limit counters.
+    save_cap_counters(
+        campaign_dir, CapCounters(compute_used=999_999.0, storage_used=0, budget_used=0.0)
+    )
+
+    called = {"n": 0}
+    monkeypatch.setattr(
+        render_stage,
+        "run_render_stage",
+        lambda *_a, **_k: called.__setitem__("n", called["n"] + 1) or [],
+    )
+
+    args = [
+        "c1-fixtures",
+        "--campaign-dir",
+        str(campaign_dir),
+        "--secret-dir",
+        str(secret_root),
+        "--approval-dir",
+        str(approval_dir),
+        "--armed",
+    ]
+    entries_before = len(load_frozen_campaign(campaign_dir, secret_root).ledger.entries)
+
+    exit_code = cli.main(args)
+    out = capsys.readouterr().out
+    assert exit_code == 1, out
+    assert '"result": "COST_CAP_EXCEEDED"' in out
+    assert "NOOP_ALREADY_COMPLETE" not in out
+    assert called["n"] == 0  # zero dispatch: render_stage never invoked
+
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    new_entries = reloaded.ledger.entries[entries_before:]
+    assert len(new_entries) == 1
+    assert new_entries[0].payload.get("kind") == "stop_event"
+    assert new_entries[0].payload.get("reason") == "COST_CAP_EXCEEDED"
+
+    # a retry re-invocation must refuse again without appending a duplicate
+    # stop_event (idempotent) — zero new events on the second retry.
+    entries_before_2 = len(load_frozen_campaign(campaign_dir, secret_root).ledger.entries)
+    exit_code2 = cli.main(args)
+    out2 = capsys.readouterr().out
+    assert exit_code2 == 1, out2
+    assert called["n"] == 0
+    reloaded2 = load_frozen_campaign(campaign_dir, secret_root)
+    assert len(reloaded2.ledger.entries) == entries_before_2
+
+
+# ---------------------------------------------------------------------------
 # finding #2 (レビュー本巡): 選択済み F0 の instance 単位フィード
 # ---------------------------------------------------------------------------
 

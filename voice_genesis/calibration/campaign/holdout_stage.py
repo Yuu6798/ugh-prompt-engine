@@ -28,16 +28,19 @@ fail-closed する。
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from voice_genesis.calibration.campaign import measure_stage, workunits
 from voice_genesis.calibration.campaign.render_stage import run_render_stage
 from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.candidates.registry import Candidate, candidate_by_id
 from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
-from voice_genesis.calibration.e_use_table import load_e_use_table
+from voice_genesis.calibration.e_use_table import row_from_dict
 from voice_genesis.calibration.fixtures.matrix import MatrixRow
 from voice_genesis.calibration.gates import (
     AbsoluteGateResult,
@@ -90,16 +93,95 @@ def declared_axes_for_family(manifest: Mapping[str, object], family: str) -> tup
 # ---------------------------------------------------------------------------
 
 
+class StaleEUseTableError(RuntimeError):
+    """round 20 採用 (2): `load_e_use_rows()` が読んだ `e_use_table.json` の
+    バイト列が、凍結 manifest の `frozen_inputs.e_use_table_sha256` pin と
+    一致しない、または pin/ファイル自体が欠落している場合の fail-closed
+    error（凍結後の改竄・欠落・pin 未設定のいずれも同じ経路で検出する）。"""
+
+
+def _read_and_verify_e_use_table_bytes(campaign: FrozenCampaign) -> tuple[Path, bytes]:
+    """`e_use_table.json` を **1 回だけ** `read_bytes()` し、そのバッファの
+    sha256 を凍結 manifest の `frozen_inputs.e_use_table_sha256` pin と照合
+    する。検証に使ったのと同一バッファを呼び出し側へ返す（TOCTOU 排除:
+    `c0_freeze._check_e_use_table()`/`measure_stage._verify_and_load_rendered_pcm()`
+    と同じ「1 read → 検証 → 同じバッファをパース」規約）。不一致・欠落は
+    いずれも `StaleEUseTableError`。"""
+    frozen_inputs = campaign.manifest.get("frozen_inputs")
+    expected_sha256 = (
+        frozen_inputs.get("e_use_table_sha256") if isinstance(frozen_inputs, Mapping) else None
+    )
+    if not isinstance(expected_sha256, str) or not expected_sha256:
+        raise StaleEUseTableError(
+            "load_e_use_rows: frozen manifest is missing a non-blank "
+            "frozen_inputs.e_use_table_sha256 pin"
+        )
+    path = campaign.campaign_dir / "e_use_table.json"
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise StaleEUseTableError(f"load_e_use_rows: cannot read {path}: {exc}") from exc
+    actual_sha256 = hashlib.sha256(data).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise StaleEUseTableError(
+            f"load_e_use_rows: {path} sha256 ({actual_sha256!r}) does not match frozen "
+            f"manifest frozen_inputs.e_use_table_sha256 pin ({expected_sha256!r}) — "
+            "the frozen E_use evidence table appears to have been mutated after freeze"
+        )
+    return path, data
+
+
+def _parse_e_use_table_bytes(path: Path, data: bytes) -> list[EUseEvidenceRow]:
+    try:
+        raw = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StaleEUseTableError(f"load_e_use_rows: {path}: {exc}") from exc
+    if not isinstance(raw, list):
+        raise StaleEUseTableError(
+            f"load_e_use_rows: {path}: must contain a JSON array of row objects"
+        )
+    rows: list[EUseEvidenceRow] = []
+    for i, entry in enumerate(raw):
+        if not isinstance(entry, Mapping):
+            raise StaleEUseTableError(f"load_e_use_rows: {path}[{i}]: row must be a JSON object")
+        try:
+            rows.append(row_from_dict(entry))
+        except (KeyError, ValueError, TypeError) as exc:
+            raise StaleEUseTableError(f"load_e_use_rows: {path}[{i}]: {exc}") from exc
+    return rows
+
+
 def load_e_use_rows(campaign: FrozenCampaign) -> tuple[EUseEvidenceRow, ...]:
     """凍結 campaign dir 直下の `e_use_table.json`（`e_use_table.load_e_use_table`
-    が読む 14 列 JSON 配列。armed `c0_freeze.armed_freeze()` がここへ配置する
-    想定）を読む。存在しなければ空タプル（dry-run/合成テスト向けの
-    fail-soft — REQUIRED_BLOCKING の判定は C0 freeze 側の責務であり、本
-    モジュールはあくまで holdout gate 側の消費者）。"""
-    path = campaign.campaign_dir / "e_use_table.json"
-    if not path.is_file():
-        return ()
-    return tuple(load_e_use_table(path))
+    が読む 14 列 JSON 配列。armed `c0_freeze.armed_freeze()` がここへ配置する）
+    を読む。
+
+    round 20 採用 (2): 従来は欠落時に空タプルへ fail-soft していたが
+    （「REQUIRED_BLOCKING の判定は C0 freeze 側の責務」という理由付け）、
+    これは凍結後にファイルが差し替えられた/削除された場合でも holdout gate
+    が「E_use evidence 無し」を静かに受理してしまう欠陥だった（レビュー
+    round 20 finding #2）。本関数は now: (1) `e_use_table.json` を 1 回だけ
+    `read_bytes()` し、(2) その sha256 を凍結 manifest の
+    `frozen_inputs.e_use_table_sha256` pin と照合し、(3) 検証に使った同一
+    バッファをパースする。ファイル欠落・pin 欠落・sha256 不一致はいずれも
+    `StaleEUseTableError` を送出しつつ ledger `stop_event`
+    （`reason: "E_USE_TABLE_STALE_OR_MUTATED"`）を記帳した上で fail-closed
+    する（`measure_stage.run_measurement_for_instance` の
+    `StaleMeasurementError`/`StaleRenderError` と同じ「catch → stop_event
+    記帳 → re-raise」規約。空タプルを返す経路はもう存在しない）。"""
+    try:
+        path, data = _read_and_verify_e_use_table_bytes(campaign)
+        rows = _parse_e_use_table_bytes(path, data)
+    except StaleEUseTableError as exc:
+        campaign.ledger.append(
+            {
+                "kind": "stop_event",
+                "reason": "E_USE_TABLE_STALE_OR_MUTATED",
+                "detail": str(exc),
+            }
+        )
+        raise
+    return tuple(rows)
 
 
 def split_e_use_rows_by_mode(
@@ -484,6 +566,7 @@ def run_holdout_stage(
 
 __all__ = [
     "declared_axes_for_family",
+    "StaleEUseTableError",
     "load_e_use_rows",
     "split_e_use_rows_by_mode",
     "RawInstanceObservation",

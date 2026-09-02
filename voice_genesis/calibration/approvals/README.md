@@ -79,6 +79,41 @@ Gate 固有の追加フィールドと、記入例・厳密なスキーマ + 具
 rm -rf "$VG_CAL_SECRET_DIR"/.staging-<id>-* "<campaigns_dir>"/.staging-<id>
 ```
 
+## E_use evidence table の source digest 再刻印（round 20 採用, `[UNDERSPEC-CAL-D46]`）
+
+`config/e_use_table_v1.json` の `USER_ACCEPTED_USE_BOUND` 行（`source_id_or_url`
+が `"GATE1-DELEGATION-..."` で始まる行）は、[`records/GATE1_DECISION_RECORD.md`](records/GATE1_DECISION_RECORD.md)
+§4 の規約により `source_hash_or_version` にその決定記録ファイル自体の
+sha256 を引用する。決定記録を編集すれば digest は当然動くため、
+`c0_freeze` dry-run/armed 双方（`e_use_table.validate_source_digests()`
+経由）は不一致を `E_USE_SOURCE_DIGEST_MISMATCH` として fail-closed で
+検出する——古い digest のまま freeze することはできない。
+
+再刻印は以下の順序で行う（**この順序を守らないと digest がまた動く**:
+決定記録を確定させる前に再刻印すると、その後の記録編集で再び不一致になる）:
+
+1. `records/GATE1_DECISION_RECORD.md` を確定させる（以降このコミットでは
+   編集しない）
+2. 再刻印コマンドを実行する:
+
+   ```bash
+   python -m voice_genesis.calibration.e_use_table restamp
+   # --table-path/--source/--repo-root で既定パスを上書き可能。既定は
+   # それぞれ voice_genesis/calibration/config/e_use_table_v1.json /
+   # voice_genesis/calibration/approvals/records/GATE1_DECISION_RECORD.md。
+   # GATE1_DECISION_RECORD.md 自体は書き換えない — source_hash_or_version
+   # 列のみを対象行だけ更新する。
+   ```
+
+3. `config/e_use_table_v1.json` の diff（`source_hash_or_version` 列のみが
+   変わっているはず）を確認して commit する
+4. dry-run で検証する:
+
+   ```bash
+   python -m voice_genesis.calibration.c0_freeze
+   # 出力の blocked_codes に E_USE_SOURCE_DIGEST_MISMATCH が含まれないこと
+   ```
+
 ## 完了時の CLI 確認手順
 
 ```bash
