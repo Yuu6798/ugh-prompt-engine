@@ -136,6 +136,28 @@ def test_dry_run_determinism_same_manifest_core_sha(tmp_path: Path) -> None:
     assert report1.manifest_core_sha == report2.manifest_core_sha
 
 
+def test_fixture_spec_confound_axes_matches_declared_sweeps_by_family() -> None:
+    """UNDERSPEC-CAL-D75 ruling (1): `frozen_design.fixture_spec.<FAMILY>.
+    confound_axes` (as `c0_freeze._fixture_specs()` records it into the
+    manifest `campaign.holdout_stage.declared_axes_for_family()` later reads
+    back) must be exactly `fixtures.matrix.declared_sweeps_by_family(build_
+    matrix())[FAMILY]` — the single canonical derivation `c0_freeze.py`/
+    `campaign/cli.py` both share, replacing the old fabricated flat 6-tuple.
+    """
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily
+    from voice_genesis.calibration.fixtures.matrix import build_matrix, declared_sweeps_by_family
+
+    manifest = c0_freeze.build_manifest(_REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02")
+    declared = declared_sweeps_by_family(build_matrix())
+    fixture_spec = manifest["frozen_design"]["fixture_spec"]
+    for family in FixtureFamily:
+        assert list(fixture_spec[family.value]["confound_axes"]) == list(declared[family.value])
+    # f0_hz/sr_hz are the truth-core grid, never a declared sweep.
+    for entry in fixture_spec.values():
+        assert "f0_hz" not in entry["confound_axes"]
+        assert "sr_hz" not in entry["confound_axes"]
+
+
 def test_dry_run_gate1_approved_reduces_blocking(tmp_path: Path) -> None:
     approval_dir = tmp_path / "approvals"
     approval_dir.mkdir()

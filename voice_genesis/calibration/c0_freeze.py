@@ -57,7 +57,13 @@ from voice_genesis.calibration.canonical import canonical_json
 from voice_genesis.calibration.canonical import manifest_sha as _full_manifest_sha
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
 from voice_genesis.calibration.fixtures.controls import ControlClass
-from voice_genesis.calibration.fixtures.matrix import MatrixRow, _negative_applicable, build_matrix
+from voice_genesis.calibration.fixtures.matrix import (
+    MatrixRow,
+    _negative_applicable,
+    build_matrix,
+    declared_sweeps_by_family,
+)
+from voice_genesis.calibration.fixtures.matrix import build_matrix as _canonical_build_matrix
 from voice_genesis.calibration.provenance import Ledger
 from voice_genesis.calibration.splitter import (
     RealizedSplitMap,
@@ -303,17 +309,31 @@ _GENERATOR_MODULE_RELATIVE_PATH: dict[str, str] = {
     ),
 }
 
-#: [UNDERSPEC-CAL-D06] `frozen_design.fixture_spec.<FAMILY>.confound_axes` /
-#: `.boundary_probes` は、設計正本が C0 manifest 上のこの節に要求する粒度を
-#: 明示しないため、matrix.py が既に厳密に持つ per-family targeted
-#: interaction 実列挙（IMPLEMENTATION_MAP §2.7）を二重管理しない、より粗い
-#: 「変動しうる primary/boundary 軸名」の宣言に留めた（非空 list 要求は満たす。
-#: 値の意味論的相互検証は `c0_validate.py` docstring が明示する範囲外）。
-_CONFOUND_AXES: tuple[str, ...] = ("f0_hz", "sr_hz", "gain_dbfs", "duration_s", "noise_snr_db", "context")
+#: [UNDERSPEC-CAL-D06] `frozen_design.fixture_spec.<FAMILY>.boundary_probes`
+#: は、設計正本が C0 manifest 上のこの節に要求する粒度を明示しないため、
+#: matrix.py が既に厳密に持つ per-family targeted interaction 実列挙
+#: （IMPLEMENTATION_MAP §2.7）を二重管理しない、より粗い「変動しうる
+#: boundary 軸名」の宣言に留めた（非空 list 要求は満たす。値の意味論的
+#: 相互検証は `c0_validate.py` docstring が明示する範囲外）。`confound_axes`
+#: は UNDERSPEC-CAL-D75 ruling (1) により、この固定リストではなく
+#: `fixtures.matrix.declared_sweeps_by_family()` が凍結 matrix (`build_matrix()`)
+#: から family ごとに決定的に導出する値へ改めた（旧: 全 family 一律の flat
+#: 6-tuple `("f0_hz","sr_hz","gain_dbfs","duration_s","noise_snr_db",
+#: "context")` — f0_hz/sr_hz は truth-core grid であり sweep ではなく、
+#: family が除外する軸も一律には反映されていなかった）。この derivation は
+#: モジュール内の `build_matrix`（row-level matrix — split/render の入力。
+#: `dry_run()` 等が使い、テストからも監査目的で substitute される）とは
+#: 独立に束縛した `_canonical_build_matrix` を使う: `confound_axes` は
+#: 「実際にどんな matrix で campaign が動くか」ではなく「凍結 matrix 生成器
+#: (`fixtures.matrix.build_matrix`) が設計として何を宣言するか」を記録する
+#: ground-truth 項目であり、`_check_hash_content_match` が宣言済み path
+#: hash を実ファイル bytes と独立に照合するのと同じ理由で、行レベル matrix
+#: の test-only 差し替えから意図的に独立させる。
 _BOUNDARY_PROBES: tuple[str, ...] = ("f0_hz", "sr_hz", "gain_dbfs", "duration_s", "noise_snr_db")
 
 
 def _fixture_specs(root: Path) -> dict[str, object]:
+    declared_sweeps = declared_sweeps_by_family(_canonical_build_matrix())
     specs: dict[str, object] = {}
     for family in FixtureFamily:
         rel_path = _GENERATOR_MODULE_RELATIVE_PATH[family.value]
@@ -325,7 +345,7 @@ def _fixture_specs(root: Path) -> dict[str, object]:
             "generator_version": "1",
             "generator_hash": generator_hash,
             "known_truth_field": _KNOWN_TRUTH_FIELD[family.value],
-            "confound_axes": list(_CONFOUND_AXES),
+            "confound_axes": list(declared_sweeps.get(family.value, ())),
             "boundary_probes": list(_BOUNDARY_PROBES),
             "negative_controls": negative_controls,
         }

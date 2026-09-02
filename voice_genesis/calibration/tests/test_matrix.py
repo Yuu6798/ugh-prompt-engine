@@ -11,9 +11,12 @@ from voice_genesis.calibration.fixtures.matrix import (
     FixtureRow,
     build_matrix,
     compute_domain,
+    declared_sweeps_by_family,
     f0_band_ok,
+    sweep_primary_row_counts,
     validate_matrix,
 )
+from voice_genesis.calibration.gates import MIN_RESOLVABLE_PAIRS_PER_SWEEP
 from voice_genesis.calibration.splitter import RowInput, realize_split
 from voice_genesis.calibration.vocab import Domain, Split
 
@@ -47,16 +50,16 @@ def _to_row_inputs(rows):
 # ---------------------------------------------------------------------------
 
 
-def test_total_is_456() -> None:
+def test_total_is_462() -> None:
     rows = build_matrix()
-    assert len(rows) == 456
+    assert len(rows) == 462
 
 
 def test_per_family_totals_and_block_breakdown_match_section_5_2() -> None:
     rows = build_matrix()
     report = validate_matrix(rows)
     assert report.ok is True
-    assert report.total == 456
+    assert report.total == 462
     for family, (truth_n, confound_n, boundary_n, total_n) in axes.FAMILY_COUNTS.items():
         fam_key = family.value
         assert report.per_family_total[fam_key] == total_n
@@ -66,9 +69,61 @@ def test_per_family_totals_and_block_breakdown_match_section_5_2() -> None:
         assert blocks.get("BOUNDARY", 0) + blocks.get("NEGATIVE_CONTROL", 0) == boundary_n
 
 
-def test_sum_of_family_totals_is_456() -> None:
+def test_sum_of_family_totals_is_462() -> None:
     total = sum(t for (_, _, _, t) in axes.FAMILY_COUNTS.values())
-    assert total == 456
+    assert total == 462
+
+
+# ---------------------------------------------------------------------------
+# 宣言済み sweep（UNDERSPEC-CAL-D75 ruling (1)/(2)）
+# ---------------------------------------------------------------------------
+
+
+def test_declared_sweeps_by_family_matches_expected_sets_per_family() -> None:
+    """§2.7 exclude_axis_family どおり: APERIODICITY_GT は noise を、
+    TRANSITION_GT は context を除外する。f0_hz/sr_hz は truth-core grid で
+    あり、いずれの family でも宣言されない。"""
+    rows = build_matrix()
+    declared = declared_sweeps_by_family(rows)
+    all_four = ("context", "duration", "gain", "noise")
+    assert declared["F0_CONTROL"] == all_four
+    assert declared["FORMANT_GT"] == all_four
+    assert declared["TILT_GT"] == all_four
+    assert declared["RESONANCE_GT"] == all_four
+    assert declared["IDENTITY_CAUSAL_SWEEP"] == all_four
+    assert declared["APERIODICITY_GT"] == ("context", "duration", "gain")
+    assert declared["TRANSITION_GT"] == ("duration", "gain", "noise")
+    for sweeps in declared.values():
+        assert "f0_hz" not in sweeps
+        assert "sr_hz" not in sweeps
+
+
+def test_every_declared_sweep_has_at_least_the_frozen_minimum_primary_rows() -> None:
+    """§10.4「resolvable pair は各 sweep で >= 3」の構造的前提
+    (`gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP`)。"""
+    rows = build_matrix()
+    declared = declared_sweeps_by_family(rows)
+    counts = sweep_primary_row_counts(rows)
+    for family, sweeps in declared.items():
+        assert sweeps, f"{family} declares no sweeps at all"
+        for sweep in sweeps:
+            n = counts[family].get(sweep, 0)
+            assert n >= MIN_RESOLVABLE_PAIRS_PER_SWEEP, (family, sweep, n)
+
+
+def test_starved_matrix_drops_a_family_below_the_minimum() -> None:
+    """`declared_sweeps_by_family`/`sweep_primary_row_counts` は与えられた
+    `matrix_rows` から素直に再計算するだけなので、matrix を人工的に飢餓状態
+    へ書き換えれば違反を検出できる（`c0_validate` 側の fail-closed 検査が
+    使うのと同じ入力形）。"""
+    rows = build_matrix()
+    starved = [
+        mr
+        for mr in rows
+        if not (mr.row.family == "TILT_GT" and mr.row.nuisance_tag == "gain_dbfs=-6.0")
+    ]
+    counts = sweep_primary_row_counts(starved)
+    assert counts["TILT_GT"]["gain"] == MIN_RESOLVABLE_PAIRS_PER_SWEEP - 1
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +168,7 @@ def test_domain_tag_present_and_split_between_primary_and_boundary() -> None:
     assert domains == {Domain.PRIMARY, Domain.BOUNDARY}
     primary_n = sum(1 for mr in rows if mr.domain == Domain.PRIMARY)
     boundary_n = sum(1 for mr in rows if mr.domain == Domain.BOUNDARY)
-    assert primary_n + boundary_n == 456
+    assert primary_n + boundary_n == 462
     assert boundary_n > 0
 
 
@@ -276,17 +331,21 @@ def test_enumeration_is_deterministic_across_calls() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_splitter_over_full_matrix_yields_228_114_114() -> None:
+def test_splitter_over_full_matrix_yields_232_115_115() -> None:
+    # UNDERSPEC-CAL-D75 ruling (2): 456->462 行への改訂で 228/114/114 ->
+    # 232/115/115 (largest-remainder の丸め先が変わっただけで 50/25/25 の
+    # 近似は維持される: 462*0.5=231 に family 境界の largest-remainder 補正
+    # で +1 が乗る)。
     rows = build_matrix()
     row_inputs = _to_row_inputs(rows)
     realized = realize_split(row_inputs, SPLIT_SECRET, ["family"])
     counts = {Split.CALIBRATION: 0, Split.SELECTION: 0, Split.HOLDOUT: 0}
     for s in realized.assignment.values():
         counts[s] += 1
-    assert counts[Split.CALIBRATION] == 228
-    assert counts[Split.SELECTION] == 114
-    assert counts[Split.HOLDOUT] == 114
-    assert sum(counts.values()) == 456
+    assert counts[Split.CALIBRATION] == 232
+    assert counts[Split.SELECTION] == 115
+    assert counts[Split.HOLDOUT] == 115
+    assert sum(counts.values()) == 462
     assert set(realized.assignment.keys()) == {mr.row_id for mr in rows}
 
 

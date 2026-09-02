@@ -67,12 +67,26 @@ ANCHOR_DURATION_S: float = 1.00
 ANCHOR_CONTEXT: str = "steady-isolated"
 
 # ---------------------------------------------------------------------------
-# 正準 nuisance 系列（§5.1: confound block の 11 行。記載順）
+# 正準 nuisance 系列（§5.1: confound block の 11 行。記載順。
+#
+# UNDERSPEC-CAL-D75 ruling (2) により 12 行へ改訂: 単一 anchor family
+# (TILT_GT/RESONANCE_GT/TRANSITION_GT/APERIODICITY_GT) では gain 軸の
+# nuisance 行が anchor1 の 2 行 (-24/-6dBFS) しかなく、declared_sweeps_by_
+# family() が宣言する "gain" sweep が PRIMARY domain 内で 2 行しか持てない
+# ため、§10.4「resolvable pair は各 sweep で >= 3」を構造的に満たせなかった
+# (`gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP`)。gain_dbfs の 3 本目の水準を追加
+# して是正する。値は新しい語彙を発明せず、既存の frozen gain 語彙
+# `PRIMARY_GAIN_DBFS` の中央水準 `ANCHOR_GAIN_DBFS`（-12dBFS。anchor 自身が
+# 既に使う値）を再利用する。多 anchor family（F0_CONTROL/FORMANT_GT/
+# IDENTITY_CAUSAL_SWEEP）はこの 1 行追加後も target_n=24 で全 4 軸が
+# 引き続き閉じる（`fixtures/matrix.py` の `_build_confound_block` target_n
+# 調整と対で参照）。
 # ---------------------------------------------------------------------------
 
 CANONICAL_NUISANCE_SEQUENCE: tuple[tuple[str, str, object], ...] = (
     ("gain", "gain_dbfs", -24.0),
     ("gain", "gain_dbfs", -6.0),
+    ("gain", "gain_dbfs", ANCHOR_GAIN_DBFS),  # -12.0: UNDERSPEC-CAL-D75 ruling (2)
     ("duration", "duration_s", 0.25),
     ("duration", "duration_s", 0.50),
     ("duration", "duration_s", 2.00),
@@ -332,15 +346,25 @@ FAMILY_ORDER: tuple[FixtureFamily, ...] = (
     FixtureFamily.IDENTITY_CAUSAL_SWEEP,
 )
 
-# §5.2 の per-family 内訳 (truth, confound, boundary_negative, total)
+# §5.2 の per-family 内訳 (truth, confound, boundary_negative, total)。
+# UNDERSPEC-CAL-D75 ruling (2): TILT_GT/RESONANCE_GT/TRANSITION_GT の confound
+# は 12->13（gain 軸の 3 本目 nuisance 行 + `_build_confound_block` target_n
+# を 1 増やし、以前 target_n の壁で切り捨てられていた targeted interaction
+# 行を維持）。APERIODICITY_GT の confound は 6->9（gain 軸の 3 本目に加え、
+# target_n=6 が context 軸を 1 行まで切り捨てていた枯渇を解消するため
+# target_n を filtered nuisance 系列の全長 9 へ引き上げ、切り捨てなしに
+# gain/duration/context 各 3 行を確保）。F0_CONTROL/FORMANT_GT/
+# IDENTITY_CAUSAL_SWEEP は 2-anchor 構造のため target_n=24 のまま変わらず
+# 総数不変（`fixtures/matrix.py` の `_f0_control_rows`/`_formant_rows`/
+# `_identity_rows` 参照）。
 FAMILY_COUNTS: dict[FixtureFamily, tuple[int, int, int, int]] = {
     FixtureFamily.F0_CONTROL: (12, 24, 12, 48),
     FixtureFamily.FORMANT_GT: (60, 24, 12, 96),
-    FixtureFamily.TILT_GT: (30, 12, 6, 48),
-    FixtureFamily.APERIODICITY_GT: (60, 6, 6, 72),
-    FixtureFamily.RESONANCE_GT: (24, 12, 12, 48),
-    FixtureFamily.TRANSITION_GT: (24, 12, 12, 48),
+    FixtureFamily.TILT_GT: (30, 13, 6, 49),
+    FixtureFamily.APERIODICITY_GT: (60, 9, 6, 75),
+    FixtureFamily.RESONANCE_GT: (24, 13, 12, 49),
+    FixtureFamily.TRANSITION_GT: (24, 13, 12, 49),
     FixtureFamily.IDENTITY_CAUSAL_SWEEP: (60, 24, 12, 96),
 }
 
-TOTAL_LOGICAL_CELLS: int = 456
+TOTAL_LOGICAL_CELLS: int = 462

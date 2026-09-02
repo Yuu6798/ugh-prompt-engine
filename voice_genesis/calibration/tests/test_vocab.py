@@ -42,11 +42,14 @@ def test_missing_reason_closed_vocab() -> None:
 
 
 def test_blocked_code_closed_vocab() -> None:
-    assert len(BlockedCode) == 6
+    # UNDERSPEC-CAL-D75 ruling (2) added BLOCKED_C0_SWEEP_CAPACITY_INSUFFICIENT
+    # (6 -> 7).
+    assert len(BlockedCode) == 7
     assert {b.value for b in BlockedCode} == {
         "BLOCKED_DOMAIN_MANIFEST_INCOMPLETE",
         "BLOCKED_C0_MANIFEST_INCOMPLETE",
         "BLOCKED_C0_UNSEEDED_RNG",
+        "BLOCKED_C0_SWEEP_CAPACITY_INSUFFICIENT",
         "BLOCKED_C1_GENERATOR_NONDETERMINISTIC",
         "BLOCKED_LEAKAGE",
         "BLOCKED_CANONICAL_MUTATION_REQUIRED",

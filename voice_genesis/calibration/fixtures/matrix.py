@@ -1,8 +1,9 @@
-"""456 logical cell の明示列挙（設計正本 §5 / IMPLEMENTATION_MAP §2.7 FROZEN spec）。
+"""462 logical cell の明示列挙（設計正本 §5 / IMPLEMENTATION_MAP §2.7 FROZEN spec、
+UNDERSPEC-CAL-D75 ruling (2) により 456→462 へ改訂）。
 
 行選択の裁量は残さない: 本モジュールは §2.7 の truth core 因子分解・正準
 nuisance 系列・正準 boundary/negative 系列・per-family targeted interaction
-列挙を機械的に転記して 456 行を組み立てる。数値未確定箇所は
+列挙を機械的に転記して 462 行を組み立てる。数値未確定箇所は
 `fixtures/axes.py` の `[UNDERSPEC-CAL-Bnn]` タグを参照。
 
 各行は:
@@ -17,6 +18,7 @@ nuisance 系列・正準 boundary/negative 系列・per-family targeted interact
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -575,7 +577,12 @@ def _tilt_rows() -> list[FixtureRow]:
     confound = _build_confound_block(
         family=FixtureFamily.TILT_GT,
         anchor1_truth=axes.TILT_ANCHOR,
-        target_n=12,
+        # UNDERSPEC-CAL-D75 ruling (2): 12(nuisance, gain 軸 3 本目追加後)
+        # + 1(interaction) = 13。旧 target_n=12 は nuisance 系列 11 行+
+        # interaction 1 行の旧サイズにちょうど一致していたため、gain 軸の
+        # 3 本目追加分だけ引き上げ、interaction 行が切り捨てられないように
+        # する（据え置けば targeted interaction 行が丸ごと消える）。
+        target_n=13,
         interaction_k=1,
         exclude_axis_family=None,
         anchor2_truth=None,
@@ -595,7 +602,14 @@ def _aperiodicity_rows() -> list[FixtureRow]:
     confound = _build_confound_block(
         family=FixtureFamily.APERIODICITY_GT,
         anchor1_truth=axes.APERIODICITY_ANCHOR,
-        target_n=6,
+        # UNDERSPEC-CAL-D75 ruling (2): 旧 target_n=6 は filtered nuisance
+        # 系列（noise 軸除外後、gain 2+duration 3+context 3 = 8 行、gain 軸
+        # 3 本目追加後は 9 行）を context 軸 1 行まで切り捨てていた（declared
+        # sweep "context" が PRIMARY domain で 1 行しか持てず §10.4 の
+        # resolvable-pair 最低数 (>=3) を構造的に満たせなかった根因）。
+        # target_n を filtered 系列の全長 9 へ引き上げ、切り捨てなしで
+        # gain/duration/context 各 3 行を確保する。
+        target_n=9,
         interaction_k=0,
         exclude_axis_family="noise",
         anchor2_truth=None,
@@ -617,7 +631,8 @@ def _resonance_rows() -> list[FixtureRow]:
     confound = _build_confound_block(
         family=FixtureFamily.RESONANCE_GT,
         anchor1_truth=axes.RESONANCE_ANCHOR,
-        target_n=12,
+        # UNDERSPEC-CAL-D75 ruling (2): TILT_GT と同じ根拠で 12->13。
+        target_n=13,
         interaction_k=1,
         exclude_axis_family=None,
         anchor2_truth=None,
@@ -646,7 +661,11 @@ def _transition_rows() -> list[FixtureRow]:
                 axes.TRANSITION_ANCHOR["severity"]
             ],
         },
-        target_n=12,
+        # UNDERSPEC-CAL-D75 ruling (2): filtered nuisance 系列（context 軸
+        # 除外後、gain 2+duration 3+noise 3=8 行、gain 軸 3 本目追加後は 9
+        # 行）+ interaction 4 行 = 13。旧 target_n=12 は 8+4=12 の旧サイズに
+        # 一致していたため、gain 軸の 3 本目追加分だけ引き上げる。
+        target_n=13,
         interaction_k=4,
         exclude_axis_family="context",
         anchor2_truth=None,
@@ -759,7 +778,7 @@ _FAMILY_BUILDERS = {
 
 
 def build_matrix() -> list[MatrixRow]:
-    """456 logical cell 全ての明示列挙を、`axes.FAMILY_ORDER` の順・各 family 内は
+    """462 logical cell 全ての明示列挙を、`axes.FAMILY_ORDER` の順・各 family 内は
     truth core -> confound -> boundary/negative の順で返す（列挙順は決定的）。
     """
     out: list[MatrixRow] = []
@@ -784,7 +803,7 @@ class MatrixValidationReport:
 
 
 def validate_matrix(rows: list[MatrixRow]) -> MatrixValidationReport:
-    """§5.2 の per-family 内訳・total 456・row_id 一意性を検証する。
+    """§5.2 の per-family 内訳・total 462・row_id 一意性を検証する。
     不一致・重複があれば `ok=False` を返す（例外は投げない。呼び出し側 test が
     厳密一致を assert する）。row_id 重複は "件数検査を素通りして計画セルを暗黙に
     欠落させる" ため（IMPLEMENTATION_MAP §2.5）、別途 `raise` する専用関数
@@ -830,3 +849,78 @@ def assert_no_duplicate_row_ids(rows: list[MatrixRow]) -> None:
         if mr.row_id in seen:
             raise ValueError(f"matrix: duplicate row_id detected: {mr.row_id}")
         seen.add(mr.row_id)
+
+
+# ---------------------------------------------------------------------------
+# 宣言済み sweep（UNDERSPEC-CAL-D75 ruling (1)、§10.4 DIRECTIONAL gate 前提）
+# ---------------------------------------------------------------------------
+
+#: `axes.CANONICAL_NUISANCE_SEQUENCE` の `(axis_family, field_name, value)`
+#: から `field_name -> axis_family` を逆引きする（`nuisance_tag` 文字列
+#: `f"{field_name}={value!r}"` / `f"A2:{field_name}={value!r}"` から
+#: axis_family を復元するための唯一の入力。1 つの field_name が複数
+#: axis_family へまたがることはない前提 — 逆引きの一意性は
+#: `test_matrix.py` 側で検査する）。
+_FIELD_NAME_TO_AXIS_FAMILY: dict[str, str] = {
+    field_name: axis_family
+    for axis_family, field_name, _value in axes.CANONICAL_NUISANCE_SEQUENCE
+}
+
+
+def nuisance_axis_family(row: FixtureRow) -> str | None:
+    """`row.nuisance_tag` が属す axis_family（`"gain"`/`"duration"`/
+    `"noise"`/`"context"`）を返す。truth-core/targeted-interaction/boundary/
+    negative-control 行（`nuisance_tag is None`）は sweep（§10.4 の
+    resolvable-pair 最低数判定の単位。`gates.DirectionalPair.sweep_id`）の
+    対象外として `None` を返す — f0_hz/sr_hz は truth-core grid であり
+    sweep ではない、という UNDERSPEC-CAL-D75 ruling (1) の frozen matrix 側
+    の実装点はここに閉じる。"""
+    tag = row.nuisance_tag
+    if tag is None:
+        return None
+    field_part = tag.split("=", 1)[0]
+    if field_part.startswith("A2:"):
+        field_part = field_part[len("A2:") :]
+    return _FIELD_NAME_TO_AXIS_FAMILY.get(field_part)
+
+
+def sweep_primary_row_counts(rows: Sequence[MatrixRow]) -> dict[str, dict[str, int]]:
+    """family -> {sweep(axis_family): PRIMARY domain 内の行数}
+    （UNDERSPEC-CAL-D75 ruling (1)/(2) の共通入力。`declared_sweeps_by_
+    family()` の宣言集合と、`c0_validate` の sweep 容量検査
+    (`>= gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP`) の両方がこの関数の出力を
+    使う)。"""
+    counts: dict[str, dict[str, int]] = {family.value: {} for family in axes.FAMILY_ORDER}
+    for mr in rows:
+        if mr.domain is not Domain.PRIMARY:
+            continue
+        axis_family = nuisance_axis_family(mr.row)
+        if axis_family is None:
+            continue
+        family_counts = counts.setdefault(mr.row.family, {})
+        family_counts[axis_family] = family_counts.get(axis_family, 0) + 1
+    return counts
+
+
+def declared_sweeps_by_family(rows: Sequence[MatrixRow]) -> dict[str, tuple[str, ...]]:
+    """UNDERSPEC-CAL-D75 ruling (1): family の宣言済み sweep 集合は、凍結
+    matrix が PRIMARY domain 内で `nuisance_tag` を介して実際に変動させる
+    confound 軸そのもの — truth-core grid の f0_hz/sr_hz は sweep ではなく、
+    family が除外する軸（§2.7 exclude_axis_family。例: APERIODICITY_GT の
+    noise・TRANSITION_GT の context）は当該 family の PRIMARY 行に
+    `nuisance_tag` として一度も現れないため、この導出だけで自然に集合から
+    漏れる（別途の除外リストを持つ必要がない）。
+
+    `build_matrix()` の出力から決定的に導出する唯一の入口——生成レシピ
+    （`_build_confound_block` 等）が変われば、この関数の出力も機械的に
+    追従する。以下の 3 箇所が本関数の出力を最終的な権威として共有する:
+    `c0_freeze._fixture_specs()`（`frozen_design.fixture_spec.<FAMILY>.
+    confound_axes` として凍結し `manifest_core_sha` へ含める）、
+    `campaign.holdout_stage.declared_axes_for_family()`（凍結 manifest から
+    その値を読み戻す）、`campaign.cli._run_c4`（`gates.
+    resolvable_pairs_possible()` へ渡す `expected_sweep_ids`）。旧実装
+    （`c0_freeze._CONFOUND_AXES` の flat 6-tuple 固定値・`cli._run_c4` の
+    fabricated `"default"` sweep）はいずれも本関数へ一本化して除去した。
+    """
+    counts = sweep_primary_row_counts(rows)
+    return {family: tuple(sorted(sweeps)) for family, sweeps in counts.items()}

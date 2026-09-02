@@ -26,6 +26,7 @@ from voice_genesis.calibration.campaign.caps import (
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import candidates_for_meter
+from voice_genesis.calibration.fixtures.matrix import build_matrix, nuisance_axis_family
 from voice_genesis.calibration.vocab import MeterId, MissingReason
 
 from ._campaign_fixture import (
@@ -44,7 +45,8 @@ def test_plan_subcommand_reports_design_totals_even_without_campaign(
     )
     assert exit_code == 0
     out = capsys.readouterr().out
-    assert '"instances_total": 2280' in out
+    # UNDERSPEC-CAL-D75 ruling (2): 456->462 logical cells (2280->2310).
+    assert '"instances_total": 2310' in out
     assert '"campaign_state": "UNAVAILABLE"' in out
 
 
@@ -1211,11 +1213,40 @@ def _c4_measurement_record_missing(
     )
 
 
+def _aperiodicity_single_sweep_subset() -> list[Any]:
+    """4 TRUTH_CORE rows (unchanged base) + the 3 real `"duration"`-sweep
+    CONFOUND rows of `APERIODICITY_GT` (`nuisance_axis_family() == "duration"`
+    — `duration_s in {0.25, 0.50, 2.00}`, the frozen `axes.
+    CANONICAL_NUISANCE_SEQUENCE` items). round 5 #344 ADOPT
+    (`[UNDERSPEC-CAL-D75]`): `declared_sweeps_by_family()` now derives its
+    sweep set from the `matrix_rows` actually passed to `_run_c4` — the
+    plain `small_matrix_subset(4, family=...)` TRUTH_CORE-only subset used
+    below declares *zero* sweeps (no `nuisance_tag` row at all), which would
+    make the DIRECTIONAL minimum-count check fail closed unconditionally
+    regardless of coverage (`gates.resolvable_pairs_possible()` returns
+    `False` for an empty `expected_sweep_ids`). Restricting to a single real
+    declared sweep (`"duration"`, `APERIODICITY_GT`'s other 2 declared
+    sweeps — `"gain"`/`"context"` — are simply absent from this subset, so
+    they are not declared at all here) keeps the two DIRECTIONAL coverage
+    tests below single-sweep and easy to reason about, while still
+    exercising the real `fixtures.matrix.declared_sweeps_by_family()`/
+    `nuisance_axis_family()` partition end to end."""
+    truth = small_matrix_subset(4, family="APERIODICITY_GT")
+    duration_confound = [
+        mr
+        for mr in build_matrix()
+        if mr.row.family == "APERIODICITY_GT" and nuisance_axis_family(mr.row) == "duration"
+    ]
+    assert len(duration_confound) == 3, duration_confound
+    return truth + duration_confound
+
+
 def _c4_setup_selected_candidate_coverage_test(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
     select_directional: bool = False,
+    subset_override: list[Any] | None = None,
 ) -> tuple[Any, Any, Any, frozenset[tuple[str, int]]]:
     """Shared scaffolding for the coverage tests below: a tiny campaign with
     `APERIODICITY_GT`'s HARMONIC_RESIDUAL candidate (F0-dependent, but F0
@@ -1228,13 +1259,21 @@ def _c4_setup_selected_candidate_coverage_test(
     pre-existing caller of this helper exercises. `select_directional=True`
     instead names the DIRECTIONAL-ceiling `-B0-` (`B0_CURRENT_HNR_APPROX`)
     candidate as selected, so the D74 DIRECTIONAL-only minimum-count branch
-    can be exercised at this same CLI call site. Returns `(campaign, subset,
-    selected_candidate, expected_instances)`."""
+    can be exercised at this same CLI call site. `subset_override`
+    (round 5 #344 ADOPT `[UNDERSPEC-CAL-D75]`) lets a caller pass a matrix
+    subset that declares real sweeps (see `_aperiodicity_single_sweep_
+    subset()`) instead of the plain TRUTH_CORE-only default — needed by the
+    two `select_directional=True` DIRECTIONAL coverage tests below, since
+    the minimum-count check now partitions usable instances by the real
+    declared sweep set of whatever `matrix_rows` is passed to `_run_c4`.
+    Returns `(campaign, subset, selected_candidate, expected_instances)`."""
     from voice_genesis.calibration.campaign import workunits
     from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
     from voice_genesis.calibration.vocab import ClaimCeiling
 
-    subset = small_matrix_subset(4, family="APERIODICITY_GT")
+    subset = subset_override if subset_override is not None else small_matrix_subset(
+        4, family="APERIODICITY_GT"
+    )
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
 
@@ -1553,10 +1592,20 @@ def test_c4_directional_partial_coverage_below_minimum_count_closes_not_evaluabl
     the actual measured values — so §11's cascade (~L395-396: "critical
     output 全欠損 or 最小数割れで score/gate 計算不能 → NOT_EVALUABLE/
     OUTPUT_NOT_EVALUABLE") applies, exactly as D73 originally intended, now
-    correctly scoped to a DIRECTIONAL effective ceiling."""
+    correctly scoped to a DIRECTIONAL effective ceiling.
+
+    round 5 #344 ADOPT (`[UNDERSPEC-CAL-D75]`): `usable_instances` is now
+    scoped to the real declared `"duration"` sweep
+    (`_aperiodicity_single_sweep_subset()`) — the minimum-count check
+    partitions by `fixtures.matrix.nuisance_axis_family()`, not by a raw
+    total-instance count, so the 2 usable instances below must actually
+    belong to the one declared sweep this subset exercises."""
     campaign, subset, independent_candidate, expected_instances = (
         _c4_setup_selected_candidate_coverage_test(
-            tmp_path, monkeypatch, select_directional=True
+            tmp_path,
+            monkeypatch,
+            select_directional=True,
+            subset_override=_aperiodicity_single_sweep_subset(),
         )
     )
     harmonic_residual = next(
@@ -1564,8 +1613,16 @@ def test_c4_directional_partial_coverage_below_minimum_count_closes_not_evaluabl
         for c in candidates_for_meter(MeterId.M2_APERIODICITY)
         if c.algorithm_family == "HARMONIC_RESIDUAL"
     )
+    row_by_id = {mr.row_id: mr.row for mr in subset}
+    duration_instances = sorted(
+        inst for inst in expected_instances if nuisance_axis_family(row_by_id[inst[0]]) == "duration"
+    )
+    assert len(duration_instances) >= 3, (
+        "test setup needs >=3 expected 'duration'-sweep instances to leave "
+        "room for a below-minimum usable subset"
+    )
     ordered_instances = sorted(expected_instances)
-    usable_instances = ordered_instances[:2]  # only 2 usable -> below the minimum
+    usable_instances = duration_instances[:2]  # only 2 usable in the declared sweep -> below minimum
     assert len(expected_instances) > len(usable_instances) >= 2, (
         "test setup needs >=3 expected instances with exactly 2 usable to "
         "exercise the below-minimum branch"
@@ -1627,10 +1684,18 @@ def test_c4_directional_partial_coverage_at_minimum_count_closes_diagnostic_only
     DIAGNOSTIC_ONLY/OUTPUT_MISSING" applies, mirroring the ABSOLUTE-ceiling
     control case `test_c4_selected_candidate_partially_covered_closes_
     diagnostic_only` (4 of 5 usable) but for a DIRECTIONAL-ceiling selected
-    candidate."""
+    candidate.
+
+    round 5 #344 ADOPT (`[UNDERSPEC-CAL-D75]`): `usable_instances` is now
+    scoped to the real declared `"duration"` sweep
+    (`_aperiodicity_single_sweep_subset()`) — see the below-minimum test
+    above for the same rationale."""
     campaign, subset, independent_candidate, expected_instances = (
         _c4_setup_selected_candidate_coverage_test(
-            tmp_path, monkeypatch, select_directional=True
+            tmp_path,
+            monkeypatch,
+            select_directional=True,
+            subset_override=_aperiodicity_single_sweep_subset(),
         )
     )
     harmonic_residual = next(
@@ -1638,8 +1703,16 @@ def test_c4_directional_partial_coverage_at_minimum_count_closes_diagnostic_only
         for c in candidates_for_meter(MeterId.M2_APERIODICITY)
         if c.algorithm_family == "HARMONIC_RESIDUAL"
     )
+    row_by_id = {mr.row_id: mr.row for mr in subset}
+    duration_instances = sorted(
+        inst for inst in expected_instances if nuisance_axis_family(row_by_id[inst[0]]) == "duration"
+    )
+    assert len(duration_instances) >= 3, (
+        "test setup needs >=3 expected 'duration'-sweep instances to leave "
+        "room for an at-minimum usable subset"
+    )
     ordered_instances = sorted(expected_instances)
-    usable_instances = ordered_instances[:-2]  # drop exactly 2 -> 3 usable, C(3,2)=3 >= 3
+    usable_instances = duration_instances[:3]  # exactly 3 usable in the declared sweep, C(3,2)=3 >= 3
     assert len(expected_instances) - len(usable_instances) >= 1, (
         "test setup needs a genuine coverage gap to exercise partial coverage"
     )

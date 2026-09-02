@@ -740,6 +740,51 @@ def test_fixture_spec_generator_version_blank_string_blocks() -> None:
     assert violations == ["frozen_design.fixture_spec.FORMANT_GT.generator_version"]
 
 
+# ---------------------------------------------------------------------------
+# sweep 容量検査（UNDERSPEC-CAL-D75 ruling (2)）
+# ---------------------------------------------------------------------------
+
+
+def test_sweep_capacity_check_passes_on_the_real_frozen_matrix() -> None:
+    """`_check_sweep_capacity()` は manifest の宣言値ではなく実際の凍結
+    matrix (`fixtures.matrix.build_matrix()`) を数える構造検査であり、
+    `manifest` 引数の内容とは独立している。"""
+    assert c0_validate._check_sweep_capacity({}) == ()
+    assert c0_validate._check_sweep_capacity(_complete_manifest()) == ()
+
+
+def test_starved_matrix_blocks_with_sweep_capacity_insufficient(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`fixtures.matrix.build_matrix()` を人工的に飢餓状態（TILT_GT の
+    `"gain"` sweep を 3 行から 2 行へ）へ差し替えると、`validate_c0_manifest`
+    は専用の `BLOCKED_C0_SWEEP_CAPACITY_INSUFFICIENT` で fail-closed する
+    （`BLOCKED_C0_MANIFEST_INCOMPLETE` とは独立に発火することも確認する）。"""
+    from voice_genesis.calibration.fixtures.matrix import build_matrix as real_build_matrix
+
+    starved = [
+        mr
+        for mr in real_build_matrix()
+        if not (mr.row.family == "TILT_GT" and mr.row.nuisance_tag == "gain_dbfs=-6.0")
+    ]
+    monkeypatch.setattr(c0_validate, "build_matrix", lambda: starved)
+
+    violations = c0_validate._check_sweep_capacity({})
+    assert len(violations) == 1
+    assert "TILT_GT.confound_axes['gain']" in violations[0]
+    assert "2 PRIMARY row(s)" in violations[0]
+
+    result = c0_validate.validate_c0_manifest(_complete_manifest())
+    assert result.is_blocked
+    assert vocab.BlockedCode.BLOCKED_C0_SWEEP_CAPACITY_INSUFFICIENT in result.blocked_codes
+    assert result.sweep_capacity_violations == tuple(violations)
+    # this is a structural defect independent of manifest content — none of
+    # the manifest-completeness violations mention confound_axes/sweeps for
+    # this cause (unrelated causes, e.g. an actually-dirty checkout, may
+    # still coexist and are not this test's concern).
+    assert not any("confound_axes" in key for key in result.missing_required_keys)
+
+
 def test_meter_spec_parameter_grid_scalar_int_blocks() -> None:
     """finding 原文の再現ケース: `parameter_grid=1` は非 hollow な scalar
     (`0`/`False` と異なり `_is_hollow` の対象外) のため従来は通過していた。"""
