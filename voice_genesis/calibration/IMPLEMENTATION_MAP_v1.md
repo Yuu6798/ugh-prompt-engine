@@ -312,8 +312,13 @@ README のみ。B/C は README の自セクションのみ追記）。
   （secret 生成・書込のいずれも行わない）で拒否する（理由コード `"nonce_already_used"`）。
   この検査を通過した場合のみ armed 手続きへ進み、凍結 manifest には検査済みの
   `authorization_nonce` をそのまま記録する（次回以降の armed 実行が同じ承認ファイルを
-  再利用しても上記走査で検出できるようにするため。PR #343 第 5 巡採用）→ secret 生成 → commitment 記入 → splitter 実行 → 実現 split 表 → freeze event を
-  ledger 先頭に記帳 → **全成果物を staging に書く**（同一 FS 上の
+  再利用しても上記走査で検出できるようにするため。PR #343 第 5 巡採用）→ secret 生成 → commitment 記入 → splitter 実行 → 実現 split 表 → `c0_freeze` event を
+  ledger 先頭に記帳 → **直後に `split_frozen` event（`realized_split_map_hash`/
+  `seal_commitment`）を記帳**（`c0_freeze.split_frozen_event_payload()` が正本。
+  round 14 finding #1: `provenance.Ledger.check_leakage()` の
+  `_verified_split_freeze_commitment()` はこの event を要求するが、旧稿はこの
+  producer 側の記帳を欠いており実際の C0→...→C4 flow が常に `BLOCKED_LEAKAGE` に
+  なっていた。`[UNDERSPEC-CAL-D28]`）→ **全成果物を staging に書く**（同一 FS 上の
   `campaigns/.staging-<id>/` と secret_dir 側 staging）→ read-back で
   `validate_c0_manifest` / `verify_split` / `Ledger.verify_chain` を再実行 → 全て通れば
   **公開順序を固定**する: まず secret 側を `os.replace`、続いて campaign 側を
@@ -350,7 +355,11 @@ README のみ。B/C は README の自セクションのみ追記）。
   （全 construct 行を `evidence_class: UNJUSTIFIED` かつ `e_use_value: null` で出力。
   数値 placeholder 禁止）。UNJUSTIFIED 行は自動 ceiling（DIRECTIONAL/DIAGNOSTIC_ONLY）
 - cost caps / stop rules: `c0_validate.COST_CAPS_REQUIRED_KEYS` と一致する 3 キー
-  `compute`（秒）/ `storage`（bytes）/ `budget`（通貨単位）の loader、超過判定 API
+  `compute`（**CPU 秒数**。wall-clock ではない — round 14 finding #2:
+  `--workers>1` 下では wall time は並行実行分の CPU 時間を過小計上するため、
+  各 fresh-process worker が自身の `resource.getrusage` 由来の `cpu_seconds` を
+  報告しそれを課金する。`[UNDERSPEC-CAL-D29]`）/ `storage`（bytes）/ `budget`
+  （通貨単位）の loader、超過判定 API
   （PR #343 第 2 巡採用）
 
 ### 6.4 D2 — campaign runner（`campaign/` サブパッケージ）

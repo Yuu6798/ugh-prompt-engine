@@ -6,6 +6,7 @@ subprocess を伴うため `@pytest.mark.slow`。
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -54,6 +55,13 @@ def test_c1_render_determinism_and_resume(tmp_path: Path) -> None:
         e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "render"
     ]
     assert len(render_events) == len(outcomes)
+    # round 14 finding #2: cpu_seconds (what is actually charged to the
+    # compute cap) and wall_seconds (informational only) are both recorded.
+    for outcome, event in zip(outcomes, render_events, strict=False):
+        assert event["cpu_seconds"] == pytest.approx(outcome.cpu_seconds)
+        assert event["wall_seconds"] == pytest.approx(outcome.wall_seconds)
+        assert event["cpu_seconds"] >= 0.0
+        assert event["wall_seconds"] >= 0.0
     fixture_valid_events = [
         e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "fixture_valid"
     ]
@@ -100,3 +108,47 @@ def test_c1_render_resume_stale_fails_closed_on_missing_file(tmp_path: Path) -> 
 
     with pytest.raises(render_stage.RenderStaleError):
         render_stage.run_render_stage(campaign, subset, stage="c1")
+
+
+# ---------------------------------------------------------------------------
+# round 14 finding #2: compute is charged from each render worker's own
+# reported cpu_seconds (never wall-clock elapsed); a missing/non-finite/
+# negative cpu_seconds is a stale/invalid unit — fail closed.
+# ---------------------------------------------------------------------------
+
+
+class _FakeCompletedProcess:
+    def __init__(self, stdout: str) -> None:
+        self.stdout = stdout
+
+
+@pytest.mark.slow
+def test_c1_render_invalid_worker_cpu_seconds_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh-process render worker reporting an invalid `cpu_seconds`
+    (round 14 finding #2) refuses the whole render unit: no PCM is
+    published, no `render` ledger event is appended, and a `stop_event`
+    records the reason — instead of silently charging 0 or wall time."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    def fake_run(cmd, **kwargs):
+        return _FakeCompletedProcess(stdout=json.dumps({"pcm_hex": "00", "cpu_seconds": -1.0}))
+
+    monkeypatch.setattr(render_stage.subprocess, "run", fake_run)
+
+    with pytest.raises(render_stage.WorkerCpuSecondsInvalidError):
+        render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    assert not campaign.renders_dir.exists() or not any(campaign.renders_dir.iterdir())
+    render_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "render"
+    ]
+    assert render_events == []
+    stop_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "stop_event"
+    ]
+    assert len(stop_events) == 1
+    assert stop_events[0]["reason"] == "INVALID_RENDER_WORKER_CPU_SECONDS"

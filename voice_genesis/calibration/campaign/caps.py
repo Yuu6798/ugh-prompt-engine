@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import tempfile
 from collections.abc import Mapping
@@ -56,6 +57,38 @@ class CostCapExceededError(RuntimeError):
     """`cost_caps.check()` が超過を検出した際の fail-closed error
     （render_stage/measure_stage 共通 — 単一の型を両モジュールが import して
     使う。個別に定義すると `except` 側が両方を捕捉し損ねる恐れがあるため）。"""
+
+
+class WorkerCpuSecondsInvalidError(ValueError):
+    """round 14 finding #2: a fresh-process worker (`_render_worker.py`/
+    `_measure_worker.py`) reported a missing/non-finite/negative
+    ``cpu_seconds`` in its JSON result. Treated as a stale/invalid work
+    unit — fail-closed, no compute charge, no ledger `render`/`meter_call`
+    event for it (render_stage/measure_stage share this single type so a
+    caller catching it does not need to know which stage raised it)."""
+
+
+def validate_worker_cpu_seconds(value: object, *, context: str) -> float:
+    """finding #2: `elapsed` (wall-clock) undercounts the compute cap Gate 1
+    defines in CPU-seconds once fresh-process work runs concurrently
+    (`--workers > 1`) — wall time for the parent does not sum the CPU time
+    actually spent across parallel worker subprocesses. Each worker now
+    reports its own ``cpu_seconds`` (``resource.getrusage`` RUSAGE_SELF +
+    RUSAGE_CHILDREN, i.e. user+sys) in its JSON result; the parent charges
+    that value to the compute counter instead of wall time. A missing/
+    non-finite/negative value is a stale/invalid unit — fail closed rather
+    than silently falling back to 0 or to wall time (either would reopen
+    the same undercounting hole this fix closes)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise WorkerCpuSecondsInvalidError(
+            f"{context}: worker reported non-numeric cpu_seconds={value!r}"
+        )
+    if not math.isfinite(value) or value < 0:
+        raise WorkerCpuSecondsInvalidError(
+            f"{context}: worker reported invalid cpu_seconds={value!r} "
+            "(must be finite and >= 0)"
+        )
+    return float(value)
 
 
 def counters_path(campaign_dir: Path) -> Path:
@@ -136,6 +169,8 @@ __all__ = [
     "COUNTERS_FILENAME",
     "CapStateError",
     "CostCapExceededError",
+    "WorkerCpuSecondsInvalidError",
+    "validate_worker_cpu_seconds",
     "counters_path",
     "cost_caps_from_manifest",
     "load_cap_counters",

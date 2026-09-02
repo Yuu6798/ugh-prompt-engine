@@ -47,6 +47,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import resource
 import subprocess
 import sys
 import time
@@ -58,7 +59,12 @@ from pathlib import Path
 import numpy as np
 
 from voice_genesis.calibration.campaign import render_stage
-from voice_genesis.calibration.campaign.caps import CostCapExceededError, save_cap_counters
+from voice_genesis.calibration.campaign.caps import (
+    CostCapExceededError,
+    WorkerCpuSecondsInvalidError,
+    save_cap_counters,
+    validate_worker_cpu_seconds,
+)
 from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import Candidate
@@ -74,6 +80,17 @@ FRESH_PROCESS_REPEATS = 3
 #: （finding #1: render_stage/measure_stage で単一の cap 超過 error 型を
 #: 共有する。既存呼び出し元は `measure_stage.CostCapExceededError` を参照
 #: するため、import 元の変更後もこの属性名を保つ）。
+
+
+def _process_cpu_seconds() -> float:
+    """This process's own cumulative user+sys CPU seconds
+    (`resource.getrusage(RUSAGE_SELF)`). Used by
+    `run_measurement_for_instance` to charge the within-process 3 calls
+    (round 14 finding #2) — those run serially in-process (never under
+    `ThreadPoolExecutor`), so a before/after delta of this value is exact
+    CPU time, not merely a wall-clock approximation of it."""
+    ru_self = resource.getrusage(resource.RUSAGE_SELF)
+    return ru_self.ru_utime + ru_self.ru_stime
 
 
 def resolve_measure_callable(implementation_ref: str) -> Callable[..., MeterOutput]:
@@ -403,7 +420,13 @@ def run_within_process_calls(
 
 def _run_one_fresh_call(
     candidate_id: str, pcm_path: Path, sr: int, f0_hz: float | None, timeout_s: float
-) -> MeterOutput:
+) -> tuple[MeterOutput, float]:
+    """Returns `(output, cpu_seconds)`. `cpu_seconds` is the worker's own
+    reported CPU time (round 14 finding #2) — validated here (fail-closed
+    via `WorkerCpuSecondsInvalidError` on a missing/non-finite/negative
+    value) so a caller running these concurrently under `ThreadPoolExecutor`
+    sees the failure surface through `future.result()` exactly like any
+    other error from this call."""
     payload = {
         "candidate_id": candidate_id,
         "pcm_path": str(pcm_path),
@@ -422,7 +445,12 @@ def _run_one_fresh_call(
         timeout=timeout_s,
         check=True,
     )
-    return meter_output_from_dict(json.loads(proc.stdout))
+    raw = json.loads(proc.stdout)
+    cpu_seconds = validate_worker_cpu_seconds(
+        raw.get("cpu_seconds"),
+        context=f"measure_stage: fresh-process worker for candidate_id={candidate_id!r}",
+    )
+    return meter_output_from_dict(raw), cpu_seconds
 
 
 def run_fresh_process_calls(
@@ -436,13 +464,19 @@ def run_fresh_process_calls(
     repeats: int = FRESH_PROCESS_REPEATS,
     timeout_s: float = 60.0,
     max_workers: int = 1,
-) -> list[MeasurementRecord]:
+) -> tuple[list[MeasurementRecord], float]:
     """`repeats` 回、subprocess worker (`_measure_worker.py`) を起動して測定
     する。`max_workers>1` なら `ThreadPoolExecutor` で並行起動する（結果は
     repeat_index 順に整列して返す — ledger への append 順を決定論的に保つ
-    ため）。"""
+    ため）。戻り値は `(records, cpu_seconds_total)` —
+    `cpu_seconds_total` は各 worker が報告した `cpu_seconds` の合計
+    （round 14 finding #2: 並行実行時の wall-clock 過小計上を避けるため、
+    呼び出し元はこれを compute cap へ課金する。wall time ではない）。
+    いずれかの worker が無効な `cpu_seconds` を報告した場合は
+    `WorkerCpuSecondsInvalidError` を伝播する（測定結果ごと破棄 — fail
+    closed）。"""
     if max_workers <= 1:
-        outputs = [
+        results = [
             _run_one_fresh_call(candidate.candidate_id, pcm_path, sr, f0_hz, timeout_s)
             for _ in range(repeats)
         ]
@@ -454,8 +488,9 @@ def run_fresh_process_calls(
                 )
                 for _ in range(repeats)
             ]
-            outputs = [f.result() for f in futures]
-    return [
+            results = [f.result() for f in futures]
+    cpu_seconds_total = sum(cpu_seconds for _output, cpu_seconds in results)
+    records = [
         MeasurementRecord(
             row_id=row_id,
             probe_index=probe_index,
@@ -465,8 +500,9 @@ def run_fresh_process_calls(
             process_id=f"fresh-process-{i}",
             output=output,
         )
-        for i, output in enumerate(outputs)
+        for i, (output, _cpu_seconds) in enumerate(results)
     ]
+    return records, cpu_seconds_total
 
 
 def run_measurement_for_instance(
@@ -496,7 +532,21 @@ def run_measurement_for_instance(
     その結果をそのまま返し、再測定・再記帳は一切しない。部分的にしか
     揃っていない/同一キー重複があれば `stop_event` を記帳し
     `StaleMeasurementError` で fail-closed する（この場合も測定・記帳は
-    一切行わない）。"""
+    一切行わない）。
+
+    **compute 課金**（round 14 finding #2）: `--workers>1` では fresh-process
+    3 call が `ThreadPoolExecutor` で並行実行されるため、親プロセスの
+    wall-clock 経過時間（`elapsed`）は実際に消費した CPU 秒数を過小計上する。
+    fresh 側は各 worker が報告した `cpu_seconds`（`resource.getrusage`
+    RUSAGE_SELF+RUSAGE_CHILDREN、`run_fresh_process_calls()` が合算して返す）
+    を、within 側は本関数自身の `resource.getrusage(RUSAGE_SELF)` 差分
+    （within は並行化されず本プロセス内で直列実行されるため、この差分は
+    正確な CPU 秒数そのもの）を使い、両者の和を compute counter へ課金する
+    — wall time はどちらの計上にも使わず、`wall_seconds` として ledger
+    `meter_call` event へ informational にのみ記録する。fresh worker が
+    無効な `cpu_seconds` を報告した場合は `WorkerCpuSecondsInvalidError`
+    を stale/invalid work unit として `stop_event` 記帳の上 fail-closed する
+    （測定・記帳のいずれも行わない）。"""
     try:
         resumed = _completed_meter_call_records(
             campaign.ledger.entries, row_id, probe_index, candidate.candidate_id
@@ -519,20 +569,36 @@ def run_measurement_for_instance(
     pcm_path = campaign.renders_dir / row_id / f"{probe_index}.pcm"
     signal, sr = _verify_and_load_rendered_pcm(campaign, row_id, probe_index, sr_hz)
 
-    t0 = time.perf_counter()
+    wall_t0 = time.perf_counter()
+    within_cpu_t0 = _process_cpu_seconds()
     within = run_within_process_calls(
         candidate, signal, sr, f0_hz=f0_hz, row_id=row_id, probe_index=probe_index
     )
-    fresh = run_fresh_process_calls(
-        candidate,
-        pcm_path,
-        sr,
-        f0_hz=f0_hz,
-        row_id=row_id,
-        probe_index=probe_index,
-        max_workers=max_workers,
-    )
-    elapsed = time.perf_counter() - t0
+    within_cpu_seconds = _process_cpu_seconds() - within_cpu_t0
+    try:
+        fresh, fresh_cpu_seconds = run_fresh_process_calls(
+            candidate,
+            pcm_path,
+            sr,
+            f0_hz=f0_hz,
+            row_id=row_id,
+            probe_index=probe_index,
+            max_workers=max_workers,
+        )
+    except WorkerCpuSecondsInvalidError as exc:
+        campaign.ledger.append(
+            {
+                "kind": "stop_event",
+                "reason": "INVALID_MEASURE_WORKER_CPU_SECONDS",
+                "row_id": row_id,
+                "probe_index": probe_index,
+                "candidate_id": candidate.candidate_id,
+                "detail": str(exc),
+            }
+        )
+        raise
+    wall_seconds = time.perf_counter() - wall_t0
+    compute_seconds = within_cpu_seconds + fresh_cpu_seconds
 
     records = within + fresh
     storage_bytes = 0
@@ -544,6 +610,12 @@ def run_measurement_for_instance(
             "candidate_id": candidate.candidate_id,
             "repeat_kind": record.repeat_kind,
             "repeat_index": record.repeat_index,
+            # round 14 finding #2: instance x candidate work-unit aggregate
+            # (same value on every one of the 6 records — this is a per-work-
+            # unit figure, not a per-call one; matches the existing
+            # per-work-unit granularity of `cap_counters.add()` below).
+            "wall_seconds": wall_seconds,
+            "cpu_seconds": compute_seconds,
             **meter_output_to_dict(record.output),
         }
         campaign.ledger.append(payload)
@@ -554,7 +626,7 @@ def run_measurement_for_instance(
         # within3 + fresh3) is 1 budget work unit — same accounting rule and
         # granularity as render_stage.render_instance().
         budget_charge = cost_caps.budget_charge_per_work_unit() if cost_caps is not None else 0.0
-        cap_counters.add(compute=elapsed, storage=storage_bytes, budget=budget_charge)
+        cap_counters.add(compute=compute_seconds, storage=storage_bytes, budget=budget_charge)
         # Persist immediately (finding #1: counters must survive across
         # subcommands) — before the breach check, so a unit's consumption is
         # never lost even when this same unit trips a fail-closed exit below.
@@ -605,6 +677,7 @@ __all__ = [
     "WITHIN_PROCESS_REPEATS",
     "FRESH_PROCESS_REPEATS",
     "CostCapExceededError",
+    "WorkerCpuSecondsInvalidError",
     "StaleRenderError",
     "StaleMeasurementError",
     "resolve_measure_callable",

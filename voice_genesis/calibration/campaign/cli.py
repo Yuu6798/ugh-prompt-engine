@@ -307,16 +307,6 @@ def _latest_f0_selection(campaign: FrozenCampaign) -> tuple[bool, str | None]:
     return found, selected
 
 
-def _process_id_for_repeat(repeat_kind: str, repeat_index: int) -> str:
-    """`measure_stage.run_within_process_calls`/`run_fresh_process_calls` が
-    実際に割り当てる `MeasurementRecord.process_id` と同じ規約（within は
-    単一 process、fresh は repeat_index ごとに別 process）を、ledger へ既に
-    記帳済みの `meter_call` payload（`process_id` 自体は保持しない — kind/
-    row_id/probe_index/candidate_id/repeat_kind/repeat_index のみ）から
-    再構築するための独立ミラー。"""
-    return "within-process" if repeat_kind == "within" else f"fresh-process-{repeat_index}"
-
-
 def _reusable_f0_values_by_process(
     campaign: FrozenCampaign, candidate_id: str, row_id: str, probe_index: int
 ) -> dict[str, list[float]] | None:
@@ -325,36 +315,40 @@ def _reusable_f0_values_by_process(
     within `WITHIN_PROCESS_REPEATS` 回 + fresh `FRESH_PROCESS_REPEATS` 回が
     過不足なく記帳済みなら `f0_hz` 値を process 単位でまとめて返す
     （`observables.two_stage_median` の入力形）。1 件でも欠けていれば
-    `None`（呼び出し側は改めて実測する）。"""
-    by_process: dict[str, list[float]] = {}
-    seen: set[tuple[str, int]] = set()
-    for entry in campaign.ledger.entries:
-        payload = entry.payload
-        if not isinstance(payload, Mapping) or payload.get("kind") != "meter_call":
-            continue
-        if (
-            payload.get("candidate_id") != candidate_id
-            or payload.get("row_id") != row_id
-            or payload.get("probe_index") != probe_index
-        ):
-            continue
-        repeat_kind = payload.get("repeat_kind")
-        repeat_index = payload.get("repeat_index")
-        if repeat_kind not in ("within", "fresh") or not isinstance(repeat_index, int):
-            continue
-        values = payload.get("values")
-        f0 = values.get("f0_hz") if isinstance(values, Mapping) else None
-        if not isinstance(f0, (int, float)) or isinstance(f0, bool):
-            continue
-        seen.add((repeat_kind, repeat_index))
-        by_process.setdefault(
-            _process_id_for_repeat(repeat_kind, repeat_index), []
-        ).append(float(f0))
-    expected = {("within", i) for i in range(measure_stage.WITHIN_PROCESS_REPEATS)} | {
-        ("fresh", i) for i in range(measure_stage.FRESH_PROCESS_REPEATS)
-    }
-    if not expected.issubset(seen):
+    `None`（呼び出し側は `run_measurement_for_instance` 経由で改めて実測
+    する — その resume 判定が同じ ledger 状態から重複記帳なしに解決する）。
+
+    round 14 finding #3: coverage 判定は
+    `measure_stage._completed_meter_call_records()`（`(repeat_kind,
+    repeat_index)` の**厳密な一意キー集合**を要求する唯一の正本 —
+    `run_measurement_for_instance` の resume 判定・`StaleMeasurementError`
+    の判定基準そのもの）に一本化した。旧実装は独立の subset 比較
+    （`expected.issubset(seen)`）と無条件 append で ledger を自前走査して
+    おり、同一 `(repeat_kind, repeat_index)` キーへの重複 `meter_call`
+    event を検出できないまま — `_completed_meter_call_records()` の
+    duplicate-key 拒否を素通りして — 余分な f0_hz 値をそのまま
+    `two_stage_median()` へ平均入力してしまっていた。これにより duplicate
+    と partial coverage の両方が、この関数を通じて素通り/平均されることなく
+    `StaleMeasurementError`（呼び出し元 CLI 経由で未捕捉のまま fail-closed
+    伝播 — 他の `measure_stage`/`render_stage` の Stale*Error と同じ契約）
+    として扱われる。"""
+    records = measure_stage._completed_meter_call_records(
+        campaign.ledger.entries, row_id, probe_index, candidate_id
+    )
+    if records is None:
         return None
+    by_process: dict[str, list[float]] = {}
+    for record in records:
+        f0 = record.output.values.get("f0_hz")
+        if not isinstance(f0, (int, float)) or isinstance(f0, bool):
+            # Matches the pre-fix semantics: any repeat without a valid
+            # f0_hz means this instance is not cleanly reusable as-is —
+            # fall through to `run_measurement_for_instance`, whose own
+            # resume check re-derives the same complete record set (no
+            # duplicate append) and whose caller rebuilds `by_process`
+            # itself (see `_build_f0_by_instance` below).
+            return None
+        by_process.setdefault(record.process_id, []).append(float(f0))
     return by_process
 
 

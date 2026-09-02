@@ -5,6 +5,7 @@ subprocess を伴うため `@pytest.mark.slow`。
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -111,6 +112,133 @@ def test_cost_cap_breach_raises_and_records_stop_event(tmp_path: Path) -> None:
     assert len(stop_events) == 1
     assert stop_events[0]["reason"] == "COST_CAP_EXCEEDED"
     assert "compute" in stop_events[0]["exceeded_dims"]
+
+
+# ---------------------------------------------------------------------------
+# round 14 finding #2: compute must be charged as the SUM of each
+# fresh-process worker's own reported cpu_seconds, never wall-clock elapsed
+# (which undercounts once `--workers > 1` runs them concurrently).
+# ---------------------------------------------------------------------------
+
+
+class _FakeCompletedProcess:
+    def __init__(self, stdout: str) -> None:
+        self.stdout = stdout
+
+
+def _fake_subprocess_run_with_cpu_seconds(cpu_seconds: object):
+    """Stub for `measure_stage.subprocess.run` whose worker JSON always
+    reports `cpu_seconds`. Exercises the real `_run_one_fresh_call` parsing
+    + `caps.validate_worker_cpu_seconds()` validation path (only the actual
+    subprocess boundary is mocked), so both the happy and fail-closed tests
+    below are real regression coverage of that wiring, not of the mock."""
+
+    def _run(cmd, **kwargs):
+        return _FakeCompletedProcess(
+            stdout=json.dumps(
+                {
+                    "values": {"f0_hz": 130.0},
+                    "missing_reason": None,
+                    "ineligible": False,
+                    "ineligible_reason": None,
+                    "cpu_seconds": cpu_seconds,
+                }
+            )
+        )
+
+    return _run
+
+
+@pytest.mark.slow
+def test_measure_workers_3_compute_charged_equals_sum_of_worker_cpu_seconds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 14 finding #2 regression: with `max_workers=3` (fresh-process
+    calls run concurrently under `ThreadPoolExecutor`), the compute counter
+    must equal the SUM of every worker's own reported `cpu_seconds` — never
+    wall-clock elapsed, which would undercount concurrent CPU usage. Both
+    the fresh-process subprocess boundary and the within-process CPU delta
+    are pinned to exact known values so the expected total is fully
+    deterministic (not dependent on real OS scheduling noise)."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    row = subset[0]
+    candidate = candidate_by_id("F0-B0-CURRENT")
+
+    fresh_cpu_seconds_per_call = 2.0
+    monkeypatch.setattr(
+        measure_stage.subprocess, "run", _fake_subprocess_run_with_cpu_seconds(fresh_cpu_seconds_per_call)
+    )
+    within_cpu_ticks = iter([100.0, 100.25])  # before, after -> exact delta 0.25
+    monkeypatch.setattr(measure_stage, "_process_cpu_seconds", lambda: next(within_cpu_ticks))
+
+    counters = CapCounters()
+    caps = CostCaps(
+        compute=1e9, storage=1_000_000_000, budget=1e9, budget_accounting_mode="local_zero_cost"
+    )
+    records = measure_stage.run_measurement_for_instance(
+        campaign,
+        candidate,
+        row_id=row.row_id,
+        probe_index=0,
+        sr_hz=row.row.sr_hz,
+        cap_counters=counters,
+        cost_caps=caps,
+        max_workers=3,
+    )
+    assert len(records) == measure_stage.WITHIN_PROCESS_REPEATS + measure_stage.FRESH_PROCESS_REPEATS
+
+    expected_compute = 0.25 + measure_stage.FRESH_PROCESS_REPEATS * fresh_cpu_seconds_per_call
+    assert counters.compute_used == pytest.approx(expected_compute)
+
+    meter_calls = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"]
+    assert len(meter_calls) == len(records)
+    # informational field: recorded on every one of the 6 records for this
+    # work unit (see run_measurement_for_instance docstring).
+    assert all(m["cpu_seconds"] == pytest.approx(expected_compute) for m in meter_calls)
+    assert all(isinstance(m["wall_seconds"], float) and m["wall_seconds"] >= 0.0 for m in meter_calls)
+
+
+@pytest.mark.slow
+def test_measure_invalid_worker_cpu_seconds_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 14 finding #2 fail-closed path: a fresh-process worker
+    reporting a missing/non-finite/negative `cpu_seconds` must refuse the
+    whole work unit as a stale/invalid unit — no meter_call ledger events,
+    no compute charged — rather than silently falling back to 0 or to wall
+    time (either would reopen the undercounting hole this fix closes)."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    row = subset[0]
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    monkeypatch.setattr(
+        measure_stage.subprocess, "run", _fake_subprocess_run_with_cpu_seconds(None)
+    )
+
+    counters = CapCounters()
+    with pytest.raises(measure_stage.WorkerCpuSecondsInvalidError):
+        measure_stage.run_measurement_for_instance(
+            campaign,
+            candidate,
+            row_id=row.row_id,
+            probe_index=0,
+            sr_hz=row.row.sr_hz,
+            cap_counters=counters,
+        )
+
+    assert counters.compute_used == pytest.approx(0.0)
+    meter_calls = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"]
+    assert meter_calls == []
+    stop_events = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "stop_event"]
+    assert len(stop_events) == 1
+    assert stop_events[0]["reason"] == "INVALID_MEASURE_WORKER_CPU_SECONDS"
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from voice_genesis.calibration.c0_freeze import split_frozen_event_payload
 from voice_genesis.calibration.canonical import canonical_json
 from voice_genesis.calibration.canonical import manifest_sha as _manifest_sha
 from voice_genesis.calibration.fixtures.matrix import MatrixRow, build_matrix
@@ -216,13 +217,26 @@ def build_tiny_campaign(
     campaign_dir = campaigns_dir / campaign_id
     campaign_dir.mkdir(parents=True)
     (campaign_dir / "c0_manifest.json").write_text(canonical_json(manifest), encoding="utf-8")
-    Ledger(campaign_dir / "ledger.jsonl").append(
+    fixture_ledger = Ledger(campaign_dir / "ledger.jsonl")
+    fixture_ledger.append(
         {
             "kind": "c0_freeze",
             "campaign_id": campaign_id,
             "manifest_sha": _manifest_sha(manifest),
             "realized_split_sha": realized.realized_sha,
         }
+    )
+    # round 14 finding #1: call the production `split_frozen` emitter
+    # (`c0_freeze.split_frozen_event_payload`) instead of hand-fabricating an
+    # equivalent dict here, so fixture and production payload shape cannot
+    # drift apart again.
+    fixture_ledger.append(
+        split_frozen_event_payload(
+            campaign_id=campaign_id,
+            realized_split_sha=realized.realized_sha,
+            split_secret_sha256=hashlib.sha256(split_secret).hexdigest(),
+            event_time_utc="2026-09-02T00:00:00+00:00",
+        )
     )
     if write_secrets:
         secret_dir = secret_root / campaign_id

@@ -1129,6 +1129,34 @@ class ArmedFreezeResult:
     validation: c0_validate.C0ValidationResult | None = None
 
 
+def split_frozen_event_payload(
+    *,
+    campaign_id: str,
+    realized_split_sha: str,
+    split_secret_sha256: str,
+    event_time_utc: str | None = None,
+) -> dict[str, object]:
+    """`provenance.Ledger.check_leakage`（`_verified_split_freeze_commitment`）が
+    要求する ``kind="split_frozen"`` event の payload を組み立てる単一の正本
+    （round 14 finding #1, `[UNDERSPEC-CAL-D28]`）。`realized_split_map_hash`/
+    `seal_commitment` は検証器が読む必須 2 フィールドで、値はそれぞれ
+    ``realize_split()`` の `realized_sha` と `sha256(split_secret)` そのもの
+    （`armed_freeze()` が manifest/`c0_freeze` event へ記録するのと同じ値）で
+    なければならない。`armed_freeze()` 自身に加え、テスト fixture
+    （`tests/_campaign_fixture.py`）もこの関数を呼ぶことで fixture と本番の
+    payload 形状が drift しないことを保証する。"""
+    payload: dict[str, object] = {
+        "kind": "split_frozen",
+        "campaign_id": campaign_id,
+        "realized_split_map_hash": realized_split_sha,
+        "seal_commitment": split_secret_sha256,
+    }
+    payload["event_time_utc"] = (
+        event_time_utc if event_time_utc is not None else datetime.now(timezone.utc).isoformat()
+    )
+    return payload
+
+
 def armed_freeze(
     repo_root: Path,
     *,
@@ -1348,6 +1376,19 @@ def armed_freeze(
         "approvals": dict(approval_digests),
         "event_time_utc": datetime.now(timezone.utc).isoformat(),
     }
+    # round 14 finding #1: `provenance.Ledger.check_leakage` (via
+    # `_verified_split_freeze_commitment`) requires exactly one pre-render
+    # `split_frozen` event carrying `realized_split_map_hash` and
+    # `seal_commitment` — no production code emitted it, so every real
+    # C0->...->C4 flow ended BLOCKED_LEAKAGE. Emit it here, immediately after
+    # `c0_freeze` and before any render/meter_call event, with values derived
+    # from the exact same realized split / seal commitment the manifest and
+    # `c0_freeze` event record above (`[UNDERSPEC-CAL-D28]`).
+    split_frozen_payload = split_frozen_event_payload(
+        campaign_id=campaign_id,
+        realized_split_sha=realized.realized_sha,
+        split_secret_sha256=commitments["split_secret_sha256"],
+    )
 
     campaigns_dir = Path(campaigns_dir)
     secret_dir = Path(secret_dir)
@@ -1399,7 +1440,9 @@ def armed_freeze(
             (campaign_staging / "realized_split.json").write_text(
                 canonical_json(realized_split_dict), encoding="utf-8"
             )
-            Ledger(campaign_staging / "ledger.jsonl").append(freeze_event_payload)
+            staging_ledger = Ledger(campaign_staging / "ledger.jsonl")
+            staging_ledger.append(freeze_event_payload)
+            staging_ledger.append(split_frozen_payload)
             (campaign_staging / "e_use_table.json").write_bytes(e_use_table_bytes)
 
             _write_secret_file(secret_staging / "split_secret.bin", split_secret)

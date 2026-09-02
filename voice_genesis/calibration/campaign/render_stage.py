@@ -29,7 +29,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from voice_genesis.calibration.campaign import workunits
-from voice_genesis.calibration.campaign.caps import CostCapExceededError, save_cap_counters
+from voice_genesis.calibration.campaign.caps import (
+    CostCapExceededError,
+    WorkerCpuSecondsInvalidError,
+    save_cap_counters,
+    validate_worker_cpu_seconds,
+)
 from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
 from voice_genesis.calibration.cost_caps import check as cost_caps_check
@@ -118,6 +123,13 @@ class RenderOutcome:
     probe_index: int
     status: str  # "rendered" | "skipped_resume"
     sha256: str
+    #: round 14 finding #2: `cpu_seconds` is the sum of the 2 fresh-process
+    #: render workers' own reported CPU time (the value actually charged to
+    #: the compute cap); `wall_seconds` is the wall-clock elapsed for those
+    #: same 2 renders, kept informational-only. Both are 0.0 for
+    #: `status="skipped_resume"` (no new work was done).
+    wall_seconds: float = 0.0
+    cpu_seconds: float = 0.0
 
 
 def _recorded_render_sha(
@@ -157,10 +169,22 @@ def render_instance(
     byte 比較 → 書込の順で処理する。
 
     `cap_counters`/`cost_caps`（finding #1）: 実際に render した（resume で
-    skip しなかった）unit のみ compute（2 回の subprocess render の実測
-    経過時間）/storage（書き込んだ PCM bytes 数）を計上する。cap 超過を
-    検出したら `stop_event` ledger event を記帳し `CostCapExceededError` で
-    fail-closed する — 呼び出し元 `run_render_stage` の次 unit には進まない。
+    skip しなかった）unit のみ compute/storage（書き込んだ PCM bytes 数）を
+    計上する。cap 超過を検出したら `stop_event` ledger event を記帳し
+    `CostCapExceededError` で fail-closed する — 呼び出し元
+    `run_render_stage` の次 unit には進まない。
+
+    **compute 課金**（round 14 finding #2）: compute へ課金する値は
+    2 回の fresh-process render worker（`_render_worker.py`）が自ら報告した
+    `cpu_seconds`（`resource.getrusage` RUSAGE_SELF+RUSAGE_CHILDREN）の合計
+    であり、wall-clock 経過時間ではない（Gate 1 が定義する compute cap の
+    単位は CPU 秒数であり、wall time は並行実行時に過小計上する —
+    `campaign/caps.py` の `validate_worker_cpu_seconds()` docstring 参照）。
+    wall time は `RenderOutcome.wall_seconds` として informational にのみ
+    保持し、呼び出し元 `run_render_stage` がそれを ledger `render` event へ
+    転記する。worker が無効な `cpu_seconds` を報告した場合は
+    `WorkerCpuSecondsInvalidError` を送出する（測定は完了しているが
+    stale/invalid unit として fail-closed — PCM は書き込まない）。
     """
     pcm_path = _pcm_path(campaign, row_id, probe_index)
     recorded_sha = _recorded_render_sha(campaign.ledger.entries, row_id, probe_index)
@@ -186,8 +210,9 @@ def render_instance(
         "probe_index": probe_index,
     }
     payload_json = json.dumps(payload)
-    t0 = time.perf_counter()
+    wall_t0 = time.perf_counter()
     outputs: list[str] = []
+    cpu_seconds_total = 0.0
     for _ in range(2):
         proc = subprocess.run(
             [
@@ -201,8 +226,14 @@ def render_instance(
             timeout=timeout_s,
             check=True,
         )
-        outputs.append(proc.stdout.strip())
-    elapsed = time.perf_counter() - t0
+        worker_result = json.loads(proc.stdout)
+        cpu_seconds_total += validate_worker_cpu_seconds(
+            worker_result.get("cpu_seconds"),
+            context=f"render_stage: fresh-process worker for row_id={row_id!r} "
+            f"probe_index={probe_index}",
+        )
+        outputs.append(worker_result["pcm_hex"])
+    wall_seconds = time.perf_counter() - wall_t0
     a, b = outputs
     if a != b:
         raise RenderNondeterministicError(row_id, probe_index)
@@ -220,7 +251,7 @@ def render_instance(
         # under per_unit_fixed). No cost_caps declared -> no budget dimension
         # tracked (same "cap not yet frozen" posture as compute/storage).
         budget_charge = cost_caps.budget_charge_per_work_unit() if cost_caps is not None else 0.0
-        cap_counters.add(compute=elapsed, storage=len(pcm_bytes), budget=budget_charge)
+        cap_counters.add(compute=cpu_seconds_total, storage=len(pcm_bytes), budget=budget_charge)
         # Persist immediately (finding #1: counters must survive across
         # subcommands) — before the breach check below.
         save_cap_counters(campaign.campaign_dir, cap_counters)
@@ -230,7 +261,14 @@ def render_instance(
                 campaign.ledger.append(decision.event_payload)
                 raise CostCapExceededError(decision.detail)
 
-    return RenderOutcome(row_id=row_id, probe_index=probe_index, status="rendered", sha256=sha)
+    return RenderOutcome(
+        row_id=row_id,
+        probe_index=probe_index,
+        status="rendered",
+        sha256=sha,
+        wall_seconds=wall_seconds,
+        cpu_seconds=cpu_seconds_total,
+    )
 
 
 def _refuse_if_pre_unseal_holdout(
@@ -309,6 +347,21 @@ def run_render_stage(
                 }
             )
             raise exc
+        except WorkerCpuSecondsInvalidError as exc:
+            # round 14 finding #2: a fresh-process render worker reported a
+            # missing/non-finite/negative cpu_seconds — stale/invalid unit,
+            # fail-closed (no PCM was published for it).
+            campaign.ledger.append(
+                {
+                    "kind": "stop_event",
+                    "reason": "INVALID_RENDER_WORKER_CPU_SECONDS",
+                    "row_id": unit.row_id,
+                    "probe_index": unit.probe_index,
+                    "stage": stage,
+                    "detail": str(exc),
+                }
+            )
+            raise exc
         outcomes.append(outcome)
         if outcome.status == "rendered":
             campaign.ledger.append(
@@ -320,6 +373,10 @@ def run_render_stage(
                     "probe_index": unit.probe_index,
                     "sha256": outcome.sha256,
                     "stage": stage,
+                    # round 14 finding #2: cpu_seconds is what was charged to
+                    # the compute cap; wall_seconds is informational only.
+                    "wall_seconds": outcome.wall_seconds,
+                    "cpu_seconds": outcome.cpu_seconds,
                 }
             )
 

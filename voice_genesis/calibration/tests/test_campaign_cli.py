@@ -9,9 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from voice_genesis.calibration.campaign import cli, holdout_stage, render_stage
+from voice_genesis.calibration.campaign import cli, holdout_stage, measure_stage, render_stage
 from voice_genesis.calibration.campaign.caps import CapCounters, save_cap_counters
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
+from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import candidates_for_meter
 from voice_genesis.calibration.vocab import MeterId
 
@@ -261,7 +262,7 @@ def test_gate1_approval_not_bound_to_frozen_manifest_is_refused(
 
     # fail-closed with zero side effects: no renders/ledger growth.
     campaign = load_frozen_campaign(campaign_dir, secret_root)
-    assert len(campaign.ledger.entries) == 1  # only the c0_freeze event
+    assert len(campaign.ledger.entries) == 2  # c0_freeze + split_frozen (round 14 finding #1)
     assert not campaign.renders_dir.exists()
 
 
@@ -327,7 +328,7 @@ def test_c2_before_c1_is_refused_by_phase_order(
     assert "c2-baseline_requires_FIXTURE_VALID" in out
 
     campaign = load_frozen_campaign(campaign_dir, secret_root)
-    assert len(campaign.ledger.entries) == 1  # only the c0_freeze event
+    assert len(campaign.ledger.entries) == 2  # c0_freeze + split_frozen (round 14 finding #1)
 
 
 def test_c3b_selection_after_unseal_is_refused_by_phase_order(
@@ -646,6 +647,89 @@ def test_c3b_selection_feeds_selected_f0_to_f0_dependent_candidate(
     assert f0_calls
     apgt_row_ids = {mr.row_id for mr in subset}
     assert all(m["row_id"] in apgt_row_ids for m in f0_calls)
+
+
+# ---------------------------------------------------------------------------
+# round 14 finding #3: F0 repeat-record reuse must reject duplicates/partial
+# coverage as stale, never average them into two_stage_median().
+# ---------------------------------------------------------------------------
+
+
+def _fake_meter_call(
+    candidate_id: str, row_id: str, probe_index: int, repeat_kind: str, repeat_index: int, value: float
+) -> dict[str, object]:
+    return {
+        "kind": "meter_call",
+        "row_id": row_id,
+        "probe_index": probe_index,
+        "candidate_id": candidate_id,
+        "repeat_kind": repeat_kind,
+        "repeat_index": repeat_index,
+        **measure_stage.meter_output_to_dict(MeterOutput(values={"f0_hz": value})),
+    }
+
+
+def test_f0_reuse_refuses_duplicated_repeat_record_as_stale(tmp_path: Path) -> None:
+    """round 14 finding #3 regression: `cli._reusable_f0_values_by_process`
+    (used by `_build_f0_by_instance` for C3b/C4's F0 reuse) previously did
+    its own subset-containment ledger scan and unconditionally appended
+    every matching value — a duplicated `meter_call` for the same
+    `(repeat_kind, repeat_index)` key slipped past `_completed_meter_call_
+    records()`'s duplicate-key rejection and fed an extra f0_hz value into
+    `two_stage_median()`. It now delegates to that shared reconstruction
+    helper directly, so the same duplicate must refuse with the stale code
+    (`StaleMeasurementError`) and compute no F0 for the instance."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    candidate_id = "F0-B0-CURRENT"
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "within", i, 100.0 + i))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "fresh", i, 200.0 + i))
+    # duplicate ledger entry for the same (repeat_kind="within", repeat_index=0) key.
+    campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "within", 0, 999.0))
+    entries_before = len(campaign.ledger.entries)
+
+    with pytest.raises(measure_stage.StaleMeasurementError):
+        cli._build_f0_by_instance(
+            campaign,
+            [("r1", 0)],
+            candidate_id,
+            {"r1": 48000},
+            max_workers=1,
+            cap_counters=None,
+            cost_caps=None,
+        )
+
+    # refusal is read-only: no F0 was computed, and no new ledger entry was
+    # appended chasing a fresh re-measurement of an already-duplicated key.
+    assert len(campaign.ledger.entries) == entries_before
+
+
+def test_f0_reuse_accepts_exactly_complete_non_duplicated_coverage(tmp_path: Path) -> None:
+    """Companion to the duplicate-refusal test above: exactly within3+fresh3,
+    no duplicates, is reused (not refused, not re-measured)."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    candidate_id = "F0-B0-CURRENT"
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "within", i, 100.0))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "fresh", i, 100.0))
+    entries_before = len(campaign.ledger.entries)
+
+    result = cli._build_f0_by_instance(
+        campaign,
+        [("r1", 0)],
+        candidate_id,
+        {"r1": 48000},
+        max_workers=1,
+        cap_counters=None,
+        cost_caps=None,
+    )
+    assert result == {("r1", 0): pytest.approx(100.0)}
+    # reused, not re-measured: no new ledger entries.
+    assert len(campaign.ledger.entries) == entries_before
 
 
 # ---------------------------------------------------------------------------

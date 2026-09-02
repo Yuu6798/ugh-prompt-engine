@@ -2027,3 +2027,175 @@ def test_core_payload_excludes_only_secret_and_identity_bookkeeping(
         "authorization_nonce",
     ):
         assert key not in stripped
+
+
+# ---------------------------------------------------------------------------
+# round 14 finding #1: armed_freeze() must emit split_frozen so the real
+# C0 -> C1 -> C2 -> C3a -> C3b -> unseal -> C4 -> close production path
+# (driven through campaign/cli.py exactly like an operator would run it)
+# never hits BLOCKED_LEAKAGE.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_armed_freeze_through_full_campaign_cli_never_hits_blocked_leakage(
+    tmp_path: Path,
+    clean_checkout: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Before round 14 finding #1, no production code ever emitted a
+    ``split_frozen`` ledger event, so `provenance.Ledger.check_leakage`
+    (`_verified_split_freeze_commitment`) unconditionally returned
+    `BLOCKED_LEAKAGE` for *every* real armed campaign — the C0 freeze
+    manifest was internally valid but the campaign could never actually run
+    a C4 holdout render. This test drives the real production path (real
+    `armed_freeze()`, real `campaign/cli.py` subcommand dispatch, real
+    `provenance.Ledger.check_leakage`) end to end and asserts it never
+    blocks on leakage.
+
+    Rendering the full 456-row canonical matrix here would take well over
+    an hour, so `build_matrix()` is monkeypatched at every call site that
+    the freeze/CLI/leakage-check path actually uses (`c0_freeze.py`,
+    `campaign/cli.py`, and `fixtures.matrix.build_matrix` itself — the
+    latter covers `provenance.check_leakage`'s own local re-import) to a
+    tiny *real* 4-row F0_CONTROL TRUTH_CORE slice. Because every one of
+    those call sites is patched to the same tiny matrix, `check_leakage`'s
+    canonical-row-coverage checks (§7) stay internally self-consistent —
+    the point under test (split_frozen wiring) is exercised exactly as in
+    production, only the row *count* is reduced for tractability.
+    """
+    import voice_genesis.calibration.fixtures.matrix as matrix_mod
+    from voice_genesis.calibration.campaign import cli as campaign_cli
+    from voice_genesis.calibration.fixtures.matrix import build_matrix as real_build_matrix
+    from voice_genesis.calibration.provenance import Ledger
+    from voice_genesis.calibration.vocab import BlockedCode
+
+    tiny_matrix = tuple(
+        mr
+        for mr in real_build_matrix()
+        if mr.row.family == "F0_CONTROL" and mr.row.block == "TRUTH_CORE"
+    )[:4]
+    assert len(tiny_matrix) == 4
+
+    def fake_build_matrix() -> list[object]:
+        return list(tiny_matrix)
+
+    # All 3 binding sites `build_matrix()` reaches from the freeze/CLI/
+    # leakage-check path (see docstring above).
+    monkeypatch.setattr(matrix_mod, "build_matrix", fake_build_matrix)
+    monkeypatch.setattr(c0_freeze, "build_matrix", fake_build_matrix)
+    monkeypatch.setattr(campaign_cli, "build_matrix", fake_build_matrix)
+
+    approval_dir = tmp_path / "approvals"
+    secret_dir = tmp_path / "secrets"
+    campaigns_dir = tmp_path / "campaigns"
+    approval_dir.mkdir()
+    # F0_CONTROL candidates claim construct "fundamental_frequency", not the
+    # module default scope ("formant_frequency") — freeze against the scope
+    # this campaign actually needs.
+    _write_gate1(approval_dir, scope=["fundamental_frequency"])
+    dry_report = c0_freeze.dry_run(_REPO_ROOT, approval_dir, os.environ)
+    assert not dry_report.validation.is_blocked, dry_report.validation.missing_required_keys
+    _write_gate2(approval_dir, dry_report.manifest_core_sha)
+
+    freeze_env = dict(os.environ)
+    freeze_env["VG_CAL_C0_FREEZE_AUTHORIZED"] = "1"
+    freeze_result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=freeze_env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert freeze_result.outcome == c0_freeze.FreezeOutcome.PUBLISHED, freeze_result.detail
+    campaign_dir = freeze_result.campaign_dir
+    assert campaign_dir is not None
+
+    # The fix itself: the freeze event sequence must now be exactly
+    # [c0_freeze, split_frozen] — this is the event `check_leakage` requires
+    # and that no production code emitted before round 14 finding #1.
+    frozen_entries = Ledger(campaign_dir / "ledger.jsonl").entries
+    assert [e.payload.get("kind") for e in frozen_entries] == ["c0_freeze", "split_frozen"]
+    manifest = json.loads((campaign_dir / "c0_manifest.json").read_text(encoding="utf-8"))
+    split_frozen_payload = frozen_entries[1].payload
+    assert split_frozen_payload["realized_split_map_hash"] == manifest["realized_split_sha"]
+    assert split_frozen_payload["seal_commitment"] == manifest["commitments"]["split_secret_sha256"]
+
+    monkeypatch.setenv(campaign_cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    def run_stage(subcommand: str) -> dict[str, object]:
+        exit_code = campaign_cli.main(
+            [
+                subcommand,
+                "--campaign-dir",
+                str(campaign_dir),
+                "--secret-dir",
+                str(secret_dir),
+                "--approval-dir",
+                str(approval_dir),
+                "--armed",
+            ]
+        )
+        out = json.loads(capsys.readouterr().out)
+        assert exit_code == 0, out
+        assert out.get("result") == "OK", out
+        assert out.get("result") != "BLOCKED_LEAKAGE", out
+        return out
+
+    # plan (read-only, not gated by --armed dispatch at all).
+    plan_exit = campaign_cli.main(
+        ["plan", "--campaign-dir", str(campaign_dir), "--secret-dir", str(secret_dir)]
+    )
+    assert plan_exit == 0
+    capsys.readouterr()
+
+    run_stage("c1-fixtures")
+    run_stage("c2-baseline")
+    run_stage("c3a-f0-selection")
+    run_stage("c3b-selection")
+
+    from ._campaign_fixture import write_gate3_approval
+
+    write_gate3_approval(approval_dir)
+    run_stage("unseal")
+
+    # This is the actual regression assertion: before round 14 finding #1,
+    # `check_leakage` inside c4-holdout's pre-render leakage gate always
+    # returned BLOCKED_LEAKAGE here (no `split_frozen` event existed for it
+    # to authenticate the realized holdout set against), and render_stage
+    # raised `RenderLeakageBlockedError` — this call would never reach
+    # `result == "OK"`.
+    c4_out = run_stage("c4-holdout")
+    assert "holdout_executed_valid_entry_sha" in c4_out
+
+    run_stage("close")
+
+    # Independent confirmation, calling `check_leakage` directly the same
+    # way `render_stage._refuse_if_pre_unseal_holdout` does in production.
+    from voice_genesis.calibration.campaign.state import load_frozen_campaign
+    from voice_genesis.calibration.campaign.render_stage import (
+        STRATUM_FACTOR_NAMES as render_stratum_names,
+    )
+    from voice_genesis.calibration.campaign.render_stage import _row_inputs_for_split
+    from voice_genesis.calibration.fixtures.controls import control_row_ids
+    from voice_genesis.calibration.vocab import Split
+
+    campaign = load_frozen_campaign(campaign_dir, secret_dir)
+    control_ids = control_row_ids(tiny_matrix)
+    holdout_row_ids = frozenset(
+        rid for rid, split in campaign.realized_split.assignment.items() if split == Split.HOLDOUT
+    )
+    assert holdout_row_ids - control_ids, "test setup must realize a non-control holdout row"
+    result = Ledger.check_leakage(
+        campaign.ledger.entries,
+        holdout_row_ids,
+        None,
+        control_row_ids=control_ids,
+        realized_split_map=campaign.realized_split,
+        split_verification_rows=_row_inputs_for_split(tiny_matrix, render_stratum_names),
+        split_secret=campaign.split_secret,
+    )
+    assert result.blocked is None, result.blocked
+    assert result.blocked != BlockedCode.BLOCKED_LEAKAGE
