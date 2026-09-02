@@ -477,6 +477,7 @@ def render_and_measure_holdout(
     candidates_by_family: Mapping[str, Sequence[Candidate]],
     max_workers: int = 1,
     f0_by_instance: Mapping[tuple[str, int], float] | None = None,
+    f0_unusable_instances: frozenset[tuple[str, int]] = frozenset(),
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
 ) -> dict[str, list[measure_stage.MeasurementRecord]]:
@@ -487,7 +488,10 @@ def render_and_measure_holdout(
     素通しで `measure_stage.run_measure_stage` へ渡す — 呼び出し元
     (`cli._run_c4`) が C3b と同じ規約（選択済み F0 candidate の instance 単位
     実測、fixture truth は使わない）で構築する。`cap_counters`/`cost_caps`
-    （finding #1）は render/measure 双方へ素通しする。"""
+    （finding #1）は render/measure 双方へ素通しする。round 27 ADOPT (1)
+    (`[UNDERSPEC-CAL-D61]`): `f0_unusable_instances` も同様に素通しし、
+    F0-dependent candidate を該当 instance 上で一切呼ばせない（詳細は
+    `measure_stage.run_measure_stage()`/`cli._build_f0_by_instance()`）。"""
     run_render_stage(campaign, matrix_rows, stage="c4", cap_counters=cap_counters, cost_caps=cost_caps)
 
     assignment = campaign.realized_split.assignment
@@ -501,6 +505,7 @@ def render_and_measure_holdout(
             candidates,
             sr_by_row=sr_by_row,
             f0_by_instance=f0_by_instance,
+            f0_unusable_instances=f0_unusable_instances,
             max_workers=max_workers,
             cap_counters=cap_counters,
             cost_caps=cost_caps,

@@ -789,6 +789,7 @@ def test_f0_reuse_refuses_duplicated_repeat_record_as_stale(tmp_path: Path) -> N
             max_workers=1,
             cap_counters=None,
             cost_caps=None,
+            stage="c3b",
         )
 
     # refusal is read-only: no F0 was computed, and no new ledger entry was
@@ -808,7 +809,7 @@ def test_f0_reuse_accepts_exactly_complete_non_duplicated_coverage(tmp_path: Pat
         campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "fresh", i, 100.0))
     entries_before = len(campaign.ledger.entries)
 
-    result = cli._build_f0_by_instance(
+    result, unusable = cli._build_f0_by_instance(
         campaign,
         [("r1", 0)],
         candidate_id,
@@ -816,10 +817,99 @@ def test_f0_reuse_accepts_exactly_complete_non_duplicated_coverage(tmp_path: Pat
         max_workers=1,
         cap_counters=None,
         cost_caps=None,
+        stage="c3b",
     )
     assert result == {("r1", 0): pytest.approx(100.0)}
+    assert unusable == frozenset()
     # reused, not re-measured: no new ledger entries.
     assert len(campaign.ledger.entries) == entries_before
+
+
+# ---------------------------------------------------------------------------
+# round 27 ADOPT (1) (`[UNDERSPEC-CAL-D61]`) "Reject unusable F0 values
+# before downstream injection": a non-finite/non-positive f0_hz repeat
+# (durably round-tripped through the ledger since round 26,
+# `[UNDERSPEC-CAL-D58]`) must never reach `f0_by_instance` — the instance is
+# excluded and recorded as unusable (with an `f0_injection_rejected` ledger
+# event) instead.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [math.nan, math.inf, 0.0, -1.0],
+    ids=["nan", "inf", "zero", "negative"],
+)
+def test_f0_injection_rejects_unusable_repeat(tmp_path: Path, bad_value: float) -> None:
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    candidate_id = "F0-B0-CURRENT"
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "within", i, 100.0))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        # 1 of the 3 fresh repeats carries the unusable value; the rest are
+        # ordinary valid F0 -- a single bad repeat must reject the whole
+        # instance, not just get outvoted by the two-stage median.
+        value = bad_value if i == 0 else 100.0
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "fresh", i, value))
+    entries_before = len(campaign.ledger.entries)
+
+    result, unusable = cli._build_f0_by_instance(
+        campaign,
+        [("r1", 0)],
+        candidate_id,
+        {"r1": 48000},
+        max_workers=1,
+        cap_counters=None,
+        cost_caps=None,
+        stage="c3b",
+    )
+    assert result == {}
+    assert unusable == frozenset({("r1", 0)})
+    # read-only refusal: still reused from the existing ledger coverage, no
+    # re-measurement.
+    assert len(campaign.ledger.entries) == entries_before + 1  # + the rejection event
+
+    rejected = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "f0_injection_rejected"
+    ]
+    assert len(rejected) == 1
+    assert rejected[0]["stage"] == "c3b"
+    assert rejected[0]["reason"] == "F0_UNUSABLE"
+    assert rejected[0]["instances"] == [["r1", 0]]
+
+
+def test_f0_injection_accepts_instance_when_every_repeat_is_valid(tmp_path: Path) -> None:
+    """Companion to the rejection test above: an instance with an entirely
+    valid, finite, strictly-positive F0 repeat set is unaffected — it flows
+    through to `f0_by_instance` and is never recorded as unusable."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    candidate_id = "F0-B0-CURRENT"
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "within", i, 150.0))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "fresh", i, 150.0))
+
+    result, unusable = cli._build_f0_by_instance(
+        campaign,
+        [("r1", 0)],
+        candidate_id,
+        {"r1": 48000},
+        max_workers=1,
+        cap_counters=None,
+        cost_caps=None,
+        stage="c4",
+    )
+    assert result == {("r1", 0): pytest.approx(150.0)}
+    assert unusable == frozenset()
+    assert not [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "f0_injection_rejected"
+    ]
 
 
 # ---------------------------------------------------------------------------

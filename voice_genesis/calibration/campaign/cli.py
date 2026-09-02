@@ -75,6 +75,7 @@ import argparse
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import platform
 import resource
@@ -477,14 +478,48 @@ def _build_f0_by_instance(
     max_workers: int,
     cap_counters: CapCounters | None,
     cost_caps: CostCaps | None,
-) -> dict[tuple[str, int], float]:
+    stage: str,
+) -> tuple[dict[tuple[str, int], float], frozenset[tuple[str, int]]]:
     """finding #2: 選択済み F0 candidate を `instances` の各 instance 上で
     測定し（ledger に within3+fresh3 が既に揃っていれば再測定しない）、
     `observables.two_stage_median` で instance ごとに 1 スカラーへ集約する。
     F0_CONTROL 以外の family の instance（TILT_GT 等の実音源）に対して、
-    その audio 自体から F0 を検出する — fixture の truth F0 は使わない。"""
+    その audio 自体から F0 を検出する — fixture の truth F0 は使わない。
+
+    round 27 ADOPT (1) (`[UNDERSPEC-CAL-D61]`) "Reject unusable F0 values
+    before downstream injection": round 26 (`[UNDERSPEC-CAL-D58]`) made a
+    non-finite `f0_hz` repeat durably round-trip through the ledger instead
+    of aborting the work unit inside `canonical_json()` — so a NaN/Inf
+    repeat (or a two-stage-median aggregate that comes out non-finite even
+    when every repeat is individually valid) now silently reaches this
+    function's `result` dict, from where `_params_with_f0()` injects it into
+    every F0-dependent candidate's `params["f0_hz"]`.
+    `formant_cepstral.cepstral_envelope_db()` treats a non-finite/
+    non-positive `f0_hz` as "use the default lifter cutoff" rather than
+    reporting missing (unlike `aperiodicity.py`/`tilt_harmonic.py`'s own
+    F0-dependent candidates, which already self-report OUTPUT_MISSING/
+    INPUT_MISSING on invalid F0) — so an unusable F0 could freeze a finite,
+    plausible-looking formant output as if a valid selected F0 had been
+    used, and be indistinguishable downstream from a genuine measurement.
+
+    Guard (the meter implementation is frozen — the guard lives here, in
+    the runner): every individual repeat AND the two-stage-median aggregate
+    must be `math.isfinite` and strictly positive. If not, the instance is
+    excluded from the returned `result` (its F0 is never injected into any
+    candidate's params for this stage) and is instead added to the second
+    return value, `f0_unusable_instances`. Callers pass that set through to
+    `measure_stage.run_measure_stage()`/`holdout_stage.
+    render_and_measure_holdout()`, which skip calling any
+    `measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES` candidate on these
+    instances entirely — the candidate's `measure()` is never invoked, so
+    `formant_cepstral.py`'s own default-cutoff substitution is never
+    reached (this is why merely not injecting the key would not have been
+    enough: the call itself must not happen). A non-empty rejection set is
+    recorded as an `f0_injection_rejected` ledger event (`reason:
+    "F0_UNUSABLE"`, tagged with `stage`) for provenance."""
     f0_candidate = candidate_by_id(f0_candidate_id)
     result: dict[tuple[str, int], float] = {}
+    unusable: set[tuple[str, int]] = set()
     for row_id, probe_index in sorted(set(instances)):
         by_process = _reusable_f0_values_by_process(
             campaign, f0_candidate_id, row_id, probe_index
@@ -506,9 +541,31 @@ def _build_f0_by_instance(
                 if f0 is None:
                     continue
                 by_process.setdefault(r.process_id, []).append(float(f0))
-        if by_process:
-            result[(row_id, probe_index)] = two_stage_median(by_process)
-    return result
+        if not by_process:
+            continue
+        all_repeats_usable = all(
+            math.isfinite(v) and v > 0.0
+            for repeats in by_process.values()
+            for v in repeats
+        )
+        if not all_repeats_usable:
+            unusable.add((row_id, probe_index))
+            continue
+        aggregate = two_stage_median(by_process)
+        if not math.isfinite(aggregate) or aggregate <= 0.0:
+            unusable.add((row_id, probe_index))
+            continue
+        result[(row_id, probe_index)] = aggregate
+    if unusable:
+        campaign.ledger.append(
+            {
+                "kind": "f0_injection_rejected",
+                "stage": stage,
+                "reason": "F0_UNUSABLE",
+                "instances": [[rid, pidx] for rid, pidx in sorted(unusable)],
+            }
+        )
+    return result, frozenset(unusable)
 
 
 def _positive_row_ids_for_selection(
@@ -770,9 +827,10 @@ def _run_c3b(
         )
 
     f0_by_instance: dict[tuple[str, int], float] = {}
+    f0_unusable_instances: frozenset[tuple[str, int]] = frozenset()
     if f0_selected_id is not None:
         all_instances = sorted({inst for insts in instances_by_family.values() for inst in insts})
-        f0_by_instance = _build_f0_by_instance(
+        f0_by_instance, f0_unusable_instances = _build_f0_by_instance(
             campaign,
             all_instances,
             f0_selected_id,
@@ -780,6 +838,7 @@ def _run_c3b(
             max_workers=workers,
             cap_counters=cap_counters,
             cost_caps=cost_caps,
+            stage="c3b",
         )
 
     criteria_by_family: dict[str, list] = {}
@@ -805,6 +864,7 @@ def _run_c3b(
             meter_candidates,
             sr_by_row=sr_by_row,
             f0_by_instance=f0_by_instance,
+            f0_unusable_instances=f0_unusable_instances,
             max_workers=workers,
             cap_counters=cap_counters,
             cost_caps=cost_caps,
@@ -929,6 +989,7 @@ def _run_c4(
     assignment = campaign.realized_split.assignment
     sr_by_row = {mr.row_id: mr.row.sr_hz for mr in matrix_rows}
     f0_by_instance: dict[tuple[str, int], float] = {}
+    f0_unusable_instances: frozenset[tuple[str, int]] = frozenset()
     if f0_selected_id is not None:
         all_instances = sorted(
             {
@@ -937,7 +998,7 @@ def _run_c4(
                 for inst in workunits.c4_holdout_instances(matrix_rows, assignment, family=family)
             }
         )
-        f0_by_instance = _build_f0_by_instance(
+        f0_by_instance, f0_unusable_instances = _build_f0_by_instance(
             campaign,
             all_instances,
             f0_selected_id,
@@ -945,6 +1006,7 @@ def _run_c4(
             max_workers=workers,
             cap_counters=cap_counters,
             cost_caps=cost_caps,
+            stage="c4",
         )
 
     records_by_family = holdout_stage.render_and_measure_holdout(
@@ -953,6 +1015,7 @@ def _run_c4(
         candidates_by_family=candidates_by_family,
         max_workers=workers,
         f0_by_instance=f0_by_instance,
+        f0_unusable_instances=f0_unusable_instances,
         cap_counters=cap_counters,
         cost_caps=cost_caps,
     )

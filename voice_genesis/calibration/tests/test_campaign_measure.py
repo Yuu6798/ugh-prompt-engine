@@ -19,8 +19,9 @@ from voice_genesis.calibration.campaign.caps import cap_counters_from_ledger, lo
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.candidates import adapter
 from voice_genesis.calibration.candidates.adapter import MeterOutput
-from voice_genesis.calibration.candidates.registry import candidate_by_id
+from voice_genesis.calibration.candidates.registry import candidate_by_id, candidates_for_meter
 from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
+from voice_genesis.calibration.vocab import MeterId
 
 from ._campaign_fixture import build_tiny_campaign, small_matrix_subset
 
@@ -1326,3 +1327,83 @@ def test_measure_nonfinite_work_unit_resume_reuses_without_remeasuring(
     within_second = [r for r in second if r.repeat_kind == "within"]
     assert all(math.isnan(r.output.values["f0_hz"]) for r in within_second)
     assert all(adapter.unexplained_nonfinite(r.output) for r in within_second)
+
+
+# ---------------------------------------------------------------------------
+# round 27 ADOPT (1) (`[UNDERSPEC-CAL-D61]`): `f0_unusable_instances` must
+# make `run_measure_stage()` skip F0-dependent candidates entirely on the
+# named instances (never call `measure()`, no ledger `meter_call`), while
+# leaving non-F0-dependent candidates and F0-usable instances untouched.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_run_measure_stage_skips_f0_dependent_candidate_on_unusable_instance(
+    tmp_path: Path,
+) -> None:
+    """An instance in `f0_unusable_instances` must never reach an
+    `F0_DEPENDENT_ALGORITHM_FAMILIES` candidate's `measure()` at all — no
+    `MeasurementRecord`, no ledger `meter_call` event, no wasted compute
+    (`formant_cepstral.py`'s own default-cutoff substitution on invalid F0
+    is therefore never reached). A non-F0-dependent candidate on the very
+    same instance is unaffected."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+    row = subset[0]
+
+    formant_candidate = next(
+        c
+        for c in candidates_for_meter(MeterId.M3_FORMANTS)
+        if c.algorithm_family == "CEPSTRAL_POLES"
+    )
+    independent_candidate = candidate_by_id("M3-B0-CURRENT-CENTROID")
+    assert independent_candidate.algorithm_family not in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+    assert formant_candidate.algorithm_family in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+
+    records = measure_stage.run_measure_stage(
+        campaign,
+        [(row.row_id, 0)],
+        [formant_candidate, independent_candidate],
+        sr_by_row={row.row_id: row.row.sr_hz},
+        f0_unusable_instances=frozenset({(row.row_id, 0)}),
+    )
+
+    seen_candidate_ids = {r.candidate_id for r in records}
+    assert seen_candidate_ids == {independent_candidate.candidate_id}
+    assert len(records) == measure_stage.WITHIN_PROCESS_REPEATS + measure_stage.FRESH_PROCESS_REPEATS
+
+    meter_calls = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"
+    ]
+    assert {m["candidate_id"] for m in meter_calls} == {independent_candidate.candidate_id}
+
+
+@pytest.mark.slow
+def test_run_measure_stage_measures_f0_dependent_candidate_when_instance_usable(
+    tmp_path: Path,
+) -> None:
+    """Companion to the skip test above: an instance NOT named in
+    `f0_unusable_instances` (the default, empty set) is measured normally —
+    the guard only ever removes coverage, it never adds a spurious skip."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+    row = subset[0]
+
+    formant_candidate = next(
+        c
+        for c in candidates_for_meter(MeterId.M3_FORMANTS)
+        if c.algorithm_family == "CEPSTRAL_POLES"
+    )
+
+    records = measure_stage.run_measure_stage(
+        campaign,
+        [(row.row_id, 0)],
+        [formant_candidate],
+        sr_by_row={row.row_id: row.row.sr_hz},
+    )
+    assert len(records) == measure_stage.WITHIN_PROCESS_REPEATS + measure_stage.FRESH_PROCESS_REPEATS
+    assert {r.candidate_id for r in records} == {formant_candidate.candidate_id}

@@ -243,6 +243,30 @@ PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY: Mapping[str, str] = {
 }
 
 
+#: round 27 ADOPT (1) (`[UNDERSPEC-CAL-D61]`): `algorithm_family` values whose
+#: `measure()` reads an injected `f0_hz` from `params` (mechanically
+#: transcribed from `candidates/impl/{aperiodicity,tilt_harmonic,
+#: formant_cepstral}.py` — the only implementations that call
+#: `params.get("f0_hz", ...)`; `F0_CONTROL` family candidates derive F0
+#: themselves and are excluded). `run_measure_stage()` uses this set together
+#: with `f0_unusable_instances` to make sure a candidate in this set is never
+#: even called (never receives an injected `f0_hz` key at all) on an instance
+#: whose selected-F0 aggregate failed the finite/strictly-positive guard in
+#: `cli._build_f0_by_instance()` — see that function's docstring for the full
+#: rationale (`formant_cepstral.py`'s own cutoff substitution on invalid F0
+#: is why "not injected" alone is not enough; the call itself must not
+#: happen).
+F0_DEPENDENT_ALGORITHM_FAMILIES: frozenset[str] = frozenset(
+    {
+        "HARMONIC_OLS",
+        "HARMONIC_THEILSEN",
+        "HARMONIC_RESIDUAL",
+        "D4C_WORLD",
+        "CEPSTRAL_POLES",
+    }
+)
+
+
 def primary_output_value(candidate: Candidate, output: MeterOutput) -> float | None:
     """`candidate.algorithm_family` の主要出力フィールド（`values` の 1 キー）
     を返す。missing/ineligible、または該当フィールド不在なら `None`。"""
@@ -957,16 +981,33 @@ def run_measure_stage(
     *,
     sr_by_row: Mapping[str, int],
     f0_by_instance: Mapping[tuple[str, int], float] | None = None,
+    f0_unusable_instances: frozenset[tuple[str, int]] = frozenset(),
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
     max_workers: int = 1,
 ) -> list[MeasurementRecord]:
     """`instances × candidates` の全 work unit を決定論的順序（instance →
-    candidate_id 昇順）で処理する。"""
+    candidate_id 昇順）で処理する。
+
+    round 27 ADOPT (1) (`[UNDERSPEC-CAL-D61]`): `f0_unusable_instances`
+    names instances whose selected-F0 per-instance aggregate was rejected by
+    `cli._build_f0_by_instance()`'s finite/strictly-positive guard. Any
+    candidate whose `algorithm_family` is in `F0_DEPENDENT_ALGORITHM_FAMILIES`
+    is skipped entirely (not called, no `MeasurementRecord` produced) for
+    those instances — the same "absent, as if unmeasured" treatment
+    `build_candidate_criteria()`/`candidate_fail_filter_report()` already
+    give any instance this candidate has no record for (their coverage/N_pos
+    accounting is denominator-driven from `records`, so an absent instance
+    is excluded rather than counted as a measured-but-missing failure).
+    Non-F0-dependent candidates and F0-usable instances are unaffected."""
     f0_map = f0_by_instance or {}
     all_records: list[MeasurementRecord] = []
     for row_id, probe_index in sorted(instances):
         for candidate in sorted(candidates, key=lambda c: c.candidate_id):
+            if (row_id, probe_index) in f0_unusable_instances and (
+                candidate.algorithm_family in F0_DEPENDENT_ALGORITHM_FAMILIES
+            ):
+                continue
             f0_hz = f0_map.get((row_id, probe_index))
             all_records.extend(
                 run_measurement_for_instance(
@@ -995,6 +1036,7 @@ __all__ = [
     "pcm_bytes_to_signal",
     "load_pcm_signal",
     "PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY",
+    "F0_DEPENDENT_ALGORITHM_FAMILIES",
     "primary_output_value",
     "meter_output_to_dict",
     "meter_output_from_dict",
