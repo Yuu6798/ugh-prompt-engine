@@ -17,6 +17,7 @@ import pytest
 from voice_genesis.calibration.campaign import measure_stage, render_stage
 from voice_genesis.calibration.campaign.caps import cap_counters_from_ledger, load_cap_counters
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
+from voice_genesis.calibration.candidates import adapter
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import candidate_by_id
 from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
@@ -649,7 +650,11 @@ def test_measure_repeat_2_of_3_fails_charges_surviving_successes_workers_1(
     # 3 attempts total: 2 discarded successes @2.0 + 1 failure @1.5.
     expected_compute = 2 * 2.0 + 1.5
     assert counters.compute_used == pytest.approx(expected_compute)
-    assert counters.budget_used == pytest.approx(3 * 5.0)  # 1 budget unit / attempt
+    # round 26 ADOPT (3) (`[UNDERSPEC-CAL-D59]`): 1 budget unit for the whole
+    # failed 3-attempt batch (one attempted measurement invocation), not 1
+    # per attempt -- this is the exact "failed 3-attempt batch under
+    # per_unit_fixed charges budget exactly once" regression.
+    assert counters.budget_used == pytest.approx(1 * 5.0)
 
     # no meter_call was ever appended for the failed unit.
     assert [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"] == []
@@ -661,9 +666,9 @@ def test_measure_repeat_2_of_3_fails_charges_surviving_successes_workers_1(
     # earlier render_stage.run_render_stage() setup call above was NOT given
     # cap_counters, so its own render units never landed in `counters` --
     # ledger reconstruction still sees them (1 budget unit per render event)
-    # alongside this test's own 3 charged attempts, so compare against that
+    # alongside this test's own 1 charged batch unit, so compare against that
     # full ledger-derived total rather than `counters.budget_used` directly.
-    expected_derived_budget = caps.budget_unit_cost * (len(render_events) + 3)
+    expected_derived_budget = caps.budget_unit_cost * (len(render_events) + 1)
     assert derived.budget_used == pytest.approx(expected_derived_budget)
 
 
@@ -746,7 +751,9 @@ def test_measure_one_of_three_concurrent_attempts_fails_charges_surviving_succes
 
     expected_compute = 2 * 2.0 + 1.5
     assert counters.compute_used == pytest.approx(expected_compute)
-    assert counters.budget_used == pytest.approx(3 * 5.0)
+    # round 26 ADOPT (3) (`[UNDERSPEC-CAL-D59]`): 1 budget unit for the whole
+    # failed batch, not 1 per attempt.
+    assert counters.budget_used == pytest.approx(1 * 5.0)
 
     derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
     render_events = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "render"]
@@ -755,9 +762,9 @@ def test_measure_one_of_three_concurrent_attempts_fails_charges_surviving_succes
     # earlier render_stage.run_render_stage() setup call above was NOT given
     # cap_counters, so its own render units never landed in `counters` --
     # ledger reconstruction still sees them (1 budget unit per render event)
-    # alongside this test's own 3 charged attempts, so compare against that
+    # alongside this test's own 1 charged batch unit, so compare against that
     # full ledger-derived total rather than `counters.budget_used` directly.
-    expected_derived_budget = caps.budget_unit_cost * (len(render_events) + 3)
+    expected_derived_budget = caps.budget_unit_cost * (len(render_events) + 1)
     assert derived.budget_used == pytest.approx(expected_derived_budget)
 
 
@@ -1056,3 +1063,266 @@ def test_resume_skips_already_completed_instance_and_only_appends_missing(tmp_pa
         ]
         assert len(calls) == per_instance_calls
         assert len({(c["repeat_kind"], c["repeat_index"]) for c in calls}) == per_instance_calls
+
+
+# ---------------------------------------------------------------------------
+# round 26 ADOPT (1) (`[UNDERSPEC-CAL-D58]`): a candidate emitting NaN/±Inf
+# must not crash `Ledger.append()` (canonical JSON forbids non-finite floats)
+# uncharged and unrecorded -- `meter_output_to_dict()` sanitizes the value to
+# `null` + a `nonfinite_kind` companion field before serialization, and
+# `meter_output_from_dict()` reconstructs the exact original float on
+# read-back so every downstream consumer (the `unexplained_nonfinite` fail
+# filter chief among them) still sees it.
+# ---------------------------------------------------------------------------
+
+_NONFINITE_CASES = [
+    pytest.param(math.nan, "nan", id="nan"),
+    pytest.param(math.inf, "inf", id="inf"),
+    pytest.param(-math.inf, "-inf", id="-inf"),
+]
+
+
+@pytest.mark.parametrize("bad_value,kind", _NONFINITE_CASES)
+def test_meter_output_to_dict_sanitizes_nonfinite_and_from_dict_roundtrips(
+    bad_value: float, kind: str
+) -> None:
+    output = MeterOutput(values={"f0_hz": bad_value, "f1_hz": 100.0})
+    payload = measure_stage.meter_output_to_dict(output)
+    assert payload["values"]["f0_hz"] is None
+    assert payload["values"]["f1_hz"] == 100.0
+    assert payload["nonfinite_kind"] == {"f0_hz": kind}
+
+    # must survive the same canonical serialization `Ledger.append()` uses
+    # (this is the exact call that used to raise `ValueError` on the raw
+    # non-finite float -- see the `meter_output_to_dict` docstring).
+    from voice_genesis.calibration.canonical import canonical_json
+
+    canonical_json(payload)  # must not raise
+
+    reconstructed = measure_stage.meter_output_from_dict(payload)
+    if kind == "nan":
+        assert math.isnan(reconstructed.values["f0_hz"])
+    else:
+        assert reconstructed.values["f0_hz"] == bad_value
+    assert reconstructed.values["f1_hz"] == 100.0
+    assert adapter.unexplained_nonfinite(reconstructed) is True
+
+
+def test_meter_output_to_dict_all_finite_leaves_nonfinite_kind_none() -> None:
+    output = MeterOutput(values={"f0_hz": 130.0})
+    payload = measure_stage.meter_output_to_dict(output)
+    assert payload["nonfinite_kind"] is None
+    reconstructed = measure_stage.meter_output_from_dict(payload)
+    assert reconstructed.values == {"f0_hz": 130.0}
+    assert adapter.unexplained_nonfinite(reconstructed) is False
+
+
+def test_meter_output_from_dict_rejects_null_value_without_nonfinite_kind() -> None:
+    with pytest.raises(ValueError, match="nonfinite_kind"):
+        measure_stage.meter_output_from_dict(
+            {
+                "values": {"f0_hz": None},
+                "missing_reason": None,
+                "ineligible": False,
+                "ineligible_reason": None,
+            }
+        )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("bad_value,kind", _NONFINITE_CASES)
+def test_measure_within_process_nonfinite_charges_and_records_nonfinite_kind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_value: float, kind: str
+) -> None:
+    """A within-process call returning NaN/±Inf must not crash
+    `run_measurement_for_instance` -- the work unit charges normally, all 6
+    `meter_call` events are durably appended (none lost to a failed
+    `Ledger.append()`), and the non-finite within-process records carry
+    `nonfinite_kind` while the (still finite, stubbed) fresh-process records
+    do not."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    row = subset[0]
+    candidate = candidate_by_id("F0-B0-CURRENT")
+
+    def _nonfinite_fn(signal, sr, params):
+        return MeterOutput(values={"f0_hz": bad_value})
+
+    monkeypatch.setattr(measure_stage, "resolve_measure_callable", lambda ref: _nonfinite_fn)
+    monkeypatch.setattr(
+        measure_stage.subprocess, "run", _fake_subprocess_run_with_cpu_seconds(2.0)
+    )
+
+    counters = CapCounters()
+    caps = CostCaps(
+        compute=1e9, storage=1_000_000_000, budget=1e9, budget_accounting_mode="local_zero_cost"
+    )
+    records = measure_stage.run_measurement_for_instance(
+        campaign,
+        candidate,
+        row_id=row.row_id,
+        probe_index=0,
+        sr_hz=row.row.sr_hz,
+        cap_counters=counters,
+        cost_caps=caps,
+    )
+    assert len(records) == measure_stage.WITHIN_PROCESS_REPEATS + measure_stage.FRESH_PROCESS_REPEATS
+
+    meter_calls = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"]
+    assert len(meter_calls) == len(records)
+    within_calls = [m for m in meter_calls if m["repeat_kind"] == "within"]
+    fresh_calls = [m for m in meter_calls if m["repeat_kind"] == "fresh"]
+    assert len(within_calls) == measure_stage.WITHIN_PROCESS_REPEATS
+    assert len(fresh_calls) == measure_stage.FRESH_PROCESS_REPEATS
+    assert all(m["values"]["f0_hz"] is None for m in within_calls)
+    assert all(m["nonfinite_kind"] == {"f0_hz": kind} for m in within_calls)
+    assert all(m["values"]["f0_hz"] == 130.0 for m in fresh_calls)
+    assert all(m["nonfinite_kind"] is None for m in fresh_calls)
+
+    # the work unit's own CPU (within + fresh) was charged -- not skipped
+    # because the ledger write nearly crashed.
+    assert counters.compute_used > 0.0
+
+    # the ledger append actually happened (canonical_json did not raise) --
+    # the chain is intact.
+    assert campaign.ledger.verify_chain().ok is True
+
+    reconstructed = measure_stage.meter_output_from_dict(within_calls[0])
+    assert adapter.unexplained_nonfinite(reconstructed) is True
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("bad_value,kind", _NONFINITE_CASES)
+def test_measure_fresh_worker_nonfinite_charges_and_records_nonfinite_kind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_value: float, kind: str
+) -> None:
+    """The same fix, exercised from the fresh-process worker side: the
+    worker itself calls `meter_output_to_dict()` to build its stdout JSON
+    (`_measure_worker.py`), so a NaN/±Inf worker result already arrives at
+    `_run_one_fresh_call` sanitized -- this pins that the parent correctly
+    forwards the sanitized `null` + `nonfinite_kind` payload straight into
+    the `meter_call` ledger event (no re-corruption on the way through)."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    row = subset[0]
+    candidate = candidate_by_id("F0-B0-CURRENT")
+
+    def fake_run(cmd, **kwargs):
+        return _FakeCompletedProcess(
+            stdout=json.dumps(
+                {
+                    "values": {"f0_hz": None},
+                    "missing_reason": None,
+                    "ineligible": False,
+                    "ineligible_reason": None,
+                    "nonfinite_kind": {"f0_hz": kind},
+                    "cpu_seconds": 2.0,
+                }
+            )
+        )
+
+    monkeypatch.setattr(measure_stage.subprocess, "run", fake_run)
+
+    counters = CapCounters()
+    caps = CostCaps(
+        compute=1e9, storage=1_000_000_000, budget=1e9, budget_accounting_mode="local_zero_cost"
+    )
+    records = measure_stage.run_measurement_for_instance(
+        campaign,
+        candidate,
+        row_id=row.row_id,
+        probe_index=0,
+        sr_hz=row.row.sr_hz,
+        cap_counters=counters,
+        cost_caps=caps,
+    )
+    assert len(records) == measure_stage.WITHIN_PROCESS_REPEATS + measure_stage.FRESH_PROCESS_REPEATS
+
+    meter_calls = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"]
+    fresh_calls = [m for m in meter_calls if m["repeat_kind"] == "fresh"]
+    within_calls = [m for m in meter_calls if m["repeat_kind"] == "within"]
+    assert len(fresh_calls) == measure_stage.FRESH_PROCESS_REPEATS
+    assert all(m["values"]["f0_hz"] is None for m in fresh_calls)
+    assert all(m["nonfinite_kind"] == {"f0_hz": kind} for m in fresh_calls)
+    assert all(m["nonfinite_kind"] is None for m in within_calls)
+    assert counters.compute_used > 0.0
+    assert campaign.ledger.verify_chain().ok is True
+
+    reconstructed = measure_stage.meter_output_from_dict(fresh_calls[0])
+    assert adapter.unexplained_nonfinite(reconstructed) is True
+
+
+@pytest.mark.slow
+def test_measure_nonfinite_work_unit_resume_reuses_without_remeasuring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a NaN-producing work unit has been charged and recorded, a
+    second call for the same (row_id, probe_index, candidate) must resume
+    from the durable `meter_call` records -- not re-invoke the measure
+    callable (which would re-charge compute the caller already paid for) --
+    and the resumed record's non-finite value must reconstruct correctly."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    row = subset[0]
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    call_count = {"n": 0}
+
+    def _nonfinite_fn(signal, sr, params):
+        call_count["n"] += 1
+        return MeterOutput(values={"f0_hz": math.nan})
+
+    monkeypatch.setattr(measure_stage, "resolve_measure_callable", lambda ref: _nonfinite_fn)
+    monkeypatch.setattr(
+        measure_stage.subprocess, "run", _fake_subprocess_run_with_cpu_seconds(2.0)
+    )
+
+    counters = CapCounters()
+    caps = CostCaps(
+        compute=1e9, storage=1_000_000_000, budget=1e9, budget_accounting_mode="local_zero_cost"
+    )
+    first = measure_stage.run_measurement_for_instance(
+        campaign,
+        candidate,
+        row_id=row.row_id,
+        probe_index=0,
+        sr_hz=row.row.sr_hz,
+        cap_counters=counters,
+        cost_caps=caps,
+    )
+    calls_after_first = call_count["n"]
+    compute_after_first = counters.compute_used
+    meter_calls_after_first = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"
+    ]
+    assert len(meter_calls_after_first) == len(first)
+
+    second = measure_stage.run_measurement_for_instance(
+        campaign,
+        candidate,
+        row_id=row.row_id,
+        probe_index=0,
+        sr_hz=row.row.sr_hz,
+        cap_counters=counters,
+        cost_caps=caps,
+    )
+    # resume returned the same records without invoking the measure callable
+    # again or re-appending/re-charging.
+    assert call_count["n"] == calls_after_first
+    assert counters.compute_used == pytest.approx(compute_after_first)
+    meter_calls_after_second = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"
+    ]
+    assert len(meter_calls_after_second) == len(meter_calls_after_first)
+    assert len(second) == len(first)
+    within_second = [r for r in second if r.repeat_kind == "within"]
+    assert all(math.isnan(r.output.values["f0_hz"]) for r in within_second)
+    assert all(adapter.unexplained_nonfinite(r.output) for r in within_second)

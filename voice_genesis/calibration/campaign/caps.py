@@ -257,21 +257,51 @@ def charge_worker_attempts_before_raising(
       all-succeeded path charges through its own normal (non-failure) route.
 
     Charging (`cap_counters.add()`: compute = the sum of every attempt's own
-    charge across both `successes` and `failures`, storage always 0, budget
-    = 1 work unit per attempt — `len(successes) + len(failures)` — the same
-    per-attempt granularity `worker_failed` already uses alone) happens once
-    for the whole batch, after every ledger event above is appended, then
-    persists and runs the cap check ONCE (a breach raises
+    charge across both `successes` and `failures`, storage always 0) happens
+    once for the whole batch, after every ledger event above is appended,
+    then persists and runs the cap check ONCE (a breach raises
     `CostCapExceededError` in preference to the original failure, same
     priority as every other charge-then-check call site in this package).
     Finally re-raises `failures[0][2]` — the first failed attempt in batch
     (i.e. start) order — unchanged, exactly as `charge_worker_failure` does
-    for a single failure."""
+    for a single failure.
+
+    round 26 ADOPT (3) (`[UNDERSPEC-CAL-D59]`) "Charge failed batches as one
+    outer work unit": budget is charged **once per batch** (this one call =
+    one attempted render/measurement invocation, the frozen definition of a
+    work unit — `cost_caps.CostCaps.budget_charge_per_work_unit()` docstring,
+    IMPLEMENTATION_MAP_v1.md §6.4), never once per individual attempt inside
+    it. The round 25 (`[UNDERSPEC-CAL-D57]`) revision that introduced this
+    function charged `budget_per_unit * (len(successes) + len(failures))` —
+    under `budget_accounting_mode="per_unit_fixed"` a failed 3-attempt
+    measure batch charged 3x the budget a same-shaped *successful* batch
+    charges (1x, via the ordinary `cap_counters.add(budget=budget_per_unit)`
+    call at each success call site), contradicting the frozen work-unit
+    definition. CPU stays charged **per attempt** (`total_compute` below is
+    unchanged, still the sum across every attempt) — only the budget
+    dimension collapses to 1 unit for the whole batch. The 1-unit charge is
+    recorded on exactly one ledger event (`budget_units: 1`; every other
+    event in the batch carries `budget_units: 0`) so
+    `cap_counters_from_ledger()` can recover the batch-level (not
+    attempt-level) unit count purely from the ledger — a `(row_id,
+    probe_index, candidate_id, stage)` key cannot be deduped the way
+    `meter_call`'s resume-guaranteed-unique key can, because a caller that
+    retries a fully-failed batch (no `meter_call`/`render` was ever
+    persisted, so resume sees the instance as unstarted and reattempts it)
+    legitimately produces a SECOND batch of `worker_failed`/
+    `worker_attempts_discarded` events at that same key — each such retry is
+    its own attempted work unit and must charge its own 1 budget unit, so
+    grouping by key alone would under-count real retries."""
     if not failures:
         raise ValueError(
             "campaign.caps.charge_worker_attempts_before_raising: "
             "failures must be non-empty"
         )
+    # round 26 (`[UNDERSPEC-CAL-D59]`): exactly one event in this batch
+    # carries the batch's single budget unit -- the `worker_attempts_discarded`
+    # event when present (it already represents "the rest of the batch"
+    # alongside the failures), otherwise the first `worker_failed` event.
+    batch_budget_units = 1
     if successes:
         discarded_payload: dict[str, object] = {
             "kind": "worker_attempts_discarded",
@@ -282,7 +312,9 @@ def charge_worker_attempts_before_raising(
                 {"cpu_seconds": cpu_seconds} for cpu_seconds in successes
             ],
             "storage_bytes": 0,
+            "budget_units": batch_budget_units,
         }
+        batch_budget_units = 0
         if candidate_id is not None:
             discarded_payload["candidate_id"] = candidate_id
         ledger.append(discarded_payload)
@@ -295,7 +327,9 @@ def charge_worker_attempts_before_raising(
             "failure_kind": failure_kind,
             "cpu_seconds": compute,
             "storage_bytes": 0,
+            "budget_units": batch_budget_units,
         }
+        batch_budget_units = 0
         if candidate_id is not None:
             failure_payload["candidate_id"] = candidate_id
         ledger.append(failure_payload)
@@ -304,10 +338,9 @@ def charge_worker_attempts_before_raising(
     if cap_counters is not None:
         total_compute = sum(successes) + sum(compute for _fk, compute, _c in failures)
         budget_per_unit = cost_caps.budget_charge_per_work_unit() if cost_caps is not None else 0.0
-        attempt_count = len(successes) + len(failures)
-        cap_counters.add(
-            compute=total_compute, storage=0, budget=budget_per_unit * attempt_count
-        )
+        # round 26 (`[UNDERSPEC-CAL-D59]`): 1 work unit for the whole batch,
+        # not `len(successes) + len(failures)`.
+        cap_counters.add(compute=total_compute, storage=0, budget=budget_per_unit)
         # Persist before the breach check (finding #1 pattern): the whole
         # batch's consumption is never lost even when this same batch trips
         # fail-closed below.
@@ -515,13 +548,25 @@ def cap_counters_from_ledger(
       `caps.charge_worker_failure()`): each event is 1 charged *attempt* at
       a fresh-process worker call (measure or render) that failed post-spawn
       (timeout / nonzero exit / malformed JSON) — unlike `meter_call`, there
-      is no 6-records-per-work-unit aggregation to dedup here, each event is
-      independently one attempt with its own `cpu_seconds`, so all of them
-      sum without dedup (repeated retries of a crashing candidate/instance
-      each contribute their own charge, by design — that is the point of
-      the fix). `storage_bytes` is always `0` on these events (no output is
-      ever persisted on a failed attempt). Counted toward `budget` the same
-      way `render`/`render_nondeterministic` are (1 work unit each).
+      is no 6-records-per-work-unit aggregation to dedup here, each event's
+      `cpu_seconds` is independently one attempt's own compute, so all of
+      them sum without dedup (repeated retries of a crashing
+      candidate/instance each contribute their own compute charge, by
+      design — that is the point of the fix). `storage_bytes` is always `0`
+      on these events (no output is ever persisted on a failed attempt).
+
+      round 26 ADOPT (3) (`[UNDERSPEC-CAL-D59]`): unlike `cpu_seconds`,
+      `budget` is NOT 1 unit per `worker_failed`/`worker_attempts_discarded`
+      event — `charge_worker_attempts_before_raising()` stamps exactly one
+      event per batch with `budget_units: 1` (every other event in that same
+      batch carries `budget_units: 0`), so the batch's single work-unit
+      charge is recovered by summing `budget_units` across both event kinds
+      rather than counting events/attempts. A `budget_units` field missing
+      (an event predating this revision) defaults to `1` — an overcount
+      relative to the true frozen-work-unit semantics for that specific
+      legacy event, but it matches this module's existing fail-closed
+      direction for reconstructing pre-revision ledger data (same posture as
+      the `within_cpu_seconds`-missing fallback above).
     - `worker_attempts_discarded` events (round 25, `[UNDERSPEC-CAL-D57]`,
       `caps.charge_worker_attempts_before_raising()`): recorded alongside a
       `worker_failed` event whenever a batch of worker attempts (measure's N
@@ -530,18 +575,24 @@ def cap_counters_from_ledger(
       attempt in the same batch failed) — the sibling successes' results
       are discarded (never a `meter_call`/`render` event) but the compute
       they already spent is not free. Each entry of
-      `discarded_success_attempts` is its own charged attempt (own
-      `cpu_seconds`, own budget work unit) — the same per-attempt
+      `discarded_success_attempts` is its own charged attempt for `compute`
+      (own `cpu_seconds`, summed without dedup — the same per-attempt
       granularity `worker_failed` uses, just carried as a list on 1 event
-      instead of 1 event each (the discarded attempts have no `failure_kind`
-      to key separate events on). `storage_bytes` is always `0` (a discarded
-      attempt's result is never persisted).
+      instead of 1 event each, since the discarded attempts have no
+      `failure_kind` to key separate events on). `storage_bytes` is always
+      `0` (a discarded attempt's result is never persisted). `budget` comes
+      from this event's own `budget_units` field exactly like `worker_failed`
+      above (see round 26 note there) — NOT from the count of
+      `discarded_success_attempts` entries.
     - `budget`: reconstructed as `budget_charge_per_work_unit() ×
-      (completed render units + completed meter-call work units + charged
-      worker-failure attempts + charged discarded-success attempts)` per the
-      frozen `budget_accounting_mode` (round 13 finding #3; round 24 ADOPT
-      (1) extended the unit count to include `worker_failed`; round 25
-      extended it again to include `worker_attempts_discarded`). `None`
+      (completed render units + completed meter-call work units + Σ
+      `budget_units` across `worker_failed`/`worker_attempts_discarded`
+      events)` per the frozen `budget_accounting_mode` (round 13 finding #3;
+      round 24 ADOPT (1) extended the unit count to include `worker_failed`;
+      round 25 extended it again to include `worker_attempts_discarded`;
+      round 26 ADOPT (3) (`[UNDERSPEC-CAL-D59]`) changed the per-attempt
+      `worker_failed`/`worker_attempts_discarded` unit count to a
+      per-*batch* `budget_units` sum — see the round 26 note above). `None`
       `cost_caps` (Gate 1 not yet frozen with cost caps) reconstructs
       `budget_used=0.0` — informational only, nothing enforces it either.
     """
@@ -549,7 +600,7 @@ def cap_counters_from_ledger(
     storage = 0
     render_units = 0
     meter_units = 0
-    worker_attempt_units = 0
+    worker_batch_budget_units = 0
     seen_meter_keys: set[tuple[object, object, object]] = set()
     for entry in ledger_entries:
         payload = entry.payload
@@ -588,28 +639,34 @@ def cap_counters_from_ledger(
         elif kind == "stage_summary":
             compute += _finite_nonneg_float(payload.get("parent_cpu_seconds"))
         elif kind == "worker_failed":
-            # round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): see docstring above
-            # — no dedup, every event is its own charged attempt.
+            # round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): compute — no dedup,
+            # every event is its own charged attempt.
             compute += _finite_nonneg_float(payload.get("cpu_seconds"))
             storage += _finite_nonneg_int(payload.get("storage_bytes"))
-            worker_attempt_units += 1
+            # round 26 ADOPT (3) (`[UNDERSPEC-CAL-D59]`): budget — per-BATCH
+            # `budget_units` (0 or 1 on this event), not 1 per event. Missing
+            # field (pre-round-26 event) defaults to 1 (see docstring above).
+            worker_batch_budget_units += _finite_nonneg_int(payload.get("budget_units", 1))
         elif kind == "worker_attempts_discarded":
-            # round 25 (`[UNDERSPEC-CAL-D57]`): see docstring above — each
-            # entry of `discarded_success_attempts` is its own charged
-            # attempt, summed the same way `worker_failed` events are.
+            # round 25 (`[UNDERSPEC-CAL-D57]`): compute — each entry of
+            # `discarded_success_attempts` is its own charged attempt, summed
+            # the same way `worker_failed` events are.
             attempts = payload.get("discarded_success_attempts")
             if isinstance(attempts, Sequence) and not isinstance(attempts, (str, bytes)):
                 for attempt in attempts:
                     if not isinstance(attempt, Mapping):
                         continue
                     compute += _finite_nonneg_float(attempt.get("cpu_seconds"))
-                    worker_attempt_units += 1
             storage += _finite_nonneg_int(payload.get("storage_bytes"))
+            # round 26 ADOPT (3) (`[UNDERSPEC-CAL-D59]`): budget — same
+            # per-BATCH `budget_units` field as `worker_failed` above (NOT
+            # the count of `discarded_success_attempts` entries).
+            worker_batch_budget_units += _finite_nonneg_int(payload.get("budget_units", 1))
     budget = 0.0
     if cost_caps is not None:
         per_unit = cost_caps.budget_charge_per_work_unit()
         if per_unit:
-            budget = per_unit * (render_units + meter_units + worker_attempt_units)
+            budget = per_unit * (render_units + meter_units + worker_batch_budget_units)
     return CapCounters(compute_used=compute, storage_used=storage, budget_used=budget)
 
 

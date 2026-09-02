@@ -344,7 +344,7 @@ def test_reconcile_propagates_counters_corrupt_error_for_malformed_persisted_fil
 
 
 def _fake_worker_attempts_discarded_event(
-    stage: str, row_id: str, probe_index: int, *, cpu_seconds_list: list
+    stage: str, row_id: str, probe_index: int, *, cpu_seconds_list: list, budget_units: int = 1
 ) -> dict:
     return {
         "kind": "worker_attempts_discarded",
@@ -353,19 +353,24 @@ def _fake_worker_attempts_discarded_event(
         "probe_index": probe_index,
         "discarded_success_attempts": [{"cpu_seconds": c} for c in cpu_seconds_list],
         "storage_bytes": 0,
+        "budget_units": budget_units,
     }
 
 
-def test_cap_counters_from_ledger_sums_worker_attempts_discarded_per_attempt(
+def test_cap_counters_from_ledger_worker_attempts_discarded_budget_is_batch_level(
     tmp_path: Path,
 ) -> None:
-    """Each entry of `discarded_success_attempts` is its own charged
-    attempt -- both for `compute` (summed) and `budget` (1 unit / entry),
-    the same per-attempt granularity `worker_failed` uses alone."""
+    """round 26 ADOPT (3) (`[UNDERSPEC-CAL-D59]`): `compute` still sums every
+    entry of `discarded_success_attempts` (per-attempt, unchanged), but
+    `budget` comes from the event's own `budget_units` field (the whole
+    batch's single work-unit charge, per the real
+    `charge_worker_attempts_before_raising()` emitter) -- NOT the count of
+    discarded entries. A standalone discarded event carrying 2 entries and
+    `budget_units: 1` charges budget for 1 unit, not 2."""
     ledger = Ledger(tmp_path / "ledger.jsonl")
     ledger.append(
         _fake_worker_attempts_discarded_event(
-            "measure", "r1", 0, cpu_seconds_list=[2.0, 3.0]
+            "measure", "r1", 0, cpu_seconds_list=[2.0, 3.0], budget_units=1
         )
     )
     caps = CostCaps(
@@ -378,13 +383,57 @@ def test_cap_counters_from_ledger_sums_worker_attempts_discarded_per_attempt(
     derived = cap_counters_from_ledger(ledger.entries, caps)
     assert derived.compute_used == 5.0
     assert derived.storage_used == 0
-    assert derived.budget_used == 4.0  # 2 attempts * 2.0/unit
+    assert derived.budget_used == 2.0  # 1 batch unit * 2.0/unit, not 2 attempts.
 
 
-def test_cap_counters_from_ledger_combines_worker_failed_and_discarded(tmp_path: Path) -> None:
-    """A single failed-batch charge (1 `worker_failed` + 1
-    `worker_attempts_discarded` carrying 2 successes) reconstructs to 3
-    attempt-units total."""
+def test_cap_counters_from_ledger_combines_worker_failed_and_discarded_charges_batch_once(
+    tmp_path: Path,
+) -> None:
+    """A single failed-batch charge (1 `worker_failed` carrying the batch's
+    `budget_units: 1` + 1 `worker_attempts_discarded` carrying 2 discarded
+    successes with `budget_units: 0`, exactly as the real
+    `charge_worker_attempts_before_raising()` emitter stamps them) must
+    reconstruct to exactly 1 work unit of budget -- round 26 ADOPT (3)
+    (`[UNDERSPEC-CAL-D59]`), superseding the round 25 shape where this same
+    3-attempt batch reconstructed to 3 budget units."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        {
+            "kind": "worker_failed",
+            "stage": "measure",
+            "row_id": "r1",
+            "probe_index": 0,
+            "candidate_id": "F0-B0-CURRENT",
+            "failure_kind": "timeout",
+            "cpu_seconds": 1.5,
+            "storage_bytes": 0,
+            "budget_units": 1,
+        }
+    )
+    ledger.append(
+        _fake_worker_attempts_discarded_event(
+            "measure", "r1", 0, cpu_seconds_list=[2.0, 2.0], budget_units=0
+        )
+    )
+    caps = CostCaps(
+        compute=1000.0,
+        storage=1000,
+        budget=1000.0,
+        budget_accounting_mode="per_unit_fixed",
+        budget_unit_cost=5.0,
+    )
+    derived = cap_counters_from_ledger(ledger.entries, caps)
+    assert derived.compute_used == pytest.approx(1.5 + 2.0 + 2.0)
+    assert derived.budget_used == pytest.approx(1 * 5.0)
+
+
+def test_cap_counters_from_ledger_worker_failed_legacy_missing_budget_units_defaults_to_one(
+    tmp_path: Path,
+) -> None:
+    """A `worker_failed` event predating round 26 (no `budget_units` field
+    at all) must not silently reconstruct to 0 budget -- it defaults to 1
+    (the same fail-closed/overcount-for-legacy-events direction this module
+    already uses for a `meter_call` missing `within_cpu_seconds`)."""
     ledger = Ledger(tmp_path / "ledger.jsonl")
     ledger.append(
         {
@@ -398,11 +447,6 @@ def test_cap_counters_from_ledger_combines_worker_failed_and_discarded(tmp_path:
             "storage_bytes": 0,
         }
     )
-    ledger.append(
-        _fake_worker_attempts_discarded_event(
-            "measure", "r1", 0, cpu_seconds_list=[2.0, 2.0]
-        )
-    )
     caps = CostCaps(
         compute=1000.0,
         storage=1000,
@@ -411,8 +455,7 @@ def test_cap_counters_from_ledger_combines_worker_failed_and_discarded(tmp_path:
         budget_unit_cost=5.0,
     )
     derived = cap_counters_from_ledger(ledger.entries, caps)
-    assert derived.compute_used == pytest.approx(1.5 + 2.0 + 2.0)
-    assert derived.budget_used == pytest.approx(3 * 5.0)
+    assert derived.budget_used == pytest.approx(5.0)
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +498,10 @@ def test_charge_worker_attempts_before_raising_charges_batch_and_reraises_first_
     worker_failed = [e.payload for e in ledger.entries if e.payload.get("kind") == "worker_failed"]
     assert len(worker_failed) == 2
     assert [w["cpu_seconds"] for w in worker_failed] == [1.5, 1.0]
+    # round 26 ADOPT (3) (`[UNDERSPEC-CAL-D59]`): the batch's single budget
+    # unit is on the `worker_attempts_discarded` event (appended first, since
+    # `successes` is non-empty) -- both `worker_failed` events carry 0.
+    assert [w["budget_units"] for w in worker_failed] == [0, 0]
 
     discarded = [
         e.payload for e in ledger.entries if e.payload.get("kind") == "worker_attempts_discarded"
@@ -464,11 +511,15 @@ def test_charge_worker_attempts_before_raising_charges_batch_and_reraises_first_
         {"cpu_seconds": 2.0},
         {"cpu_seconds": 2.0},
     ]
+    assert discarded[0]["budget_units"] == 1
 
     # compute: 2 successes (2.0 each) + 2 failures (1.5, 1.0) = 6.5.
     assert counters.compute_used == pytest.approx(6.5)
-    # budget: 1 unit / attempt, 4 attempts total.
-    assert counters.budget_used == pytest.approx(4 * 5.0)
+    # budget: round 26 ADOPT (3) (`[UNDERSPEC-CAL-D59]`) -- 1 work unit for
+    # the WHOLE batch (this one call = one attempted measurement invocation),
+    # not 1 unit per attempt (4 attempts here would have been 4 * 5.0 under
+    # the round 25 shape this supersedes).
+    assert counters.budget_used == pytest.approx(1 * 5.0)
     assert counters.storage_used == 0
 
     # persisted immediately (finding #1 pattern).

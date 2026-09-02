@@ -47,6 +47,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import math
 import resource
 import subprocess
 import sys
@@ -254,23 +255,118 @@ def primary_output_value(candidate: Candidate, output: MeterOutput) -> float | N
     return float(value) if value is not None else None
 
 
+#: round 26 ADOPT (1) (`[UNDERSPEC-CAL-D58]`): the 3 non-finite kinds a
+#: `MeterOutput.values` field can take, sufficient (together with the
+#: sanitized `None` standing in for the actual float) to losslessly
+#: reconstruct the original `nan`/`inf`/`-inf` value — see
+#: `meter_output_to_dict`/`meter_output_from_dict`.
+def _nonfinite_kind(value: float) -> str:
+    if math.isnan(value):
+        return "nan"
+    return "inf" if value > 0.0 else "-inf"
+
+
 def meter_output_to_dict(output: MeterOutput) -> dict[str, object]:
+    """round 26 ADOPT (1) (`[UNDERSPEC-CAL-D58]`) "Classify non-finite values
+    before ledger serialization": a candidate that violates the adapter
+    contract (`candidates/adapter.py` docstring: an unexplained field should
+    be OMITTED, never returned as NaN/Inf) and returns a non-finite float in
+    `output.values` without `missing_reason`/`ineligible` used to pass this
+    conversion unchanged, carrying the raw `nan`/`inf`/`-inf` straight into
+    the `meter_call` ledger payload — `canonical.canonical_json()` (which
+    `provenance.Ledger.append()` uses for `entry_sha`) then rejects the FIRST
+    such non-finite float with `ValueError` (`vgcal-canon/1` forbids
+    NaN/Infinity), and because that happens inside `Ledger.append()`'s
+    exclusive-lock write path (no bytes written on the raise) *before* this
+    work unit's compute charge (`run_measurement_for_instance` charges
+    AFTER its full `for record in records: ... ledger.append(...)` loop),
+    the candidate's already-spent CPU (within-process + every fresh-process
+    worker) went uncharged, no `meter_call` was durably recorded either, and
+    every retry of that candidate/instance repeated the same wasted work.
+
+    Fix: sanitize each non-finite entry of `values` to `None` here (valid
+    JSON, passes `canonical_json` unchanged) and record which entries were
+    sanitized — and which of the 3 non-finite kinds each was — in a sibling
+    `nonfinite_kind` mapping (`{field_name: "nan" | "inf" | "-inf"}`, `None`
+    when `values` has no non-finite entries so the payload shape for the
+    common case is unchanged). This is enough for `meter_output_from_dict`
+    to reconstruct the EXACT original float on read-back (a plain `None`
+    could not distinguish `nan` from `inf` from `-inf`), so every downstream
+    consumer that inspects `MeterOutput.values` — `candidates.adapter.
+    unexplained_nonfinite()` (the fail filter this contract already
+    designates for exactly this case), `is_finite_and_explained()`,
+    `within_fresh_process_mismatch()`, `observables.two_stage_median()`/
+    `u_rep()` (never coerce a non-finite repeat to 0 — see their own
+    docstrings) — sees the identical `math.isnan`/`math.isinf` value it
+    would have seen had `canonical_json` not existed, whether the record was
+    freshly measured or reconstructed via `_completed_meter_call_records`
+    resume. The `values`/`missing_reason`/`ineligible`/`ineligible_reason`
+    keys and their meaning are otherwise unchanged — only the added
+    `nonfinite_kind` key and `values`' use of `None` for a sanitized entry
+    are new. `_measure_worker.py` calls this same function to build its
+    stdout payload, so a NaN/Inf from a fresh-process worker is sanitized at
+    the exact same boundary as one from a within-process call — both charge
+    and record identically."""
+    sanitized_values: dict[str, float | None] = {}
+    nonfinite_kind: dict[str, str] = {}
+    for key, value in output.values.items():
+        if math.isfinite(value):
+            sanitized_values[key] = value
+        else:
+            sanitized_values[key] = None
+            nonfinite_kind[key] = _nonfinite_kind(value)
     return {
-        "values": dict(output.values),
+        "values": sanitized_values,
         "missing_reason": output.missing_reason.value if output.missing_reason is not None else None,
         "ineligible": output.ineligible,
         "ineligible_reason": output.ineligible_reason,
+        "nonfinite_kind": nonfinite_kind or None,
     }
 
 
+_NONFINITE_KIND_VALUES: Mapping[str, float] = {
+    "nan": math.nan,
+    "inf": math.inf,
+    "-inf": -math.inf,
+}
+
+
 def meter_output_from_dict(d: Mapping[str, object]) -> MeterOutput:
+    """round 26 ADOPT (1) (`[UNDERSPEC-CAL-D58]`): the inverse of
+    `meter_output_to_dict`'s sanitization — a `values` entry of `None`
+    (whether freshly parsed from a `meter_call`/fresh-worker payload or
+    reconstructed on resume) is reconstructed back to the exact original
+    `nan`/`inf`/`-inf` float using the paired `nonfinite_kind` entry, so
+    `MeterOutput.values` is indistinguishable from what a freshly-measured
+    candidate would have produced in-memory. A `None` entry with no matching
+    `nonfinite_kind` (or an unrecognized kind string) is malformed — raises
+    `ValueError` exactly like the pre-existing `float(v)` on a genuinely
+    invalid entry did, so the existing `_run_one_fresh_call`/
+    `_completed_meter_call_records` callers' fail-closed handling of a
+    malformed payload is unchanged."""
     missing = d.get("missing_reason")
     values_raw = d.get("values") or {}
     if not isinstance(values_raw, Mapping):
         raise ValueError("measure_stage: MeterOutput payload 'values' must be an object")
+    nonfinite_kind_raw = d.get("nonfinite_kind") or {}
+    if not isinstance(nonfinite_kind_raw, Mapping):
+        raise ValueError("measure_stage: MeterOutput payload 'nonfinite_kind' must be an object")
+    values: dict[str, float] = {}
+    for k, v in values_raw.items():
+        key = str(k)
+        if v is None:
+            kind = nonfinite_kind_raw.get(key)
+            if not isinstance(kind, str) or kind not in _NONFINITE_KIND_VALUES:
+                raise ValueError(
+                    f"measure_stage: MeterOutput payload has null values[{key!r}] "
+                    f"without a matching nonfinite_kind entry (got {kind!r})"
+                )
+            values[key] = _NONFINITE_KIND_VALUES[kind]
+        else:
+            values[key] = float(v)
     ineligible_reason = d.get("ineligible_reason")
     return MeterOutput(
-        values={str(k): float(v) for k, v in values_raw.items()},
+        values=values,
         missing_reason=MissingReason(missing) if isinstance(missing, str) else None,
         ineligible=bool(d.get("ineligible", False)),
         ineligible_reason=str(ineligible_reason) if isinstance(ineligible_reason, str) else None,

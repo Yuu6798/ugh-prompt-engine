@@ -518,7 +518,9 @@ def test_c1_render_worker1_ok_worker2_fails_charges_both(
     expected_compute = 2.0 + 1.5
     assert counters.compute_used == pytest.approx(expected_compute)
     assert counters.storage_used == 0
-    assert counters.budget_used == pytest.approx(2 * 5.0)  # 1 budget unit / attempt
+    # round 26 ADOPT (3) (`[UNDERSPEC-CAL-D59]`): 1 budget unit for the whole
+    # 2-attempt batch (one attempted render invocation), not 1 per attempt.
+    assert counters.budget_used == pytest.approx(1 * 5.0)
     assert not campaign.renders_dir.exists() or not any(campaign.renders_dir.iterdir())
 
     derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
