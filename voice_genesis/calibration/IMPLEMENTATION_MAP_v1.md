@@ -241,7 +241,9 @@ README のみ。B/C は README の自セクションのみ追記）。
   `manifest_core_sha` から事後導出される値であり承認ファイル作成時点では確定しない
   （導出規則は §6.2）（PR #343 第 2 巡採用）。sha は**実ファイルのハッシュと
   照合**。各承認ファイルの content sha256 は manifest（`approvals.<gate>_sha256`）と
-  freeze event の双方に記録する（content-pin）（PR #343 第 1 巡採用）
+  freeze event の双方に記録する（content-pin）（PR #343 第 1 巡採用）。承認ファイルは
+  **1 回のバイト読み取り**で取得し、parse（JSON decode）と sha256 計算は**同一バッファ**
+  から行う（読み取りを重ねない。TOCTOU・二重読み不整合の回避）（PR #343 第 4 巡採用）
 - `AUTHORIZATION_REQUIRED` は §3.3 閉語彙（BLOCKED_*）とは別軸の pre-campaign 拒否コード
 
 ### 6.2 secret と出力レイアウト
@@ -256,13 +258,21 @@ README のみ。B/C は README の自セクションのみ追記）。
   （既定 `~/.vg_cal/approvals/`）配下の `gate1_campaign_execution.json` /
   `gate2_c0_freeze.json` / `gate3_seal_acceptance.json`（配置理由・sha256 記録先 =
   §6.1）（PR #343 第 1 巡採用）
-- `manifest_core_sha` = `approvals` セクションと secret-commitment フィールドを除いた
-  manifest 本体の sha（dry-run が報告する値）。`campaign_id = RUN10-CAL-<YYYYMMDD>-
-  <manifest_core_sha[:8]>`。Gate 2 承認（`gate2_c0_freeze.json`）はこの
-  `manifest_core_sha` を束縛対象とする（PR #343 第 2 巡採用）
-- freeze 済み manifest は `manifest_core_sha` に加えて `approvals`（gate1/gate2 の
-  sha256）と commitments を保持する。この最終形全体の sha は `manifest_core_sha` とは
-  別に freeze event へ `manifest_sha` として記録する（PR #343 第 2 巡採用）
+- `manifest_core_sha` = manifest 本体から `approvals` セクション・secret-commitment
+  フィールド・`realized_split` セクション・`campaign_id` を除いた**凍結前
+  authorization payload**の canonical sha（dry-run 時点で計算可能な値）。
+  `campaign_id = RUN10-CAL-<YYYYMMDD>-<manifest_core_sha[:8]>`。Gate 2 承認
+  （`gate2_c0_freeze.json`）はこの `manifest_core_sha` を束縛対象とする（PR #343
+  第 2 巡採用。定義を「凍結前 authorization payload の sha」として明確化 =
+  PR #343 第 4 巡採用）
+- freeze 済み manifest は上記 authorization payload に加えて `realized_split`
+  （設計正本 §7 の「正本は C0 manifest に列挙した実現済み row→split 表」に従う、
+  実現済み row_id→split 表）を**インライン**で保持し、`realized_split_sha`・
+  commitments・`approvals`（gate1/gate2 の sha256）を併せ持つ。この最終形全体の
+  sha は `manifest_core_sha` とは別に freeze event へ `manifest_sha` として記録
+  する。`realized_split.json` はこのインライン表の convenience copy（写し）で
+  あり、正本はあくまで manifest 内のインライン表である（PR #343 第 2 巡採用。
+  realized_split の正本所在とインライン保持を明確化 = PR #343 第 4 巡採用）
 - Gate 3（seal 受容）は freeze **後**に成立するため manifest には含まれない: D2
   runner は sealed-stage 作業に入る前に、承認ファイルの sha256 を伴う
   `GATE3_ACCEPTED` ledger event で束縛する（PR #343 第 2 巡採用）
@@ -275,6 +285,9 @@ README のみ。B/C は README の自セクションのみ追記）。
 - `approvals/README.md` は**外部配置場所の説明のみ**を記す（`VG_CAL_APPROVAL_DIR` /
   既定 `~/.vg_cal/approvals/` 配下の 3 ファイル名。承認 json 実体はリポジトリに
   一切格納しない）（PR #343 第 1 巡採用）
+- `approvals.py` の承認ファイル読み取りは §6.1 と同じ**1 回のバイト読み取り**を
+  実装契約とする: parse と sha256 は同一バッファから計算し、ファイルを 2 度読まない
+  （PR #343 第 4 巡採用）
 
 - producer は manifest を**コードから生成**: git HEAD full SHA・dirty-tree・path inventory
   実ハッシュ・Python/numpy/scipy/librosa/soundfile exact version・sample format policy・
@@ -303,11 +316,21 @@ README のみ。B/C は README の自セクションのみ追記）。
 - `detect_orphans()`: campaign dir はあるが対応する secret が無い → fail-closed
   （runner は当該 campaign の実行を拒否する）。secret はあるが対応する campaign dir
   が無い → orphan secret として削除する（PR #343 第 2 巡採用）。**ただし `.staging-*`
-  ディレクトリは削除対象から除外し、in-progress マーカー（`.publishing`）を持つ
-  secret dir も削除しない**（公開途中の secret を誤って orphan 扱いしないため）。
-  `detect_orphans()` 自体も上記の `.publish.lock` を取得してから走査する（PR #343
-  第 3 巡採用）。テスト要件: in-progress（`.publishing` マーカーあり）の secret dir
-  が `detect_orphans()` によって削除されないこと（PR #343 第 3 巡採用）
+  ディレクトリは削除対象から除外する**。`detect_orphans()` 自体も上記の
+  `.publish.lock` を取得してから走査する（PR #343 第 3 巡採用）。
+  **`.publishing` マーカーを持つ secret dir の回収規則**: `.publish.lock` を
+  **取得できた場合**（= 他 fd がロックを保持していない = 生存中の公開処理が無い
+  ことを意味する）、対応する campaign dir の有無で分岐する——campaign dir が
+  **無ければ**公開が完了しなかった stale な中断とみなし secret dir ごと削除する。
+  campaign dir が**あれば**公開自体は完了済みでマーカー削除だけが中断したとみなし、
+  マーカーのみを削除して当該 campaign を正当なものとして扱う（secret 本体は
+  削除しない）。**ロックが他 fd に保持されている（= 生存中の公開処理が進行中）場合は
+  マーカーの有無・campaign dir の有無に関わらず一切触れない**（PR #343 第 4 巡
+  採用）。テスト要件: marker あり・対応する campaign dir 無し・lock 取得可能 →
+  secret dir が削除されること／lock が他 fd に保持されている場合はマーカー付き
+  secret dir が一切変更されないこと（PR #343 第 4 巡採用。旧稿の「in-progress
+  マーカーは常に削除しない」という一律規則を、lock 取得可否と campaign dir 有無に
+  基づく上記の回収規則へ訂正）
 - E_use evidence table: §10.2 の 13 列 schema + loader/validator + テンプレート生成
   （全 construct 行を `evidence_class: UNJUSTIFIED` かつ `e_use_value: null` で出力。
   数値 placeholder 禁止）。UNJUSTIFIED 行は自動 ceiling（DIRECTIONAL/DIAGNOSTIC_ONLY）
@@ -324,7 +347,11 @@ README のみ。B/C は README の自セクションのみ追記）。
   ための制約（PR #343 第 1 巡採用））→ `c2-baseline`（B0 × calibration split・
   tolerance 導出）→ `c3-selection`（全候補 × 自 family selection 行・fail filter・
   lexicographic・SELECTION_FROZEN event）→ `unseal`（§7 の 5 sha 相互参照検査）→
-  `c4-holdout`（選択 1 候補 + B0 × holdout・**holdout 行の render**・gate・terminal
+  `c4-holdout`（選択 1 候補 + B0 × holdout・**holdout 行の render**（C1 と**同一の**
+  generator determinism 検査を holdout 行にも適用する: 2 回の fresh-process
+  render で byte-identical PCM を確認し、両 render を holdout evidence 受理前に
+  ledger へ記帳する。`HOLDOUT_EXECUTED_VALID` はこの determinism 検査通過を必須
+  とする（PR #343 第 4 巡採用））・gate・terminal
   status cascade）→ `close`（CAMPAIGN_CLOSED・debt_discharged 導出・M6）
 - 手続 Gate の単調性を ledger event で強制。各段は ledger 駆動で**再開可能**だが、
   work unit をスキップしてよいのは**ledger に記帳された artifact の sha256 が
@@ -335,8 +362,13 @@ README のみ。B/C は README の自セクションのみ追記）。
   per-worker JSONL → 直列 append 集約（provenance 契約）
 - cost cap / stop rule 超過 → stop event 記帳 + fail-closed 終了
 - dry-run（既定）: 計画のみ — work unit 件数（instances 2,280 / renders = campaign 合計
-  4,560、内訳は `c1-fixtures`: calibration + selection split 行 ×5 + control 行 render
-  数、`c4-holdout`: holdout 行 ×5（realized split は secret 依存のため確定内訳は freeze
+  4,560。**4,560 = 2,280 instances × 2 fresh-process renders**（各 instance を
+  generator determinism 検査のため 2 回 fresh-process render し byte 一致を確認する
+  ——上記 `c1-fixtures` の determinism 検査・`c4-holdout` の determinism 検査の
+  双方がこの 2 render を構成する）。内訳は `c1-fixtures`: calibration + selection
+  split 行 + control 行の instances × 2、`c4-holdout`: holdout 行の instances × 2
+  に分かれる（realized split は secret 依存のため確定内訳は freeze
   後に定まり、dry-run 段階は §5.2 の想定 split 比で概算表示。合計 4,560 は不変）（PR
-  #343 第 1 巡採用） / meter calls 13,680 per impl / selection ≈10^5）と cap の照合表を
-  出力
+  #343 第 1 巡採用。render 内訳の算出式を「instances × 2 fresh-process renders」に
+  訂正 = PR #343 第 4 巡採用） / meter calls 13,680 per impl / selection ≈10^5）と
+  cap の照合表を出力
