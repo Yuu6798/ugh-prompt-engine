@@ -538,7 +538,34 @@ def _gate1_e_use_bound_accepted(approvals: Mapping[Gate, ApprovalLoadResult]) ->
     return bool(result.record.e_use_bound_accepted)
 
 
-def _check_e_use_table(path: Path, *, gate1_e_use_bound_accepted: bool) -> list[str]:
+def _parse_e_use_table_bytes(path: Path, data: bytes) -> list[e_use_table.EUseEvidenceRow]:
+    """`e_use_table.load_e_use_table()` と同一の shape 検証・エラー整形を、
+    既に読み込み済みの `data`（呼び出し側の 1 回きりの `path.read_bytes()`）に
+    対して行う（bug fix P2 #1: `_check_e_use_table()` が独自にファイルを再度
+    読まないようにするための下請け — `load_e_use_table(path)` を直接呼ぶと
+    その内部で `path.read_text()` が再度走ってしまう）。`json.JSONDecodeError`/
+    `UnicodeDecodeError` はいずれも `ValueError` のサブクラスであり、意図的に
+    ここでは捕まえず呼び出し側 `_check_e_use_table()` の
+    `except (ValueError, KeyError, TypeError)` へそのまま伝播させる
+    （`load_e_use_table()` 自身が decode エラーを個別に捕まえないのと同じ
+    挙動に揃える）。"""
+    raw = json.loads(data.decode("utf-8"))
+    if not isinstance(raw, list):
+        raise ValueError(f"{path}: must contain a JSON array of row objects")
+    rows: list[e_use_table.EUseEvidenceRow] = []
+    for i, entry in enumerate(raw):
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"{path}[{i}]: row must be a JSON object")
+        try:
+            rows.append(e_use_table.row_from_dict(entry))
+        except (KeyError, ValueError, TypeError) as exc:
+            raise ValueError(f"{path}[{i}]: {exc}") from exc
+    return rows
+
+
+def _check_e_use_table(
+    path: Path, *, gate1_e_use_bound_accepted: bool
+) -> tuple[list[str], bytes | None]:
     """E_use evidence table（設計正本 §10.2, `[UNDERSPEC-CAL-D10]`）の load +
     検証を dry-run/armed 双方が共有する。違反は `"e_use_table: <理由>"` 形式で
     返す（`c0_validate` 側の他の違反文字列と同じ prefix 慣例に揃え、
@@ -546,17 +573,29 @@ def _check_e_use_table(path: Path, *, gate1_e_use_bound_accepted: bool) -> list[
     C0 manifest の 1 キーではないため `c0_validate.py` は関知しない、
     producer 側専用の追加ゲート）。読込失敗（ファイル不在・壊れた JSON・行の
     shape 違反）と、読込は成功したが横断制約違反（`e_use_table.
-    validate_e_use_table`）の両方をここで一本化する。"""
+    validate_e_use_table`）の両方をここで一本化する。
+
+    戻り値は `(violations, table_bytes)`。`table_bytes` は `path` から実際に
+    読み込めた生バイト列で、読込+パースが成功した場合は常に非 None
+    （`validate_e_use_table` が横断制約違反を返した場合でも非 None のまま —
+    ファイル自体は読めているため）。`None` になるのは読込・パース自体が
+    失敗した場合のみで、そのときは `violations` が必ず非空になる。bug fix P2
+    #1: `armed_freeze()` はこの `table_bytes` を sha256 pin/staging コピーの
+    双方にそのまま再利用し、`path.read_bytes()` を再度呼ばない — 検証に使った
+    内容と実際に確定される内容が別読み取りになる TOCTOU（読込と読込の間に
+    ファイルが差し替えられても検出できない）を構造的に排除する。"""
     try:
-        rows = e_use_table.load_e_use_table(path)
+        data = path.read_bytes()
     except OSError as exc:
-        return [f"e_use_table: cannot read {path}: {exc}"]
+        return [f"e_use_table: cannot read {path}: {exc}"], None
+    try:
+        rows = _parse_e_use_table_bytes(path, data)
     except (ValueError, KeyError, TypeError) as exc:
-        return [f"e_use_table: {path}: {exc}"]
+        return [f"e_use_table: {path}: {exc}"], None
     violations = e_use_table.validate_e_use_table(
         rows, gate1_e_use_bound_accepted=gate1_e_use_bound_accepted
     )
-    return [f"e_use_table: {v}" for v in violations]
+    return [f"e_use_table: {v}" for v in violations], data
 
 
 def _merge_e_use_table_violations(
@@ -620,7 +659,7 @@ def dry_run(
     table_path = (
         e_use_table_path if e_use_table_path is not None else default_e_use_table_path(root)
     )
-    e_use_violations = _check_e_use_table(
+    e_use_violations, _e_use_table_bytes = _check_e_use_table(
         table_path, gate1_e_use_bound_accepted=_gate1_e_use_bound_accepted(all_approvals)
     )
     validation = _merge_e_use_table_violations(validation, e_use_violations)
@@ -758,22 +797,31 @@ def _rmtree_if_exists(path: Path) -> None:
 _PUBLISHING_MARKER_NAME = ".publishing"
 
 #: 二根公開 (`armed_freeze` の os.replace 2 回) と `detect_orphans()` が共有する
-#: 排他ロック。`secret_dir` 直下に置く（secret_dir は常に存在すると仮定できない
-#: ため `mkdir(parents=True, exist_ok=True)` してから開く）。
+#: 排他ロックのファイル名。**同一名で 2 か所** に置く（bug fix P2 #3）:
+#: `campaigns_dir/.publish.lock` が **authoritative**（nonce 一意性の判定は
+#: 必ずこちらで行う — `campaigns_dir` は複数プロセスが必ず共有する campaign
+#: registry の実体であるのに対し、`secret_dir` は呼び出し側が任意に選べる値
+#: であり、同じ `campaigns_dir` に対して異なる `secret_dir` を渡す 2 プロセスが
+#: あれば互いにロックが無関係になってしまう）。`secret_dir/.publish.lock` は
+#: 二次ロックとして残す（secret dir 自体の直列化には引き続き有効）。両ロックとも
+#: 対象ディレクトリは常に存在すると仮定できないため `mkdir(parents=True,
+#: exist_ok=True)` してから開く。
 _PUBLISH_LOCK_NAME = ".publish.lock"
 
 
 @contextlib.contextmanager
-def _publish_lock(secret_dir: Path, *, blocking: bool = True) -> Iterator[bool]:
-    """`secret_dir/.publish.lock` 上の排他ロックを取る。`yield` される bool は
+def _publish_lock(lock_dir: Path, *, blocking: bool = True) -> Iterator[bool]:
+    """`lock_dir/.publish.lock` 上の排他ロックを取る（`lock_dir` は
+    `campaigns_dir`（authoritative）・`secret_dir`（secondary）のいずれでも
+    同じロジックで使う汎用ヘルパー — bug fix P2 #3）。`yield` される bool は
     ロックを実際に取得できたか（`blocking=True` では OS レベルの異常が無い限り
     常に `True` — 取得できるまで待つため）。`blocking=False`
     （`detect_orphans()` が使う）はロック競合時に即座に `False` を yield して
     何もせず戻る（PR レビュー第 4 巡: 生きた公開処理と競合させない）。
     """
-    secret_dir = Path(secret_dir)
-    secret_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = secret_dir / _PUBLISH_LOCK_NAME
+    lock_dir = Path(lock_dir)
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / _PUBLISH_LOCK_NAME
     with open(lock_path, "a+", encoding="utf-8") as f:
         flags = fcntl.LOCK_EX if blocking else (fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
@@ -1007,23 +1055,20 @@ def armed_freeze(
         and result.content_sha256 is not None
     }
 
-    # E_use evidence table (Part A/D1b, `[UNDERSPEC-CAL-D10]`): read the bytes
-    # exactly once and reuse them both for the sha256 pin and the staged copy
-    # (avoids a read-then-reread TOCTOU). `e_use_table_bytes is None` implies
+    # E_use evidence table (Part A/D1b, `[UNDERSPEC-CAL-D10]`): `_check_e_use_table()`
+    # reads `table_path` exactly once and hands back those same bytes — reused
+    # here for both the sha256 pin and the staged copy (bug fix P2 #1: this used
+    # to call `table_path.read_bytes()` a second time, so the bytes that were
+    # actually validated and the bytes that ended up pinned/staged could differ
+    # if the file was swapped in between). `e_use_table_bytes is None` implies
     # `e_use_violations` is non-empty, so `validation.is_blocked` below will
     # already refuse the freeze before staging is ever attempted.
     table_path = (
         e_use_table_path if e_use_table_path is not None else default_e_use_table_path(root)
     )
-    e_use_violations = _check_e_use_table(
+    e_use_violations, e_use_table_bytes = _check_e_use_table(
         table_path, gate1_e_use_bound_accepted=_gate1_e_use_bound_accepted(all_approvals)
     )
-    e_use_table_bytes: bytes | None = None
-    if not e_use_violations:
-        try:
-            e_use_table_bytes = table_path.read_bytes()
-        except OSError as exc:
-            e_use_violations = [f"e_use_table: cannot read {table_path}: {exc}"]
     e_use_table_sha256 = (
         hashlib.sha256(e_use_table_bytes).hexdigest() if e_use_table_bytes is not None else None
     )
@@ -1145,12 +1190,21 @@ def armed_freeze(
             validation=validation,
         )
 
-    # PUBLISH: secret dir first, then campaign dir (PR review round 2), both
-    # under the same lock `detect_orphans()` also takes (PR review round 3/4).
-    # `blocking=True` (default): `acquired` is always True barring an OS-level
-    # error opening/locking the lock file, handled defensively below.
-    with _publish_lock(secret_dir) as acquired:
-        if not acquired:
+    # PUBLISH: secret dir first, then campaign dir (PR review round 2), under
+    # nested locks (bug fix P2 #3). `campaigns_dir/.publish.lock` is the
+    # *authoritative* lock — `campaigns_dir` is the shared campaign registry
+    # every process necessarily agrees on, whereas `secret_dir` is a
+    # caller-selected value that can legitimately differ between two
+    # processes racing to freeze against the same `campaigns_dir`; keying the
+    # nonce-uniqueness decision off `secret_dir` alone would let such
+    # processes acquire unrelated locks and both publish. `secret_dir` keeps
+    # its own lock nested inside as a secondary lock (still serializes
+    # writers to that particular secret dir). `detect_orphans()` takes both
+    # locks in the same nesting order. `blocking=True` (default): `acquired`
+    # is always True barring an OS-level error opening/locking the lock file,
+    # handled defensively below at both levels.
+    with _publish_lock(campaigns_dir) as campaigns_acquired:
+        if not campaigns_acquired:
             _rmtree_if_exists(campaign_staging)
             _rmtree_if_exists(secret_staging)
             return ArmedFreezeResult(
@@ -1160,80 +1214,127 @@ def armed_freeze(
                 manifest_sha=full_sha,
                 campaign_dir=None,
                 secret_dir=None,
-                detail="could not acquire publish lock",
+                detail="could not acquire campaigns_dir publish lock",
                 gate2_arming=gate2_arming,
                 validation=validation,
             )
 
-        # PR review round 6 #4: the early nonce-uniqueness check above (before
-        # this lock was acquired) is a best-effort fast rejection only — it
-        # cannot see a sibling process that published the same nonce in the
-        # TOCTOU window between that check and reaching here. This is the
-        # authoritative recheck, performed only once this process is the sole
-        # holder of `secret_dir/.publish.lock` (the same lock `detect_orphans()`
-        # and both `os.replace()` calls below use), so no concurrent publisher
-        # can race it.
-        existing_campaign_id = _find_existing_nonce_usage(campaigns_dir, nonce)
-        if existing_campaign_id is not None:
-            _rmtree_if_exists(campaign_staging)
-            _rmtree_if_exists(secret_staging)
-            return ArmedFreezeResult(
-                outcome=FreezeOutcome.NONCE_ALREADY_USED,
-                campaign_id=None,
-                manifest_core_sha=core_sha,
-                manifest_sha=full_sha,
-                campaign_dir=None,
-                secret_dir=None,
-                detail=(
-                    f"authorization_nonce already used by published campaign "
-                    f"{existing_campaign_id!r}; refusing (one-time-use authorization, "
-                    "detected by locked recheck)"
-                ),
-                gate2_arming=gate2_arming,
-                validation=validation,
-            )
+        with _publish_lock(secret_dir) as acquired:
+            if not acquired:
+                _rmtree_if_exists(campaign_staging)
+                _rmtree_if_exists(secret_staging)
+                return ArmedFreezeResult(
+                    outcome=FreezeOutcome.PUBLICATION_FAILED,
+                    campaign_id=campaign_id,
+                    manifest_core_sha=core_sha,
+                    manifest_sha=full_sha,
+                    campaign_dir=None,
+                    secret_dir=None,
+                    detail="could not acquire secret_dir publish lock",
+                    gate2_arming=gate2_arming,
+                    validation=validation,
+                )
 
-        (secret_staging / _PUBLISHING_MARKER_NAME).write_text("", encoding="utf-8")
-        try:
-            os.replace(str(secret_staging), str(secret_final))
-        except OSError as exc:
-            _rmtree_if_exists(secret_staging)
-            _rmtree_if_exists(campaign_staging)
-            return ArmedFreezeResult(
-                outcome=FreezeOutcome.PUBLICATION_FAILED,
-                campaign_id=campaign_id,
-                manifest_core_sha=core_sha,
-                manifest_sha=full_sha,
-                campaign_dir=None,
-                secret_dir=None,
-                detail=f"secret publish failed: {exc}",
-                gate2_arming=gate2_arming,
-                validation=validation,
-            )
+            # PR review round 6 #4: the early nonce-uniqueness check above
+            # (before this lock was acquired) is a best-effort fast rejection
+            # only — it cannot see a sibling process that published the same
+            # nonce in the TOCTOU window between that check and reaching here.
+            # This is the authoritative recheck, performed only once this
+            # process is the sole holder of `campaigns_dir/.publish.lock`
+            # (bug fix P2 #3: previously keyed off `secret_dir/.publish.lock`
+            # only, which two processes sharing `campaigns_dir` but passing
+            # different `secret_dir` values could each acquire independently
+            # — the same lock `detect_orphans()` and both `os.replace()` calls
+            # below use), so no concurrent publisher can race it.
+            existing_campaign_id = _find_existing_nonce_usage(campaigns_dir, nonce)
+            if existing_campaign_id is not None:
+                _rmtree_if_exists(campaign_staging)
+                _rmtree_if_exists(secret_staging)
+                return ArmedFreezeResult(
+                    outcome=FreezeOutcome.NONCE_ALREADY_USED,
+                    campaign_id=None,
+                    manifest_core_sha=core_sha,
+                    manifest_sha=full_sha,
+                    campaign_dir=None,
+                    secret_dir=None,
+                    detail=(
+                        f"authorization_nonce already used by published campaign "
+                        f"{existing_campaign_id!r}; refusing (one-time-use authorization, "
+                        "detected by locked recheck)"
+                    ),
+                    gate2_arming=gate2_arming,
+                    validation=validation,
+                )
 
-        try:
-            os.replace(str(campaign_staging), str(campaign_final))
-        except OSError as exc:
-            # Secret already published; roll back to "nothing published" so the
-            # two publications never disagree (no orphan secret dir left behind).
-            _rmtree_if_exists(secret_final)
-            _rmtree_if_exists(campaign_staging)
-            return ArmedFreezeResult(
-                outcome=FreezeOutcome.PUBLICATION_FAILED,
-                campaign_id=campaign_id,
-                manifest_core_sha=core_sha,
-                manifest_sha=full_sha,
-                campaign_dir=None,
-                secret_dir=None,
-                detail=f"campaign publish failed: {exc} (secret publish rolled back)",
-                gate2_arming=gate2_arming,
-                validation=validation,
-            )
+            (secret_staging / _PUBLISHING_MARKER_NAME).write_text("", encoding="utf-8")
+            try:
+                # bug fix P2 #2: this outer `try`/`except BaseException` is the
+                # authoritative rollback for the publication transaction. The
+                # two `except OSError` clauses immediately below remain the
+                # normal, expected-failure path (they return
+                # `PUBLICATION_FAILED` with a specific detail message and
+                # never reach the outer handler, since `return` inside a
+                # `try` does not raise). Anything else — most importantly
+                # `KeyboardInterrupt`/`SystemExit` landing between the
+                # secret-side rename and the campaign-side rename (or during
+                # the final marker cleanup) — used to bypass rollback
+                # entirely (only `OSError` was caught), which could leave a
+                # published secret dir with no matching campaign dir. The
+                # outer handler below restores "nothing published" for
+                # *every* exception type and then re-raises, so
+                # interrupts/exits still propagate.
+                try:
+                    os.replace(str(secret_staging), str(secret_final))
+                except OSError as exc:
+                    _rmtree_if_exists(secret_staging)
+                    _rmtree_if_exists(campaign_staging)
+                    return ArmedFreezeResult(
+                        outcome=FreezeOutcome.PUBLICATION_FAILED,
+                        campaign_id=campaign_id,
+                        manifest_core_sha=core_sha,
+                        manifest_sha=full_sha,
+                        campaign_dir=None,
+                        secret_dir=None,
+                        detail=f"secret publish failed: {exc}",
+                        gate2_arming=gate2_arming,
+                        validation=validation,
+                    )
 
-        # Both roots published and paired: the in-flight marker is no longer needed.
-        marker = secret_final / _PUBLISHING_MARKER_NAME
-        if marker.exists():
-            marker.unlink()
+                try:
+                    os.replace(str(campaign_staging), str(campaign_final))
+                except OSError as exc:
+                    # Secret already published; roll back to "nothing published"
+                    # so the two publications never disagree (no orphan secret
+                    # dir left behind).
+                    _rmtree_if_exists(secret_final)
+                    _rmtree_if_exists(campaign_staging)
+                    return ArmedFreezeResult(
+                        outcome=FreezeOutcome.PUBLICATION_FAILED,
+                        campaign_id=campaign_id,
+                        manifest_core_sha=core_sha,
+                        manifest_sha=full_sha,
+                        campaign_dir=None,
+                        secret_dir=None,
+                        detail=f"campaign publish failed: {exc} (secret publish rolled back)",
+                        gate2_arming=gate2_arming,
+                        validation=validation,
+                    )
+
+                # Both roots published and paired: the in-flight marker is no
+                # longer needed.
+                marker = secret_final / _PUBLISHING_MARKER_NAME
+                if marker.exists():
+                    marker.unlink()
+            except BaseException:
+                # Restore "nothing published" regardless of which stage the
+                # exception landed in — `_rmtree_if_exists()` is a no-op for
+                # any path that was never created/renamed, so it is safe to
+                # attempt cleanup of all four candidate paths unconditionally.
+                _rmtree_if_exists(secret_final)
+                _rmtree_if_exists(secret_staging)
+                _rmtree_if_exists(campaign_final)
+                _rmtree_if_exists(campaign_staging)
+                raise
 
     return ArmedFreezeResult(
         outcome=FreezeOutcome.PUBLISHED,
@@ -1267,14 +1368,20 @@ def _published_ids(directory: Path) -> set[str]:
 def detect_orphans(secret_dir: Path, campaigns_dir: Path) -> OrphanReport:
     """公開済み campaign dir / secret dir の対応関係の破れを検出する
     （PR レビュー第 2〜4 巡: 二根公開の回復可能性）。`armed_freeze()` の二根
-    公開と同じ `secret_dir/.publish.lock` を**非 blocking** で取得する:
-    取得できなければ「生きた公開処理が進行中かもしれない」とみなし、
-    何もせず即座に空の `OrphanReport` を返す（ブロック/スキップ。fail-safe:
-    誤って進行中の公開を孤児と誤認して壊さない）。
+    公開と同じネストしたロック（bug fix P2 #3: `campaigns_dir/.publish.lock`
+    が authoritative、`secret_dir/.publish.lock` が secondary）を**非
+    blocking** で取得する: どちらか一方でも取得できなければ「生きた公開処理が
+    進行中かもしれない」とみなし、何もせず即座に空の `OrphanReport` を返す
+    （ブロック/スキップ。fail-safe: 誤って進行中の公開を孤児と誤認して
+    壊さない）。`campaigns_dir` は本関数自身が registry（`_published_ids()`）
+    を読む対象そのものであり、`armed_freeze()` と同じ authoritative ロックを
+    取らなければ「生きた公開処理と同時に registry を読んでしまう」TOCTOU を
+    防げないため、単独では取らず必ず `campaigns_dir` ロックの内側で
+    `secret_dir` ロックを取る。
 
-    ロックを取得できた場合、それ自体が「生きた公開処理は存在しない」ことの
-    証明になる（`armed_freeze()` は公開区間全体でこのロックを保持し続ける
-    ため）。したがって:
+    両ロックを取得できた場合、それ自体が「生きた公開処理は存在しない」ことの
+    証明になる（`armed_freeze()` は公開区間全体でこの 2 つのロックを保持し
+    続けるため）。したがって:
 
     - campaign dir があり対応する secret dir が無い → fail-closed 報告のみ
       （runner はこの campaign_id を実行拒否すべき。本関数は削除しない）。
@@ -1290,30 +1397,34 @@ def detect_orphans(secret_dir: Path, campaigns_dir: Path) -> OrphanReport:
     """
     secret_dir = Path(secret_dir)
     campaigns_dir = Path(campaigns_dir)
-    with _publish_lock(secret_dir, blocking=False) as acquired:
-        if not acquired:
+    with _publish_lock(campaigns_dir, blocking=False) as campaigns_acquired:
+        if not campaigns_acquired:
             return OrphanReport(orphan_campaign_ids=(), deleted_orphan_secret_ids=())
 
-        campaign_ids = _published_ids(campaigns_dir)
-        secret_ids = _published_ids(secret_dir)
-        orphan_campaigns = tuple(sorted(campaign_ids - secret_ids))
+        with _publish_lock(secret_dir, blocking=False) as acquired:
+            if not acquired:
+                return OrphanReport(orphan_campaign_ids=(), deleted_orphan_secret_ids=())
 
-        # Paired ids with a leftover marker: publish completed, just tidy up.
-        for sid in sorted(secret_ids & campaign_ids):
-            marker = secret_dir / sid / _PUBLISHING_MARKER_NAME
-            if marker.exists():
-                marker.unlink()
+            campaign_ids = _published_ids(campaigns_dir)
+            secret_ids = _published_ids(secret_dir)
+            orphan_campaigns = tuple(sorted(campaign_ids - secret_ids))
 
-        # Unpaired secret dirs: stale by construction (see docstring above).
-        candidate_orphan_secrets = sorted(secret_ids - campaign_ids)
-        deleted: list[str] = []
-        for sid in candidate_orphan_secrets:
-            deleted.append(sid)
-            _rmtree_if_exists(secret_dir / sid)
+            # Paired ids with a leftover marker: publish completed, just tidy up.
+            for sid in sorted(secret_ids & campaign_ids):
+                marker = secret_dir / sid / _PUBLISHING_MARKER_NAME
+                if marker.exists():
+                    marker.unlink()
 
-        return OrphanReport(
-            orphan_campaign_ids=orphan_campaigns, deleted_orphan_secret_ids=tuple(deleted)
-        )
+            # Unpaired secret dirs: stale by construction (see docstring above).
+            candidate_orphan_secrets = sorted(secret_ids - campaign_ids)
+            deleted: list[str] = []
+            for sid in candidate_orphan_secrets:
+                deleted.append(sid)
+                _rmtree_if_exists(secret_dir / sid)
+
+            return OrphanReport(
+                orphan_campaign_ids=orphan_campaigns, deleted_orphan_secret_ids=tuple(deleted)
+            )
 
 
 # ---------------------------------------------------------------------------

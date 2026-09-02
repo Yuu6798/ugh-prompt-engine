@@ -379,7 +379,12 @@ def test_armed_freeze_rejects_replayed_authorization_nonce(
         campaigns_dir=campaigns_dir,
     )
     assert first.outcome == c0_freeze.FreezeOutcome.PUBLISHED, first.detail
-    published_campaign_ids = {p.name for p in campaigns_dir.iterdir()}
+    # `campaigns_dir/.publish.lock` (bug fix P2 #3: now the authoritative lock)
+    # is legitimate bookkeeping, not a campaign — filter it out same as
+    # `secret_dir`'s own `.publish.lock` below.
+    published_campaign_ids = {
+        p.name for p in campaigns_dir.iterdir() if p.name != c0_freeze._PUBLISH_LOCK_NAME
+    }
 
     second = c0_freeze.armed_freeze(
         _REPO_ROOT,
@@ -393,7 +398,9 @@ def test_armed_freeze_rejects_replayed_authorization_nonce(
     assert second.campaign_dir is None
     assert second.secret_dir is None
     # No new campaign/secret directory was created by the rejected second call.
-    assert {p.name for p in campaigns_dir.iterdir()} == published_campaign_ids
+    assert {
+        p.name for p in campaigns_dir.iterdir() if p.name != c0_freeze._PUBLISH_LOCK_NAME
+    } == published_campaign_ids
     assert {p.name for p in secret_dir.iterdir() if p.name != c0_freeze._PUBLISH_LOCK_NAME} == (
         published_campaign_ids
     )
@@ -441,12 +448,16 @@ def test_armed_freeze_publication_failure_on_campaign_replace_rolls_back_everyth
     assert call_count["n"] == 2
 
     # `.publish.lock` itself is legitimate (empty, not secret material, created
-    # by `_publish_lock()`); everything else must be gone.
+    # by `_publish_lock()` — now also under `campaigns_dir` since it holds the
+    # authoritative lock, bug fix P2 #3); everything else must be gone.
     remaining_secret = [
         p for p in (secret_dir.iterdir() if secret_dir.exists() else [])
         if p.name != c0_freeze._PUBLISH_LOCK_NAME
     ]
-    remaining_campaign = list(campaigns_dir.iterdir()) if campaigns_dir.exists() else []
+    remaining_campaign = [
+        p for p in (campaigns_dir.iterdir() if campaigns_dir.exists() else [])
+        if p.name != c0_freeze._PUBLISH_LOCK_NAME
+    ]
     assert remaining_secret == [], f"secret dir not empty: {remaining_secret}"
     assert remaining_campaign == [], f"campaigns dir not empty: {remaining_campaign}"
 
@@ -474,7 +485,10 @@ def test_armed_freeze_publication_failure_on_first_replace_leaves_nothing(
         p for p in (secret_dir.iterdir() if secret_dir.exists() else [])
         if p.name != c0_freeze._PUBLISH_LOCK_NAME
     ]
-    remaining_campaign = list(campaigns_dir.iterdir()) if campaigns_dir.exists() else []
+    remaining_campaign = [
+        p for p in (campaigns_dir.iterdir() if campaigns_dir.exists() else [])
+        if p.name != c0_freeze._PUBLISH_LOCK_NAME
+    ]
     assert remaining_secret == []
     assert remaining_campaign == []
 
@@ -937,3 +951,326 @@ def test_write_secret_file_rejects_short_write(tmp_path: Path, monkeypatch: pyte
     target = tmp_path / "secret.bin"
     with pytest.raises(OSError, match="short write"):
         c0_freeze._write_secret_file(target, b"\x00" * 32)
+
+
+# ---------------------------------------------------------------------------
+# bug fix P2 #1 — E_use table read exactly once (validation + staging share
+# the same buffer, no read-then-reread TOCTOU)
+# ---------------------------------------------------------------------------
+
+
+def test_armed_freeze_reads_e_use_table_bytes_exactly_once(
+    tmp_path: Path, clean_checkout: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`armed_freeze()` must call `Path.read_bytes()` on the E_use table path
+    exactly once (validation, sha256 pin, and staging copy all reuse that one
+    buffer). Reads of unrelated paths are not counted."""
+    approval_dir = tmp_path / "approvals"
+    secret_dir = tmp_path / "secrets"
+    campaigns_dir = tmp_path / "campaigns"
+    approval_dir.mkdir()
+    table_path = tmp_path / "e_use.json"
+    _write_valid_e_use_table(table_path)
+
+    _write_gate1(approval_dir)
+    report = c0_freeze.dry_run(_REPO_ROOT, approval_dir, os.environ, e_use_table_path=table_path)
+    assert not report.validation.is_blocked, report.validation.missing_required_keys
+    _write_gate2(approval_dir, report.manifest_core_sha)
+
+    env = dict(os.environ)
+    env["VG_CAL_C0_FREEZE_AUTHORIZED"] = "1"
+
+    real_read_bytes = Path.read_bytes
+    call_count = {"n": 0}
+
+    def counting_read_bytes(self: Path) -> bytes:
+        if self == table_path:
+            call_count["n"] += 1
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counting_read_bytes)
+
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+        e_use_table_path=table_path,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.PUBLISHED, result.detail
+    assert call_count["n"] == 1
+
+
+def test_armed_freeze_e_use_table_staged_bytes_survive_a_swap_between_reads(
+    tmp_path: Path, clean_checkout: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard for bug fix P2 #1: if `armed_freeze()` ever went back
+    to reading the E_use table path a second time (rather than reusing the
+    bytes already read for validation), a file swapped out between the two
+    reads would silently change what gets pinned/staged without ever being
+    re-validated. Simulate that swap by making any read of `table_path`
+    *after* the first return different (but still individually valid) bytes,
+    then assert the staged copy + sha256 pin equal the bytes that were
+    actually read/validated — never the swapped-in content. With the fix
+    (single read, reused), the swap branch is never reached at all."""
+    approval_dir = tmp_path / "approvals"
+    secret_dir = tmp_path / "secrets"
+    campaigns_dir = tmp_path / "campaigns"
+    approval_dir.mkdir()
+    table_path = tmp_path / "e_use.json"
+    _write_valid_e_use_table(table_path)
+    validated_bytes = table_path.read_bytes()
+
+    # A second, differently-formatted but equally-valid table: same semantic
+    # content, different exact bytes (so a real "second read returns this"
+    # bug would still pass validation but pin/stage the wrong bytes).
+    swapped_bytes = json.dumps(json.loads(validated_bytes), indent=2).encode("utf-8")
+    assert swapped_bytes != validated_bytes
+
+    _write_gate1(approval_dir)
+    report = c0_freeze.dry_run(_REPO_ROOT, approval_dir, os.environ, e_use_table_path=table_path)
+    assert not report.validation.is_blocked, report.validation.missing_required_keys
+    _write_gate2(approval_dir, report.manifest_core_sha)
+
+    env = dict(os.environ)
+    env["VG_CAL_C0_FREEZE_AUTHORIZED"] = "1"
+
+    real_read_bytes = Path.read_bytes
+    read_count = {"n": 0}
+
+    def swap_after_first_read(self: Path) -> bytes:
+        if self == table_path:
+            read_count["n"] += 1
+            if read_count["n"] > 1:
+                return swapped_bytes
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", swap_after_first_read)
+
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+        e_use_table_path=table_path,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.PUBLISHED, result.detail
+    assert read_count["n"] == 1  # the fix never triggers the swap branch
+
+    staged = (result.campaign_dir / "e_use_table.json").read_bytes()
+    assert staged == validated_bytes
+    assert staged != swapped_bytes
+
+    manifest = json.loads((result.campaign_dir / "c0_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["frozen_inputs"]["e_use_table_sha256"] == hashlib.sha256(
+        validated_bytes
+    ).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# bug fix P2 #2 — publication rollback on any BaseException, not just OSError
+# ---------------------------------------------------------------------------
+
+
+def test_armed_freeze_keyboard_interrupt_between_renames_rolls_back_and_propagates(
+    tmp_path: Path, clean_checkout: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Inject `KeyboardInterrupt` (not `OSError`) on the second `os.replace`
+    (campaign-side) call. Before the fix this bypassed rollback entirely
+    (only `OSError` was caught) and left a published secret dir with no
+    matching campaign dir. After the fix: nothing is published, the secret
+    dir is rolled back, and the interrupt still propagates to the caller."""
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+
+    real_replace = os.replace
+    call_count = {"n": 0}
+
+    def flaky_replace(src: object, dst: object) -> None:
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise KeyboardInterrupt("injected interrupt on campaign-side os.replace")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(c0_freeze.os, "replace", flaky_replace)
+
+    with pytest.raises(KeyboardInterrupt):
+        c0_freeze.armed_freeze(
+            _REPO_ROOT,
+            cli_armed=True,
+            env=env,
+            approval_dir=approval_dir,
+            secret_dir=secret_dir,
+            campaigns_dir=campaigns_dir,
+        )
+    assert call_count["n"] == 2
+
+    # Nothing published: only the (legitimate) lock files may remain.
+    remaining_secret = [
+        p for p in (secret_dir.iterdir() if secret_dir.exists() else [])
+        if p.name != c0_freeze._PUBLISH_LOCK_NAME
+    ]
+    remaining_campaign = [
+        p for p in (campaigns_dir.iterdir() if campaigns_dir.exists() else [])
+        if p.name != c0_freeze._PUBLISH_LOCK_NAME
+    ]
+    assert remaining_secret == [], f"secret dir not empty: {remaining_secret}"
+    assert remaining_campaign == [], f"campaigns dir not empty: {remaining_campaign}"
+
+
+def test_armed_freeze_system_exit_on_first_rename_rolls_back_and_propagates(
+    tmp_path: Path, clean_checkout: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same as above but `SystemExit` on the *first* (secret-side) rename, to
+    confirm the rollback-and-reraise path is not specific to the second
+    rename or to `KeyboardInterrupt`."""
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+
+    def always_raise(src: object, dst: object) -> None:
+        raise SystemExit("injected exit on secret-side os.replace")
+
+    monkeypatch.setattr(c0_freeze.os, "replace", always_raise)
+
+    with pytest.raises(SystemExit):
+        c0_freeze.armed_freeze(
+            _REPO_ROOT,
+            cli_armed=True,
+            env=env,
+            approval_dir=approval_dir,
+            secret_dir=secret_dir,
+            campaigns_dir=campaigns_dir,
+        )
+
+    remaining_secret = [
+        p for p in (secret_dir.iterdir() if secret_dir.exists() else [])
+        if p.name != c0_freeze._PUBLISH_LOCK_NAME
+    ]
+    remaining_campaign = [
+        p for p in (campaigns_dir.iterdir() if campaigns_dir.exists() else [])
+        if p.name != c0_freeze._PUBLISH_LOCK_NAME
+    ]
+    assert remaining_secret == []
+    assert remaining_campaign == []
+
+
+# ---------------------------------------------------------------------------
+# bug fix P2 #3 — authoritative nonce/publication lock lives under
+# campaigns_dir (shared registry), not the caller-selected secret_dir
+# ---------------------------------------------------------------------------
+
+
+def test_armed_freeze_authoritative_lock_lives_under_campaigns_dir(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """The authoritative publish lock must be `campaigns_dir/.publish.lock`
+    (the shared campaign registry both processes necessarily agree on).
+    `secret_dir/.publish.lock` remains as a secondary lock."""
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.PUBLISHED, result.detail
+    assert (campaigns_dir / c0_freeze._PUBLISH_LOCK_NAME).is_file()
+    assert (secret_dir / c0_freeze._PUBLISH_LOCK_NAME).is_file()
+
+
+def test_armed_freeze_nonce_recheck_inside_publish_lock_catches_toctou_with_different_secret_dirs(
+    tmp_path: Path, clean_checkout: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard for bug fix P2 #3: two processes sharing the same
+    `campaigns_dir` but passing *different* `secret_dir` values must still be
+    correctly serialized by the authoritative (campaigns_dir-keyed) lock —
+    same scenario as
+    `test_armed_freeze_nonce_recheck_inside_publish_lock_catches_toctou`
+    above, but with `secret_dir` deliberately varied between the two calls.
+    Before the fix, keying the lock off `secret_dir` alone meant these two
+    calls would take unrelated locks and the second could publish a replayed
+    nonce right past the TOCTOU-catching recheck."""
+    approval_dir, secret_dir_1, campaigns_dir, env = _prepare_armed(tmp_path)
+    secret_dir_2 = tmp_path / "secrets-2"
+
+    first = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir_1,
+        campaigns_dir=campaigns_dir,
+    )
+    assert first.outcome == c0_freeze.FreezeOutcome.PUBLISHED, first.detail
+    published_ids_after_first = {
+        p.name for p in campaigns_dir.iterdir() if p.name != c0_freeze._PUBLISH_LOCK_NAME
+    }
+
+    real_check = c0_freeze._find_existing_nonce_usage
+    call_count = {"n": 0}
+
+    def flaky_check(campaigns_dir_: Path, nonce: str) -> str | None:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # Simulate the early (pre-lock) check racing past the just-published
+            # campaign — the locked recheck (2nd call) must still catch it.
+            return None
+        return real_check(campaigns_dir_, nonce)
+
+    monkeypatch.setattr(c0_freeze, "_find_existing_nonce_usage", flaky_check)
+
+    second = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir_2,  # different secret_dir than the first call
+        campaigns_dir=campaigns_dir,
+    )
+    assert second.outcome == c0_freeze.FreezeOutcome.NONCE_ALREADY_USED, second.detail
+    assert call_count["n"] == 2
+    assert {
+        p.name for p in campaigns_dir.iterdir() if p.name != c0_freeze._PUBLISH_LOCK_NAME
+    } == published_ids_after_first
+    assert not any(p.name.startswith(".staging-") for p in campaigns_dir.iterdir())
+    # The rejected second call must not have published (or left staging
+    # behind in) the different secret_dir it was given.
+    remaining_secret_dir_2 = [
+        p for p in (secret_dir_2.iterdir() if secret_dir_2.exists() else [])
+        if p.name != c0_freeze._PUBLISH_LOCK_NAME
+    ]
+    assert remaining_secret_dir_2 == []
+
+
+def test_detect_orphans_takes_campaigns_dir_lock_too(tmp_path: Path) -> None:
+    """Regression guard for bug fix P2 #3: `detect_orphans()` reads the
+    `campaigns_dir` registry, so it must take the authoritative
+    `campaigns_dir/.publish.lock` (in addition to the secondary
+    `secret_dir` lock) — not just the secret_dir lock as before. Holding
+    only the `campaigns_dir` lock externally must make `detect_orphans()`
+    skip (empty report, no side effects), proving it actually contends for
+    that lock."""
+    import fcntl
+
+    secret_dir = tmp_path / "secrets"
+    campaigns_dir = tmp_path / "campaigns"
+    secret_dir.mkdir()
+    campaigns_dir.mkdir()
+    orphan = secret_dir / "RUN10-CAL-STALE"
+    orphan.mkdir()
+    (orphan / ".publishing").write_text("", encoding="utf-8")
+
+    lock_path = campaigns_dir / c0_freeze._PUBLISH_LOCK_NAME
+    with open(lock_path, "a+") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            report = c0_freeze.detect_orphans(secret_dir, campaigns_dir)
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+    assert report == c0_freeze.OrphanReport(orphan_campaign_ids=(), deleted_orphan_secret_ids=())
+    assert orphan.exists()  # untouched while the campaigns_dir lock was held elsewhere
