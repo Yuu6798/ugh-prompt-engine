@@ -196,6 +196,30 @@ jobs:
           done
           pytest -q --tb=short --durations=25 "${foundry_tests[@]}"
 
+  test-calibration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Test calibration
+        run: pytest -q --tb=short voice_genesis/calibration/tests
+
   test-rest:
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -245,6 +269,7 @@ jobs:
           pytest -q --tb=short --durations=25 \
             --ignore=tests/test_m2_accuracy_harness.py \
             "${deselect_args[@]}" \
+            --deselect=voice_genesis/calibration/tests \
             --deselect=tests/test_l0b_scripts.py::test_ledger_l0br_reports_reproduce_frozen_judge_reevaluation \
             --deselect=tests/test_l0b_scripts.py::test_ledger_l0br_new_search_positive_controls_reproduce_frozen_judge_reevaluation \
             --deselect=tests/test_l0b_scripts.py::test_ledger_l0br_v2_series_runs_reports_reproduce_frozen_judge_reevaluation
