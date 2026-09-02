@@ -63,7 +63,12 @@ def _write_gate1(
         "design_doc_sha256": _DESIGN_SHA,
         "memo_sha256": _MEMO_SHA,
         "authorization_nonce": nonce,
-        "cost_caps": {"compute": 36000.0, "storage": 1_000_000_000, "budget": 1.0},
+        "cost_caps": {
+            "compute": 36000.0,
+            "storage": 1_000_000_000,
+            "budget": 1.0,
+            "budget_accounting_mode": "local_zero_cost",
+        },
         "e_use_bound_accepted": True,
         "max_claim_scope": ["formant_frequency"] if scope is None else scope,
     }

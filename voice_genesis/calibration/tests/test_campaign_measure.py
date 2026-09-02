@@ -91,7 +91,9 @@ def test_cost_cap_breach_raises_and_records_stop_event(tmp_path: Path) -> None:
 
     row = subset[0]
     candidate = candidate_by_id("F0-B0-CURRENT")
-    caps = CostCaps(compute=1e-6, storage=1_000_000, budget=1000.0)
+    caps = CostCaps(
+        compute=1e-6, storage=1_000_000, budget=1000.0, budget_accounting_mode="local_zero_cost"
+    )
     counters = CapCounters()
     with pytest.raises(measure_stage.CostCapExceededError):
         measure_stage.run_measurement_for_instance(
@@ -131,7 +133,12 @@ def test_cost_cap_breach_stops_after_first_unit_and_persists_counters(tmp_path: 
 
     row = subset[0]
     candidate = candidate_by_id("F0-B0-CURRENT")
-    tiny_caps = CostCaps(compute=1e-6, storage=1_000_000_000, budget=1000.0)
+    tiny_caps = CostCaps(
+        compute=1e-6,
+        storage=1_000_000_000,
+        budget=1000.0,
+        budget_accounting_mode="local_zero_cost",
+    )
 
     counters = load_cap_counters(campaign.campaign_dir)
     assert counters.compute_used == pytest.approx(0.0)

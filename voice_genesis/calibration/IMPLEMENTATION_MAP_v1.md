@@ -389,7 +389,24 @@ README のみ。B/C は README の自セクションのみ追記）。
   禁止）（PR #343 第 2 巡採用）
 - meter 反復: within-process 3 call + fresh-process 3（subprocess worker）。並列 worker は
   per-worker JSONL → 直列 append 集約（provenance 契約）
-- cost cap / stop rule 超過 → stop event 記帳 + fail-closed 終了
+- cost cap / stop rule 超過 → stop event 記帳 + fail-closed 終了。`cli.py main()` は
+  `counters.json` を読み戻した**直後**（stage dispatch の前）にも同じ超過判定を
+  1 回実行し、既に breach 済みの永続化 counter を再読込しただけで dispatch が
+  素通りする（retry のたびに 1 work unit 分課金が進む）ことを防ぐ。この事前
+  チェックは既に記録済みの stop_event と同一内容なら重複記帳しない（idempotent。
+  round 13 finding #2、`[UNDERSPEC-CAL-D26]`）
+- **budget accounting mode**（round 13 finding #3、`[UNDERSPEC-CAL-D27]`）:
+  `cost_caps.CostCaps` は `compute`/`storage`/`budget` の 3 値に加え
+  `budget_accounting_mode`（closed vocabulary: `"local_zero_cost"` | `"per_unit_fixed"`
+  + `"per_unit_fixed"` 時必須の `budget_unit_cost`）を持つ。render/measurement の
+  各 work unit はこの宣言に従って `budget_used` へ加算する（`"local_zero_cost"` は
+  常に 0、`"per_unit_fixed"` は `budget_unit_cost` を一律加算）— 会計規則が
+  存在しないまま `CostCaps.budget` cap が常に非発火という状態を終端させた。mode が
+  欠落/閉語彙外なら `BudgetAccountingUndeclaredError`（`BUDGET_ACCOUNTING_UNDECLARED`）
+  で dispatch を fail-closed に拒否する。Gate 1 承認 payload の `cost_caps` に
+  この mode を含め、凍結 manifest の `frozen_design.cost_caps` へそのまま埋め込む
+  ため `manifest_core_sha` の対象。本キャンペーンの承認値は `"local_zero_cost"`
+  （`approvals/records/GATE1_DECISION_RECORD.md` §2 参照）
 - dry-run（既定）: 計画のみ — work unit 件数（instances 2,280 / renders = campaign 合計
   4,560。**4,560 = 2,280 instances × 2 fresh-process renders**（各 instance を
   generator determinism 検査のため 2 回 fresh-process render し byte 一致を確認する

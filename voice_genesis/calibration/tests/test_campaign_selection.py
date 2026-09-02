@@ -9,11 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from voice_genesis.calibration.campaign import selection_stage
+from voice_genesis.calibration.campaign import measure_stage, selection_stage
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
+from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import candidate_by_id
 from voice_genesis.calibration.selection import CandidateCriteria, select_across_ceilings
-from voice_genesis.calibration.vocab import ClaimCeiling
+from voice_genesis.calibration.vocab import ClaimCeiling, MissingReason
 
 from ._campaign_fixture import build_tiny_campaign
 
@@ -216,3 +217,93 @@ def test_out_of_scope_absolute_candidate_excluded_from_absolute_pool() -> None:
     # the numerically worse *in-scope* ABSOLUTE candidate wins: pool
     # membership (decided by capped ceiling) outranks accuracy comparison.
     assert outcome.selected_candidate_id == "in-scope-cand"
+
+
+# ---------------------------------------------------------------------------
+# round 13 finding #1 (`[UNDERSPEC-CAL-D25]`): positive evidence = every
+# TRUTH_CORE row of the evaluated split, not just the 2 designated anchors.
+# ---------------------------------------------------------------------------
+
+
+def _record(
+    row_id: str,
+    probe_index: int,
+    *,
+    candidate_id: str = "F0-B0-CURRENT",
+    detected: bool = True,
+    repeat_kind: str = "within",
+    repeat_index: int = 0,
+    process_id: str = "p0",
+) -> measure_stage.MeasurementRecord:
+    output = (
+        MeterOutput(values={"f0_hz": 220.0})
+        if detected
+        else MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
+    )
+    return measure_stage.MeasurementRecord(
+        row_id=row_id,
+        probe_index=probe_index,
+        candidate_id=candidate_id,
+        repeat_kind=repeat_kind,
+        repeat_index=repeat_index,
+        process_id=process_id,
+        output=output,
+    )
+
+
+def test_candidate_fails_on_non_designated_truth_core_row_is_rejected() -> None:
+    """A row that is a TRUTH_CORE row for the family but is *not* one of the
+    2 legacy `positive_control=True` designated anchors must still be able to
+    reject a candidate that fails to fire on it — the positive evidence
+    population is the full per-split TRUTH_CORE set (round 13 finding #1)."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    # "row-anchor-designated" would be a legacy 2-anchor row; here the
+    # candidate fires fine on it, but fails (non-fire) on a *different*
+    # TRUTH_CORE row that is still part of the expanded positive population.
+    records = [
+        _record("row-anchor-designated", 0, detected=True),
+        _record("row-other-truth-core", 0, detected=False),
+    ]
+    positive_ids = frozenset({"row-anchor-designated", "row-other-truth-core"})
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        positive_control_row_ids=positive_ids,
+    )
+    assert report["positive_control_non_fire"] is True
+    assert report["positive_rows_absent"] is False
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+def test_designated_anchors_absent_from_selection_is_reported_as_failure() -> None:
+    """If the declared positive-row population is non-empty but no record in
+    this evaluation matches any of those rows (e.g. the designated anchors'
+    home split doesn't include SELECTION), the candidate must be reported
+    ineligible via a distinct `positive_rows_absent` reason — not silently
+    treated as "no evidence, no failure" (round 13 finding #1, fail-closed)."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [_record("row-some-other-instance", 0, detected=True)]
+    positive_ids = frozenset({"row-anchor-designated"})  # never appears in records
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        positive_control_row_ids=positive_ids,
+    )
+    assert report["positive_rows_absent"] is True
+    assert report["positive_control_non_fire"] is False  # no detections to be non-fired
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+def test_empty_declared_positive_population_is_not_a_failure() -> None:
+    """Distinguish "no positive population declared for this family" (still
+    a legitimate no-op, per the module docstring) from a declared-but-absent
+    population (finding #1, above)."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [_record("row-some-other-instance", 0, detected=True)]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        positive_control_row_ids=frozenset(),
+    )
+    assert report["positive_rows_absent"] is False
+    assert report["positive_control_non_fire"] is False

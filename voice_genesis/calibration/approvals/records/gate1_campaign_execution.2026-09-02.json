@@ -8,7 +8,8 @@
   "cost_caps": {
     "compute": 172800,
     "storage": 4294967296,
-    "budget": 20
+    "budget": 20,
+    "budget_accounting_mode": "local_zero_cost"
   },
   "e_use_bound_accepted": true,
   "max_claim_scope": [

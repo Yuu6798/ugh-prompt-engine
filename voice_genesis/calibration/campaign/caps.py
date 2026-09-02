@@ -38,7 +38,12 @@ import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
-from voice_genesis.calibration.cost_caps import CapCounters, CostCaps, cost_caps_from_mapping
+from voice_genesis.calibration.cost_caps import (
+    BudgetAccountingUndeclaredError,
+    CapCounters,
+    CostCaps,
+    cost_caps_from_mapping,
+)
 
 COUNTERS_FILENAME = "counters.json"
 
@@ -59,8 +64,17 @@ def counters_path(campaign_dir: Path) -> Path:
 
 def cost_caps_from_manifest(manifest: Mapping[str, object]) -> CostCaps | None:
     """`manifest["frozen_design"]["cost_caps"]` から `CostCaps` を復元する。
-    節が無い・mapping でない・値が不正（例: Gate 1 未承認時の
-    `"ABSENT:GATE1_NOT_APPROVED"` 文字列）ならいずれも `None`。"""
+    節が無い・mapping でない（例: Gate 1 未承認時の
+    `"ABSENT:GATE1_NOT_APPROVED"` 文字列）なら `None`（cap 未凍結 — 値の要否
+    判断は行わない、既存の設計判断）。
+
+    round 13 finding #3: 節が mapping として**存在する**にもかかわらず
+    `budget_accounting_mode` が欠落/閉語彙外なら、`None` へ丸めて黙って
+    budget cap を non-binding 扱いにはしない——
+    `cost_caps.BudgetAccountingUndeclaredError` をそのまま呼び出し側
+    （`campaign/cli.py`）へ伝播させ、dispatch を fail-closed で拒否させる。
+    それ以外の型不正（compute/storage/budget 欠落等）は既存どおり `None` に
+    丸める。"""
     frozen_design = manifest.get("frozen_design")
     if not isinstance(frozen_design, Mapping):
         return None
@@ -69,6 +83,8 @@ def cost_caps_from_manifest(manifest: Mapping[str, object]) -> CostCaps | None:
         return None
     try:
         return cost_caps_from_mapping(dict(raw))
+    except BudgetAccountingUndeclaredError:
+        raise
     except (KeyError, TypeError, ValueError):
         return None
 

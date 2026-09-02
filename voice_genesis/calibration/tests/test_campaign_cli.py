@@ -478,6 +478,78 @@ def test_c2_baseline_armed_wires_cost_caps_and_persisted_counters(
 
 
 # ---------------------------------------------------------------------------
+# round 13 finding #2 (`[UNDERSPEC-CAL-D26]`): persisted counters already
+# over a frozen cap must refuse dispatch immediately, before any stage runs.
+# ---------------------------------------------------------------------------
+
+
+def test_persisted_cap_breach_refuses_dispatch_before_stage_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    # C2 requires FIXTURE_VALID (phase order, finding #6).
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    # simulate a prior invocation having already breached the frozen
+    # compute cap (36000.0, `_campaign_fixture.DEFAULT_GATE1_COST_CAPS`) and
+    # persisted the over-limit counters.
+    save_cap_counters(
+        campaign_dir, CapCounters(compute_used=999_999.0, storage_used=0, budget_used=0.0)
+    )
+
+    called = {"n": 0}
+
+    def _fake_run_baseline_stage(*_args, **_kwargs):
+        called["n"] += 1
+        return {"baseline_audit_sha": "0" * 64}
+
+    monkeypatch.setattr(cli.baseline_stage, "run_baseline_stage", _fake_run_baseline_stage)
+
+    args = [
+        "c2-baseline",
+        "--campaign-dir",
+        str(campaign_dir),
+        "--secret-dir",
+        str(secret_root),
+        "--approval-dir",
+        str(approval_dir),
+        "--armed",
+    ]
+    exit_code = cli.main(args)
+    out = capsys.readouterr().out
+    assert exit_code == 1, out
+    assert '"result": "COST_CAP_EXCEEDED"' in out
+    assert called["n"] == 0  # zero renders/measurements performed
+
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    stop_events = [
+        e
+        for e in reloaded.ledger.entries
+        if isinstance(e.payload, dict) and e.payload.get("kind") == "stop_event"
+    ]
+    assert len(stop_events) == 1
+    assert stop_events[0].payload.get("reason") == "COST_CAP_EXCEEDED"
+
+    # a retry re-invocation must refuse again without appending a duplicate
+    # stop_event (idempotent) and without performing any work.
+    exit_code = cli.main(args)
+    assert exit_code == 1
+    assert called["n"] == 0
+    reloaded2 = load_frozen_campaign(campaign_dir, secret_root)
+    stop_events2 = [
+        e
+        for e in reloaded2.ledger.entries
+        if isinstance(e.payload, dict) and e.payload.get("kind") == "stop_event"
+    ]
+    assert len(stop_events2) == 1
+
+
+# ---------------------------------------------------------------------------
 # finding #2 (レビュー本巡): 選択済み F0 の instance 単位フィード
 # ---------------------------------------------------------------------------
 

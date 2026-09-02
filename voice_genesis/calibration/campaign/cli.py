@@ -85,9 +85,18 @@ from voice_genesis.calibration.campaign.state import (
     load_frozen_campaign,
 )
 from voice_genesis.calibration.candidates.registry import candidate_by_id, candidates_for_meter
-from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
+from voice_genesis.calibration.cost_caps import (
+    BudgetAccountingUndeclaredError,
+    CapCounters,
+    CostCaps,
+    StopDecision,
+)
+from voice_genesis.calibration.cost_caps import check as cost_caps_check
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
-from voice_genesis.calibration.fixtures.controls import negative_control_row_ids, positive_control_row_ids
+from voice_genesis.calibration.fixtures.controls import (
+    negative_control_row_ids,
+    positive_detection_instances,
+)
 from voice_genesis.calibration.fixtures.matrix import build_matrix
 from voice_genesis.calibration.observables import two_stage_median
 from voice_genesis.calibration.vocab import (
@@ -96,6 +105,7 @@ from voice_genesis.calibration.vocab import (
     ClaimCeiling,
     MeterId,
     MissingReason,
+    Split,
     TerminalStatus,
 )
 
@@ -391,6 +401,22 @@ def _build_f0_by_instance(
     return result
 
 
+def _positive_row_ids_for_selection(
+    rows: Sequence[Any], assignment: Mapping[str, Any], family: str
+) -> frozenset[str]:
+    """round 13 finding #1: positive evidence = every TRUTH_CORE row of the
+    evaluated SELECTION split for `family` (`fixtures.controls.
+    positive_detection_instances()`, DESIGN RULING per `fixtures/controls.py`
+    module docstring), not just the 2 designated anchors
+    (`positive_control_row_ids()`). The 2-anchor row_id set under-covers:
+    each anchor's home split is HMAC-derived and may not include SELECTION at
+    all, in which case `candidate_fail_filter_report()` silently treated the
+    positive-control filter as inapplicable instead of ineligible
+    (`[UNDERSPEC-CAL-D25]`)."""
+    instances = positive_detection_instances(rows, assignment, Split.SELECTION, family=family)
+    return frozenset(row_id for row_id, _ in instances)
+
+
 def _criteria_with_fail_filters(
     candidate: Any,
     records: Sequence[Any],
@@ -493,7 +519,9 @@ def _run_c3a(
         cost_caps=cost_caps,
     )
     neg_ids = negative_control_row_ids(matrix_rows)
-    pos_ids = positive_control_row_ids(matrix_rows)
+    pos_ids = _positive_row_ids_for_selection(
+        matrix_rows, assignment, FixtureFamily.F0_CONTROL.value
+    )
     known_truth_by_instance = {k: v for k, v in truth_by_instance.items() if v is not None}
     criteria: list[Any] = []
     fail_filter_reports: dict[str, dict[str, bool]] = {}
@@ -610,7 +638,7 @@ def _run_c3b(
         )
         family_rows = [mr for mr in matrix_rows if mr.row.family == family.value]
         neg_ids = negative_control_row_ids(family_rows)
-        pos_ids = positive_control_row_ids(family_rows)
+        pos_ids = _positive_row_ids_for_selection(family_rows, assignment, family.value)
         family_criteria: list[Any] = []
         family_fail_filter_reports: dict[str, dict[str, bool]] = {}
         family_claim_scope_reports: dict[str, dict[str, object]] = {}
@@ -989,6 +1017,44 @@ def _phase_order_violation(subcommand: str, campaign: FrozenCampaign) -> str | N
     return None
 
 
+def _refuse_if_caps_already_breached(
+    campaign: FrozenCampaign,
+    cost_caps: CostCaps | None,
+    cap_counters: CapCounters,
+) -> StopDecision | None:
+    """round 13 finding #2: `counters.json` is reloaded on every subcommand
+    invocation, but the frozen-cap check only ran *inside* the previous
+    stage's per-unit loop (`render_stage`/`measure_stage`). A retry after a
+    breach reloaded already-over-limit counters and let dispatch proceed
+    anyway, charging one more work unit per retry. Run the same
+    `cost_caps.check()` immediately after loading counters, before any stage
+    dispatch — if already breached, refuse to dispatch (`[UNDERSPEC-CAL-D26]`).
+
+    Idempotent: `stop_event` recording is append-only and this guard can run
+    on every invocation while the campaign sits in a breached state, so it
+    must not append a duplicate `stop_event` when the last ledger entry
+    already records this exact breach (same reason/counters/caps) — it still
+    refuses dispatch either way.
+    """
+    if cost_caps is None:
+        return None
+    decision = cost_caps_check(cap_counters, cost_caps)
+    if decision is None:
+        return None
+    entries = campaign.ledger.entries
+    last_payload = entries[-1].payload if entries else None
+    already_recorded = (
+        isinstance(last_payload, Mapping)
+        and last_payload.get("kind") == "stop_event"
+        and last_payload.get("reason") == decision.event_payload.get("reason")
+        and last_payload.get("counters") == decision.event_payload.get("counters")
+        and last_payload.get("caps") == decision.event_payload.get("caps")
+    )
+    if not already_recorded:
+        campaign.ledger.append(decision.event_payload)
+    return decision
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
     secret_dir = args.secret_dir or default_secret_dir()
@@ -1063,8 +1129,31 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # finding #1: frozen cost caps, loaded from the manifest Gate 1 embedded
     # at freeze time, and cumulative counters persisted across subcommands.
-    cost_caps_obj = cost_caps_from_manifest(campaign.manifest)
+    # round 13 finding #3: a *declared* cost_caps section with a missing/
+    # unknown budget_accounting_mode fails closed with a distinct code
+    # rather than silently falling back to "no caps" (which would let the
+    # dead `budget` dimension stay dead).
+    try:
+        cost_caps_obj = cost_caps_from_manifest(campaign.manifest)
+    except BudgetAccountingUndeclaredError as exc:
+        campaign.ledger.append(
+            {
+                "kind": "stop_event",
+                "reason": BudgetAccountingUndeclaredError.CODE,
+                "detail": str(exc),
+            }
+        )
+        _print({"result": BudgetAccountingUndeclaredError.CODE, "detail": str(exc)})
+        return 1
     cap_counters = load_cap_counters(campaign.campaign_dir)
+
+    # round 13 finding #2: refuse dispatch immediately if the reloaded
+    # counters already breach the frozen caps — do not let a retry silently
+    # proceed and charge one more work unit.
+    breach = _refuse_if_caps_already_breached(campaign, cost_caps_obj, cap_counters)
+    if breach is not None:
+        _print({"result": "COST_CAP_EXCEEDED", "detail": breach.detail})
+        return 1
 
     matrix_rows = build_matrix() if args.subcommand in _STAGE_DISPATCH_NEEDS_MATRIX else None
 

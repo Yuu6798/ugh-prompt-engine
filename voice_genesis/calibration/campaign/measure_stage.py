@@ -550,7 +550,11 @@ def run_measurement_for_instance(
         storage_bytes += len(json.dumps(payload).encode("utf-8"))
 
     if cap_counters is not None:
-        cap_counters.add(compute=elapsed, storage=storage_bytes)
+        # round 13 finding #3: this measurement (1 instance x 1 candidate =
+        # within3 + fresh3) is 1 budget work unit — same accounting rule and
+        # granularity as render_stage.render_instance().
+        budget_charge = cost_caps.budget_charge_per_work_unit() if cost_caps is not None else 0.0
+        cap_counters.add(compute=elapsed, storage=storage_bytes, budget=budget_charge)
         # Persist immediately (finding #1: counters must survive across
         # subcommands) — before the breach check, so a unit's consumption is
         # never lost even when this same unit trips a fail-closed exit below.

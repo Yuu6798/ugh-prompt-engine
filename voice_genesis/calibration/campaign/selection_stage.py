@@ -285,14 +285,17 @@ def truth_value_for_row(row: FixtureRow) -> float | None:
 # 共通 fail filter による eligibility 判定（finding #8, 第 9 巡採用）
 # ---------------------------------------------------------------------------
 
-#: fail filter 名の閉集合（`candidates.adapter` の 5 種、設計正本 §8）。
-#: `candidate_fail_filter_report()` が返す dict のキーと 1:1 対応する。
+#: fail filter 名の閉集合（`candidates.adapter` の 5 種、設計正本 §8、+
+#: `candidate_fail_filter_report()` 自身が定義する `positive_rows_absent`
+#: の計 6 種）。`candidate_fail_filter_report()` が返す dict のキーと
+#: 1:1 対応する。
 FAIL_FILTER_NAMES: tuple[str, ...] = (
     "schema_violation",
     "unexplained_nonfinite",
     "within_fresh_process_mismatch",
     "negative_control_false_fire",
     "positive_control_non_fire",
+    "positive_rows_absent",
 )
 
 
@@ -321,7 +324,7 @@ def candidate_fail_filter_report(
     """finding #8: `candidates.adapter` の共通 5 fail filter（schema 違反 /
     無説明非有限 / within-process と fresh-process の不一致 / negative
     control 偽検出 / positive control 不発火）を `candidate` の全 record へ
-    適用し、`{filter_name: 発火したか}` を返す（`FAIL_FILTER_NAMES` の 5 キー
+    適用し、`{filter_name: 発火したか}` を返す（`FAIL_FILTER_NAMES` の 6 キー
     すべてを必ず持つ）。`eligible_after_fail_filters()` と組み合わせて使う。
 
     `negative_control_row_ids`/`positive_control_row_ids` が空（対象 family
@@ -329,6 +332,17 @@ def candidate_fail_filter_report(
     2 filter は発火しない（判定材料が無い = fail-closed 側ではなく
     「判定対象外」として扱う — 通常の候補評価で control 行が母集団に
     含まれないのは正常系であり、これを ineligible の根拠にしない）。
+
+    round 13 finding #1: 上記「判定材料が無い」の免除は
+    `positive_control_row_ids` **引数自体が空**（呼び出し側が「この family
+    に positive 母集団は無い」と判断した場合）にのみ適用する。引数が
+    **非空**（呼び出し側は positive 母集団を宣言した）にもかかわらず
+    `records` 側に該当行の record が 1 件も無い場合は、`pos_detections` は
+    やはり空になるが、これは「判定対象外」ではなく「positive 証拠が
+    観測から消えた」ことを意味する（例: designated anchor が SELECTION
+    split に home split を持たない、または record 収集が不完全）。これを
+    黙って non-failure 扱いすると fail-open になるため、`positive_rows_absent`
+    filter として別途発火させ ineligible にする（`[UNDERSPEC-CAL-D25]`）。
     """
     own_records = [r for r in records if r.candidate_id == candidate.candidate_id]
 
@@ -360,6 +374,10 @@ def candidate_fail_filter_report(
     pos_detections = [_detected(r.output) for r in own_records if r.row_id in positive_control_row_ids]
     neg_fire = adapter.negative_control_false_fire(neg_detections) if neg_detections else False
     pos_non_fire = adapter.positive_control_non_fire(pos_detections) if pos_detections else False
+    # round 13 finding #1: a *declared* (non-empty) positive population that
+    # yields zero matching records is a failure, not "not applicable" — see
+    # the docstring section above (`[UNDERSPEC-CAL-D25]`).
+    positive_rows_absent = bool(positive_control_row_ids) and not pos_detections
 
     return {
         "schema_violation": schema_violated,
@@ -367,12 +385,13 @@ def candidate_fail_filter_report(
         "within_fresh_process_mismatch": mismatch,
         "negative_control_false_fire": neg_fire,
         "positive_control_non_fire": pos_non_fire,
+        "positive_rows_absent": positive_rows_absent,
     }
 
 
 def eligible_after_fail_filters(report: Mapping[str, bool]) -> bool:
     """`candidate_fail_filter_report()` の戻り値から eligibility を導出する:
-    5 filter のいずれか 1 つでも発火（True）していれば ineligible。"""
+    6 filter のいずれか 1 つでも発火（True）していれば ineligible。"""
     return not any(report.get(name, False) for name in FAIL_FILTER_NAMES)
 
 

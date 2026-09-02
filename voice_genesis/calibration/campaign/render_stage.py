@@ -214,7 +214,13 @@ def render_instance(
     pcm_path.with_suffix(".sha256").write_text(sha, encoding="utf-8")
 
     if cap_counters is not None:
-        cap_counters.add(compute=elapsed, storage=len(pcm_bytes))
+        # round 13 finding #3: this render (1 instance = 2 fresh-process
+        # renders) is 1 budget work unit — charge it per the frozen
+        # `budget_accounting_mode` (0 under local_zero_cost, `budget_unit_cost`
+        # under per_unit_fixed). No cost_caps declared -> no budget dimension
+        # tracked (same "cap not yet frozen" posture as compute/storage).
+        budget_charge = cost_caps.budget_charge_per_work_unit() if cost_caps is not None else 0.0
+        cap_counters.add(compute=elapsed, storage=len(pcm_bytes), budget=budget_charge)
         # Persist immediately (finding #1: counters must survive across
         # subcommands) — before the breach check below.
         save_cap_counters(campaign.campaign_dir, cap_counters)

@@ -37,10 +37,14 @@ DEFAULT_NONCE = "test-nonce-campaign-000000"
 #: Gate 1 承認ファイルの `cost_caps` 既定値（`write_gate1_approval()` の既定と
 #: 同値。`build_tiny_campaign()` は同じ値を `frozen_design.cost_caps`
 #: （finding #1）へも埋め込む — 両者は実運用で常に同一値のため）。
+#: `budget_accounting_mode`（round 13 finding #3）は本キャンペーンが
+#: ローカル計算資源のみで動く前提と揃え `"local_zero_cost"` を既定にする
+#: （`GATE1_DECISION_RECORD.md` §5.x のルーリングと同じ根拠）。
 DEFAULT_GATE1_COST_CAPS: Mapping[str, object] = {
     "compute": 36000.0,
     "storage": 1_000_000_000,
     "budget": 1.0,
+    "budget_accounting_mode": "local_zero_cost",
 }
 
 

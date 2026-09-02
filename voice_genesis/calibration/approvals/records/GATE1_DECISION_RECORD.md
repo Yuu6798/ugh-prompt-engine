@@ -27,9 +27,13 @@
 | `compute` | `172800`（秒 = 48 CPU-h） | 設計正本 §14「数〜10 CPU 時間/実装」+ selection ≈ 10^5 calls を根拠に、3–4 倍のマージンを見込んだ |
 | `storage` | `4294967296`（bytes = 4 GiB） | 設計正本 §14「renders 概ね 1 GB 以下」に加え、measurements/ledger 分を含めても 4 倍のマージンを見込んだ |
 | `budget` | `20`（USD） | ローカル CPU 実行を前提としつつ、クラウド CPU に切り替えた場合の保険として、RUN9/RUN10 の実測 ≈$1.5–2.1 の 10 倍を見込んだ |
+| `budget_accounting_mode` | `"local_zero_cost"`（2026-09-02 round 13 finding #3 追補） | 本キャンペーンはローカル計算資源のみで実行し、課金対象の外部リソース（クラウド CPU・API 従量課金等）を一切使わない。そのため各 render/measurement work unit の budget charge は 0 に固定し、`budget`（20 USD）cap は non-binding（各 stage の plan/stop 出力にその旨を明記する）とする。将来クラウド CPU 等の課金資源へ切り替える場合は、本 Gate 1 を re-approve し `budget_accounting_mode="per_unit_fixed"` + 正の `budget_unit_cost` を新たに宣言すること — 過去の `local_zero_cost` 承認を課金資源にそのまま流用しない |
 
 いずれも「保守的な上限」であり、実行時の実測消費とは別軸（`cost_caps.CapCounters`/
-`check()` が実測との超過判定を別途行う）。
+`check()` が実測との超過判定を別途行う）。`budget_accounting_mode` は `cost_caps`
+宣言自体の一部として凍結 manifest（`frozen_design.cost_caps`）へ埋め込まれ、
+`manifest_core_sha` の対象に含まれる（`voice_genesis/calibration/cost_caps.py`
+`[UNDERSPEC-CAL-D27]`）。
 
 ## 3. `max_claim_scope`
 

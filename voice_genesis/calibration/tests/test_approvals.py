@@ -38,7 +38,12 @@ def _write_gate1(approval_dir: Path, **overrides: object) -> None:
         "design_doc_sha256": _design_sha(),
         "memo_sha256": _memo_sha(),
         "authorization_nonce": _TEST_NONCE,
-        "cost_caps": {"compute": 3600.0, "storage": 1_000_000, "budget": 10.0},
+        "cost_caps": {
+            "compute": 3600.0,
+            "storage": 1_000_000,
+            "budget": 10.0,
+            "budget_accounting_mode": "local_zero_cost",
+        },
         "e_use_bound_accepted": True,
         "max_claim_scope": ["formant_frequency"],
     }
@@ -91,7 +96,12 @@ def test_load_approval_valid_gate1(tmp_path: Path) -> None:
     result = approvals.load_approval(approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path)
     assert result.approved is True
     assert result.record is not None
-    assert result.record.cost_caps == CostCaps(compute=3600.0, storage=1_000_000, budget=10.0)
+    assert result.record.cost_caps == CostCaps(
+        compute=3600.0,
+        storage=1_000_000,
+        budget=10.0,
+        budget_accounting_mode="local_zero_cost",
+    )
     assert result.record.e_use_bound_accepted is True
     assert result.record.max_claim_scope == ("formant_frequency",)
     assert result.record.authorization_nonce == _TEST_NONCE
@@ -116,7 +126,12 @@ def test_load_approval_gate1_missing_nonce_is_not_approved(tmp_path: Path) -> No
         "approved_at_utc": "2026-09-02T00:00:00Z",
         "design_doc_sha256": _design_sha(),
         "memo_sha256": _memo_sha(),
-        "cost_caps": {"compute": 1.0, "storage": 1, "budget": 1.0},
+        "cost_caps": {
+            "compute": 1.0,
+            "storage": 1,
+            "budget": 1.0,
+            "budget_accounting_mode": "local_zero_cost",
+        },
         "e_use_bound_accepted": True,
         "max_claim_scope": [],
     }
@@ -205,6 +220,55 @@ def test_gate1_missing_cost_caps_key_is_not_approved(tmp_path: Path) -> None:
     result = approvals.load_approval(approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path)
     assert result.approved is False
     assert any("cost_caps" in r for r in result.reasons)
+
+
+# ---------------------------------------------------------------------------
+# round 13 finding #3 (`[UNDERSPEC-CAL-D27]`): the Gate 1 schema must
+# accept/validate `budget_accounting_mode` alongside compute/storage/budget.
+# ---------------------------------------------------------------------------
+
+
+def test_gate1_missing_budget_accounting_mode_is_not_approved(tmp_path: Path) -> None:
+    _write_gate1(tmp_path, cost_caps={"compute": 3600.0, "storage": 1_000_000, "budget": 10.0})
+    result = approvals.load_approval(approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path)
+    assert result.approved is False
+    assert any(
+        "cost_caps" in r and "budget_accounting_mode" in r for r in result.reasons
+    )
+
+
+def test_gate1_unknown_budget_accounting_mode_is_not_approved(tmp_path: Path) -> None:
+    _write_gate1(
+        tmp_path,
+        cost_caps={
+            "compute": 3600.0,
+            "storage": 1_000_000,
+            "budget": 10.0,
+            "budget_accounting_mode": "pay_as_you_go",
+        },
+    )
+    result = approvals.load_approval(approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path)
+    assert result.approved is False
+    assert any("cost_caps" in r for r in result.reasons)
+
+
+def test_gate1_per_unit_fixed_budget_accounting_mode_is_accepted(tmp_path: Path) -> None:
+    _write_gate1(
+        tmp_path,
+        cost_caps={
+            "compute": 3600.0,
+            "storage": 1_000_000,
+            "budget": 10.0,
+            "budget_accounting_mode": "per_unit_fixed",
+            "budget_unit_cost": 0.01,
+        },
+    )
+    result = approvals.load_approval(approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path)
+    assert result.approved is True
+    assert result.record is not None
+    assert result.record.cost_caps is not None
+    assert result.record.cost_caps.budget_accounting_mode == "per_unit_fixed"
+    assert result.record.cost_caps.budget_unit_cost == pytest.approx(0.01)
 
 
 def test_approval_record_never_carries_campaign_id(tmp_path: Path) -> None:

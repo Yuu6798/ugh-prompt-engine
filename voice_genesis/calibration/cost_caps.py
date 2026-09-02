@@ -12,6 +12,27 @@
 本モジュールは cap 値の生成・実行判断は一切行わない（設計正本 §0 授権境界:
 cap の値の決定と実行 Go はユーザー判断）。ここにあるのは (1) 承認済み値を
 frozen dataclass として保持する型、(2) 累積カウンタ、(3) 超過判定のみ。
+
+round 13 finding #3 (`[UNDERSPEC-CAL-D27]`): `CostCaps.budget` の 3 値
+loader/超過判定は元から存在したが、`budget_used` を実際に積み上げる
+会計規則がどこにも実装されておらず `budget` cap は常に死んでいた
+（`render_stage.py`/`measure_stage.py` は `compute`/`storage` のみ
+`cap_counters.add()` していた）。`budget_accounting_mode` を cost cap
+宣言自体の一部（closed vocabulary、Gate 1 承認 payload に必須）として
+凍結し、会計規則を明示的に宣言させる:
+
+- `"local_zero_cost"`: 本キャンペーンはローカル計算資源のみで課金対象の
+  外部リソースを一切使わない、という宣言。各 work unit の budget charge は
+  常に 0（budget cap は non-binding — stop/plan 出力にその旨を明記する）。
+- `"per_unit_fixed"`: `budget_unit_cost`（正の float）を必須とし、render・
+  measurement の各 work unit が一律この額を `budget_used` へ加算する。
+
+mode が欠落・未知語彙なら `BudgetAccountingUndeclaredError`
+（`CODE = "BUDGET_ACCOUNTING_UNDECLARED"`）で fail-closed する——`budget`
+cap を暗黙に non-binding とみなして黙って動き続けることを防ぐ（cost caps
+セクション自体が manifest に無い場合＝ Gate 1 未承認は本エラーの対象外。
+その場合は従来通り `campaign.caps.cost_caps_from_manifest()` が `None` を
+返し「cap 未凍結」として扱う）。
 """
 
 from __future__ import annotations
@@ -19,12 +40,31 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+#: closed vocabulary（round 13 finding #3）。事後追加は本ファイルの
+#: docstring 改訂を伴う設計判断とする。
+BUDGET_ACCOUNTING_LOCAL_ZERO_COST = "local_zero_cost"
+BUDGET_ACCOUNTING_PER_UNIT_FIXED = "per_unit_fixed"
+BUDGET_ACCOUNTING_MODES: frozenset[str] = frozenset(
+    {BUDGET_ACCOUNTING_LOCAL_ZERO_COST, BUDGET_ACCOUNTING_PER_UNIT_FIXED}
+)
+
+
+class BudgetAccountingUndeclaredError(ValueError):
+    """round 13 finding #3: `cost_caps.budget_accounting_mode` が欠落/閉語彙
+    外の場合の fail-closed error。呼び出し側（`campaign/cli.py`）はこれを
+    捕捉し、`CODE` を dispatch 拒否の distinct reason として ledger
+    `stop_event`/CLI 出力へそのまま使う。"""
+
+    CODE = "BUDGET_ACCOUNTING_UNDECLARED"
+
 
 @dataclass(frozen=True)
 class CostCaps:
-    """§14 の 3 値。Gate 1 承認ファイルの `cost_caps` payload と同じ 3 キー
-    (`compute`/`storage`/`budget`) を持つ（`c0_validate.COST_CAPS_REQUIRED_KEYS`
-    と一致）。"""
+    """§14 の 3 値 + round 13 finding #3 の budget accounting 宣言。Gate 1
+    承認ファイルの `cost_caps` payload と同じキー
+    (`compute`/`storage`/`budget`/`budget_accounting_mode`/
+    `budget_unit_cost`) を持つ（`compute`/`storage`/`budget` は
+    `c0_validate.COST_CAPS_REQUIRED_KEYS` と一致）。"""
 
     compute: float
     """CPU-seconds 換算の compute 上限。"""
@@ -32,6 +72,12 @@ class CostCaps:
     """bytes 換算の storage 上限。"""
     budget: float
     """課金 budget 単位の上限（通貨はユーザー宣言。本モジュールは無次元数として扱う）。"""
+    budget_accounting_mode: str
+    """`BUDGET_ACCOUNTING_MODES` の閉語彙。budget_used への加算規則を宣言する。"""
+    budget_unit_cost: float | None = None
+    """`budget_accounting_mode="per_unit_fixed"` の場合のみ必須（正の float）。
+    `"local_zero_cost"` では `None` でなければならない（値を持たせても
+    無視されず不整合として拒否する——曖昧な二重定義を避けるため）。"""
 
     def __post_init__(self) -> None:
         if not (math.isfinite(self.compute) and self.compute > 0.0):
@@ -40,9 +86,44 @@ class CostCaps:
             raise ValueError("CostCaps.storage must be a positive int (bytes)")
         if not (math.isfinite(self.budget) and self.budget > 0.0):
             raise ValueError("CostCaps.budget must be a finite positive budget value")
+        if self.budget_accounting_mode not in BUDGET_ACCOUNTING_MODES:
+            raise BudgetAccountingUndeclaredError(
+                "CostCaps.budget_accounting_mode must be one of "
+                f"{sorted(BUDGET_ACCOUNTING_MODES)}, got {self.budget_accounting_mode!r}"
+            )
+        if self.budget_accounting_mode == BUDGET_ACCOUNTING_PER_UNIT_FIXED:
+            if self.budget_unit_cost is None or not (
+                math.isfinite(self.budget_unit_cost) and self.budget_unit_cost > 0.0
+            ):
+                raise ValueError(
+                    "CostCaps.budget_unit_cost must be a finite positive number when "
+                    f"budget_accounting_mode={BUDGET_ACCOUNTING_PER_UNIT_FIXED!r}"
+                )
+        elif self.budget_unit_cost is not None:
+            raise ValueError(
+                "CostCaps.budget_unit_cost must be unset (None) when "
+                f"budget_accounting_mode={BUDGET_ACCOUNTING_LOCAL_ZERO_COST!r}"
+            )
 
-    def as_dict(self) -> dict[str, float | int]:
-        return {"compute": self.compute, "storage": self.storage, "budget": self.budget}
+    def as_dict(self) -> dict[str, float | int | str | None]:
+        return {
+            "compute": self.compute,
+            "storage": self.storage,
+            "budget": self.budget,
+            "budget_accounting_mode": self.budget_accounting_mode,
+            "budget_unit_cost": self.budget_unit_cost,
+        }
+
+    def budget_charge_per_work_unit(self) -> float:
+        """1 work unit（render 呼び出し 1 回、または measurement 呼び出し
+        1 回。`cap_counters.add()` の既存 compute/storage 会計と同じ粒度）
+        あたりの budget charge。`local_zero_cost` は常に 0.0、
+        `per_unit_fixed` は `budget_unit_cost`（`__post_init__` が正の値を
+        保証済み）。"""
+        if self.budget_accounting_mode == BUDGET_ACCOUNTING_PER_UNIT_FIXED:
+            assert self.budget_unit_cost is not None  # enforced by __post_init__
+            return self.budget_unit_cost
+        return 0.0
 
 
 def cost_caps_from_mapping(payload: dict[str, object]) -> CostCaps:
@@ -50,12 +131,24 @@ def cost_caps_from_mapping(payload: dict[str, object]) -> CostCaps:
 
     欠落・型不正はここで `KeyError`/`ValueError`/`TypeError` として fail-closed する
     （承認ファイル loader 側 `approvals.py` が shape 検証済みの mapping を渡す想定だが、
-    本関数単体でも防御的に検証する）。
+    本関数単体でも防御的に検証する）。`budget_accounting_mode` の欠落/閉語彙外は
+    `BudgetAccountingUndeclaredError`（`ValueError` のサブクラス）として区別する
+    （round 13 finding #3）。
     """
+    mode = payload.get("budget_accounting_mode")
+    if not isinstance(mode, str) or mode not in BUDGET_ACCOUNTING_MODES:
+        raise BudgetAccountingUndeclaredError(
+            "cost_caps.budget_accounting_mode is missing or unknown: "
+            f"{mode!r} (must be one of {sorted(BUDGET_ACCOUNTING_MODES)})"
+        )
+    raw_unit_cost = payload.get("budget_unit_cost")
+    budget_unit_cost = None if raw_unit_cost is None else float(raw_unit_cost)
     return CostCaps(
         compute=float(payload["compute"]),
         storage=int(payload["storage"]),
         budget=float(payload["budget"]),
+        budget_accounting_mode=mode,
+        budget_unit_cost=budget_unit_cost,
     )
 
 
@@ -133,4 +226,8 @@ __all__ = [
     "CapCounters",
     "StopDecision",
     "check",
+    "BUDGET_ACCOUNTING_LOCAL_ZERO_COST",
+    "BUDGET_ACCOUNTING_PER_UNIT_FIXED",
+    "BUDGET_ACCOUNTING_MODES",
+    "BudgetAccountingUndeclaredError",
 ]
