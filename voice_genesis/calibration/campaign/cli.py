@@ -123,6 +123,10 @@ from voice_genesis.calibration.fixtures.controls import (
     positive_detection_instances,
 )
 from voice_genesis.calibration.fixtures.matrix import build_matrix
+from voice_genesis.calibration.gates import (
+    MIN_RESOLVABLE_PAIRS_PER_SWEEP,
+    resolvable_pairs_possible,
+)
 from voice_genesis.calibration.observables import two_stage_median
 from voice_genesis.calibration.vocab import (
     CLAIM_CRITICAL_SET,
@@ -1317,6 +1321,57 @@ def _run_c4(
             )
             continue
         if expected_holdout_instances and missing_expected_instances:
+            # round 3 #344 ADOPT (`[UNDERSPEC-CAL-D73]`, amends `[UNDERSPEC-
+            # CAL-D69]`/`[UNDERSPEC-CAL-D72]`): nonzero coverage alone does not
+            # make the score/gate computable. Design quote (`DESIGN_VG_METER_
+            # CAL_DEBT_v1.0.md` ~L375, directly under §10.3's ABSOLUTE holdout
+            # gate): "resolvable pair は各 sweep で >= 3" — and §11's missing-
+            # status cascade (~L395-396): "critical output 全欠損 **or 最小数
+            # 割れ**で score/gate 計算不能 → NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE"
+            # versus "score 計算可能だが PRIMARY 一部 output missing で gate
+            # 不通過 → DIAGNOSTIC_ONLY/OUTPUT_MISSING". A selected candidate
+            # with usable output on only a handful of PRIMARY holdout instances
+            # (e.g. an M5-type DIRECTIONAL meter with 2 usable instances) can
+            # never satisfy the frozen minimum-count / resolvable-pair
+            # condition regardless of what the actual measured values are —
+            # from N usable instances at most C(N,2) distinct pairs exist, so
+            # if that structural ceiling is already below the frozen minimum
+            # the score is uncomputable, not merely gate-1-failing. This is
+            # checked here via `gates.resolvable_pairs_possible()` — the same
+            # frozen threshold (`gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP`)
+            # `directional_gates()` itself enforces per sweep — rather than a
+            # threshold re-typed in this module. Only when that structural
+            # precondition is met does nonzero-but-partial coverage remain a
+            # `DIAGNOSTIC_ONLY`/`OUTPUT_MISSING` (gate-1-not-passed) outcome;
+            # full coverage (this branch not entered) is unchanged.
+            n_usable_primary = len(usable_primary_instances)
+            if not resolvable_pairs_possible(n_usable_primary):
+                results.append(
+                    holdout_stage.MeterHoldoutResult(
+                        meter_id=meter.value,
+                        terminal_status=TerminalStatus.NOT_EVALUABLE.value,
+                        reason_code=MissingReason.OUTPUT_NOT_EVALUABLE.value,
+                        ceiling=ClaimCeiling.NONE.value,
+                        selected_candidate_id=selected_id,
+                        gate_detail={
+                            "reason": (
+                                "[UNDERSPEC-CAL-D73] frozen minimum-count condition "
+                                "not met: with "
+                                f"{n_usable_primary} usable PRIMARY instance(s), at "
+                                f"most C({n_usable_primary},2) distinct pairs exist, "
+                                "below gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP="
+                                f"{MIN_RESOLVABLE_PAIRS_PER_SWEEP} (design §10.4 "
+                                "~L375); score/gate is uncomputable regardless of "
+                                "measured values"
+                            ),
+                            "expected_instance_count": len(expected_holdout_instances),
+                            "seen_instance_count": n_usable_primary,
+                            "min_resolvable_pairs_per_sweep": MIN_RESOLVABLE_PAIRS_PER_SWEEP,
+                            "claim_scope": claim_scope_detail,
+                        },
+                    )
+                )
+                continue
             results.append(
                 holdout_stage.MeterHoldoutResult(
                     meter_id=meter.value,
@@ -1331,9 +1386,7 @@ def _run_c4(
                             "expected C4 instances"
                         ),
                         "expected_instance_count": len(expected_holdout_instances),
-                        "seen_instance_count": len(
-                            usable_holdout_instances & expected_holdout_instances
-                        ),
+                        "seen_instance_count": n_usable_primary,
                         "claim_scope": claim_scope_detail,
                     },
                 )

@@ -40,6 +40,37 @@ def threshold_margin(e_use: float, u_gt: float, u_num: float) -> float:
     return e_use - u_gt - u_num
 
 
+#: §10.4「resolvable pair は各 sweep で >= 3」（`DESIGN_VG_METER_CAL_DEBT_v1.0.md`
+#: ~L374）の frozen minimum。`directional_gates()` の per-sweep 判定
+#: (`sweeps_below_minimum`/`sweeps_with_warning`) と、coverage-count のみから
+#: 「最小数条件が構造的に達成不能」かを判定する `resolvable_pairs_possible()`
+#: の両方がこの定数を参照する（`3` の直書きをこの 1 箇所に閉じ、閾値の
+#: 二重定義を避ける。#344 round 3 ADOPT 分類③）。
+MIN_RESOLVABLE_PAIRS_PER_SWEEP: int = 3
+
+
+def resolvable_pairs_possible(n_usable_primary_instances: int) -> bool:
+    """C4 partial-coverage 判定（`campaign/cli.py` `_run_c4`）が、実際の
+    pairwise resolvability（delta_truth/delta_output/uncertainty からの
+    `directional_gates()` 判定）を計算する前に、coverage-count のみから
+    「score/gate が構造的に計算不能か」を判定する事前チェック。
+
+    N 件の usable PRIMARY instance から作れる相異なる pair の理論最大数は
+    `C(N, 2)`。これが `MIN_RESOLVABLE_PAIRS_PER_SWEEP` を下回れば、実測値が
+    何であれ（全 pair が resolvable だったとしても）最小数条件を満たすことは
+    不可能——設計正本 §11「critical output 全欠損 **or 最小数割れ**で
+    score/gate 計算不能 → NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE」（§10.3 直下の
+    minimum sample 条件、~L375）に該当する。閾値そのものは
+    `MIN_RESOLVABLE_PAIRS_PER_SWEEP`（= `directional_gates()` が使う値）
+    のみが定義し、ここでは再定義しない。
+
+    負値は防御的に「構造的に不可能」（`False`）として扱う。
+    """
+    if n_usable_primary_instances < 0:
+        return False
+    return math.comb(n_usable_primary_instances, 2) >= MIN_RESOLVABLE_PAIRS_PER_SWEEP
+
+
 #: `EUseEvidenceRow.e_use_mode` の閉語彙（`[UNDERSPEC-CAL-D11]`）。"absolute" は
 #: `e_use_value` を construct の unit そのままの絶対量として扱う（
 #: `InstanceMargin.e_use`/`threshold_margin()` が直接消費できる形）。"relative"
@@ -674,15 +705,22 @@ def directional_gates(
         if p.sweep_id in sweep_resolvable_counts:
             sweep_resolvable_counts[p.sweep_id] += 1
 
-    sweeps_below_minimum = tuple(s for s in sweep_ids if sweep_resolvable_counts[s] < 3)
-    sweeps_with_warning = tuple(s for s in sweep_ids if sweep_resolvable_counts[s] == 3)
+    sweeps_below_minimum = tuple(
+        s for s in sweep_ids if sweep_resolvable_counts[s] < MIN_RESOLVABLE_PAIRS_PER_SWEEP
+    )
+    sweeps_with_warning = tuple(
+        s for s in sweep_ids if sweep_resolvable_counts[s] == MIN_RESOLVABLE_PAIRS_PER_SWEEP
+    )
     every_sweep_meets_minimum = bool(sweep_ids) and not sweeps_below_minimum
     three_pair_warning = bool(sweeps_with_warning)
 
     if not sweep_ids:
         reasons.append("no expected sweep declared")
     if sweeps_below_minimum:
-        reasons.append("resolvable pair count < 3 in sweep(s): " + ", ".join(sweeps_below_minimum))
+        reasons.append(
+            f"resolvable pair count < {MIN_RESOLVABLE_PAIRS_PER_SWEEP} in sweep(s): "
+            + ", ".join(sweeps_below_minimum)
+        )
 
     # `is_adjacent` is caller metadata and must not decide which measured signs are
     # gated.  The authority boundary is a separately frozen sweep -> adjacent
