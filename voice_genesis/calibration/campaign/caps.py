@@ -44,6 +44,7 @@ import os
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import NoReturn
 
 from voice_genesis.calibration.cost_caps import (
     BudgetAccountingUndeclaredError,
@@ -51,7 +52,8 @@ from voice_genesis.calibration.cost_caps import (
     CostCaps,
     cost_caps_from_mapping,
 )
-from voice_genesis.calibration.provenance import LedgerEntry
+from voice_genesis.calibration.cost_caps import check as cost_caps_check
+from voice_genesis.calibration.provenance import Ledger, LedgerEntry
 
 COUNTERS_FILENAME = "counters.json"
 
@@ -108,6 +110,109 @@ def validate_worker_cpu_seconds(value: object, *, context: str) -> float:
             "(must be finite and >= 0)"
         )
     return float(value)
+
+
+#: round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): closed vocabulary for
+#: `worker_failed.failure_kind` — the 3 post-spawn ways a fresh-process
+#: worker (`_measure_worker.py`/`_render_worker.py`) can fail to deliver a
+#: usable result, per the finding text (round 24 PR review).
+WORKER_FAILURE_KIND_TIMEOUT = "timeout"
+WORKER_FAILURE_KIND_NONZERO_EXIT = "nonzero_exit"
+WORKER_FAILURE_KIND_MALFORMED_OUTPUT = "malformed_output"
+WORKER_FAILURE_KINDS: frozenset[str] = frozenset(
+    {WORKER_FAILURE_KIND_TIMEOUT, WORKER_FAILURE_KIND_NONZERO_EXIT, WORKER_FAILURE_KIND_MALFORMED_OUTPUT}
+)
+
+
+def reported_cpu_seconds_or_none(stdout: str | None) -> float | None:
+    """round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): on a nonzero-exit worker,
+    `subprocess.run(check=True, capture_output=True)` still attaches
+    whatever the worker wrote to stdout before exiting onto
+    `CalledProcessError.stdout` — best-effort extraction of a well-formed
+    `cpu_seconds` from it, so the caller charges the worker's own reported
+    figure instead of the coarser parent-observed `RUSAGE_CHILDREN` delta
+    when one is actually available. `None` (not a fallback value) on any
+    failure to parse — missing/empty stdout, invalid JSON, a non-object
+    payload, or a missing/non-finite/negative `cpu_seconds` — so the caller
+    unambiguously knows to fall back to the delta itself rather than
+    silently charging 0."""
+    if not stdout:
+        return None
+    try:
+        raw = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        return validate_worker_cpu_seconds(
+            raw.get("cpu_seconds"), context="campaign.caps: nonzero-exit worker stdout"
+        )
+    except WorkerCpuSecondsInvalidError:
+        return None
+
+
+def charge_worker_failure(
+    ledger: Ledger,
+    campaign_dir: Path,
+    *,
+    cap_counters: CapCounters | None,
+    cost_caps: CostCaps | None,
+    stage: str,
+    row_id: str,
+    probe_index: int,
+    candidate_id: str | None,
+    failure_kind: str,
+    compute: float,
+    cause: BaseException,
+) -> NoReturn:
+    """round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): charge a post-spawn
+    fresh-process worker failure (measure or render — `stage` distinguishes
+    them) BEFORE the failure that caused it propagates, so retries of a
+    crashing candidate/instance can no longer consume unbounded worker CPU
+    uncharged (mirrors the existing round 23 ADOPT (2) `render_nondeterministic`
+    charge-before-raise pattern for the analogous "attempted work must not be
+    free" reasoning).
+
+    Appends a `worker_failed` ledger event unconditionally (`cap_counters`
+    absent or not — same posture as `render`/`render_nondeterministic`: the
+    ledger is the durable record even when no in-memory counters are being
+    tracked this run) carrying `failure_kind` and the charged `cpu_seconds`
+    (`storage_bytes` is always 0 — a failed worker attempt never produces
+    persisted output). When `cap_counters` is given: charges `compute` and
+    one budget work unit (per the frozen `budget_accounting_mode`, storage
+    0), persists immediately, then runs the cap check — a cap breach raises
+    `CostCapExceededError` in preference to `cause` (same priority as every
+    other charge-then-check call site in this package). Otherwise (or if no
+    breach), re-raises `cause` unchanged so the caller sees exactly the
+    original `subprocess.TimeoutExpired`/`CalledProcessError`/
+    `JSONDecodeError` — this function never masks it, only charges before it
+    propagates."""
+    payload: dict[str, object] = {
+        "kind": "worker_failed",
+        "stage": stage,
+        "row_id": row_id,
+        "probe_index": probe_index,
+        "failure_kind": failure_kind,
+        "cpu_seconds": compute,
+        "storage_bytes": 0,
+    }
+    if candidate_id is not None:
+        payload["candidate_id"] = candidate_id
+    ledger.append(payload)
+    if cap_counters is not None:
+        budget_charge = cost_caps.budget_charge_per_work_unit() if cost_caps is not None else 0.0
+        cap_counters.add(compute=compute, storage=0, budget=budget_charge)
+        # Persist before the breach check (finding #1 pattern): a unit's
+        # consumption is never lost even when this same unit trips
+        # fail-closed below.
+        save_cap_counters(campaign_dir, cap_counters)
+        if cost_caps is not None:
+            decision = cost_caps_check(cap_counters, cost_caps)
+            if decision is not None:
+                ledger.append(decision.event_payload)
+                raise CostCapExceededError(decision.detail) from cause
+    raise cause
 
 
 def counters_path(campaign_dir: Path) -> Path:
@@ -301,16 +406,30 @@ def cap_counters_from_ledger(
       for any stage with a mid-dispatch checkpoint; the persisted cache
       itself was already correct, since the checkpoint's own delta was
       separately charged to `cap_counters` in-memory when it ran).
+    - `worker_failed` events (round 24 ADOPT (1), `[UNDERSPEC-CAL-D55]`,
+      `caps.charge_worker_failure()`): each event is 1 charged *attempt* at
+      a fresh-process worker call (measure or render) that failed post-spawn
+      (timeout / nonzero exit / malformed JSON) — unlike `meter_call`, there
+      is no 6-records-per-work-unit aggregation to dedup here, each event is
+      independently one attempt with its own `cpu_seconds`, so all of them
+      sum without dedup (repeated retries of a crashing candidate/instance
+      each contribute their own charge, by design — that is the point of
+      the fix). `storage_bytes` is always `0` on these events (no output is
+      ever persisted on a failed attempt). Counted toward `budget` the same
+      way `render`/`render_nondeterministic` are (1 work unit each).
     - `budget`: reconstructed as `budget_charge_per_work_unit() ×
-      (completed render units + completed meter-call work units)` per the
-      frozen `budget_accounting_mode` (round 13 finding #3). `None`
-      `cost_caps` (Gate 1 not yet frozen with cost caps) reconstructs
-      `budget_used=0.0` — informational only, nothing enforces it either.
+      (completed render units + completed meter-call work units + charged
+      worker-failure attempts)` per the frozen `budget_accounting_mode`
+      (round 13 finding #3; round 24 ADOPT (1) extended the unit count to
+      include `worker_failed`). `None` `cost_caps` (Gate 1 not yet frozen
+      with cost caps) reconstructs `budget_used=0.0` — informational only,
+      nothing enforces it either.
     """
     compute = 0.0
     storage = 0
     render_units = 0
     meter_units = 0
+    worker_failure_units = 0
     seen_meter_keys: set[tuple[object, object, object]] = set()
     for entry in ledger_entries:
         payload = entry.payload
@@ -348,11 +467,17 @@ def cap_counters_from_ledger(
             meter_units += 1
         elif kind == "stage_summary":
             compute += _finite_nonneg_float(payload.get("parent_cpu_seconds"))
+        elif kind == "worker_failed":
+            # round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): see docstring above
+            # — no dedup, every event is its own charged attempt.
+            compute += _finite_nonneg_float(payload.get("cpu_seconds"))
+            storage += _finite_nonneg_int(payload.get("storage_bytes"))
+            worker_failure_units += 1
     budget = 0.0
     if cost_caps is not None:
         per_unit = cost_caps.budget_charge_per_work_unit()
         if per_unit:
-            budget = per_unit * (render_units + meter_units)
+            budget = per_unit * (render_units + meter_units + worker_failure_units)
     return CapCounters(compute_used=compute, storage_used=storage, budget_used=budget)
 
 
@@ -401,7 +526,13 @@ __all__ = [
     "CountersCorruptError",
     "CostCapExceededError",
     "WorkerCpuSecondsInvalidError",
+    "WORKER_FAILURE_KIND_TIMEOUT",
+    "WORKER_FAILURE_KIND_NONZERO_EXIT",
+    "WORKER_FAILURE_KIND_MALFORMED_OUTPUT",
+    "WORKER_FAILURE_KINDS",
     "validate_worker_cpu_seconds",
+    "reported_cpu_seconds_or_none",
+    "charge_worker_failure",
     "counters_path",
     "cost_caps_from_manifest",
     "load_cap_counters",

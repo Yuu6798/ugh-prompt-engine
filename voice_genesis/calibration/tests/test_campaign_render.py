@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -237,3 +238,176 @@ def test_c1_render_nondeterministic_charges_before_raising(
     assert derived.compute_used == pytest.approx(counters.compute_used)
     assert derived.storage_used == counters.storage_used
     assert derived.budget_used == pytest.approx(counters.budget_used)
+
+
+# ---------------------------------------------------------------------------
+# round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): a fresh-process render worker
+# that fails post-spawn (timeout / nonzero exit / malformed JSON) must charge
+# the attempted work BEFORE the original error propagates — not discard it.
+# ---------------------------------------------------------------------------
+
+
+class _FakeCompletedProcessRender:
+    def __init__(self, stdout: str) -> None:
+        self.stdout = stdout
+
+
+@pytest.mark.slow
+def test_c1_render_worker_timeout_charges_before_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 0.0))
+
+    monkeypatch.setattr(render_stage.subprocess, "run", fake_run)
+    children_cpu_ticks = iter([20.0, 21.5])  # before, after -> delta 1.5
+    monkeypatch.setattr(render_stage, "_children_cpu_seconds", lambda: next(children_cpu_ticks))
+
+    counters = CapCounters()
+    caps = CostCaps(
+        compute=1000.0, storage=1_000_000, budget=1000.0, budget_accounting_mode="local_zero_cost"
+    )
+    with pytest.raises(subprocess.TimeoutExpired):
+        render_stage.run_render_stage(
+            campaign, subset, stage="c1", cap_counters=counters, cost_caps=caps
+        )
+
+    assert counters.compute_used == pytest.approx(1.5)
+    assert counters.storage_used == 0
+    worker_failed = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "worker_failed"
+    ]
+    assert len(worker_failed) == 1
+    assert worker_failed[0]["stage"] == "render"
+    assert worker_failed[0]["failure_kind"] == "timeout"
+    assert worker_failed[0]["row_id"] == subset[0].row_id
+    assert worker_failed[0]["probe_index"] == 0
+    assert "candidate_id" not in worker_failed[0]
+    assert worker_failed[0]["cpu_seconds"] == pytest.approx(1.5)
+    assert worker_failed[0]["storage_bytes"] == 0
+    assert not campaign.renders_dir.exists() or not any(campaign.renders_dir.iterdir())
+
+    derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
+    assert derived.compute_used == pytest.approx(counters.compute_used)
+    assert derived.storage_used == counters.storage_used
+    assert derived.budget_used == pytest.approx(counters.budget_used)
+
+
+@pytest.mark.slow
+def test_c1_render_worker_nonzero_exit_charges_reported_cpu_seconds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A nonzero-exit render worker's captured stdout still carries a
+    well-formed report — the charge must use the worker's own reported
+    `cpu_seconds` (not the coarser parent-observed delta) when one is
+    recoverable."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    worker_stdout = json.dumps({"pcm_hex": "00", "cpu_seconds": 3.0})
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.CalledProcessError(returncode=1, cmd=cmd, output=worker_stdout, stderr="boom")
+
+    monkeypatch.setattr(render_stage.subprocess, "run", fake_run)
+
+    counters = CapCounters()
+    caps = CostCaps(
+        compute=1000.0, storage=1_000_000, budget=1000.0, budget_accounting_mode="local_zero_cost"
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        render_stage.run_render_stage(
+            campaign, subset, stage="c1", cap_counters=counters, cost_caps=caps
+        )
+
+    assert counters.compute_used == pytest.approx(3.0)
+    worker_failed = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "worker_failed"
+    ]
+    assert len(worker_failed) == 1
+    assert worker_failed[0]["failure_kind"] == "nonzero_exit"
+    assert worker_failed[0]["cpu_seconds"] == pytest.approx(3.0)
+
+    derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
+    assert derived.compute_used == pytest.approx(counters.compute_used)
+
+
+@pytest.mark.slow
+def test_c1_render_worker_malformed_json_charges_before_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    def fake_run(cmd, **kwargs):
+        return _FakeCompletedProcessRender(stdout="{not valid json")
+
+    monkeypatch.setattr(render_stage.subprocess, "run", fake_run)
+    children_cpu_ticks = iter([7.0, 7.25])  # before, after -> delta 0.25
+    monkeypatch.setattr(render_stage, "_children_cpu_seconds", lambda: next(children_cpu_ticks))
+
+    counters = CapCounters()
+    caps = CostCaps(
+        compute=1000.0, storage=1_000_000, budget=1000.0, budget_accounting_mode="local_zero_cost"
+    )
+    with pytest.raises(json.JSONDecodeError):
+        render_stage.run_render_stage(
+            campaign, subset, stage="c1", cap_counters=counters, cost_caps=caps
+        )
+
+    assert counters.compute_used == pytest.approx(0.25)
+    worker_failed = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "worker_failed"
+    ]
+    assert len(worker_failed) == 1
+    assert worker_failed[0]["failure_kind"] == "malformed_output"
+    assert worker_failed[0]["cpu_seconds"] == pytest.approx(0.25)
+
+    derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
+    assert derived.compute_used == pytest.approx(counters.compute_used)
+
+
+@pytest.mark.slow
+def test_c1_render_worker_failure_cost_cap_breach_raises_cost_cap_exceeded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When charging a failed render worker's attempted compute itself
+    breaches the frozen cap, `CostCapExceededError` takes priority over the
+    original `TimeoutExpired`/etc. — same priority as every other
+    charge-then-check call site in this package."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 0.0))
+
+    monkeypatch.setattr(render_stage.subprocess, "run", fake_run)
+    children_cpu_ticks = iter([0.0, 1.0])  # delta 1.0 > tiny compute cap
+    monkeypatch.setattr(render_stage, "_children_cpu_seconds", lambda: next(children_cpu_ticks))
+
+    counters = CapCounters()
+    tiny_caps = CostCaps(
+        compute=1e-6, storage=1_000_000, budget=1000.0, budget_accounting_mode="local_zero_cost"
+    )
+    with pytest.raises(render_stage.CostCapExceededError):
+        render_stage.run_render_stage(
+            campaign, subset, stage="c1", cap_counters=counters, cost_caps=tiny_caps
+        )
+
+    assert counters.compute_used == pytest.approx(1.0)
+    worker_failed = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "worker_failed"
+    ]
+    assert len(worker_failed) == 1
+    stop_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "stop_event"
+    ]
+    assert len(stop_events) == 1
+    assert stop_events[0]["reason"] == "COST_CAP_EXCEEDED"

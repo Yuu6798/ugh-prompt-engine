@@ -119,6 +119,66 @@ def test_load_approval_gate1_duplicate_max_claim_scope_is_not_approved(tmp_path:
     assert any("duplicate" in r and "max_claim_scope" in r for r in result.reasons)
 
 
+# ---------------------------------------------------------------------------
+# round 24 ADOPT (2) P2 (`[UNDERSPEC-CAL-D56]`): `approved_at_utc` must parse
+# as an ISO 8601 UTC timestamp before an approval is accepted.
+# ---------------------------------------------------------------------------
+
+
+def test_load_approval_gate1_unparsable_timestamp_is_not_approved(tmp_path: Path) -> None:
+    _write_gate1(tmp_path, approved_at_utc="tomorrow")
+    result = approvals.load_approval(approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path)
+    assert result.approved is False
+    assert result.record is None
+    assert any(
+        "approved_at_utc" in r and "ISO 8601" in r for r in result.reasons
+    ), result.reasons
+
+
+def test_load_approval_gate1_naive_timestamp_is_not_approved(tmp_path: Path) -> None:
+    """No UTC offset at all (naive) — distinct from a non-UTC offset, both
+    rejected by the same ISO 8601 UTC check."""
+    _write_gate1(tmp_path, approved_at_utc="2026-09-02T00:00:00")
+    result = approvals.load_approval(approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path)
+    assert result.approved is False
+    assert any(
+        "approved_at_utc" in r and "ISO 8601" in r for r in result.reasons
+    ), result.reasons
+
+
+def test_load_approval_gate1_non_utc_offset_timestamp_is_not_approved(tmp_path: Path) -> None:
+    _write_gate1(tmp_path, approved_at_utc="2026-09-02T09:00:00+09:00")
+    result = approvals.load_approval(approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path)
+    assert result.approved is False
+    assert any(
+        "approved_at_utc" in r and "ISO 8601" in r for r in result.reasons
+    ), result.reasons
+
+
+@pytest.mark.parametrize(
+    "approved_at_utc",
+    [
+        "2026-09-02T00:00:00Z",
+        "2026-09-02T00:00:00+00:00",
+        "2026-09-02T00:00:00.123456Z",
+    ],
+)
+def test_load_approval_gate1_valid_utc_timestamp_forms_are_accepted(
+    tmp_path: Path, approved_at_utc: str
+) -> None:
+    _write_gate1(tmp_path, approved_at_utc=approved_at_utc)
+    result = approvals.load_approval(approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path)
+    assert result.approved is True
+    assert result.record is not None
+    assert result.record.approved_at_utc == approved_at_utc
+
+
+def test_is_iso8601_utc_timestamp_rejects_non_string() -> None:
+    assert approvals._is_iso8601_utc_timestamp(None) is False
+    assert approvals._is_iso8601_utc_timestamp(12345) is False
+    assert approvals._is_iso8601_utc_timestamp("") is False
+
+
 def test_load_approval_gate1_missing_nonce_is_not_approved(tmp_path: Path) -> None:
     payload = {
         "gate": "GATE1_CAMPAIGN_EXECUTION",

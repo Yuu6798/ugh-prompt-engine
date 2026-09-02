@@ -31,6 +31,7 @@ import re
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -178,6 +179,51 @@ def _require_sha256_hex(payload: Mapping[str, Any], key: str, reasons: list[str]
     return value
 
 
+def _is_iso8601_utc_timestamp(value: object) -> bool:
+    """round 24 ADOPT (2) P2 (`[UNDERSPEC-CAL-D56]`): minimal ISO 8601 UTC
+    check for `approved_at_utc`. Requires an explicit UTC offset (`Z` or
+    `+00:00`; fractional seconds are optional and pass through
+    `datetime.fromisoformat` unchanged) — a naive timestamp or one with a
+    non-UTC offset is rejected, since neither is "UTC" per the field's own
+    name. Mirrors `provenance._is_iso8601_utc_timestamp` (round 23
+    ADOPT (3), `[UNDERSPEC-CAL-D53]`) — duplicated rather than imported to
+    keep this shape-check module independent of `provenance.py`'s
+    ledger-specific internals (this module has no other dependency on
+    `provenance.py`)."""
+    if not isinstance(value, str) or not value:
+        return False
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() == timedelta(0)
+
+
+def _require_iso8601_utc_timestamp(
+    payload: Mapping[str, Any], key: str, reasons: list[str]
+) -> str | None:
+    """round 24 ADOPT (2) P2 (`[UNDERSPEC-CAL-D56]`): stricter than
+    `_require_nonblank_str` — the value must additionally parse as an ISO
+    8601 timestamp carrying an explicit UTC offset (`_is_iso8601_utc_timestamp`).
+    A non-blank-but-unparsable/naive/non-UTC value (e.g. `"tomorrow"`, a bare
+    local timestamp) is rejected with a distinct reason from a merely
+    missing/blank field, so `approved=True` can no longer be reached with an
+    approval timestamp that was never actually validated as a real UTC
+    instant."""
+    value = payload.get(key)
+    if not isinstance(value, str) or value.strip() == "":
+        reasons.append(f"{key}: must be a non-blank string")
+        return None
+    if not _is_iso8601_utc_timestamp(value):
+        reasons.append(
+            f"{key}: must be an ISO 8601 timestamp with an explicit UTC offset "
+            f"(Z or +00:00), got {value!r}"
+        )
+        return None
+    return value
+
+
 def _parse_gate1_payload(
     payload: Mapping[str, Any], reasons: list[str]
 ) -> dict[str, Any]:
@@ -285,7 +331,9 @@ def load_approval(
         reasons.append(f"gate: expected {gate.value!r}, got {declared_gate!r}")
 
     approver = _require_nonblank_str(payload, "approver", reasons)
-    approved_at_utc = _require_nonblank_str(payload, "approved_at_utc", reasons)
+    # round 24 ADOPT (2) P2 (`[UNDERSPEC-CAL-D56]`): all three gates share
+    # this loader, so the stricter ISO 8601 UTC check applies uniformly.
+    approved_at_utc = _require_iso8601_utc_timestamp(payload, "approved_at_utc", reasons)
     declared_design_sha = _require_sha256_hex(payload, "design_doc_sha256", reasons)
     declared_memo_sha = _require_sha256_hex(payload, "memo_sha256", reasons)
 

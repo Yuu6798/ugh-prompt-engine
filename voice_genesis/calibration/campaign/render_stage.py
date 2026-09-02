@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import resource
 import subprocess
 import sys
 import time
@@ -36,6 +37,8 @@ from voice_genesis.calibration.campaign import workunits
 from voice_genesis.calibration.campaign.caps import (
     CostCapExceededError,
     WorkerCpuSecondsInvalidError,
+    charge_worker_failure,
+    reported_cpu_seconds_or_none,
     save_cap_counters,
     validate_worker_cpu_seconds,
 )
@@ -88,6 +91,18 @@ def _row_inputs_for_split(
             )
         )
     return out
+
+
+def _children_cpu_seconds() -> float:
+    """round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): this process's cumulative
+    child user+sys CPU seconds (`resource.getrusage(RUSAGE_CHILDREN)`) —
+    the parent-observed fallback used to charge a fresh-process render
+    worker that failed post-spawn (timeout / nonzero exit / malformed JSON)
+    and so never reported its own `cpu_seconds`. Mirrors
+    `measure_stage._children_cpu_seconds()`; see that function's docstring
+    for the POSIX timeout-reaping note."""
+    ru_children = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return ru_children.ru_utime + ru_children.ru_stime
 
 
 class RenderNondeterministicError(RuntimeError):
@@ -200,6 +215,18 @@ def render_instance(
     転記する。worker が無効な `cpu_seconds` を報告した場合は
     `WorkerCpuSecondsInvalidError` を送出する（測定は完了しているが
     stale/invalid unit として fail-closed — PCM は書き込まない）。
+
+    **worker 失敗時の課金**（round 24 ADOPT (1)、`[UNDERSPEC-CAL-D55]`）:
+    上記の「無効な `cpu_seconds`」とは異なり、worker が起動後に timeout /
+    nonzero exit / malformed JSON でそもそも well-formed な結果を返さなかった
+    場合は、`caps.charge_worker_failure()` でその 1 attempt が実際に消費した
+    compute（可能なら worker 自身の報告値、無ければ親プロセスの
+    `RUSAGE_CHILDREN` 差分）を `worker_failed` ledger event として記帳・
+    （`cap_counters` があれば）課金・cap 再検査してから元の例外を再送出する
+    （cap 超過を検出すれば `CostCapExceededError` を優先 — 既存の他
+    charge-then-check 呼び出し箇所と同じ優先順位）。課金前に raise していた
+    旧実装は、失敗する instance への retry が worker CPU を無制限・無課金で
+    消費できてしまっていた。
     """
     pcm_path = _pcm_path(campaign, row_id, probe_index)
     recorded_sha = _recorded_render_sha(campaign.ledger.entries, row_id, probe_index)
@@ -225,23 +252,82 @@ def render_instance(
         "probe_index": probe_index,
     }
     payload_json = json.dumps(payload)
+    argv = [
+        sys.executable,
+        "-m",
+        "voice_genesis.calibration.campaign._render_worker",
+        payload_json,
+    ]
     wall_t0 = time.perf_counter()
     outputs: list[str] = []
     cpu_seconds_total = 0.0
     for _ in range(2):
-        proc = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "voice_genesis.calibration.campaign._render_worker",
-                payload_json,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            check=True,
-        )
-        worker_result = json.loads(proc.stdout)
+        # round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): a worker that times
+        # out, exits nonzero, or emits JSON that fails to parse must charge
+        # the attempted work (`caps.charge_worker_failure()`) BEFORE the
+        # failure propagates — compute is the worker's own reported
+        # `cpu_seconds` when a well-formed report is actually recoverable (a
+        # nonzero-exit worker's captured stdout, via
+        # `caps.reported_cpu_seconds_or_none()`), otherwise the
+        # parent-observed `RUSAGE_CHILDREN` delta around this call
+        # (`_children_cpu_seconds()`) — mirrors
+        # `measure_stage._run_one_fresh_call()`. Distinct from — and does
+        # not touch — the existing `WorkerCpuSecondsInvalidError` path below
+        # (a worker that exits 0 with parseable JSON but an invalid
+        # `cpu_seconds` field): that stays uncharged, per the pre-existing
+        # round 14 finding #2 contract.
+        children_t0 = _children_cpu_seconds()
+        try:
+            proc = subprocess.run(
+                argv, capture_output=True, text=True, timeout=timeout_s, check=True
+            )
+        except subprocess.TimeoutExpired as exc:
+            charge_worker_failure(
+                campaign.ledger,
+                campaign.campaign_dir,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+                stage="render",
+                row_id=row_id,
+                probe_index=probe_index,
+                candidate_id=None,
+                failure_kind="timeout",
+                compute=_children_cpu_seconds() - children_t0,
+                cause=exc,
+            )
+        except subprocess.CalledProcessError as exc:
+            compute = reported_cpu_seconds_or_none(exc.stdout)
+            if compute is None:
+                compute = _children_cpu_seconds() - children_t0
+            charge_worker_failure(
+                campaign.ledger,
+                campaign.campaign_dir,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+                stage="render",
+                row_id=row_id,
+                probe_index=probe_index,
+                candidate_id=None,
+                failure_kind="nonzero_exit",
+                compute=compute,
+                cause=exc,
+            )
+        try:
+            worker_result = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            charge_worker_failure(
+                campaign.ledger,
+                campaign.campaign_dir,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+                stage="render",
+                row_id=row_id,
+                probe_index=probe_index,
+                candidate_id=None,
+                failure_kind="malformed_output",
+                compute=_children_cpu_seconds() - children_t0,
+                cause=exc,
+            )
         cpu_seconds_total += validate_worker_cpu_seconds(
             worker_result.get("cpu_seconds"),
             context=f"render_stage: fresh-process worker for row_id={row_id!r} "

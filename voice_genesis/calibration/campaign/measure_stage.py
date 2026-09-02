@@ -62,6 +62,8 @@ from voice_genesis.calibration.campaign import render_stage
 from voice_genesis.calibration.campaign.caps import (
     CostCapExceededError,
     WorkerCpuSecondsInvalidError,
+    charge_worker_failure,
+    reported_cpu_seconds_or_none,
     save_cap_counters,
     validate_worker_cpu_seconds,
 )
@@ -91,6 +93,20 @@ def _process_cpu_seconds() -> float:
     CPU time, not merely a wall-clock approximation of it."""
     ru_self = resource.getrusage(resource.RUSAGE_SELF)
     return ru_self.ru_utime + ru_self.ru_stime
+
+
+def _children_cpu_seconds() -> float:
+    """round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): this process's cumulative
+    child user+sys CPU seconds (`resource.getrusage(RUSAGE_CHILDREN)`).
+    Used as the parent-observed fallback for charging a fresh-process worker
+    that failed post-spawn (timeout / nonzero exit / malformed JSON) and so
+    never reported its own `cpu_seconds` — a before/after delta around one
+    `subprocess.run()` call, taken by `_run_one_fresh_call`. On POSIX,
+    `subprocess.run(timeout=...)` reaps the killed child (calls
+    `process.wait()`) before re-raising `TimeoutExpired`, so this delta
+    already reflects that child's accumulated CPU by the time it is taken."""
+    ru_children = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return ru_children.ru_utime + ru_children.ru_stime
 
 
 def resolve_measure_callable(implementation_ref: str) -> Callable[..., MeterOutput]:
@@ -418,6 +434,24 @@ def run_within_process_calls(
     return records
 
 
+class _FreshWorkerFailure(RuntimeError):
+    """round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): internal-only carrier.
+    `_run_one_fresh_call` raises this instead of letting a post-spawn
+    subprocess failure (timeout / nonzero exit / malformed JSON) propagate
+    directly, so `run_fresh_process_calls` — which holds the
+    ledger/`cap_counters`/`cost_caps` this needs to be charged against — can
+    charge the attempted work (`caps.charge_worker_failure()`) before
+    re-raising `cause` unchanged. Never crosses this module's public
+    boundary (not in `__all__`, never returned/raised to callers of
+    `run_fresh_process_calls`/`run_measurement_for_instance`)."""
+
+    def __init__(self, failure_kind: str, compute: float, cause: BaseException) -> None:
+        self.failure_kind = failure_kind
+        self.compute = compute
+        self.cause = cause
+        super().__init__(f"measure_stage: fresh worker {failure_kind}: {cause}")
+
+
 def _run_one_fresh_call(
     candidate_id: str, pcm_path: Path, sr: int, f0_hz: float | None, timeout_s: float
 ) -> tuple[MeterOutput, float]:
@@ -426,26 +460,58 @@ def _run_one_fresh_call(
     via `WorkerCpuSecondsInvalidError` on a missing/non-finite/negative
     value) so a caller running these concurrently under `ThreadPoolExecutor`
     sees the failure surface through `future.result()` exactly like any
-    other error from this call."""
+    other error from this call.
+
+    round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): a worker that times out,
+    exits nonzero, or emits JSON that fails to parse raises `_FreshWorkerFailure`
+    instead (caught and charged by `run_fresh_process_calls`) — carrying
+    `failure_kind` and the compute to charge for the attempt: the worker's
+    own reported `cpu_seconds` when a well-formed report is actually
+    recoverable (a nonzero-exit worker's captured stdout, via
+    `caps.reported_cpu_seconds_or_none()`), otherwise the parent-observed
+    `RUSAGE_CHILDREN` delta around this call (`_children_cpu_seconds()`) — a
+    timed-out worker never gets a report-recovery attempt (it was killed
+    before it could reliably finish writing one; `caps.charge_worker_failure()`
+    docstring). This is distinct from — and does not touch — the existing
+    `WorkerCpuSecondsInvalidError` path below (a worker that exits 0 with
+    parseable JSON but an invalid `cpu_seconds` field): that stays
+    uncharged, per the pre-existing round 14 finding #2 contract."""
     payload = {
         "candidate_id": candidate_id,
         "pcm_path": str(pcm_path),
         "sr_hz": sr,
         "f0_hz": f0_hz,
     }
-    proc = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "voice_genesis.calibration.campaign._measure_worker",
-            json.dumps(payload),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=timeout_s,
-        check=True,
-    )
-    raw = json.loads(proc.stdout)
+    argv = [
+        sys.executable,
+        "-m",
+        "voice_genesis.calibration.campaign._measure_worker",
+        json.dumps(payload),
+    ]
+    children_t0 = _children_cpu_seconds()
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout_s, check=True)
+    except subprocess.TimeoutExpired as exc:
+        raise _FreshWorkerFailure(
+            "timeout", _children_cpu_seconds() - children_t0, exc
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        compute = reported_cpu_seconds_or_none(exc.stdout)
+        if compute is None:
+            compute = _children_cpu_seconds() - children_t0
+        raise _FreshWorkerFailure("nonzero_exit", compute, exc) from exc
+    try:
+        raw = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise _FreshWorkerFailure(
+            "malformed_output", _children_cpu_seconds() - children_t0, exc
+        ) from exc
+    if not isinstance(raw, Mapping):
+        raise _FreshWorkerFailure(
+            "malformed_output",
+            _children_cpu_seconds() - children_t0,
+            ValueError(f"measure_stage: fresh worker returned non-object JSON: {raw!r}"),
+        )
     cpu_seconds = validate_worker_cpu_seconds(
         raw.get("cpu_seconds"),
         context=f"measure_stage: fresh-process worker for candidate_id={candidate_id!r}",
@@ -461,9 +527,12 @@ def run_fresh_process_calls(
     f0_hz: float | None,
     row_id: str,
     probe_index: int,
+    campaign: FrozenCampaign,
     repeats: int = FRESH_PROCESS_REPEATS,
     timeout_s: float = 60.0,
     max_workers: int = 1,
+    cap_counters: CapCounters | None = None,
+    cost_caps: CostCaps | None = None,
 ) -> tuple[list[MeasurementRecord], float]:
     """`repeats` 回、subprocess worker (`_measure_worker.py`) を起動して測定
     する。`max_workers>1` なら `ThreadPoolExecutor` で並行起動する（結果は
@@ -474,21 +543,48 @@ def run_fresh_process_calls(
     呼び出し元はこれを compute cap へ課金する。wall time ではない）。
     いずれかの worker が無効な `cpu_seconds` を報告した場合は
     `WorkerCpuSecondsInvalidError` を伝播する（測定結果ごと破棄 — fail
-    closed）。"""
-    if max_workers <= 1:
-        results = [
-            _run_one_fresh_call(candidate.candidate_id, pcm_path, sr, f0_hz, timeout_s)
-            for _ in range(repeats)
-        ]
-    else:
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = [
-                pool.submit(
-                    _run_one_fresh_call, candidate.candidate_id, pcm_path, sr, f0_hz, timeout_s
-                )
+    closed）。
+
+    round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): いずれかの worker が
+    post-spawn で失敗（timeout / nonzero exit / malformed JSON —
+    `_run_one_fresh_call` が `_FreshWorkerFailure` として送出）した場合は、
+    `caps.charge_worker_failure()` でその失敗した 1 attempt 分の CPU を
+    `worker_failed` ledger event として記帳・（`cap_counters` があれば）
+    課金・cap 再検査してから、元の例外（`_FreshWorkerFailure.cause`）を
+    そのまま再送出する（cap 超過を検出すれば `CostCapExceededError` を優先
+    ——既存の他 charge-then-check 呼び出し箇所と同じ優先順位）。
+    `ThreadPoolExecutor` 経由でも `future.result()` が呼び出し元スレッド
+    （本関数）で例外を再送出するため、課金は常にこの関数の中で直列に
+    行われる。"""
+    try:
+        if max_workers <= 1:
+            results = [
+                _run_one_fresh_call(candidate.candidate_id, pcm_path, sr, f0_hz, timeout_s)
                 for _ in range(repeats)
             ]
-            results = [f.result() for f in futures]
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = [
+                    pool.submit(
+                        _run_one_fresh_call, candidate.candidate_id, pcm_path, sr, f0_hz, timeout_s
+                    )
+                    for _ in range(repeats)
+                ]
+                results = [f.result() for f in futures]
+    except _FreshWorkerFailure as exc:
+        charge_worker_failure(
+            campaign.ledger,
+            campaign.campaign_dir,
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            stage="measure",
+            row_id=row_id,
+            probe_index=probe_index,
+            candidate_id=candidate.candidate_id,
+            failure_kind=exc.failure_kind,
+            compute=exc.compute,
+            cause=exc.cause,
+        )
     cpu_seconds_total = sum(cpu_seconds for _output, cpu_seconds in results)
     records = [
         MeasurementRecord(
@@ -556,7 +652,18 @@ def run_measurement_for_instance(
     `wall_seconds` として ledger `meter_call` event へ informational にのみ
     記録する。fresh worker が無効な `cpu_seconds` を報告した場合は
     `WorkerCpuSecondsInvalidError` を stale/invalid work unit として
-    `stop_event` 記帳の上 fail-closed する（測定・記帳のいずれも行わない）。"""
+    `stop_event` 記帳の上 fail-closed する（測定・記帳のいずれも行わない）。
+
+    **worker 失敗時の課金**（round 24 ADOPT (1)、`[UNDERSPEC-CAL-D55]`）:
+    fresh worker が起動後に timeout / nonzero exit / malformed JSON で
+    失敗した場合（＝上記の「無効な `cpu_seconds`」とは異なり、そもそも
+    well-formed な結果を返さなかった場合）は `run_fresh_process_calls()` が
+    `caps.charge_worker_failure()` を経由して、その 1 attempt が実際に
+    消費した compute（可能なら worker 自身の報告値、無ければ親プロセスの
+    `RUSAGE_CHILDREN` 差分）を `worker_failed` ledger event として記帳・
+    課金してから元の例外を再送出する — 課金前に raise していた旧実装は、
+    クラッシュする candidate への retry が worker CPU を無制限・無課金で
+    消費できてしまっていた。"""
     try:
         resumed = _completed_meter_call_records(
             campaign.ledger.entries, row_id, probe_index, candidate.candidate_id
@@ -593,7 +700,10 @@ def run_measurement_for_instance(
             f0_hz=f0_hz,
             row_id=row_id,
             probe_index=probe_index,
+            campaign=campaign,
             max_workers=max_workers,
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
         )
     except WorkerCpuSecondsInvalidError as exc:
         campaign.ledger.append(
