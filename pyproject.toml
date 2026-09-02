@@ -235,6 +235,10 @@ testpaths = [
     # サブセット）。voice_genesis/external_validation/ 配下の専用ディレクトリのため
     # 個別収集が必要。依存は標準ライブラリ + PyYAML（本体必須依存）のみ。
     "voice_genesis/external_validation/run10_aquest_vg_phenotype_compatibility/tests",
+    # RUN10-CAL Phase A (framework core): 依存は numpy/scipy/stdlib のみ
+    # （svp_rpe / voice_genesis.harness 非依存。DESIGN_VG_METER_CAL_DEBT_v1.0.md /
+    # IMPLEMENTATION_MAP_v1.md 参照）。
+    "voice_genesis/calibration/tests",
 ]
 pythonpath = ["src", "."]
 markers = [
