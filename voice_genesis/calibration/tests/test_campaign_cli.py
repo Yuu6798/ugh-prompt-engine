@@ -1119,3 +1119,224 @@ def test_counters_corrupt_error_is_subclass_of_cap_state_error() -> None:
 
     assert issubclass(CountersCorruptError, CapStateError)
     assert CountersCorruptError.CODE == "COUNTERS_CORRUPT"
+
+
+# ---------------------------------------------------------------------------
+# round 16 finding #2 (`[UNDERSPEC-CAL-D34]`): recheck caps after charging
+# parent CPU, *before* a stage's phase-transition event is appended — a
+# breach there blocks the transition — and again on the residual parent CPU
+# charged in `main()`'s `finally` block.
+# ---------------------------------------------------------------------------
+
+_TINY_CLOSE_COST_CAPS = {
+    "compute": 10.0,
+    "storage": 1_000_000_000,
+    "budget": 1000.0,
+    "budget_accounting_mode": "local_zero_cost",
+}
+
+
+def _fake_clock(values: list[float]):
+    """Deterministic stand-in for `cli._process_cpu_seconds`: returns each
+    value in `values` in order on successive calls, then keeps repeating
+    the last one — so a test can pin exactly which call sees which CPU
+    reading without depending on real CPU-time tick-granularity timing
+    (`_burn_cpu()` above is the real-clock alternative used elsewhere in
+    this file; a fake clock is used here because these tests pin an exact
+    *sequence* of readings across specific call sites)."""
+    state = {"i": 0}
+
+    def _fn() -> float:
+        i = min(state["i"], len(values) - 1)
+        state["i"] += 1
+        return values[i]
+
+    return _fn
+
+
+def _seed_closable_holdout(campaign) -> None:
+    """Fabricate a `holdout_executed_valid` event with every `MeterId` at a
+    terminal status (matches `test_unseal_and_close_dispatch_through_cli`'s
+    pattern) so `close` dispatch is reachable without a full C1-C4 run."""
+    results = [holdout_stage.diagnostic_only_close(m.value) for m in MeterId]
+    holdout_stage.run_holdout_stage(campaign, results)
+
+
+def _armed_c3a_args(campaign_dir: Path, secret_root: Path, approval_dir: Path) -> list[str]:
+    return [
+        "c3a-f0-selection",
+        "--campaign-dir",
+        str(campaign_dir),
+        "--secret-dir",
+        str(secret_root),
+        "--approval-dir",
+        str(approval_dir),
+        "--armed",
+    ]
+
+
+def _armed_close_args(campaign_dir: Path, secret_root: Path, approval_dir: Path) -> list[str]:
+    return [
+        "close",
+        "--campaign-dir",
+        str(campaign_dir),
+        "--secret-dir",
+        str(secret_root),
+        "--approval-dir",
+        str(approval_dir),
+        "--armed",
+    ]
+
+
+def test_pre_transition_checkpoint_blocks_c3a_phase_transition_on_breach(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 16 finding #2 ordering ruling: a stage just under cap whose own
+    parent CPU (charged at the pre-transition checkpoint) pushes it over
+    must not append its phase-transition event (`f0_selection_frozen`) —
+    the stop event is recorded, dispatch exits non-zero, and the CLI
+    reports failure rather than success."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, gate1_cost_caps=_TINY_CLOSE_COST_CAPS)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    entry = campaign.ledger.append(
+        {"kind": "baseline_audit", "artifact_sha": "2" * 64, "payload": {}}
+    )
+    campaign.ledger.append({"kind": "baseline_audited", "baseline_audit_sha": entry.entry_sha})
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir, cost_caps=_TINY_CLOSE_COST_CAPS)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    from voice_genesis.calibration.campaign import selection_stage
+
+    frozen_called = {"n": 0}
+    real_run_c3a = selection_stage.run_c3a_f0_selection
+
+    def _spy_run_c3a(*args, **kwargs):
+        frozen_called["n"] += 1
+        return real_run_c3a(*args, **kwargs)
+
+    monkeypatch.setattr(cli.selection_stage, "run_c3a_f0_selection", _spy_run_c3a)
+    # No render/measure work is needed to exercise this checkpoint (that
+    # machinery is exercised for real elsewhere, e.g. test_campaign_measure.py)
+    # — stub it out so this test stays fast and needs no rendered PCM.
+    monkeypatch.setattr(cli.measure_stage, "run_measure_stage", lambda *a, **k: [])
+    # call 1: dispatch-start parent_cpu_t0. call 2: the pre-transition
+    # checkpoint inside _run_c3a, before run_c3a_f0_selection() -- jumps
+    # far past the 10.0s cap.
+    monkeypatch.setattr(cli, "_process_cpu_seconds", _fake_clock([0.0, 1_000.0]))
+
+    exit_code = cli.main(_armed_c3a_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 1, out
+    assert '"result": "COST_CAP_EXCEEDED"' in out
+    assert frozen_called["n"] == 0  # blocked before the transition-appending call
+
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    assert not any(
+        isinstance(e.payload, dict) and e.payload.get("kind") == "f0_selection_frozen"
+        for e in reloaded.ledger.entries
+    )
+    stop_events = [
+        e.payload
+        for e in reloaded.ledger.entries
+        if isinstance(e.payload, dict) and e.payload.get("kind") == "stop_event"
+    ]
+    assert len(stop_events) == 1
+    assert stop_events[0].get("reason") == "COST_CAP_EXCEEDED"
+
+
+def test_close_pre_transition_checkpoint_blocks_campaign_closed_on_breach(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`close` variant of the ordering-ruling test above: the pre-transition
+    checkpoint in `_run_close` fires before `close_stage.close_campaign()`
+    (which appends `campaign_closed`) is ever called — a breach there
+    blocks close entirely, so no `campaign_closed` event is recorded."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, gate1_cost_caps=_TINY_CLOSE_COST_CAPS)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    _seed_closable_holdout(campaign)
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir, cost_caps=_TINY_CLOSE_COST_CAPS)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    close_called = {"n": 0}
+    real_close_campaign = cli.close_stage.close_campaign
+
+    def _spy_close_campaign(*args, **kwargs):
+        close_called["n"] += 1
+        return real_close_campaign(*args, **kwargs)
+
+    monkeypatch.setattr(cli.close_stage, "close_campaign", _spy_close_campaign)
+    # call 1: dispatch-start parent_cpu_t0. call 2: the pre-transition
+    # checkpoint inside _run_close, before close_campaign() -- jumps far
+    # past the 10.0s cap. No further calls should be needed (dispatch
+    # returns before close_campaign or the finally block's own recheck
+    # would run, but the fake clock repeats the last value regardless).
+    monkeypatch.setattr(cli, "_process_cpu_seconds", _fake_clock([0.0, 1_000.0]))
+
+    exit_code = cli.main(_armed_close_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 1, out
+    assert '"result": "COST_CAP_EXCEEDED"' in out
+    assert close_called["n"] == 0
+
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    assert not any(
+        isinstance(e.payload, dict) and e.payload.get("kind") == "campaign_closed"
+        for e in reloaded.ledger.entries
+    )
+    stop_events = [
+        e.payload
+        for e in reloaded.ledger.entries
+        if isinstance(e.payload, dict) and e.payload.get("kind") == "stop_event"
+    ]
+    assert len(stop_events) == 1
+    assert stop_events[0].get("reason") == "COST_CAP_EXCEEDED"
+    assert "post_close_breach" not in stop_events[0]
+
+
+def test_close_post_close_residual_breach_still_records_close_but_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 16 finding #2 ordering ruling, close's documented special case:
+    if the pre-transition checkpoint passes (close proceeds and
+    `campaign_closed` is appended) but the small *residual* parent CPU
+    charged afterwards in `main()`'s `finally` block alone breaches the
+    cap, the campaign remains closed (append-only ledger — nothing
+    retracts `campaign_closed`) but the dispatch still reports failure, and
+    the stop event is marked `post_close_breach: True`."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, gate1_cost_caps=_TINY_CLOSE_COST_CAPS)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    _seed_closable_holdout(campaign)
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir, cost_caps=_TINY_CLOSE_COST_CAPS)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    # call 1: parent_cpu_t0. call 2: the pre-transition checkpoint (no
+    # jump -- passes). call 3+: the finally block's residual charge --
+    # jumps far past the cap only *after* close_campaign() has already run.
+    monkeypatch.setattr(cli, "_process_cpu_seconds", _fake_clock([0.0, 0.0, 1_000.0]))
+
+    exit_code = cli.main(_armed_close_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 1, out
+    assert '"result": "COST_CAP_EXCEEDED"' in out
+
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    closed_events = [
+        e.payload
+        for e in reloaded.ledger.entries
+        if isinstance(e.payload, dict) and e.payload.get("kind") == "campaign_closed"
+    ]
+    assert len(closed_events) == 1  # close remains recorded despite the failure report
+    stop_events = [
+        e.payload
+        for e in reloaded.ledger.entries
+        if isinstance(e.payload, dict) and e.payload.get("kind") == "stop_event"
+    ]
+    assert len(stop_events) == 1
+    assert stop_events[0].get("reason") == "COST_CAP_EXCEEDED"
+    assert stop_events[0].get("post_close_breach") is True

@@ -260,9 +260,23 @@ def cap_counters_from_ledger(
       aggregate value* repeated on all 6 records (see that function's
       docstring) — summing it naively would 6x overcount, so only the
       first record seen per `(row_id, probe_index, candidate_id)` key
-      counts toward `compute`. `storage_bytes` (round 15 finding #3,
-      newly recorded) is each record's own individual serialized size —
-      genuinely additive per record, so it is summed without dedup.
+      counts toward `compute`. round 16 finding #3 (`[UNDERSPEC-CAL-D35]`):
+      that first record's `within_cpu_seconds` (the within-process portion
+      of `cpu_seconds`, recorded purely as informational provenance since
+      round 16) is then subtracted back out, because
+      `measure_stage.run_measurement_for_instance` no longer charges it to
+      `compute_used` either (it is already charged once, via `cli.py`
+      `main()`'s parent RUSAGE_SELF `stage_summary` charge) — reconstruction
+      must mirror that or it would diverge from the persisted cache. A
+      `meter_call` event that predates round 16 and carries no
+      `within_cpu_seconds` field subtracts `0.0` (`_finite_nonneg_float`
+      on a missing field), so the whole legacy `cpu_seconds` counts toward
+      `compute` — an overcount rather than an undercount for old events,
+      matching this module's fail-closed direction (see
+      `reconcile_cap_counters` docstring). `storage_bytes` (round 15
+      finding #3, newly recorded) is each record's own individual
+      serialized size — genuinely additive per record, so it is summed
+      without dedup.
     - `stage_summary` events (round 15 finding #5, `[UNDERSPEC-CAL-D31]`):
       the CLI dispatch path's own parent-side CPU for the whole stage,
       not captured by either of the above (matrix build, ledger/JSON I/O,
@@ -295,7 +309,14 @@ def cap_counters_from_ledger(
             if key in seen_meter_keys:
                 continue
             seen_meter_keys.add(key)
-            compute += _finite_nonneg_float(payload.get("cpu_seconds"))
+            # round 16 finding #3 (`[UNDERSPEC-CAL-D35]`): exclude the
+            # within-process portion — see the docstring above.
+            fresh_cpu_seconds = _finite_nonneg_float(
+                payload.get("cpu_seconds")
+            ) - _finite_nonneg_float(payload.get("within_cpu_seconds"))
+            if fresh_cpu_seconds < 0.0:
+                fresh_cpu_seconds = 0.0
+            compute += fresh_cpu_seconds
             meter_units += 1
         elif kind == "stage_summary":
             compute += _finite_nonneg_float(payload.get("parent_cpu_seconds"))

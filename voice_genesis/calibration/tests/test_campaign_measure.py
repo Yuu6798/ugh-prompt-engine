@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from voice_genesis.calibration.campaign import measure_stage, render_stage
-from voice_genesis.calibration.campaign.caps import load_cap_counters
+from voice_genesis.calibration.campaign.caps import cap_counters_from_ledger, load_cap_counters
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import candidate_by_id
@@ -159,7 +159,15 @@ def test_measure_workers_3_compute_charged_equals_sum_of_worker_cpu_seconds(
     wall-clock elapsed, which would undercount concurrent CPU usage. Both
     the fresh-process subprocess boundary and the within-process CPU delta
     are pinned to exact known values so the expected total is fully
-    deterministic (not dependent on real OS scheduling noise)."""
+    deterministic (not dependent on real OS scheduling noise).
+
+    round 16 finding #3 (`[UNDERSPEC-CAL-D35]`) revision: the charged
+    compute counter must equal the fresh-worker sum ALONE — the
+    within-process delta (0.25s here) is no longer part of the *charge*
+    (it is already charged once via `cli.py` `main()`'s parent RUSAGE_SELF
+    `stage_summary` charge), but stays on the ledger's `meter_call.cpu_seconds`
+    combined total and is broken out separately on the new informational
+    `within_cpu_seconds` field."""
     subset = small_matrix_subset(1, family="F0_CONTROL")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
@@ -191,15 +199,76 @@ def test_measure_workers_3_compute_charged_equals_sum_of_worker_cpu_seconds(
     )
     assert len(records) == measure_stage.WITHIN_PROCESS_REPEATS + measure_stage.FRESH_PROCESS_REPEATS
 
-    expected_compute = 0.25 + measure_stage.FRESH_PROCESS_REPEATS * fresh_cpu_seconds_per_call
-    assert counters.compute_used == pytest.approx(expected_compute)
+    within_cpu_seconds = 0.25
+    expected_fresh = measure_stage.FRESH_PROCESS_REPEATS * fresh_cpu_seconds_per_call
+    expected_combined = within_cpu_seconds + expected_fresh
+    # round 16 finding #3: only the fresh-worker sum is charged.
+    assert counters.compute_used == pytest.approx(expected_fresh)
 
     meter_calls = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"]
     assert len(meter_calls) == len(records)
-    # informational field: recorded on every one of the 6 records for this
-    # work unit (see run_measurement_for_instance docstring).
-    assert all(m["cpu_seconds"] == pytest.approx(expected_compute) for m in meter_calls)
+    # informational fields: recorded on every one of the 6 records for this
+    # work unit (see run_measurement_for_instance docstring). `cpu_seconds`
+    # stays the combined within+fresh total; `within_cpu_seconds` (round 16
+    # finding #3) is that total's within-process portion, broken out
+    # separately — neither is what gets charged (see the assertion above).
+    assert all(m["cpu_seconds"] == pytest.approx(expected_combined) for m in meter_calls)
+    assert all(m["within_cpu_seconds"] == pytest.approx(within_cpu_seconds) for m in meter_calls)
     assert all(isinstance(m["wall_seconds"], float) and m["wall_seconds"] >= 0.0 for m in meter_calls)
+
+
+@pytest.mark.slow
+def test_measure_ledger_derived_reconstruction_equals_persisted_compute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 16 finding #3 (`[UNDERSPEC-CAL-D35]`): after a real
+    `run_measurement_for_instance` charge (fresh-worker CPU only, within
+    excluded), `caps.cap_counters_from_ledger()`'s reconstruction from the
+    `meter_call` events it appended must equal what was actually persisted
+    to `cap_counters` — the compute-charge composition and its ledger-
+    derived reconstruction must stay consistent (the round 15 finding #3
+    invariant, re-verified for the round 16 finding #3 revision)."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    row = subset[0]
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    fresh_cpu_seconds_per_call = 3.0
+    monkeypatch.setattr(
+        measure_stage.subprocess,
+        "run",
+        _fake_subprocess_run_with_cpu_seconds(fresh_cpu_seconds_per_call),
+    )
+    within_cpu_ticks = iter([50.0, 50.1])  # exact within delta 0.1
+    monkeypatch.setattr(measure_stage, "_process_cpu_seconds", lambda: next(within_cpu_ticks))
+
+    counters = CapCounters()
+    caps = CostCaps(
+        compute=1e9, storage=1_000_000_000, budget=1e9, budget_accounting_mode="local_zero_cost"
+    )
+    measure_stage.run_measurement_for_instance(
+        campaign,
+        candidate,
+        row_id=row.row_id,
+        probe_index=0,
+        sr_hz=row.row.sr_hz,
+        cap_counters=counters,
+        cost_caps=caps,
+    )
+    expected_fresh = measure_stage.FRESH_PROCESS_REPEATS * fresh_cpu_seconds_per_call
+    assert counters.compute_used == pytest.approx(expected_fresh)
+
+    derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
+    # render_stage.run_render_stage charged its own cpu_seconds too (real,
+    # one event per probe repeat) -- so compare the derived total against
+    # the persisted total, which by construction is the sum of every
+    # render event's cpu_seconds plus this test's own measure charge.
+    render_events = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "render"]
+    assert len(render_events) >= 1
+    persisted_total = sum(e["cpu_seconds"] for e in render_events) + counters.compute_used
+    assert derived.compute_used == pytest.approx(persisted_total)
 
 
 @pytest.mark.slow

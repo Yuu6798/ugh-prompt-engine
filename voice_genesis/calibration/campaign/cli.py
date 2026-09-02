@@ -463,6 +463,46 @@ def _criteria_with_fail_filters(
     return criteria, report, scope_report
 
 
+def _checkpoint_parent_cpu_before_transition(
+    campaign: FrozenCampaign,
+    cap_counters: CapCounters,
+    cost_caps: CostCaps,
+    parent_cpu_checkpoint: list[float],
+) -> StopDecision | None:
+    """round 16 finding #2 ordering ruling (`[UNDERSPEC-CAL-D34]`): charge
+    the parent-process CPU accumulated since the last checkpoint (dispatch
+    start, or an earlier pre-transition checkpoint within this same
+    dispatch — `parent_cpu_checkpoint[0]`) to the compute cap and check it,
+    called immediately before a stage wrapper's own call into the library
+    function that appends that stage's phase-transition ledger event
+    (`f0_selection_frozen`/`selection_frozen`/`holdout_executed_valid`/
+    `campaign_closed`), so a breach blocks the transition — the caller must
+    return a `COST_CAP_EXCEEDED` result *without* making that call when this
+    returns non-`None`.
+
+    Scope: only wired into `_run_c3a`/`_run_c3b`/`_run_c4`/`_run_close`.
+    `c1-fixtures`/`c2-baseline` deliberately are not: those two delegate
+    their entire stage body (every render/measure per-unit charge *and* the
+    phase-transition event itself) to `render_stage`/`baseline_stage` in a
+    single call with no intervening `cli.py`-side work, so a checkpoint
+    immediately before that call would charge/check `cap_counters`
+    unchanged from what `_refuse_if_caps_already_breached` (the dispatch-
+    entry guard) already checked moments earlier — a same-value no-op. Those
+    two stages still get the `finally`-block recheck in `main()` (the base
+    round 16 finding #2 fix), same as every other stage.
+
+    Mutates `parent_cpu_checkpoint[0]` to the new checkpoint so `main()`'s
+    `finally` block charges only the residual CPU spent after this point,
+    rather than double-charging the portion already charged here."""
+    now = _process_cpu_seconds()
+    delta = now - parent_cpu_checkpoint[0]
+    if delta < 0.0:  # pragma: no cover - defensive only
+        delta = 0.0
+    parent_cpu_checkpoint[0] = now
+    cap_counters.add(compute=delta)
+    return _refuse_if_caps_already_breached(campaign, cost_caps, cap_counters)
+
+
 def _run_c1(
     campaign: FrozenCampaign,
     matrix_rows: Sequence[Any],
@@ -506,6 +546,7 @@ def _run_c3a(
     *,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
+    parent_cpu_checkpoint: list[float] | None = None,
 ) -> dict[str, Any]:
     # finding #11: claim scope must be frozen before any selection runs.
     try:
@@ -553,6 +594,19 @@ def _run_c3a(
         criteria.append(candidate_criteria)
         fail_filter_reports[c.candidate_id] = report
         claim_scope_reports[c.candidate_id] = scope_report
+
+    # round 16 finding #2 ordering ruling: recheck the compute cap
+    # (including this stage's own parent-side CPU so far) immediately
+    # before `f0_selection_frozen` is appended below, so a breach blocks
+    # the phase transition instead of committing it and only reporting
+    # failure afterwards.
+    if parent_cpu_checkpoint is not None and cap_counters is not None and cost_caps is not None:
+        breach = _checkpoint_parent_cpu_before_transition(
+            campaign, cap_counters, cost_caps, parent_cpu_checkpoint
+        )
+        if breach is not None:
+            return {"result": "COST_CAP_EXCEEDED", "detail": breach.detail}
+
     result = selection_stage.run_c3a_f0_selection(
         campaign,
         criteria,
@@ -573,6 +627,7 @@ def _run_c3b(
     *,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
+    parent_cpu_checkpoint: list[float] | None = None,
 ) -> dict[str, Any]:
     # finding #11: claim scope must be frozen before any selection runs.
     try:
@@ -673,6 +728,16 @@ def _run_c3b(
         fail_filter_reports_by_family[family.value] = family_fail_filter_reports
         claim_scope_reports_by_family[family.value] = family_claim_scope_reports
 
+    # round 16 finding #2 ordering ruling: see `_run_c3a`'s identical
+    # comment — recheck the compute cap immediately before
+    # `selection_frozen` is appended below.
+    if parent_cpu_checkpoint is not None and cap_counters is not None and cost_caps is not None:
+        breach = _checkpoint_parent_cpu_before_transition(
+            campaign, cap_counters, cost_caps, parent_cpu_checkpoint
+        )
+        if breach is not None:
+            return {"result": "COST_CAP_EXCEEDED", "detail": breach.detail}
+
     result = selection_stage.run_c3b_selection(
         campaign,
         criteria_by_family,
@@ -723,6 +788,7 @@ def _run_c4(
     *,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
+    parent_cpu_checkpoint: list[float] | None = None,
 ) -> dict[str, Any]:
     # finding #11: claim scope must be frozen before holdout runs too (the
     # capping fact is recorded per candidate below; see the note at the
@@ -916,11 +982,28 @@ def _run_c4(
             )
         )
 
+    # round 16 finding #2 ordering ruling: see `_run_c3a`'s identical
+    # comment — recheck the compute cap immediately before
+    # `holdout_executed_valid` is appended below.
+    if parent_cpu_checkpoint is not None and cap_counters is not None and cost_caps is not None:
+        breach = _checkpoint_parent_cpu_before_transition(
+            campaign, cap_counters, cost_caps, parent_cpu_checkpoint
+        )
+        if breach is not None:
+            return {"result": "COST_CAP_EXCEEDED", "detail": breach.detail}
+
     entry = holdout_stage.run_holdout_stage(campaign, results)
     return {"result": "OK", "holdout_executed_valid_entry_sha": entry.entry_sha}
 
 
-def _run_close(campaign: FrozenCampaign, *, reveal: bool) -> dict[str, Any]:
+def _run_close(
+    campaign: FrozenCampaign,
+    *,
+    reveal: bool,
+    cap_counters: CapCounters | None = None,
+    cost_caps: CostCaps | None = None,
+    parent_cpu_checkpoint: list[float] | None = None,
+) -> dict[str, Any]:
     holdout_payload = None
     for entry in campaign.ledger.entries:
         payload = entry.payload
@@ -928,6 +1011,20 @@ def _run_close(campaign: FrozenCampaign, *, reveal: bool) -> dict[str, Any]:
             holdout_payload = payload
     if holdout_payload is None:
         return {"result": "ERROR", "detail": "no holdout_executed_valid event found"}
+
+    # round 16 finding #2 ordering ruling: see `_run_c3a`'s identical
+    # comment — recheck the compute cap immediately before
+    # `campaign_closed` is appended below, so a breach here blocks the
+    # close transition itself (distinct from the *post*-close residual
+    # breach the `finally` block in `main()` can still separately detect —
+    # see that block's `post_close_breach` handling).
+    if parent_cpu_checkpoint is not None and cap_counters is not None and cost_caps is not None:
+        breach = _checkpoint_parent_cpu_before_transition(
+            campaign, cap_counters, cost_caps, parent_cpu_checkpoint
+        )
+        if breach is not None:
+            return {"result": "COST_CAP_EXCEEDED", "detail": breach.detail}
+
     try:
         result = close_stage.close_campaign(campaign, holdout_payload)
     except close_stage.CampaignNotClosableError as exc:
@@ -1036,6 +1133,8 @@ def _refuse_if_caps_already_breached(
     campaign: FrozenCampaign,
     cost_caps: CostCaps | None,
     cap_counters: CapCounters,
+    *,
+    extra_payload: Mapping[str, object] | None = None,
 ) -> StopDecision | None:
     """round 13 finding #2: `counters.json` is reloaded on every subcommand
     invocation, but the frozen-cap check only ran *inside* the previous
@@ -1056,6 +1155,17 @@ def _refuse_if_caps_already_breached(
     mid-stage breach exit), which would otherwise sit *after* the
     breach's own `stop_event` and defeat this dedup on the very next
     invocation.
+
+    round 16 finding #2 ordering ruling (`[UNDERSPEC-CAL-D34]`):
+    `extra_payload`, when given, is merged into the appended `stop_event`
+    payload (but not into the dedup comparison above, which stays scoped to
+    reason/counters/caps — a duplicate breach carries the same extra
+    marker anyway). `main()`'s `finally`-block residual recheck uses this
+    to mark a breach detected *after* `close` has already appended
+    `campaign_closed` as `{"post_close_breach": True}`, distinguishing it
+    from a breach this same guard would otherwise record identically at
+    other call sites (the pre-dispatch guard, and each stage's own
+    pre-transition checkpoint via `_checkpoint_parent_cpu_before_transition`).
     """
     if cost_caps is None:
         return None
@@ -1074,7 +1184,10 @@ def _refuse_if_caps_already_breached(
         and last_payload.get("caps") == decision.event_payload.get("caps")
     )
     if not already_recorded:
-        campaign.ledger.append(decision.event_payload)
+        payload_to_append = dict(decision.event_payload)
+        if extra_payload:
+            payload_to_append.update(extra_payload)
+        campaign.ledger.append(payload_to_append)
     return decision
 
 
@@ -1215,7 +1328,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     # event (independent of whatever `stop_event`/`render`/`meter_call`
     # events the stage itself appended) so it is always present exactly
     # once per dispatch, regardless of exit path.
+    #
+    # round 16 finding #2 (`[UNDERSPEC-CAL-D34]`): `parent_cpu_checkpoint`
+    # is a mutable single-element box, not a plain float — `_run_c3a`/
+    # `_run_c3b`/`_run_c4`/`_run_close` advance it (via
+    # `_checkpoint_parent_cpu_before_transition`) when they perform their
+    # own pre-transition recheck, so the residual charge below only covers
+    # CPU spent *after* that last mid-stage checkpoint (or the whole
+    # dispatch, for `c1-fixtures`/`c2-baseline`/`unseal`, which never
+    # checkpoint mid-stage — see `_checkpoint_parent_cpu_before_transition`'s
+    # docstring for why).
+    out: dict[str, Any] | None = None
     parent_cpu_t0 = _process_cpu_seconds()
+    parent_cpu_checkpoint = [parent_cpu_t0]
     try:
         if args.subcommand == "c1-fixtures":
             out = _run_c1(campaign, matrix_rows, cap_counters=cap_counters, cost_caps=cost_caps_obj)
@@ -1225,24 +1350,45 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         elif args.subcommand == "c3a-f0-selection":
             out = _run_c3a(
-                campaign, matrix_rows, args.workers, cap_counters=cap_counters, cost_caps=cost_caps_obj
+                campaign,
+                matrix_rows,
+                args.workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps_obj,
+                parent_cpu_checkpoint=parent_cpu_checkpoint,
             )
         elif args.subcommand == "c3b-selection":
             out = _run_c3b(
-                campaign, matrix_rows, args.workers, cap_counters=cap_counters, cost_caps=cost_caps_obj
+                campaign,
+                matrix_rows,
+                args.workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps_obj,
+                parent_cpu_checkpoint=parent_cpu_checkpoint,
             )
         elif args.subcommand == "unseal":
             out = _run_unseal(campaign, approval_dir)
         elif args.subcommand == "c4-holdout":
             out = _run_c4(
-                campaign, matrix_rows, args.workers, cap_counters=cap_counters, cost_caps=cost_caps_obj
+                campaign,
+                matrix_rows,
+                args.workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps_obj,
+                parent_cpu_checkpoint=parent_cpu_checkpoint,
             )
         elif args.subcommand == "close":
-            out = _run_close(campaign, reveal=args.reveal_split_secret)
+            out = _run_close(
+                campaign,
+                reveal=args.reveal_split_secret,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps_obj,
+                parent_cpu_checkpoint=parent_cpu_checkpoint,
+            )
         else:  # pragma: no cover - argparse choices already constrains this
             out = {"result": "ERROR", "detail": f"unknown subcommand {args.subcommand!r}"}
     finally:
-        parent_cpu_seconds = _process_cpu_seconds() - parent_cpu_t0
+        parent_cpu_seconds = _process_cpu_seconds() - parent_cpu_checkpoint[0]
         if parent_cpu_seconds < 0.0:  # pragma: no cover - defensive only
             parent_cpu_seconds = 0.0
         cap_counters.add(compute=parent_cpu_seconds)
@@ -1254,9 +1400,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "parent_cpu_seconds": parent_cpu_seconds,
             }
         )
+        # round 16 finding #2 (`[UNDERSPEC-CAL-D34]`) — the base fix:
+        # recheck the cap with this residual charge folded in, and refuse
+        # to report success if it alone breaches. For `close` specifically,
+        # a breach detected only here means `campaign_closed` was already
+        # appended above (the pre-transition checkpoint in `_run_close`
+        # passed) — the close stays recorded (append-only ledger; nothing
+        # here retracts it), but this dispatch is still reported as a
+        # failure, and the stop event carries `post_close_breach: True` so
+        # the ledger itself records that distinction (memo requirement).
+        out_is_ok = isinstance(out, dict) and out.get("result") == "OK"
+        extra_payload = (
+            {"post_close_breach": True} if (args.subcommand == "close" and out_is_ok) else None
+        )
+        post_breach = _refuse_if_caps_already_breached(
+            campaign, cost_caps_obj, cap_counters, extra_payload=extra_payload
+        )
+        if post_breach is not None and isinstance(out, dict):
+            out = {"result": "COST_CAP_EXCEEDED", "detail": post_breach.detail}
 
     _print(out)
-    return 0 if out.get("result") == "OK" else 1
+    return 0 if isinstance(out, dict) and out.get("result") == "OK" else 1
 
 
 if __name__ == "__main__":

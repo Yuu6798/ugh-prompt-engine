@@ -534,19 +534,29 @@ def run_measurement_for_instance(
     `StaleMeasurementError` で fail-closed する（この場合も測定・記帳は
     一切行わない）。
 
-    **compute 課金**（round 14 finding #2）: `--workers>1` では fresh-process
-    3 call が `ThreadPoolExecutor` で並行実行されるため、親プロセスの
-    wall-clock 経過時間（`elapsed`）は実際に消費した CPU 秒数を過小計上する。
-    fresh 側は各 worker が報告した `cpu_seconds`（`resource.getrusage`
-    RUSAGE_SELF+RUSAGE_CHILDREN、`run_fresh_process_calls()` が合算して返す）
-    を、within 側は本関数自身の `resource.getrusage(RUSAGE_SELF)` 差分
+    **compute 課金**（round 14 finding #2、round 16 finding #3 で改訂）:
+    `--workers>1` では fresh-process 3 call が `ThreadPoolExecutor` で並行
+    実行されるため、親プロセスの wall-clock 経過時間（`elapsed`）は実際に
+    消費した CPU 秒数を過小計上する。fresh 側は各 worker が報告した
+    `cpu_seconds`（`resource.getrusage` RUSAGE_SELF+RUSAGE_CHILDREN、
+    `run_fresh_process_calls()` が合算して返す）を compute counter へ課金
+    する。within 側は本関数自身の `resource.getrusage(RUSAGE_SELF)` 差分
     （within は並行化されず本プロセス内で直列実行されるため、この差分は
-    正確な CPU 秒数そのもの）を使い、両者の和を compute counter へ課金する
-    — wall time はどちらの計上にも使わず、`wall_seconds` として ledger
-    `meter_call` event へ informational にのみ記録する。fresh worker が
-    無効な `cpu_seconds` を報告した場合は `WorkerCpuSecondsInvalidError`
-    を stale/invalid work unit として `stop_event` 記帳の上 fail-closed する
-    （測定・記帳のいずれも行わない）。"""
+    正確な CPU 秒数そのもの）で `within_cpu_seconds` として引き続き測定
+    するが、**compute counter へは課金しない**（round 16 finding #3、
+    `[UNDERSPEC-CAL-D35]`）: within-process 3 call の CPU は `cli.py`
+    `main()` が dispatch 全体の親プロセス CPU として既に
+    `resource.getrusage(RUSAGE_SELF)` 差分で丸ごと課金・`stage_summary`
+    event へ記帳している（round 15 finding #5, 1351736）ため、ここで
+    さらに課金すると二重計上になる。`within_cpu_seconds` は ledger
+    `meter_call` event へ informational として記帳する（`cpu_seconds`
+    フィールドは従来どおり within+fresh の合計を保つ——`wall_seconds` と
+    並ぶ informational な全体像であり、課金額そのものは `cap_counters.add()`
+    へ渡す fresh 側の値のみ）。wall time はどちらの計上にも使わず、
+    `wall_seconds` として ledger `meter_call` event へ informational にのみ
+    記録する。fresh worker が無効な `cpu_seconds` を報告した場合は
+    `WorkerCpuSecondsInvalidError` を stale/invalid work unit として
+    `stop_event` 記帳の上 fail-closed する（測定・記帳のいずれも行わない）。"""
     try:
         resumed = _completed_meter_call_records(
             campaign.ledger.entries, row_id, probe_index, candidate.candidate_id
@@ -598,6 +608,14 @@ def run_measurement_for_instance(
         )
         raise
     wall_seconds = time.perf_counter() - wall_t0
+    # round 16 finding #3 (`[UNDERSPEC-CAL-D35]`): `compute_seconds` here
+    # stays the informational within+fresh total recorded on the
+    # `cpu_seconds` ledger field below (unchanged meaning); the *charged*
+    # compute (`cap_counters.add()` further down) uses `fresh_cpu_seconds`
+    # alone — within-process CPU is already covered by the parent
+    # RUSAGE_SELF stage charge (`cli.py` `main()`'s `stage_summary` event,
+    # round 15 finding #5 / 1351736) and charging it again here would
+    # double-count it against the frozen compute cap.
     compute_seconds = within_cpu_seconds + fresh_cpu_seconds
 
     records = within + fresh
@@ -616,6 +634,12 @@ def run_measurement_for_instance(
             # per-work-unit granularity of `cap_counters.add()` below).
             "wall_seconds": wall_seconds,
             "cpu_seconds": compute_seconds,
+            # round 16 finding #3 (`[UNDERSPEC-CAL-D35]`): the within-process
+            # portion of `cpu_seconds` above, broken out purely as
+            # informational provenance (not charged — see the compute
+            # charging docstring paragraph above and the `cap_counters.add()`
+            # call below, which uses `fresh_cpu_seconds` only).
+            "within_cpu_seconds": within_cpu_seconds,
             **meter_output_to_dict(record.output),
         }
         # round 15 finding #3 (`[UNDERSPEC-CAL-D31]`): unlike `cpu_seconds`
@@ -636,7 +660,11 @@ def run_measurement_for_instance(
         # within3 + fresh3) is 1 budget work unit — same accounting rule and
         # granularity as render_stage.render_instance().
         budget_charge = cost_caps.budget_charge_per_work_unit() if cost_caps is not None else 0.0
-        cap_counters.add(compute=compute_seconds, storage=storage_bytes, budget=budget_charge)
+        # round 16 finding #3 (`[UNDERSPEC-CAL-D35]`): fresh-worker CPU only
+        # — `within_cpu_seconds` is deliberately excluded here (see the
+        # docstring paragraph above); it is already charged once, in
+        # `cli.py` `main()`'s parent RUSAGE_SELF `stage_summary` charge.
+        cap_counters.add(compute=fresh_cpu_seconds, storage=storage_bytes, budget=budget_charge)
         # Persist immediately (finding #1: counters must survive across
         # subcommands) — before the breach check, so a unit's consumption is
         # never lost even when this same unit trips a fail-closed exit below.
