@@ -705,8 +705,11 @@ def test_armed_freeze_copies_e_use_table_and_records_sha(tmp_path: Path, clean_c
 
     manifest = json.loads((result.campaign_dir / "c0_manifest.json").read_text(encoding="utf-8"))
     assert manifest["frozen_inputs"]["e_use_table_sha256"] == expected_sha
-    # frozen_inputs is a non-core section: stripping it must not change manifest_core_sha.
-    assert "frozen_inputs" not in c0_freeze.core_payload(manifest)
+    # 第 12 巡採用: frozen_inputs is now part of the CORE payload (Gate 2 binds
+    # it) -- it must survive core_payload() stripping, unlike approvals/
+    # commitments/realized_split/campaign_id/authorization_nonce.
+    assert "frozen_inputs" in c0_freeze.core_payload(manifest)
+    assert c0_freeze.core_payload(manifest)["frozen_inputs"] == manifest["frozen_inputs"]
     assert c0_freeze.manifest_core_sha(manifest) == report.manifest_core_sha
 
     from voice_genesis.calibration.provenance import Ledger
@@ -859,12 +862,12 @@ def test_armed_freeze_nonce_recheck_inside_publish_lock_catches_toctou(
     real_check = c0_freeze._find_existing_nonce_usage
     call_count = {"n": 0}
 
-    def flaky_check(campaigns_dir_: Path, nonce: str) -> str | None:
+    def flaky_check(campaigns_dir_: Path, nonce: str) -> c0_freeze.NonceRegistryScan:
         call_count["n"] += 1
         if call_count["n"] == 1:
             # Simulate the early (pre-lock) check racing past the just-published
             # campaign — the locked recheck (2nd call) must still catch it.
-            return None
+            return c0_freeze.NonceRegistryScan(existing_campaign_id=None, uninspectable_dirs=())
         return real_check(campaigns_dir_, nonce)
 
     monkeypatch.setattr(c0_freeze, "_find_existing_nonce_usage", flaky_check)
@@ -1196,6 +1199,17 @@ def test_armed_freeze_keyboard_interrupt_before_first_rename_preserves_existing_
     campaigns_dir.mkdir(parents=True, exist_ok=True)
     existing_campaign_dir = campaigns_dir / campaign_id
     existing_campaign_dir.mkdir()
+    # 第 12 巡採用: `_find_existing_nonce_usage()` now fail-closed refuses the
+    # whole freeze if it finds a non-staging campaign dir with a missing/
+    # malformed manifest ("nonce_registry_uninspectable"). Give this
+    # pre-existing dir a *valid*, parseable manifest with a *different*
+    # authorization_nonce, so it registers as an unrelated, already-published
+    # campaign (neither uninspectable nor a nonce match) and this test can
+    # still reach the KeyboardInterrupt-before-first-rename scenario it's
+    # actually meant to guard.
+    (existing_campaign_dir / "c0_manifest.json").write_text(
+        json.dumps({"authorization_nonce": "unrelated-foreign-nonce"}), encoding="utf-8"
+    )
     sentinel = existing_campaign_dir / "sentinel.txt"
     sentinel.write_text("pre-existing, must survive", encoding="utf-8")
 
@@ -1344,12 +1358,12 @@ def test_armed_freeze_nonce_recheck_inside_publish_lock_catches_toctou_with_diff
     real_check = c0_freeze._find_existing_nonce_usage
     call_count = {"n": 0}
 
-    def flaky_check(campaigns_dir_: Path, nonce: str) -> str | None:
+    def flaky_check(campaigns_dir_: Path, nonce: str) -> c0_freeze.NonceRegistryScan:
         call_count["n"] += 1
         if call_count["n"] == 1:
             # Simulate the early (pre-lock) check racing past the just-published
             # campaign — the locked recheck (2nd call) must still catch it.
-            return None
+            return c0_freeze.NonceRegistryScan(existing_campaign_id=None, uninspectable_dirs=())
         return real_check(campaigns_dir_, nonce)
 
     monkeypatch.setattr(c0_freeze, "_find_existing_nonce_usage", flaky_check)
@@ -1742,3 +1756,269 @@ def test_cli_dry_run_prints_max_claim_scope(
     out = capsys.readouterr().out
     assert "max_claim_scope:" in out
     assert rc in (0, 1)
+
+
+# ---------------------------------------------------------------------------
+# 第 12 巡採用 #1 — nonce uniqueness scan fail-closes when it cannot inspect a
+# campaign dir's manifest (missing / unreadable / malformed JSON / missing
+# authorization_nonce field), instead of silently ignoring it.
+# ---------------------------------------------------------------------------
+
+
+def test_armed_freeze_refuses_when_a_campaign_dir_has_a_truncated_manifest(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """A campaign dir with a truncated/malformed `c0_manifest.json` makes the
+    nonce registry uninspectable -> `armed_freeze()` must refuse with
+    `NONCE_REGISTRY_UNINSPECTABLE` and have zero side effects (no staging, no
+    publish), regardless of whether the actual nonce would otherwise have been
+    unused."""
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+
+    campaigns_dir.mkdir(parents=True, exist_ok=True)
+    broken = campaigns_dir / "RUN10-CAL-BROKEN"
+    broken.mkdir()
+    (broken / "c0_manifest.json").write_text('{"campaign_meta": {truncated', encoding="utf-8")
+
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.NONCE_REGISTRY_UNINSPECTABLE, result.detail
+    assert "nonce_registry_uninspectable" in result.detail
+    assert "RUN10-CAL-BROKEN" in result.detail
+    assert result.campaign_dir is None
+    assert result.secret_dir is None
+
+    # Zero side effects: the broken dir survives untouched, no new campaign
+    # was published, and no staging/secret material was ever created.
+    assert (broken / "c0_manifest.json").read_text(encoding="utf-8") == '{"campaign_meta": {truncated'
+    assert {p.name for p in campaigns_dir.iterdir() if p.name != c0_freeze._PUBLISH_LOCK_NAME} == {
+        "RUN10-CAL-BROKEN"
+    }
+    remaining_secret = [
+        p for p in (secret_dir.iterdir() if secret_dir.exists() else [])
+        if p.name != c0_freeze._PUBLISH_LOCK_NAME
+    ]
+    assert remaining_secret == []
+
+
+def test_armed_freeze_refuses_when_a_campaign_dir_is_missing_its_manifest_file(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """Same as above but the manifest file is simply absent (dir exists,
+    `c0_manifest.json` does not) -- also uninspectable, also refused."""
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+
+    campaigns_dir.mkdir(parents=True, exist_ok=True)
+    (campaigns_dir / "RUN10-CAL-NOMANIFEST").mkdir()
+
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.NONCE_REGISTRY_UNINSPECTABLE, result.detail
+    assert "RUN10-CAL-NOMANIFEST" in result.detail
+
+
+def test_armed_freeze_refuses_when_a_campaign_manifest_is_missing_the_nonce_field(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """A campaign dir with a syntactically valid but nonce-less manifest is
+    also uninspectable for nonce-uniqueness purposes -- also refused."""
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+
+    campaigns_dir.mkdir(parents=True, exist_ok=True)
+    no_nonce = campaigns_dir / "RUN10-CAL-NONONCE"
+    no_nonce.mkdir()
+    (no_nonce / "c0_manifest.json").write_text(
+        json.dumps({"campaign_meta": {"campaign_date_utc": "2026-01-01"}}), encoding="utf-8"
+    )
+
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.NONCE_REGISTRY_UNINSPECTABLE, result.detail
+    assert "RUN10-CAL-NONONCE" in result.detail
+
+
+def test_find_existing_nonce_usage_still_ignores_staging_dirs(tmp_path: Path) -> None:
+    """`.staging-*` dirs are never considered part of the published registry,
+    so they must not trigger `uninspectable_dirs` even with no manifest at
+    all (they never have one)."""
+    campaigns_dir = tmp_path / "campaigns"
+    campaigns_dir.mkdir()
+    (campaigns_dir / ".staging-RUN10-CAL-X-deadbeef").mkdir()
+
+    scan = c0_freeze._find_existing_nonce_usage(campaigns_dir, "some-nonce")
+    assert scan.existing_campaign_id is None
+    assert scan.uninspectable_dirs == ()
+
+
+def test_find_existing_nonce_usage_finds_match_and_reports_uninspectable_together(
+    tmp_path: Path,
+) -> None:
+    """A clean match and an uninspectable sibling can coexist in one scan;
+    both must be reported (the match does not suppress the uninspectable
+    finding, and vice versa)."""
+    campaigns_dir = tmp_path / "campaigns"
+    campaigns_dir.mkdir()
+    matching = campaigns_dir / "RUN10-CAL-MATCH"
+    matching.mkdir()
+    (matching / "c0_manifest.json").write_text(
+        json.dumps({"authorization_nonce": "target-nonce"}), encoding="utf-8"
+    )
+    broken = campaigns_dir / "RUN10-CAL-BROKEN"
+    broken.mkdir()
+    (broken / "c0_manifest.json").write_text("not json", encoding="utf-8")
+
+    scan = c0_freeze._find_existing_nonce_usage(campaigns_dir, "target-nonce")
+    assert scan.existing_campaign_id == "RUN10-CAL-MATCH"
+    assert scan.uninspectable_dirs == ("RUN10-CAL-BROKEN",)
+
+
+# ---------------------------------------------------------------------------
+# 第 12 巡採用 #2 — the E_use table digest (`frozen_inputs.e_use_table_sha256`)
+# is now part of the *core* payload, so changing the table changes
+# `manifest_core_sha`, and a Gate 2 approval that pinned the old core_sha gets
+# invalidated (`MANIFEST_CORE_SHA_MISMATCH`) once the table changes.
+# ---------------------------------------------------------------------------
+
+
+def _reformat_json_file(path: Path) -> bytes:
+    """Rewrite `path`'s JSON content with different formatting (different
+    exact bytes, same semantic/parsed content) and return the new bytes."""
+    original = path.read_bytes()
+    reformatted = json.dumps(json.loads(original), indent=2).encode("utf-8")
+    assert reformatted != original, "reformat must actually change the bytes"
+    path.write_bytes(reformatted)
+    return reformatted
+
+
+def test_e_use_table_content_change_alters_manifest_core_sha(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    approval_dir = tmp_path / "approvals"
+    approval_dir.mkdir()
+    table_path = tmp_path / "e_use.json"
+    _write_valid_e_use_table(table_path)
+    _write_gate1(approval_dir)
+
+    report_1 = c0_freeze.dry_run(_REPO_ROOT, approval_dir, os.environ, e_use_table_path=table_path)
+    assert not report_1.validation.is_blocked, report_1.validation.missing_required_keys
+
+    _reformat_json_file(table_path)  # different bytes, same semantic content
+
+    report_2 = c0_freeze.dry_run(_REPO_ROOT, approval_dir, os.environ, e_use_table_path=table_path)
+    assert not report_2.validation.is_blocked, report_2.validation.missing_required_keys
+
+    assert (
+        report_1.manifest["frozen_inputs"]["e_use_table_sha256"]
+        != report_2.manifest["frozen_inputs"]["e_use_table_sha256"]
+    )
+    assert report_1.manifest_core_sha != report_2.manifest_core_sha
+
+
+def test_armed_freeze_refuses_when_e_use_table_changes_after_gate2_pinned(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """A Gate 2 approval binds `manifest_core_sha` at dry-run time. If the
+    E_use table is swapped afterward (before `armed_freeze()` runs),
+    `manifest_core_sha` recomputed at armed time no longer matches what Gate 2
+    pinned -- `armed_freeze()` must refuse with `MANIFEST_CORE_SHA_MISMATCH`,
+    with zero side effects."""
+    approval_dir = tmp_path / "approvals"
+    secret_dir = tmp_path / "secrets"
+    campaigns_dir = tmp_path / "campaigns"
+    approval_dir.mkdir()
+    table_path = tmp_path / "e_use.json"
+    _write_valid_e_use_table(table_path)
+
+    _write_gate1(approval_dir)
+    report = c0_freeze.dry_run(_REPO_ROOT, approval_dir, os.environ, e_use_table_path=table_path)
+    assert not report.validation.is_blocked, report.validation.missing_required_keys
+    _write_gate2(approval_dir, report.manifest_core_sha)
+
+    _reformat_json_file(table_path)  # table changed *after* Gate 2 pinned the old sha
+
+    env = dict(os.environ)
+    env["VG_CAL_C0_FREEZE_AUTHORIZED"] = "1"
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+        e_use_table_path=table_path,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.MANIFEST_CORE_SHA_MISMATCH, result.detail
+    assert result.campaign_dir is None
+    assert result.secret_dir is None
+    assert not secret_dir.exists() or list(secret_dir.iterdir()) == []
+    assert not campaigns_dir.exists() or list(campaigns_dir.iterdir()) == []
+
+
+def test_cli_dry_run_prints_e_use_table_sha256(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = c0_freeze.main(
+        [
+            "--repo-root",
+            str(_REPO_ROOT),
+            "--approval-dir",
+            str(tmp_path / "approvals"),
+            "--secret-dir",
+            str(tmp_path / "secrets"),
+            "--campaigns-dir",
+            str(tmp_path / "campaigns"),
+        ]
+    )
+    out = capsys.readouterr().out
+    assert "e_use_table_sha256:" in out
+    assert rc in (0, 1)
+
+
+def test_core_payload_excludes_only_secret_and_identity_bookkeeping(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """Regression guard for the 第 12 巡 design change: `frozen_inputs` must
+    now survive `core_payload()` stripping (Gate 2 binds it), while the
+    genuinely non-core, per-invocation/secret-derived sections
+    (`approvals`/`commitments`/`realized_split`/`realized_split_sha`/
+    `campaign_id`/`authorization_nonce`) are still stripped."""
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.PUBLISHED, result.detail
+    manifest = json.loads((result.campaign_dir / "c0_manifest.json").read_text(encoding="utf-8"))
+    stripped = c0_freeze.core_payload(manifest)
+    assert "frozen_inputs" in stripped
+    for key in (
+        "approvals",
+        "commitments",
+        "realized_split",
+        "realized_split_sha",
+        "campaign_id",
+        "authorization_nonce",
+    ):
+        assert key not in stripped

@@ -449,18 +449,30 @@ def build_manifest(
 
 #: `build_manifest()` の core 出力には決して現れないが、armed freeze が
 #: full/frozen manifest へ後付けする節（PR レビュー第 4/5 巡:
-#: manifest_core_sha の定義精緻化 + 承認の一回性。第 6 巡: `frozen_inputs`
-#: 追加）。`core_payload()` は これらを取り除いた「事前承認 payload」を返す
-#: — Gate 2 承認はこの payload の sha (`manifest_core_sha`) を束縛する。
-#: `authorization_nonce` も `dry_run()` が呼び出しごとに新規発行する乱数で
-#: ありコード自身とは無関係なため、core payload から除く（さもなくば
-#: `manifest_core_sha` が dry-run の呼び出しごとに変わってしまい
-#: determinism が壊れる）。`frozen_inputs`（E_use table の sha256 pin。
-#: Part A/D1b）も同様の理由で core から除く: E_use table 自体は Gate 1 の一部
-#: として既に `e_use_bound_accepted`/`max_claim_scope` 経由で承認対象だが、
-#: その sha256 pin は armed freeze 時点で初めて確定する freeze-time bookkeeping
-#: であり、Gate 2 が署名する core manifest の一部にはしない（`campaign_id`/
-#: `authorization_nonce` と同じ扱い）。
+#: manifest_core_sha の定義精緻化 + 承認の一回性）。`core_payload()` は
+#: これらを取り除いた「事前承認 payload」を返す — Gate 2 承認はこの payload
+#: の sha (`manifest_core_sha`) を束縛する。`authorization_nonce` も
+#: `dry_run()` が呼び出しごとに新規発行する乱数でありコード自身とは無関係な
+#: ため、core payload から除く（さもなくば `manifest_core_sha` が dry-run の
+#: 呼び出しごとに変わってしまい determinism が壊れる）。`approvals`/
+#: `commitments`/`realized_split`/`realized_split_sha`/`campaign_id` はいずれも
+#: 承認そのものや armed freeze 時点で初めて確定する secret 由来 bookkeeping
+#: であり、Gate 2 が署名する core manifest には含めない。
+#:
+#: `frozen_inputs`（E_use table の sha256 pin。Part A/D1b）は **第 12 巡採用で
+#: core へ移した**（設計変更）: 従来は「armed freeze 時点で初めて確定する
+#: freeze-time bookkeeping」として非-core 扱いだったが、E_use table の内容は
+#: 「結果を左右する」frozen design 相当の入力であり、その pin を Gate 2 承認
+#: の外に置くと、dry-run で承認した E_use table と armed freeze 時点で実際に
+#: 使われる E_use table が食い違っていても検出できない（表を無断で差し替え
+#: られても manifest_core_sha が変わらず Gate 2 承認をすり抜ける）。`dry_run()`
+#: が load/validate/hash した sha256 を `frozen_inputs.e_use_table_sha256` として
+#: manifest（`build_manifest()` の core 出力そのものではなく、`dry_run()`/
+#: `armed_freeze()` がそこへ後付けする 1 キー）へ入れ、その状態で
+#: `manifest_core_sha()` を計算するため、dry-run と armed の間で表が変われば
+#: core_sha が不一致になり Gate 2 の束縛が無効化される（`campaign_id`/
+#: `authorization_nonce` とは異なり、`frozen_inputs` はこの意味で `cost_caps`/
+#: `max_claim_scope` などの他の frozen-design 入力と同じ扱いになった）。
 _CORE_ONLY_EXCLUDED_KEYS: frozenset[str] = frozenset(
     {
         "approvals",
@@ -469,7 +481,6 @@ _CORE_ONLY_EXCLUDED_KEYS: frozenset[str] = frozenset(
         "realized_split_sha",
         "campaign_id",
         "authorization_nonce",
-        "frozen_inputs",
     }
 )
 
@@ -511,7 +522,6 @@ def _attach_freeze_extras(
     commitments: Mapping[str, str],
     realized_split: Mapping[str, object],
     realized_split_sha: str,
-    frozen_inputs: Mapping[str, str],
 ) -> dict[str, object]:
     """core manifest から frozen/full manifest を組み立てる。設計正本 §7
     「正本は C0 manifest に列挙した実現済み row→split 表」に従い、
@@ -521,10 +531,14 @@ def _attach_freeze_extras(
     1 対 1 で対応する。`authorization_nonce` は Gate 2 承認ファイルに記録
     された値（`check_armed()` が既に Gate 1 との一致を検証済み）で、
     `armed_freeze()` の一回性チェックが後続の freeze 試行を拒否するために
-    使う（PR レビュー第 5 巡）。`frozen_inputs`（Part A/D1b, PR レビュー
-    第 6 巡）は E_use evidence table の sha256 pin
-    (`frozen_inputs.e_use_table_sha256`) を保持する — approvals/commitments
-    と同じく非-core 節。"""
+    使う（PR レビュー第 5 巡）。
+
+    `frozen_inputs`（E_use evidence table の sha256 pin,
+    `frozen_inputs.e_use_table_sha256`）はもはやここでは付加しない — 第 12
+    巡採用で core payload へ移ったため、呼び出し側（`armed_freeze()`）が
+    `core_manifest` 自体へ（`manifest_core_sha()` を計算する前に）既に
+    埋め込んでいる前提であり、`core_manifest` をコピーする `full = dict(...)`
+    がそのまま引き継ぐ。"""
     full = dict(core_manifest)
     full["campaign_id"] = campaign_id
     full["authorization_nonce"] = authorization_nonce
@@ -532,7 +546,6 @@ def _attach_freeze_extras(
     full["commitments"] = dict(commitments)
     full["realized_split"] = dict(realized_split)
     full["realized_split_sha"] = realized_split_sha
-    full["frozen_inputs"] = dict(frozen_inputs)
     return full
 
 
@@ -713,16 +726,29 @@ def dry_run(
     root = Path(repo_root)
     all_approvals = load_all_approvals(approval_dir, repo_root=root)
     manifest = build_manifest(root, approvals=all_approvals, campaign_date_utc=_today_utc())
-    core_sha = manifest_core_sha(manifest)
-    campaign_id = campaign_id_for(manifest)
-    validation = c0_validate.validate_c0_manifest(manifest)
 
+    # 第 12 巡採用: E_use table の sha256 pin (`frozen_inputs.e_use_table_sha256`)
+    # は now part of the *core* payload -- it must be read/hashed and attached
+    # to `manifest` *before* `manifest_core_sha()`/`campaign_id_for()` run
+    # below, so that a table swapped in between this dry-run and a later
+    # `armed_freeze()` call changes `manifest_core_sha` (and therefore
+    # invalidates whatever `manifest_core_sha` a stale Gate 2 approval pins).
     table_path = (
         e_use_table_path if e_use_table_path is not None else default_e_use_table_path(root)
     )
-    e_use_violations, _e_use_table_bytes = _check_e_use_table(
+    e_use_violations, e_use_table_bytes = _check_e_use_table(
         table_path, gate1_e_use_bound_accepted=_gate1_e_use_bound_accepted(all_approvals)
     )
+    e_use_table_sha256 = (
+        hashlib.sha256(e_use_table_bytes).hexdigest() if e_use_table_bytes is not None else None
+    )
+    manifest["frozen_inputs"] = {
+        "e_use_table_sha256": e_use_table_sha256 or "ABSENT:e_use_table_invalid"
+    }
+
+    core_sha = manifest_core_sha(manifest)
+    campaign_id = campaign_id_for(manifest)
+    validation = c0_validate.validate_c0_manifest(manifest)
     validation = _merge_e_use_table_violations(validation, e_use_violations)
 
     frozen_design = manifest.get("frozen_design")
@@ -1021,34 +1047,73 @@ class FreezeOutcome(str, Enum):
     AUTHORIZATION_REQUIRED = "AUTHORIZATION_REQUIRED"
     MANIFEST_CORE_SHA_MISMATCH = "MANIFEST_CORE_SHA_MISMATCH"
     NONCE_ALREADY_USED = "NONCE_ALREADY_USED"
+    NONCE_REGISTRY_UNINSPECTABLE = "NONCE_REGISTRY_UNINSPECTABLE"
     VALIDATION_BLOCKED = "VALIDATION_BLOCKED"
     PUBLICATION_FAILED = "PUBLICATION_FAILED"
     PUBLISHED = "PUBLISHED"
 
 
-def _find_existing_nonce_usage(campaigns_dir: Path, nonce: str) -> str | None:
+@dataclass(frozen=True)
+class NonceRegistryScan:
+    """`_find_existing_nonce_usage()` の走査結果（第 12 巡採用）。
+
+    `existing_campaign_id` が非 None なら、同じ `authorization_nonce` を
+    使った公開済み campaign が見つかったことを示す。
+
+    `uninspectable_dirs`（第 12 巡採用）が非空なら、`campaigns_dir` 配下に
+    manifest が欠落・読取不能・JSON 不正・`authorization_nonce` 欄欠落の
+    campaign dir（`.staging-*` は除く）が存在し、nonce 一意性を確実には
+    判定できないことを示す。従来はそのような dir を単に無視していた（「この
+    1 件は判定材料にならない」という設計だったが、その dir 自体が実は同じ
+    nonce で公開されていた場合に検出できず、一回性保証が静かに破れる穴
+    だった）。呼び出し側は `uninspectable_dirs` が非空なら
+    `existing_campaign_id` の値に関わらず freeze を拒否しなければならない
+    （fail-closed: 「見つからなかった」を「安全に見つからなかった」と混同
+    しない）。
+    """
+
+    existing_campaign_id: str | None
+    uninspectable_dirs: tuple[str, ...]
+
+
+def _find_existing_nonce_usage(campaigns_dir: Path, nonce: str) -> NonceRegistryScan:
     """PR レビュー第 5 巡: 承認の一回性。`campaigns_dir` 配下の公開済み
     campaign の `c0_manifest.json` を走査し、同じ `authorization_nonce` を
-    持つものがあればその campaign_id を返す（無ければ `None`）。壊れた/
-    読めないファイルは無視する（fail-open ではなく単に「この 1 件は判定材料
-    にならない」— 他の正当な published campaign が既にヒットしていれば
-    そちらで検出される）。"""
+    持つものがあればその campaign_id を `existing_campaign_id` として返す。
+
+    第 12 巡採用: manifest が欠落・読取不能・JSON 不正・
+    `authorization_nonce` 欄欠落の campaign dir は、もはや黙って無視しない
+    — `uninspectable_dirs` へ個別に記録して呼び出し側へ fail-closed な
+    拒否を促す（`NonceRegistryScan` docstring 参照）。`.staging-*` は
+    従来どおり対象外（公開済み campaign ではないため）。走査は全 entry を
+    見終えるまで続ける（先に match が見つかっても、後続の uninspectable な
+    entry を見逃さないため）。
+    """
     campaigns_dir = Path(campaigns_dir)
     if not campaigns_dir.exists():
-        return None
+        return NonceRegistryScan(existing_campaign_id=None, uninspectable_dirs=())
+    uninspectable: list[str] = []
+    existing_campaign_id: str | None = None
     for entry in sorted(campaigns_dir.iterdir()):
         if not entry.is_dir() or entry.name.startswith(".staging-"):
             continue
         manifest_path = entry / "c0_manifest.json"
         if not manifest_path.is_file():
+            uninspectable.append(entry.name)
             continue
         try:
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
+            uninspectable.append(entry.name)
             continue
-        if isinstance(data, Mapping) and data.get("authorization_nonce") == nonce:
-            return entry.name
-    return None
+        if not isinstance(data, Mapping) or not isinstance(data.get("authorization_nonce"), str):
+            uninspectable.append(entry.name)
+            continue
+        if data["authorization_nonce"] == nonce and existing_campaign_id is None:
+            existing_campaign_id = entry.name
+    return NonceRegistryScan(
+        existing_campaign_id=existing_campaign_id, uninspectable_dirs=tuple(uninspectable)
+    )
 
 
 @dataclass(frozen=True)
@@ -1107,6 +1172,37 @@ def armed_freeze(
         )
 
     core_manifest = build_manifest(root, approvals=all_approvals, campaign_date_utc=_today_utc())
+
+    # E_use evidence table (Part A/D1b, `[UNDERSPEC-CAL-D10]`): `_check_e_use_table()`
+    # reads `table_path` exactly once and hands back those same bytes — reused
+    # below for both the sha256 pin and the staged copy (bug fix P2 #1: this used
+    # to call `table_path.read_bytes()` a second time, so the bytes that were
+    # actually validated and the bytes that ended up pinned/staged could differ
+    # if the file was swapped in between). `e_use_table_bytes is None` implies
+    # `e_use_violations` is non-empty, so `validation.is_blocked` further below
+    # will already refuse the freeze before staging is ever attempted.
+    #
+    # 第 12 巡採用: this must run — and `frozen_inputs.e_use_table_sha256` must
+    # be attached to `core_manifest` — *before* `manifest_core_sha()` is
+    # computed just below, since `frozen_inputs` is now part of the *core*
+    # payload (see `_CORE_ONLY_EXCLUDED_KEYS` docstring). This is what makes a
+    # table swapped in between the `dry_run()` Gate 2 pinned and this
+    # `armed_freeze()` call surface as `MANIFEST_CORE_SHA_MISMATCH` below,
+    # rather than silently freezing a different table than the one Gate 2
+    # actually approved.
+    table_path = (
+        e_use_table_path if e_use_table_path is not None else default_e_use_table_path(root)
+    )
+    e_use_violations, e_use_table_bytes = _check_e_use_table(
+        table_path, gate1_e_use_bound_accepted=_gate1_e_use_bound_accepted(all_approvals)
+    )
+    e_use_table_sha256 = (
+        hashlib.sha256(e_use_table_bytes).hexdigest() if e_use_table_bytes is not None else None
+    )
+    core_manifest["frozen_inputs"] = {
+        "e_use_table_sha256": e_use_table_sha256 or "ABSENT:e_use_table_invalid"
+    }
+
     core_sha = manifest_core_sha(core_manifest)
 
     gate2_record = gate2_arming.approval
@@ -1142,8 +1238,28 @@ def armed_freeze(
             detail="Gate 2 approval is missing authorization_nonce",
             gate2_arming=gate2_arming,
         )
-    existing_campaign_id = _find_existing_nonce_usage(campaigns_dir, nonce)
-    if existing_campaign_id is not None:
+    early_nonce_scan = _find_existing_nonce_usage(campaigns_dir, nonce)
+    if early_nonce_scan.uninspectable_dirs:
+        # 第 12 巡採用: nonce 一意性を保証できない registry 状態は
+        # fail-closed で拒否する（`existing_campaign_id` の有無に関わらず —
+        # uninspectable な dir 自体が同じ nonce を使っていた可能性を排除
+        # できない）。
+        return ArmedFreezeResult(
+            outcome=FreezeOutcome.NONCE_REGISTRY_UNINSPECTABLE,
+            campaign_id=None,
+            manifest_core_sha=core_sha,
+            manifest_sha=None,
+            campaign_dir=None,
+            secret_dir=None,
+            detail=(
+                "nonce_registry_uninspectable: cannot verify authorization_nonce "
+                "uniqueness — campaign dir(s) with missing/unreadable/malformed/"
+                f"nonce-less manifest: {list(early_nonce_scan.uninspectable_dirs)!r}; "
+                "refusing"
+            ),
+            gate2_arming=gate2_arming,
+        )
+    if early_nonce_scan.existing_campaign_id is not None:
         return ArmedFreezeResult(
             outcome=FreezeOutcome.NONCE_ALREADY_USED,
             campaign_id=None,
@@ -1153,7 +1269,7 @@ def armed_freeze(
             secret_dir=None,
             detail=(
                 f"authorization_nonce already used by published campaign "
-                f"{existing_campaign_id!r}; refusing (one-time-use authorization)"
+                f"{early_nonce_scan.existing_campaign_id!r}; refusing (one-time-use authorization)"
             ),
             gate2_arming=gate2_arming,
         )
@@ -1165,24 +1281,6 @@ def armed_freeze(
         and result.approved
         and result.content_sha256 is not None
     }
-
-    # E_use evidence table (Part A/D1b, `[UNDERSPEC-CAL-D10]`): `_check_e_use_table()`
-    # reads `table_path` exactly once and hands back those same bytes — reused
-    # here for both the sha256 pin and the staged copy (bug fix P2 #1: this used
-    # to call `table_path.read_bytes()` a second time, so the bytes that were
-    # actually validated and the bytes that ended up pinned/staged could differ
-    # if the file was swapped in between). `e_use_table_bytes is None` implies
-    # `e_use_violations` is non-empty, so `validation.is_blocked` below will
-    # already refuse the freeze before staging is ever attempted.
-    table_path = (
-        e_use_table_path if e_use_table_path is not None else default_e_use_table_path(root)
-    )
-    e_use_violations, e_use_table_bytes = _check_e_use_table(
-        table_path, gate1_e_use_bound_accepted=_gate1_e_use_bound_accepted(all_approvals)
-    )
-    e_use_table_sha256 = (
-        hashlib.sha256(e_use_table_bytes).hexdigest() if e_use_table_bytes is not None else None
-    )
 
     split_secret = secrets.token_bytes(32)
     render_root_secret = secrets.token_bytes(32)
@@ -1207,7 +1305,6 @@ def armed_freeze(
         commitments=commitments,
         realized_split=realized_split_dict,
         realized_split_sha=realized.realized_sha,
-        frozen_inputs={"e_use_table_sha256": e_use_table_sha256 or "ABSENT:e_use_table_invalid"},
     )
     full_sha = _full_manifest_sha(full_manifest)
 
@@ -1408,8 +1505,30 @@ def armed_freeze(
             # different `secret_dir` values could each acquire independently
             # — the same lock `detect_orphans()` and both `os.replace()` calls
             # below use), so no concurrent publisher can race it.
-            existing_campaign_id = _find_existing_nonce_usage(campaigns_dir, nonce)
-            if existing_campaign_id is not None:
+            locked_nonce_scan = _find_existing_nonce_usage(campaigns_dir, nonce)
+            if locked_nonce_scan.uninspectable_dirs:
+                # 第 12 巡採用: 同じ fail-closed 拒否をロック内の権威的な
+                # 再チェックでも行う（早期チェック通過後にレジストリが
+                # uninspectable な状態へ変わった TOCTOU も塞ぐ）。
+                _rmtree_if_exists(campaign_staging)
+                _rmtree_if_exists(secret_staging)
+                return ArmedFreezeResult(
+                    outcome=FreezeOutcome.NONCE_REGISTRY_UNINSPECTABLE,
+                    campaign_id=None,
+                    manifest_core_sha=core_sha,
+                    manifest_sha=full_sha,
+                    campaign_dir=None,
+                    secret_dir=None,
+                    detail=(
+                        "nonce_registry_uninspectable: cannot verify authorization_nonce "
+                        "uniqueness — campaign dir(s) with missing/unreadable/malformed/"
+                        f"nonce-less manifest: {list(locked_nonce_scan.uninspectable_dirs)!r}; "
+                        "refusing (detected by locked recheck)"
+                    ),
+                    gate2_arming=gate2_arming,
+                    validation=validation,
+                )
+            if locked_nonce_scan.existing_campaign_id is not None:
                 _rmtree_if_exists(campaign_staging)
                 _rmtree_if_exists(secret_staging)
                 return ArmedFreezeResult(
@@ -1421,7 +1540,7 @@ def armed_freeze(
                     secret_dir=None,
                     detail=(
                         f"authorization_nonce already used by published campaign "
-                        f"{existing_campaign_id!r}; refusing (one-time-use authorization, "
+                        f"{locked_nonce_scan.existing_campaign_id!r}; refusing (one-time-use authorization, "
                         "detected by locked recheck)"
                     ),
                     gate2_arming=gate2_arming,
@@ -1700,6 +1819,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             else None
         )
         print(f"max_claim_scope: {_max_claim_scope}")
+        _frozen_inputs = report.manifest.get("frozen_inputs")
+        _e_use_table_sha256 = (
+            _frozen_inputs.get("e_use_table_sha256")
+            if isinstance(_frozen_inputs, Mapping)
+            else None
+        )
+        print(f"e_use_table_sha256: {_e_use_table_sha256}")
         print(f"blocked_codes: {[c.value for c in report.validation.blocked_codes]}")
         print(f"missing_required_keys: {list(report.validation.missing_required_keys)}")
         print(f"gate2.armed: {report.gate2_arming.armed}")
