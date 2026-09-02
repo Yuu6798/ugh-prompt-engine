@@ -72,17 +72,21 @@ C0 manifest / freeze event に記録され、`design_doc_sha256`/`memo_sha256` �
 `IMPLEMENTATION_MAP_v1.md` §6.4 が挙げる D2 dry-run の work unit 件数
 （instances 2,280 / renders 4,560 / meter calls …）も同じ規模の裏付けとして参照できる。
 
-cap は compute（`compute_seconds`）/ storage（`storage_bytes`）/ 課金
-（`budget`）の 3 値を C0 manifest に凍結し、超過時は fail-closed の stop event で
-キャンペーンを閉じる（§14「超過で stop event（fail-closed、結果不完全のまま閉鎖）」）。
-`IMPLEMENTATION_MAP_v1.md` §2.6 は `COST_CAPS_REQUIRED_KEYS` を
+cap は `c0_validate.COST_CAPS_REQUIRED_KEYS` と一致する厳密に 3 キー
+`compute`（単位=秒）/ `storage`（単位=bytes）/ `budget`（単位=通貨単位）の 3 値を
+C0 manifest に凍結し、超過時は fail-closed の stop event でキャンペーンを閉じる
+（§14「超過で stop event（fail-closed、結果不完全のまま閉鎖）」）（PR #343 第 2 巡
+採用）。`IMPLEMENTATION_MAP_v1.md` §2.6 は `COST_CAPS_REQUIRED_KEYS` を
 compute/storage/budget の 3 次元に固定済み。
 
-| cap フィールド | 上記どの規模数値から見積もるか | 値 |
-|---|---|---|
-| `compute_seconds` | meter calls 13,680×implementation 数（数〜10 CPU 時間オーダー、完全並列化可能）+ selection 段 ~10^5 call | ユーザー記入 |
-| `storage_bytes` | renders 4,560 本・音声換算約 2.5 時間・storage 概ね 1 GB 以下 | ユーザー記入 |
-| `budget` | 上記 compute を実行環境の課金レートに換算 | ユーザー記入 |
+| cap フィールド | 単位 | 上記どの規模数値から見積もるか | 値 |
+|---|---|---|---|
+| `compute` | 秒 | meter calls 13,680×implementation 数（数〜10 CPU 時間オーダー、完全並列化可能）+ selection 段 ~10^5 call | ユーザー記入 |
+| `storage` | bytes | renders 4,560 本・音声換算約 2.5 時間・storage 概ね 1 GB 以下 | ユーザー記入 |
+| `budget` | 通貨単位 | 上記 compute を実行環境の課金レートに換算 | ユーザー記入 |
+
+（フィールド名・単位は PR #343 第 2 巡採用: `compute_seconds`/`storage_bytes` 等の
+旧称を廃し `compute`/`storage`/`budget` に統一）
 
 cap の値そのものの決定と実行 Go はユーザー判断であり、本書は変数として保持する
 （§14 原文）。本ブリーフも具体数値は提案しない。
@@ -144,21 +148,42 @@ D1 実装（`IMPLEMENTATION_MAP_v1.md` §6.3）は、`e_use_table.py` のテン�
 規定している——つまり **このテーブルの中身（証拠の記入）はユーザー Gate 1 判断の
 本体そのもの**であり、コード側は空の worksheet しか用意しない。
 
-**construct 別 worksheet**（`candidates/registry.py` の claim-critical + 主要
-construct を列挙。値セルは全てユーザー記入。候補となる evidence source の例を
-「参考」欄に示すが、実際の採否・記入はユーザーが行う）:
+**worksheet の行粒度**（PR #343 第 2 巡採用）: `e_use_table.generate_template()` は
+`candidates/registry.py` を読み、そこに登録された全 99 candidate から一意な
+**(construct_id, unit, domain) の 3 つ組**を抽出し、その組ごとに 1 行を出力する
+（同一 construct・同一 unit でも domain 宣言が異なれば別行——例: M3 の
+CEPSTRAL-POLES family と BURG-LPC の fs'=4000Hz / 5000Hz resample family は
+domain が異なるため formant_frequency/Hz でも 3 行に分かれる。F0_CONTROL の
+baseline と pyin family も domain 宣言が異なるため 2 行に分かれる）。registry 現状
+（99 candidate）では一意な 3 つ組は **20 件**であり、下表はその 20 行を全て列挙した
+ものである。値セルは全てユーザー記入。候補となる evidence source の例を「参考」欄
+に示すが、実際の採否・記入はユーザーが行う。
+
+**construct 別 worksheet**（`candidates/registry.py` 由来の 20 件、一意
+(construct_id, unit, domain) 単位。PR #343 第 2 巡採用で registry 全走査から再生成）:
 
 | construct_id | unit | domain | 参考: 想定される evidence_class の候補源 | E_use_value | evidence_class | review_status |
 |---|---|---|---|---|---|---|
-| formant_frequency (F1/F2/F3, M3-BURG-LPC / M3-CEPSTRAL-POLES) | Hz | 宣言済み F0×ceiling×window×sample-rate domain 内 | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` / 音声知覚上の formant JND 文献 → `VALIDATED_REFERENCE`（source hash 必須） | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| source_spectral_tilt (dB/oct, M2T-HARMONIC-OLS/THEILSEN) | dB/oct | K本以上の倍音が取得できる domain | 回帰の数値分解能 → `FIRST_PRINCIPLES_BOUND` / tilt 知覚閾に関する文献 → `VALIDATED_REFERENCE` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| injected_noise_fraction (M2A-HARMONIC-RESIDUAL) | fraction | 独立 generator 上 | 注入量そのものの量子化限界 → `FIRST_PRINCIPLES_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| harmonic_to_noise_ratio (M2A-B0 / HNR-ACF) | dB | — | 用途上許容する dB 幅をユーザーが直接宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| world_d4c_aperiodicity (M2A-D4C) | fraction | SHARED_MODEL_DIAGNOSTIC | 同上 | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| resonance_center_frequency (M4) | Hz | DIAGNOSTIC_ONLY 上限（§16-1） | 診断用途としての許容幅をユーザーが宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| join_discontinuity_magnitude (M5) | rms_amplitude_delta / spectral_flux_l1,l2 | — | 検出感度の用途要件 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| identity_component_distance (M6) | normalized_l1 / normalized_l2 | DIRECTIONAL 上限（§12） | E_use[j] は各 component 側 E_use の正規化に従属するため、上記 construct 側の記入が前提 | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| fundamental_frequency (F0_CONTROL) | Hz | claim-critical 外・上流 control | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| fundamental_frequency（F0-B0-CURRENT baseline） | Hz | 宣言済み primary F0 帯 (C3-G4 anchor) + boundary probe | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| fundamental_frequency（F0-PYIN-FRAME*-HOP* family ×4） | Hz | 宣言済み primary F0 帯 (C3-G4 anchor) + boundary probe。fmin=80/fmax=600 固定 | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` / 音声知覚上のピッチ JND 文献 → `VALIDATED_REFERENCE` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| formant_centroid（M3-B0-CURRENT-CENTROID baseline） | Hz | DIAGNOSTIC_ONLY: centroid は F1/F2/F3 個別 Hz error の代用にならない | 診断用途としての許容幅をユーザーが宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| formant_frequency（M3-CEPSTRAL-POLES family ×18） | Hz | baseline と同族（ケプストラム liftering 系）。band_lo=300Hz 固定 | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` / 音声知覚上の formant JND 文献 → `VALIDATED_REFERENCE`（source hash 必須） | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| formant_frequency（M3-BURG-LPC family, fs'=2×4000Hz resample ×12） | Hz | 唯一の独立 family。fs'=2*4000Hz へ決定的 resample 必須 | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` / formant JND 文献 → `VALIDATED_REFERENCE`（source hash 必須） | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| formant_frequency（M3-BURG-LPC family, fs'=2×5000Hz resample ×12） | Hz | 唯一の独立 family。fs'=2*5000Hz へ決定的 resample 必須 | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` / formant JND 文献 → `VALIDATED_REFERENCE`（source hash 必須） | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| source_spectral_tilt（M2T-B0-CURRENT-HYBRID baseline） | mixed(db_per_oct\|db) | unit 混在のためそのままでは INVALID（設計正本 §8） | NONE（INVALID_CIRCULAR 相当）——ceiling は claim ceiling 表（§2.2）で確定済みのため E_use 記入は本来不要（UNDERSPEC-CAL-C06 参照） | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| source_spectral_tilt（M2T-HARMONIC-OLS family ×6） | dB/oct | 20*log10(A_k) vs log2(k) 線形回帰。H1-H2 フォールバックなし | 回帰の数値分解能 → `FIRST_PRINCIPLES_BOUND` / tilt 知覚閾に関する文献 → `VALIDATED_REFERENCE` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| source_spectral_tilt（M2T-HARMONIC-THEILSEN family ×6） | dB/oct | Theil-Sen（中央値ベース）勾配。H1-H2 フォールバックなし | 回帰の数値分解能 → `FIRST_PRINCIPLES_BOUND` / tilt 知覚閾に関する文献 → `VALIDATED_REFERENCE` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| harmonic_to_noise_ratio（M2A-B0-AUTOCORR-PERIODICITY baseline） | dB | harmonic/noise 帯域エネルギー比（FFT ベース） | 用途上許容する dB 幅をユーザーが直接宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| harmonic_to_noise_ratio（M2A-HNR-ACF family ×8） | dB | 正規化自己相関ピーク → HNR。独立実装は directional/monotonicity 上限 | 用途上許容する dB 幅をユーザーが直接宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| injected_noise_fraction（M2A-HARMONIC-RESIDUAL family ×12） | fraction | comb-remove 後の残差/全パワー比。独立 generator 上のみ ABSOLUTE 候補 | 注入量そのものの量子化限界 → `FIRST_PRINCIPLES_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| world_d4c_aperiodicity（M2A-D4C family ×3） | fraction | WORLD 合成 fixture 上は SHARED_MODEL_DIAGNOSTIC。F0 入力は選択済み F0_CONTROL 固定 | 診断用途としての許容幅をユーザーが宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| resonance_centroid（M4-B0-CURRENT-CENTROID baseline） | Hz | 全 M4 候補は RUN10 で DIAGNOSTIC_ONLY 上限に閉じる（設計正本 §16） | 診断用途としての許容幅をユーザーが宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| resonance_center_frequency（M4-LOCAL-PROMINENCE family ×4） | Hz | 全 M4 候補は RUN10 で DIAGNOSTIC_ONLY 上限に閉じる（設計正本 §16。M3 との construct 独立性は未証明） | 診断用途としての許容幅をユーザーが宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| join_discontinuity_magnitude（M5-WAVE-DISCONTINUITY family ×3） | rms_amplitude_delta | 短窓 RMS の frame-to-frame jump | 検出感度の用途要件 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| join_discontinuity_magnitude（M5-SPECTRAL-FLUX family, L1 ノルム ×2） | spectral_flux_l1 | frame-to-frame 振幅スペクトル差分のノルム | 検出感度の用途要件 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| join_discontinuity_magnitude（M5-SPECTRAL-FLUX family, L2 ノルム ×2） | spectral_flux_l2 | frame-to-frame 振幅スペクトル差分のノルム | 検出感度の用途要件 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| identity_component_distance（M6-WEIGHTED-L1） | normalized_l1 | CLAIM_CRITICAL_SET 全 member が CALIBRATED_ABSOLUTE のときのみ計算（DIRECTIONAL 上限 §12） | E_use[j] は各 component 側 E_use の正規化に従属するため、上記 construct 側の記入が前提 | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| identity_component_distance（M6-WEIGHTED-L2） | normalized_l2 | CLAIM_CRITICAL_SET 全 member が CALIBRATED_ABSOLUTE のときのみ計算（DIRECTIONAL 上限 §12） | E_use[j] は各 component 側 E_use の正規化に従属するため、上記 construct 側の記入が前提 | ユーザー記入 | ユーザー記入 | ユーザー記入 |
 
 ---
 
@@ -313,16 +338,23 @@ Gate 3 の受容対象は、この宣言された水準（事故検出・改竄�
 2. **Gate 2 承認**（`gate2_c0_freeze.json` を同じく `VG_CAL_APPROVAL_DIR` に
    記入・配置）
    → `--armed` + `VG_CAL_C0_FREEZE_AUTHORIZED=1` + 承認ファイルの 3 要素が揃うと
-   `c0_freeze.py` の armed 実行が可能になる: secret 生成 → commitment 記入 →
-   splitter 実行 → 実現 split 表 → freeze event を ledger 先頭に記帳 →
-   `campaigns/<id>/` へ書込（`c0_manifest.json` / `realized_split.json` /
-   `ledger.jsonl` / `events/*.json`）。secret は `VG_CAL_SECRET_DIR`
-   （既定 `~/.vg_cal/secrets/<campaign_id>/`、mode 0600）に生成され repo には
-   commitment のみが残る。承認ファイル自体も checkout 外のため、この段階で
-   repo の dirty-tree 状態を汚さない。**git commit はしない**（ユーザー操作）。
+   `c0_freeze.py` の armed 実行が可能になる。この承認は producer が dry-run 時点で
+   報告する `manifest_core_sha`（`approvals` セクションと secret-commitment を除いた
+   manifest 本体の sha。承認ファイル自体は campaign_id を含まない）を束縛対象とする
+   （`IMPLEMENTATION_MAP_v1.md` §6.1/§6.2。PR #343 第 2 巡採用）: secret 生成 →
+   commitment 記入 → splitter 実行 → 実現 split 表 → freeze event を ledger 先頭に
+   記帳 → `campaigns/<id>/` へ書込（`c0_manifest.json` / `realized_split.json` /
+   `ledger.jsonl` / `events/*.json`）。この `<id>`（campaign_id）は
+   `RUN10-CAL-<YYYYMMDD>-<manifest_core_sha[:8]>` として事後導出される。secret は
+   `VG_CAL_SECRET_DIR`（既定 `~/.vg_cal/secrets/<campaign_id>/`、mode 0600）に生成
+   され repo には commitment のみが残る。承認ファイル自体も checkout 外のため、この
+   段階で repo の dirty-tree 状態を汚さない。**git commit はしない**（ユーザー操作）。
 3. **Gate 3 承認**（`gate3_seal_acceptance.json` を `VG_CAL_APPROVAL_DIR` に
    記入・配置）
-   → runner（D2）が続行してよい状態になる。`--armed` +
+   → runner（D2）が続行してよい状態になる。Gate 3 は freeze **後**に成立するため
+   C0 manifest には含まれない: D2 runner が sealed-stage 作業に入る前に、この承認
+   ファイルの sha256 を伴う `GATE3_ACCEPTED` ledger event を記帳することで束縛する
+   （`IMPLEMENTATION_MAP_v1.md` §6.2。PR #343 第 2 巡採用）。`--armed` +
    `VG_CAL_CAMPAIGN_AUTHORIZED=1` + 承認ファイルが揃うと、`c1-fixtures` →
    `c2-baseline` → `c3-selection` → `unseal` → `c4-holdout` → `close` の手続
    Gate を ledger 駆動で進められる。**`c1-fixtures` は calibration 行・

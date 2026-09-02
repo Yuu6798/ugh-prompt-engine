@@ -237,7 +237,9 @@ README のみ。B/C は README の自セクションのみ追記）。
   `gate3_seal_acceptance.json`（Gate 3）。理由: checkout 内の未追跡ファイルは
   dirty-tree 判定で武装経路を自己否定し、コミットすれば HEAD が変わり manifest 派生の
   campaign identity が動くため（PR #343 第 1 巡採用）。各 {approver, approved_at_utc,
-  campaign_id, design_doc_sha256, memo_sha256} を持ち、sha は**実ファイルのハッシュと
+  design_doc_sha256, memo_sha256} を持ち、**campaign_id は含まない**——campaign_id は
+  `manifest_core_sha` から事後導出される値であり承認ファイル作成時点では確定しない
+  （導出規則は §6.2）（PR #343 第 2 巡採用）。sha は**実ファイルのハッシュと
   照合**。各承認ファイルの content sha256 は manifest（`approvals.<gate>_sha256`）と
   freeze event の双方に記録する（content-pin）（PR #343 第 1 巡採用）
 - `AUTHORIZATION_REQUIRED` は §3.3 閉語彙（BLOCKED_*）とは別軸の pre-campaign 拒否コード
@@ -252,7 +254,16 @@ README のみ。B/C は README の自セクションのみ追記）。
   （既定 `~/.vg_cal/approvals/`）配下の `gate1_campaign_execution.json` /
   `gate2_c0_freeze.json` / `gate3_seal_acceptance.json`（配置理由・sha256 記録先 =
   §6.1）（PR #343 第 1 巡採用）
-- `campaign_id = RUN10-CAL-<YYYYMMDD>-<manifest_sha[:8]>`
+- `manifest_core_sha` = `approvals` セクションと secret-commitment フィールドを除いた
+  manifest 本体の sha（dry-run が報告する値）。`campaign_id = RUN10-CAL-<YYYYMMDD>-
+  <manifest_core_sha[:8]>`。Gate 2 承認（`gate2_c0_freeze.json`）はこの
+  `manifest_core_sha` を束縛対象とする（PR #343 第 2 巡採用）
+- freeze 済み manifest は `manifest_core_sha` に加えて `approvals`（gate1/gate2 の
+  sha256）と commitments を保持する。この最終形全体の sha は `manifest_core_sha` とは
+  別に freeze event へ `manifest_sha` として記録する（PR #343 第 2 巡採用）
+- Gate 3（seal 受容）は freeze **後**に成立するため manifest には含まれない: D2
+  runner は sealed-stage 作業に入る前に、承認ファイルの sha256 を伴う
+  `GATE3_ACCEPTED` ledger event で束縛する（PR #343 第 2 巡採用）
 - `voice_genesis/calibration/campaigns/<campaign_id>/`: `c0_manifest.json` /
   `realized_split.json` / `ledger.jsonl` / `events/*.json` / `renders/`（gitignore）/
   `measurements/`（gitignore）
@@ -268,19 +279,30 @@ README のみ。B/C は README の自セクションのみ追記）。
   frozen design 各節（registry / matrix / memo §2.6–2.7 定数から導出）・independence
   ledger（registry 99 件）・RNG 宣言台帳・RECORDED_OR_ABSENT 環境項目（取得不能は
   `ABSENT:<理由>`）→ `validate_c0_manifest` を通す
-- dry-run: manifest を生成・検証して報告するだけ（書込なし・secret なし）
+- dry-run: manifest を生成・検証して報告するだけ（書込なし・secret なし）。この際
+  `manifest_core_sha`（§6.2）を報告し、Gate 2 承認はこの値を束縛対象とする
+  （PR #343 第 2 巡採用）
 - armed: secret 生成 → commitment 記入 → splitter 実行 → 実現 split 表 → freeze event を
   ledger 先頭に記帳 → **全成果物を staging に書く**（同一 FS 上の
   `campaigns/.staging-<id>/` と secret_dir 側 staging）→ read-back で
   `validate_c0_manifest` / `verify_split` / `Ledger.verify_chain` を再実行 → 全て通れば
-  `os.replace` で `campaigns/<id>/` と secret へ**atomic に公開** → 失敗時は staging を
-  削除し何も公開しない（secret も残さない）。テスト要件: 公開直前の例外注入で
-  `campaigns/<id>/` も secret も残らないこと（PR #343 第 1 巡採用）。**git commit は
-  しない**（ユーザー操作）
+  **公開順序を固定**する: まず secret 側を `os.replace`、続いて campaign 側を
+  `os.replace`（secret を先に公開してから campaign を公開する）。campaign 側の
+  rename が失敗した場合は**既に公開済みの secret dir を削除し、何も公開されていない
+  状態へロールバック**する（PR #343 第 2 巡採用）。staging 検証段の失敗時は staging を
+  削除し何も公開しない（secret も残さない）。テスト要件: **2 回の `os.replace` の間**
+  に例外を注入しても `campaigns/<id>/` と secret のどちらも残らないこと（PR #343
+  第 2 巡採用。旧稿の「公開直前の例外注入」から対象タイミングを訂正）。**git commit
+  はしない**（ユーザー操作）
+- `detect_orphans()`: campaign dir はあるが対応する secret が無い → fail-closed
+  （runner は当該 campaign の実行を拒否する）。secret はあるが対応する campaign dir
+  が無い → orphan secret として削除する（PR #343 第 2 巡採用）
 - E_use evidence table: §10.2 の 13 列 schema + loader/validator + テンプレート生成
   （全 construct 行を `evidence_class: UNJUSTIFIED` かつ `e_use_value: null` で出力。
   数値 placeholder 禁止）。UNJUSTIFIED 行は自動 ceiling（DIRECTIONAL/DIAGNOSTIC_ONLY）
-- cost caps / stop rules: 3 値（compute 時間・storage bytes・課金額）loader、超過判定 API
+- cost caps / stop rules: `c0_validate.COST_CAPS_REQUIRED_KEYS` と一致する 3 キー
+  `compute`（秒）/ `storage`（bytes）/ `budget`（通貨単位）の loader、超過判定 API
+  （PR #343 第 2 巡採用）
 
 ### 6.4 D2 — campaign runner（`campaign/` サブパッケージ）
 
@@ -293,8 +315,11 @@ README のみ。B/C は README の自セクションのみ追記）。
   lexicographic・SELECTION_FROZEN event）→ `unseal`（§7 の 5 sha 相互参照検査）→
   `c4-holdout`（選択 1 候補 + B0 × holdout・**holdout 行の render**・gate・terminal
   status cascade）→ `close`（CAMPAIGN_CLOSED・debt_discharged 導出・M6）
-- 手続 Gate の単調性を ledger event で強制。各段は ledger 駆動で**再開可能**（記帳済み
-  work unit をスキップ）
+- 手続 Gate の単調性を ledger event で強制。各段は ledger 駆動で**再開可能**だが、
+  work unit をスキップしてよいのは**ledger に記帳された artifact の sha256 が
+  render/measurement ファイルの現在バイト列と一致する場合のみ**。ファイル欠損また
+  は sha 不一致は stale 扱いで fail-closed（無言スキップ・無言再 render のいずれも
+  禁止）（PR #343 第 2 巡採用）
 - meter 反復: within-process 3 call + fresh-process 3（subprocess worker）。並列 worker は
   per-worker JSONL → 直列 append 集約（provenance 契約）
 - cost cap / stop rule 超過 → stop event 記帳 + fail-closed 終了
