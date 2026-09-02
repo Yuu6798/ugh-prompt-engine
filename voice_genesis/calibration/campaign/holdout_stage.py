@@ -17,10 +17,18 @@
 `HOLDOUT_EXECUTED_VALID` は **全 meter の終端 status + 理由コードをまとめた
 単一 ledger event**（`per_meter` mapping）として記帳する（設計正本 §1: 手続
 Gate は meter status とは別軸の 1 つの手続完了イベント）。
+
+**meter 被覆検証**（finding #10, 第 10 巡採用）: `run_holdout_stage` は記帳
+前に、渡された `results` が `vocab.MeterId` の全 7 値をちょうど 1 回ずつ
+含むことを検証する（`per_meter` は `meter_id` キーの dict comprehension で
+組み立てるため、検証なしでは重複が黙って上書きされ欠落を検出できない）。
+欠落・重複・未知の meter_id はいずれも `HoldoutCoverageError` で
+fail-closed する。
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -28,6 +36,7 @@ from voice_genesis.calibration.campaign import measure_stage, workunits
 from voice_genesis.calibration.campaign.render_stage import run_render_stage
 from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.candidates.registry import Candidate, candidate_by_id
+from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
 from voice_genesis.calibration.e_use_table import load_e_use_table
 from voice_genesis.calibration.fixtures.matrix import MatrixRow
 from voice_genesis.calibration.gates import (
@@ -43,7 +52,7 @@ from voice_genesis.calibration.gates import (
 from voice_genesis.calibration.observables import error_terms, two_stage_median
 from voice_genesis.calibration.provenance import LedgerEntry
 from voice_genesis.calibration.status import terminal_status
-from voice_genesis.calibration.vocab import ClaimCeiling, Domain, MissingReason, TerminalStatus
+from voice_genesis.calibration.vocab import ClaimCeiling, Domain, MeterId, MissingReason, TerminalStatus
 
 # ---------------------------------------------------------------------------
 # frozen fixture_spec からの invariance 軸宣言 [UNDERSPEC-CAL-D18]
@@ -385,12 +394,19 @@ def render_and_measure_holdout(
     *,
     candidates_by_family: Mapping[str, Sequence[Candidate]],
     max_workers: int = 1,
+    f0_by_instance: Mapping[tuple[str, int], float] | None = None,
+    cap_counters: CapCounters | None = None,
+    cost_caps: CostCaps | None = None,
 ) -> dict[str, list[measure_stage.MeasurementRecord]]:
     """C4: holdout 非 control 行を render（determinism 検査つき。§7 leakage
     検査は `render_stage.run_render_stage` が行う）→ family ごとに指定
     candidate（選択済み候補 + B0）で測定する。戻り値は
-    `{family: [MeasurementRecord, ...]}`。"""
-    run_render_stage(campaign, matrix_rows, stage="c4")
+    `{family: [MeasurementRecord, ...]}`。`f0_by_instance`（finding #2）は
+    素通しで `measure_stage.run_measure_stage` へ渡す — 呼び出し元
+    (`cli._run_c4`) が C3b と同じ規約（選択済み F0 candidate の instance 単位
+    実測、fixture truth は使わない）で構築する。`cap_counters`/`cost_caps`
+    （finding #1）は render/measure 双方へ素通しする。"""
+    run_render_stage(campaign, matrix_rows, stage="c4", cap_counters=cap_counters, cost_caps=cost_caps)
 
     assignment = campaign.realized_split.assignment
     sr_by_row = {mr.row_id: mr.row.sr_hz for mr in matrix_rows}
@@ -398,7 +414,14 @@ def render_and_measure_holdout(
     for family, candidates in sorted(candidates_by_family.items()):
         instances = workunits.c4_holdout_instances(matrix_rows, assignment, family=family)
         results[family] = measure_stage.run_measure_stage(
-            campaign, instances, candidates, sr_by_row=sr_by_row, max_workers=max_workers
+            campaign,
+            instances,
+            candidates,
+            sr_by_row=sr_by_row,
+            f0_by_instance=f0_by_instance,
+            max_workers=max_workers,
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
         )
     return results
 
@@ -412,12 +435,40 @@ def resolve_candidates(candidate_ids: Sequence[str]) -> tuple[Candidate, ...]:
 # ---------------------------------------------------------------------------
 
 
+class HoldoutCoverageError(RuntimeError):
+    """finding #10: `run_holdout_stage` に渡された `results` が
+    `vocab.MeterId` の全 7 値をちょうど 1 回ずつ含まない場合の fail-closed
+    error（欠落・重複・未知の meter_id のいずれか）。"""
+
+
+def _validate_meter_coverage(results: Sequence[MeterHoldoutResult]) -> None:
+    seen = [r.meter_id for r in results]
+    counts = Counter(seen)
+    duplicates = sorted(m for m, n in counts.items() if n > 1)
+    expected = {m.value for m in MeterId}
+    missing = sorted(expected - set(seen))
+    unexpected = sorted(set(seen) - expected)
+    if duplicates or missing or unexpected:
+        raise HoldoutCoverageError(
+            "run_holdout_stage: results must cover exactly the "
+            f"{len(expected)} vocab.MeterId values with no duplicates "
+            f"(duplicates={duplicates!r}, missing={missing!r}, unexpected={unexpected!r})"
+        )
+
+
 def run_holdout_stage(
     campaign: FrozenCampaign, results: Sequence[MeterHoldoutResult]
 ) -> LedgerEntry:
     """全 meter の評価結果を単一 `holdout_executed_valid` event として記帳
     する（設計正本 §1: 手続 Gate は meter status とは別軸だが、本 event 自体
-    は全 meter の終端 status + reason code を payload に持つ）。"""
+    は全 meter の終端 status + reason code を payload に持つ）。
+
+    finding #10: 記帳前に `_validate_meter_coverage` で `results` の被覆を
+    検証する（`per_meter` は `meter_id` キーの dict comprehension のため、
+    検証なしでは重複が黙って上書きされ欠落を検出できない — fail-closed で
+    `HoldoutCoverageError` を送出する）。
+    """
+    _validate_meter_coverage(results)
     per_meter = {
         r.meter_id: {
             "terminal_status": r.terminal_status,
@@ -446,5 +497,6 @@ __all__ = [
     "selection_failed_closed_meter",
     "render_and_measure_holdout",
     "resolve_candidates",
+    "HoldoutCoverageError",
     "run_holdout_stage",
 ]

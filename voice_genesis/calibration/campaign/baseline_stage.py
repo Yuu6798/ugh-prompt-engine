@@ -24,6 +24,7 @@ from voice_genesis.calibration.campaign import measure_stage, workunits
 from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.candidates.registry import ALL_CANDIDATES, Candidate
 from voice_genesis.calibration.canonical import manifest_sha
+from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
 from voice_genesis.calibration.fixtures.matrix import MatrixRow
 from voice_genesis.calibration.tolerance import derive_floor, pooled_dispersion
 from voice_genesis.calibration.tolerance import tolerance as tolerance_of
@@ -57,17 +58,28 @@ def run_baseline_stage(
     k: float = DEFAULT_TOLERANCE_K,
     meter_declared_resolution: float | None = None,
     max_workers: int = 1,
+    cap_counters: CapCounters | None = None,
+    cost_caps: CostCaps | None = None,
 ) -> dict[str, object]:
     """C2: B0 candidates × CALIBRATION split の実測 → pooled tolerance 導出
     → `baseline_audit` + `baseline_audited` ledger event。戻り値は
-    `{"baseline_audit_sha": str, "tolerances": {candidate_id: {...}}}`。"""
+    `{"baseline_audit_sha": str, "tolerances": {candidate_id: {...}}}`。
+    `cap_counters`/`cost_caps`（finding #1）は素通しで
+    `measure_stage.run_measure_stage` へ渡す — cap 超過は
+    `measure_stage.CostCapExceededError` として fail-closed に伝播する。"""
     assignment = campaign.realized_split.assignment
     instances = workunits.c2_baseline_instances(matrix_rows, assignment)
     sr_by_row = {mr.row_id: mr.row.sr_hz for mr in matrix_rows}
     candidates = b0_candidates()
 
     records = measure_stage.run_measure_stage(
-        campaign, instances, candidates, sr_by_row=sr_by_row, max_workers=max_workers
+        campaign,
+        instances,
+        candidates,
+        sr_by_row=sr_by_row,
+        max_workers=max_workers,
+        cap_counters=cap_counters,
+        cost_caps=cost_caps,
     )
 
     values_by_cell: dict[tuple[str, str], list[float]] = {}

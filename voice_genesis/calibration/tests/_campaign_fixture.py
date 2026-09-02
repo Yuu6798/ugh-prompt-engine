@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from voice_genesis.calibration.canonical import canonical_json
@@ -27,6 +28,59 @@ STRATUM_FACTOR_NAMES: tuple[str, ...] = ("truth_level", "boundary_class")
 SPLIT_SECRET = b"S" * 32
 RENDER_ROOT_SECRET = b"R" * 32
 CAMPAIGN_ID = "RUN10-CAL-TESTFIXTURE"
+
+#: Gate 1 承認ファイルの `authorization_nonce` 既定値。`build_tiny_campaign()`
+#: と `write_gate1_approval()` の両方の既定値として使う（finding #5: 両者が
+#: デフォルトのまま呼ばれれば自動的に束縛が一致するように）。
+DEFAULT_NONCE = "test-nonce-campaign-000000"
+
+#: Gate 1 承認ファイルの `cost_caps` 既定値（`write_gate1_approval()` の既定と
+#: 同値。`build_tiny_campaign()` は同じ値を `frozen_design.cost_caps`
+#: （finding #1）へも埋め込む — 両者は実運用で常に同一値のため）。
+DEFAULT_GATE1_COST_CAPS: Mapping[str, object] = {
+    "compute": 36000.0,
+    "storage": 1_000_000_000,
+    "budget": 1.0,
+}
+
+
+def _all_constructs() -> tuple[str, ...]:
+    """全候補の `construct` 全種（`ALL_CANDIDATES` の遅延 import — 循環 import
+    回避のため関数内 import）。`build_tiny_campaign()` の
+    `max_claim_scope`（finding #11）既定値: 「全 construct が scope 内」
+    という最も緩い既定にし、scope 制限そのものを検証したいテストだけが
+    明示的に狭い `max_claim_scope` を渡す。"""
+    from voice_genesis.calibration.candidates.registry import ALL_CANDIDATES
+
+    return tuple(sorted({c.construct for c in ALL_CANDIDATES}))
+
+#: `build_tiny_campaign()` が manifest `candidates` 節（finding #7:
+#: `cli._canonical_path_violations` が照合する 4 カテゴリ）へ埋め込む、
+#: 実在する小さな代表 path 集合（カテゴリごとに 1 件ずつ）。`c0_freeze.
+#: _path_hash_maps()` の全量走査は行わず、`cli._canonical_path_violations`
+#: が 4 カテゴリすべてを実際に検査することだけをこの小集合で確認できれば
+#: 十分なため、実ファイルの sha256 を毎回 `_canonical_candidates_section()`
+#: 呼び出し時点で計算する（固定値をハードコードしない — 対象ファイルが後で
+#: 編集されても自動的に追随し陳腐化しない）。
+_CANONICAL_PATH_SAMPLES: Mapping[str, str] = {
+    "meter_paths_sha256": "voice_genesis/calibration/candidates/registry.py",
+    "generator_paths_sha256": "voice_genesis/calibration/fixtures/generators/f0_control.py",
+    "schema_paths_sha256": "voice_genesis/calibration/vocab.py",
+    "test_paths_sha256": "voice_genesis/calibration/tests/_campaign_fixture.py",
+}
+
+
+def _canonical_candidates_section(repo_root: Path | None = None) -> dict[str, dict[str, str]]:
+    """`c0_freeze._path_hash_maps()` と同じ 4 キー形状
+    (`{category: {rel_path: sha256}}`) を、`_CANONICAL_PATH_SAMPLES` の
+    実ファイルから独立に計算して返す（finding #7 のテスト用最小 fixture。
+    `c0_freeze.py` には依存しない — 他 agent 並行編集の対象外にする既存方針
+    と同じ）。"""
+    root = repo_root if repo_root is not None else _REPO_ROOT
+    return {
+        category: {rel_path: hashlib.sha256((root / rel_path).read_bytes()).hexdigest()}
+        for category, rel_path in _CANONICAL_PATH_SAMPLES.items()
+    }
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 DESIGN_DOC_PATH = _REPO_ROOT / "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.0.md"
@@ -72,8 +126,26 @@ def build_tiny_campaign(
     split_secret: bytes = SPLIT_SECRET,
     render_root_secret: bytes = RENDER_ROOT_SECRET,
     write_secrets: bool = True,
+    gate1_nonce: str = DEFAULT_NONCE,
+    gate1_cost_caps: Mapping[str, object] | None = None,
+    canonical_candidates_section: Mapping[str, Mapping[str, str]] | None = None,
+    max_claim_scope: Sequence[str] | None = None,
 ) -> tuple[Path, Path]:
-    """`(campaign_dir, secret_dir_root)` を組み立てて返す。"""
+    """`(campaign_dir, secret_dir_root)` を組み立てて返す。
+
+    `gate1_nonce`/`gate1_cost_caps`（既定は `write_gate1_approval()` の既定と
+    一致するよう選んである）は manifest の `authorization_nonce`/
+    `approvals.gate1_sha256`（finding #5: Gate 1 承認の凍結 manifest への
+    束縛）と `frozen_design.cost_caps`（finding #1: frozen cost caps の
+    enforcement）へ埋め込まれる。デフォルトのまま呼べば、同じくデフォルトの
+    `write_gate1_approval(approval_dir)` が書く承認ファイルと自動的に
+    束縛が一致する。`canonical_candidates_section`（既定は
+    `_canonical_candidates_section()`）は manifest `candidates` 節
+    （finding #7: canonical path 照合）— 改竄検知テストは実ファイルを一切
+    変更せず、この引数へ細工した mapping を渡して検証する。`max_claim_scope`
+    （既定は `_all_constructs()` — 全 construct が scope 内、finding #11:
+    scope 制限そのものを検証したいテストだけ明示的に狭い値を渡す）は
+    manifest `frozen_design.max_claim_scope` へ埋め込まれる。"""
     subset = subset if subset is not None else small_matrix_subset()
     row_inputs = [
         RowInput(
@@ -91,9 +163,13 @@ def build_tiny_campaign(
     manifest: dict[str, object] = {
         "campaign_meta": {"campaign_date_utc": "2026-09-02"},
         "campaign_id": campaign_id,
+        "authorization_nonce": gate1_nonce,
         "commitments": {
             "split_secret_sha256": hashlib.sha256(split_secret).hexdigest(),
             "render_root_secret_sha256": hashlib.sha256(render_root_secret).hexdigest(),
+        },
+        "approvals": {
+            "gate1_sha256": gate1_content_sha256(nonce=gate1_nonce, cost_caps=gate1_cost_caps),
         },
         "realized_split": {
             "stratum_factor_names": list(realized.stratum_factor_names),
@@ -112,7 +188,23 @@ def build_tiny_campaign(
             "realized_sha": realized.realized_sha,
         },
         "realized_split_sha": realized.realized_sha,
-        "frozen_design": {"fixture_spec": {}},
+        "frozen_design": {
+            "fixture_spec": {},
+            "cost_caps": dict(gate1_cost_caps)
+            if gate1_cost_caps is not None
+            else dict(DEFAULT_GATE1_COST_CAPS),
+            "max_claim_scope": list(max_claim_scope)
+            if max_claim_scope is not None
+            else list(_all_constructs()),
+        },
+        "candidates": {
+            category: dict(paths)
+            for category, paths in (
+                canonical_candidates_section
+                if canonical_candidates_section is not None
+                else _canonical_candidates_section()
+            ).items()
+        },
     }
 
     campaigns_dir = tmp_path / "campaigns"
@@ -125,6 +217,7 @@ def build_tiny_campaign(
             "kind": "c0_freeze",
             "campaign_id": campaign_id,
             "manifest_sha": _manifest_sha(manifest),
+            "realized_split_sha": realized.realized_sha,
         }
     )
     if write_secrets:
@@ -140,21 +233,43 @@ def build_tiny_campaign(
 # Gate approval file fabrication (tmp_path only)
 # ---------------------------------------------------------------------------
 
-DEFAULT_NONCE = "test-nonce-campaign-000000"
 
-
-def write_gate1_approval(approval_dir: Path, *, nonce: str = DEFAULT_NONCE) -> None:
-    payload = {
+def _gate1_payload(
+    *, nonce: str = DEFAULT_NONCE, cost_caps: Mapping[str, object] | None = None
+) -> dict[str, object]:
+    return {
         "gate": "GATE1_CAMPAIGN_EXECUTION",
         "approver": "tester",
         "approved_at_utc": "2026-09-02T00:00:00Z",
         "design_doc_sha256": design_doc_sha256(),
         "memo_sha256": memo_sha256(),
         "authorization_nonce": nonce,
-        "cost_caps": {"compute": 36000.0, "storage": 1_000_000_000, "budget": 1.0},
+        "cost_caps": dict(cost_caps) if cost_caps is not None else dict(DEFAULT_GATE1_COST_CAPS),
         "e_use_bound_accepted": True,
         "max_claim_scope": ["formant_frequency"],
     }
+
+
+def gate1_content_sha256(
+    *, nonce: str = DEFAULT_NONCE, cost_caps: Mapping[str, object] | None = None
+) -> str:
+    """`write_gate1_approval()` が実際にディスクへ書き出すのと **同一
+    payload・同一 serialization**（`json.dumps(payload)`, kwargs 無し）から
+    content sha256 を計算する。`build_tiny_campaign()` が manifest 内
+    `approvals.gate1_sha256`（finding #5）を埋め込む際に、実際の承認
+    ファイルの bytes と食い違わせないために使う — 呼び出し側 2 つが別々に
+    文字列を組み立てて事故ることを防ぐ、単一の正本。"""
+    payload = _gate1_payload(nonce=nonce, cost_caps=cost_caps)
+    return hashlib.sha256(json.dumps(payload).encode("utf-8")).hexdigest()
+
+
+def write_gate1_approval(
+    approval_dir: Path,
+    *,
+    nonce: str = DEFAULT_NONCE,
+    cost_caps: Mapping[str, object] | None = None,
+) -> None:
+    payload = _gate1_payload(nonce=nonce, cost_caps=cost_caps)
     approval_dir.mkdir(parents=True, exist_ok=True)
     (approval_dir / "gate1_campaign_execution.json").write_text(
         json.dumps(payload), encoding="utf-8"

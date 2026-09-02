@@ -584,6 +584,48 @@ def _verified_split_freeze_commitment(
     return frozen
 
 
+def _parse_ledger_lines(
+    raw_lines: Sequence[str],
+) -> tuple[list[LedgerEntry], list[MalformedLedgerLine]]:
+    """`raw_lines`（`_split_complete_lines` が返す、改行区切りの完全な行の列）
+    から `LedgerEntry`/`MalformedLedgerLine` を構築する純関数（I/O なし）。
+    `Ledger._read_all()`（キャッシュ構築時の唯一の読取）と
+    `Ledger.load_with_verification()`（campaign/state.py finding #12:
+    1 回の読取から entries 構築 + chain 検証の両方を行う）が共有する。
+    挙動は元々 `Ledger._read_all()` 内にあったループそのものであり、抽出に
+    伴う変更は無い。"""
+    entries: list[LedgerEntry] = []
+    malformed: list[MalformedLedgerLine] = []
+    for i, line in enumerate(raw_lines):
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(raw, Mapping) or not _ENTRY_REQUIRED_KEYS.issubset(raw.keys()):
+            missing = (
+                sorted(_ENTRY_REQUIRED_KEYS - set(raw.keys()))
+                if isinstance(raw, Mapping)
+                else sorted(_ENTRY_REQUIRED_KEYS)
+            )
+            malformed.append(
+                MalformedLedgerLine(
+                    line_index=i,
+                    raw=line,
+                    reason=f"missing required field(s) {missing}",
+                )
+            )
+            continue
+        entries.append(
+            LedgerEntry(
+                seq=raw["seq"],
+                prev_sha=raw["prev_sha"],
+                entry_sha=raw["entry_sha"],
+                payload=raw["payload"],
+            )
+        )
+    return entries, malformed
+
+
 class Ledger:
     """append-only JSONL 台帳。
 
@@ -638,37 +680,32 @@ class Ledger:
         """
         content = self.path.read_text(encoding="utf-8")
         raw_lines, _truncated_tail, _missing_final_newline = _split_complete_lines(content)
+        return _parse_ledger_lines(raw_lines)
 
-        entries: list[LedgerEntry] = []
-        malformed: list[MalformedLedgerLine] = []
-        for i, line in enumerate(raw_lines):
-            try:
-                raw = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(raw, Mapping) or not _ENTRY_REQUIRED_KEYS.issubset(raw.keys()):
-                missing = (
-                    sorted(_ENTRY_REQUIRED_KEYS - set(raw.keys()))
-                    if isinstance(raw, Mapping)
-                    else sorted(_ENTRY_REQUIRED_KEYS)
-                )
-                malformed.append(
-                    MalformedLedgerLine(
-                        line_index=i,
-                        raw=line,
-                        reason=f"missing required field(s) {missing}",
-                    )
-                )
-                continue
-            entries.append(
-                LedgerEntry(
-                    seq=raw["seq"],
-                    prev_sha=raw["prev_sha"],
-                    entry_sha=raw["entry_sha"],
-                    payload=raw["payload"],
-                )
-            )
-        return entries, malformed
+    @classmethod
+    def load_with_verification(cls, path: Path) -> tuple["Ledger", ChainVerification]:
+        """`path` を **1 回だけ** 読み、同一バッファから entries 構築
+        （`_read_all()` 相当）と chain 検証（`verify_chain()` 相当）の両方を
+        行う（finding #12: `campaign/state.py::load_frozen_campaign` は従来
+        `Ledger(path)`（1 回読取） → `ledger.verify_chain()`（もう 1 回読取）
+        の 2 回読みだった）。`Ledger(path)`/`verify_chain()` 単体の挙動・
+        シグネチャは変更しない — 本メソッドは追加の入口であり、
+        `_split_complete_lines`/`_parse_ledger_lines`/`_verify_chain_prefix`
+        という既存の純関数を同一バッファへ 2 度（構築用・検証用）適用する
+        だけの薄い合成。"""
+        if path.exists():
+            content = path.read_text(encoding="utf-8")
+        else:
+            content = ""
+        raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(content)
+        entries, malformed = _parse_ledger_lines(raw_lines)
+        chain = _verify_chain_prefix(raw_lines, truncated_tail, missing_final_newline)
+
+        instance = cls.__new__(cls)
+        instance.path = path
+        instance._entries = entries
+        instance._malformed = malformed
+        return instance, chain
 
     @property
     def entries(self) -> tuple[LedgerEntry, ...]:

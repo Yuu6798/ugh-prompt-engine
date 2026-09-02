@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from voice_genesis.calibration.campaign import holdout_stage
+from voice_genesis.calibration.campaign import holdout_stage, selection_stage
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.gates import DirectionalPair, EUseEvidenceRow, InvariancePair
 from voice_genesis.calibration.vocab import ClaimCeiling, Domain, EvidenceClass, MeterId, TerminalStatus
@@ -205,3 +205,50 @@ def test_split_e_use_rows_by_mode() -> None:
     absolute_rows, relative_rows = holdout_stage.split_e_use_rows_by_mode(rows)
     assert {r.construct_id for r in absolute_rows} == {"a", "c"}
     assert {r.construct_id for r in relative_rows} == {"b", "d"}
+
+
+def test_out_of_scope_construct_cannot_reach_calibrated_absolute_in_holdout() -> None:
+    """finding #11 regression, requirement (b): the *same* clean synthetic
+    data that reaches CALIBRATED_ABSOLUTE with an uncapped ABSOLUTE ceiling
+    can never reach it once `selection_stage.capped_ceiling()` has downgraded
+    the ceiling to DIRECTIONAL (construct out of `max_claim_scope`) —
+    demonstrating the capped ceiling actually constrains holdout terminal
+    status derivation, not just selection-time pool membership."""
+    observations = _absolute_pass_observations()
+    margins = holdout_stage.build_instance_margins(observations)
+    instance_ids = [m.instance_id for m in margins]
+    pairs = [
+        InvariancePair(pair_id=f"p{i}", axis="axis-a", ds=0.0, e_use_i0=1.0, e_use_ia=1.0)
+        for i in range(5)
+    ]
+
+    def _evaluate(ceiling: ClaimCeiling) -> holdout_stage.MeterHoldoutResult:
+        return holdout_stage.evaluate_absolute_meter(
+            MeterId.M3_FORMANTS.value,
+            ceiling,
+            selected_candidate_id="FAKE-ABS-CAND",
+            per_instance_margins=margins,
+            u_rep=0.01,
+            u_proc=0.005,
+            invariance_pairs_by_axis={"axis-a": pairs},
+            declared_invariance_axes=("axis-a",),
+            expected_primary_instance_ids=instance_ids,
+            fdr0=0.0,
+            fnr1=0.0,
+            min_count_met=True,
+        )
+
+    # baseline: uncapped ABSOLUTE ceiling reaches CALIBRATED_ABSOLUTE.
+    uncapped = _evaluate(ClaimCeiling.ABSOLUTE)
+    assert uncapped.terminal_status == TerminalStatus.CALIBRATED_ABSOLUTE.value
+
+    # the construct behind this meter is not in max_claim_scope -> capped.
+    capped_ceiling, was_capped = selection_stage.capped_ceiling(
+        "formant_frequency", ClaimCeiling.ABSOLUTE, frozenset({"some_other_construct"})
+    )
+    assert capped_ceiling == ClaimCeiling.DIRECTIONAL
+    assert was_capped is True
+
+    capped_result = _evaluate(capped_ceiling)
+    assert capped_result.terminal_status != TerminalStatus.CALIBRATED_ABSOLUTE.value
+    assert capped_result.gate_detail["passed"] is True  # the gate itself still passes

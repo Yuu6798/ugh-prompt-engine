@@ -23,17 +23,25 @@ import hashlib
 import json
 import subprocess
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from voice_genesis.calibration.campaign import workunits
+from voice_genesis.calibration.campaign.caps import CostCapExceededError, save_cap_counters
 from voice_genesis.calibration.campaign.state import FrozenCampaign
+from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
+from voice_genesis.calibration.cost_caps import check as cost_caps_check
 from voice_genesis.calibration.fixtures.controls import control_row_ids
 from voice_genesis.calibration.fixtures.matrix import FixtureRow, MatrixRow
 from voice_genesis.calibration.provenance import Ledger, LedgerEntry
 from voice_genesis.calibration.splitter import RowInput
 from voice_genesis.calibration.vocab import BlockedCode, Split
+
+#: `campaign.caps.CostCapExceededError` を本モジュール名前空間へ再公開する
+#: （finding #1: render_stage/measure_stage で単一の cap 超過 error 型を
+#: 共有する）。
 
 #: `c0_freeze.STRATUM_FACTOR_NAMES` と同一の stratum 化因子（`c0_freeze.py` は
 #: 他 agent が並行編集中のため import せず、値のみをここに複製する — この値
@@ -142,9 +150,18 @@ def render_instance(
     row_id: str,
     probe_index: int,
     timeout_s: float = 60.0,
+    cap_counters: CapCounters | None = None,
+    cost_caps: CostCaps | None = None,
 ) -> RenderOutcome:
     """1 instance を resume 判定 → (必要なら) 2 回 fresh-process render →
-    byte 比較 → 書込の順で処理する。"""
+    byte 比較 → 書込の順で処理する。
+
+    `cap_counters`/`cost_caps`（finding #1）: 実際に render した（resume で
+    skip しなかった）unit のみ compute（2 回の subprocess render の実測
+    経過時間）/storage（書き込んだ PCM bytes 数）を計上する。cap 超過を
+    検出したら `stop_event` ledger event を記帳し `CostCapExceededError` で
+    fail-closed する — 呼び出し元 `run_render_stage` の次 unit には進まない。
+    """
     pcm_path = _pcm_path(campaign, row_id, probe_index)
     recorded_sha = _recorded_render_sha(campaign.ledger.entries, row_id, probe_index)
     if recorded_sha is not None:
@@ -169,6 +186,7 @@ def render_instance(
         "probe_index": probe_index,
     }
     payload_json = json.dumps(payload)
+    t0 = time.perf_counter()
     outputs: list[str] = []
     for _ in range(2):
         proc = subprocess.run(
@@ -184,6 +202,7 @@ def render_instance(
             check=True,
         )
         outputs.append(proc.stdout.strip())
+    elapsed = time.perf_counter() - t0
     a, b = outputs
     if a != b:
         raise RenderNondeterministicError(row_id, probe_index)
@@ -193,6 +212,18 @@ def render_instance(
     pcm_path.write_bytes(pcm_bytes)
     sha = hashlib.sha256(pcm_bytes).hexdigest()
     pcm_path.with_suffix(".sha256").write_text(sha, encoding="utf-8")
+
+    if cap_counters is not None:
+        cap_counters.add(compute=elapsed, storage=len(pcm_bytes))
+        # Persist immediately (finding #1: counters must survive across
+        # subcommands) — before the breach check below.
+        save_cap_counters(campaign.campaign_dir, cap_counters)
+        if cost_caps is not None:
+            decision = cost_caps_check(cap_counters, cost_caps)
+            if decision is not None:
+                campaign.ledger.append(decision.event_payload)
+                raise CostCapExceededError(decision.detail)
+
     return RenderOutcome(row_id=row_id, probe_index=probe_index, status="rendered", sha256=sha)
 
 
@@ -223,13 +254,20 @@ def _refuse_if_pre_unseal_holdout(
 
 
 def run_render_stage(
-    campaign: FrozenCampaign, matrix_rows: Sequence[MatrixRow], *, stage: str
+    campaign: FrozenCampaign,
+    matrix_rows: Sequence[MatrixRow],
+    *,
+    stage: str,
+    cap_counters: CapCounters | None = None,
+    cost_caps: CostCaps | None = None,
 ) -> tuple[RenderOutcome, ...]:
     """`stage='c1'` または `stage='c4'`。C4 は render を試みる前に leakage
     検査を行う。determinism 違反時は既に render 済みの outcome を保ったまま
     `BLOCKED_C1_GENERATOR_NONDETERMINISTIC` stop event を ledger へ記帳し、
     `RenderNondeterministicError` を再送出する（fail-closed。以降の instance
-    は render しない）。"""
+    は render しない）。`cap_counters`/`cost_caps`（finding #1）は
+    `render_instance` へ素通しし、cap 超過時は同様に以降の instance へ進まず
+    `CostCapExceededError` を伝播する。"""
     assignment = campaign.realized_split.assignment
     if stage == "c1":
         units = workunits.enumerate_c1_render_units(matrix_rows, assignment)
@@ -251,6 +289,8 @@ def run_render_stage(
                 split=unit.split,
                 row_id=unit.row_id,
                 probe_index=unit.probe_index,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
             )
         except RenderNondeterministicError as exc:
             campaign.ledger.append(

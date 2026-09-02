@@ -7,7 +7,11 @@
 を読み込み、以下を検証する（いずれか 1 つでも失敗すれば fail-closed で
 `CampaignStateError` を送出する。書込は一切行わない）:
 
-- `ledger.jsonl` の chain 検証（`provenance.Ledger.verify_chain`）
+- `ledger.jsonl` の chain 検証（`provenance.Ledger.load_with_verification`。
+  finding #12, 第 12 巡採用: `ledger.jsonl` を 1 回だけ読み、同一バッファから
+  entries 構築と chain 検証の両方を行う — 旧実装は `Ledger(path)`（構築時の
+  読取）→ `ledger.verify_chain()`（検証用の再読取）で同一ファイルを 2 回
+  読んでいた）
 - ledger の先頭行が `kind="c0_freeze"` かつ manifest の `campaign_id` と一致
 - **orphan 検出**（`c0_freeze.detect_orphans()` と同じ fail-closed 意味論を
   読み込み時点で単体適用する — campaign dir はあるが対応する secret dir が
@@ -15,7 +19,20 @@
   — それは `c0_freeze.detect_orphans()` 自身の責務であり、他 agent が編集中の
   `c0_freeze.py` には一切触れない）
 - secret file 2 件の実バイト列が manifest `commitments` の sha256 と一致
-- `realized_split` インライン表の `realized_sha` が manifest 記載値と一致
+- manifest 全体（`c0_manifest.json` の JSON object そのもの）の canonical sha
+  （`canonical.manifest_sha`。`c0_freeze.armed_freeze()` が freeze event の
+  `manifest_sha` として記帳するのと同じ関数）を再計算し、ledger 先頭の
+  `c0_freeze` event に刻まれた `manifest_sha` と一致することを検証する
+  （finding #3: manifest bytes が freeze event の pin と一致しない改竄を
+  検出する）
+- `realized_split` インライン表の `assignment`/`swaps` から
+  `splitter.realize_split()` と同一の payload 形状で `realized_sha` を
+  再計算し、(1) manifest 記載の `realized_split.realized_sha` 自身、
+  (2) manifest 直下の `realized_split_sha`、(3) freeze event の
+  `realized_split_sha` の 3 箇所すべてと一致することを検証する（旧実装は
+  manifest 内の 2 つの格納値同士を比較するだけで、両方を同時に改竄されれば
+  検出できなかった — 実際の `assignment` 内容から独立に再計算することで
+  改竄を検出する）
 
 `[UNDERSPEC-CAL-D19]` 設計正本 / IMPLEMENTATION_MAP は D2 の手続 Gate 状態を
 `vocab.ProcedureGate`（5 値: PREPARATION_VALID/FIXTURE_VALID/BASELINE_AUDITED/
@@ -49,6 +66,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from voice_genesis.calibration.canonical import manifest_sha as _canonical_manifest_sha
 from voice_genesis.calibration.provenance import Ledger, LedgerEntry
 from voice_genesis.calibration.splitter import RealizedSplitMap, SwapRecord
 from voice_genesis.calibration.vocab import ProcedureGate, Split, procedure_gates_monotonic
@@ -172,6 +190,38 @@ def _realized_split_from_manifest(d: Mapping[str, Any]) -> RealizedSplitMap:
         raise CampaignStateError(f"malformed realized_split payload: {exc}") from exc
 
 
+def _swap_to_dict(s: SwapRecord) -> dict[str, Any]:
+    """`splitter._swap_to_dict` と同一 shape の独立ミラー（`realized_sha`
+    再計算専用。`splitter.py` は他 agent が並行編集中のファイルには該当
+    しないが、private 関数を跨いで import するより shape だけをミラーする
+    方が本モジュールの「独立実装」方針（モジュール docstring 参照）と揃う）。
+    """
+    return {
+        "row_id": s.row_id,
+        "from_split": s.from_split.value,
+        "to_split": s.to_split.value,
+        "reason": s.reason,
+        "hmac_key": s.hmac_key,
+        "detail": s.detail,
+    }
+
+
+def _recompute_realized_sha(realized: RealizedSplitMap) -> str:
+    """`splitter.realize_split()` が `realized_sha` を計算するのと同一の
+    payload 形状（`stratum_factor_names`/`assignment`/`swaps`）・同一の
+    `canonical.manifest_sha` で、読み込んだ `assignment`/`swaps` そのものから
+    独立に再計算する（finding #3: 格納済み `realized_sha` 同士を比較する
+    だけでは `assignment` の改竄を検出できない）。"""
+    payload = {
+        "stratum_factor_names": list(realized.stratum_factor_names),
+        "assignment": {
+            rid: split.value for rid, split in sorted(realized.assignment.items())
+        },
+        "swaps": [_swap_to_dict(s) for s in realized.swaps],
+    }
+    return _canonical_manifest_sha(payload)
+
+
 # ---------------------------------------------------------------------------
 # FrozenCampaign
 # ---------------------------------------------------------------------------
@@ -236,8 +286,11 @@ def load_frozen_campaign(campaign_dir: Path, secret_dir_root: Path) -> FrozenCam
     if not isinstance(campaign_id, str) or not campaign_id:
         raise CampaignStateError("manifest is missing a non-blank campaign_id")
 
-    ledger = Ledger(campaign_dir / "ledger.jsonl")
-    chain = ledger.verify_chain()
+    # finding #12: read ledger.jsonl exactly once — `Ledger.load_with_verification`
+    # builds entries and runs chain verification from the same buffer,
+    # instead of `Ledger(path)` (1 read) followed by `ledger.verify_chain()`
+    # (a second, independent read of the same file).
+    ledger, chain = Ledger.load_with_verification(campaign_dir / "ledger.jsonl")
     if not chain.ok:
         raise CampaignStateError(f"ledger chain invalid: {chain.detail}")
     entries = ledger.entries
@@ -249,6 +302,20 @@ def load_frozen_campaign(campaign_dir: Path, secret_dir_root: Path) -> FrozenCam
     if freeze_event.get("campaign_id") != campaign_id:
         raise CampaignStateError(
             "freeze event campaign_id does not match manifest campaign_id"
+        )
+
+    # finding #3: the manifest bytes themselves were never checked against
+    # the freeze event's pin — only `campaign_id` was. Recompute the same
+    # canonical sha `c0_freeze.armed_freeze()` used to produce the freeze
+    # event's `manifest_sha` and require it to match exactly (the manifest
+    # object itself never carries a `manifest_sha` key — see
+    # `c0_freeze._CORE_ONLY_EXCLUDED_KEYS` — so hashing the loaded manifest
+    # as-is reproduces the same bytes that were hashed at freeze time).
+    recomputed_manifest_sha = _canonical_manifest_sha(manifest)
+    if recomputed_manifest_sha != freeze_event.get("manifest_sha"):
+        raise CampaignStateError(
+            "recomputed manifest sha does not match freeze event manifest_sha "
+            "(c0_manifest.json bytes do not match what was frozen)"
         )
 
     # Orphan detection (read-only mirror of `c0_freeze.detect_orphans()` fail-closed
@@ -284,8 +351,24 @@ def load_frozen_campaign(campaign_dir: Path, secret_dir_root: Path) -> FrozenCam
     if not isinstance(realized_split_raw, Mapping):
         raise CampaignStateError("manifest is missing a realized_split section")
     realized_split = _realized_split_from_manifest(realized_split_raw)
+
+    # finding #3: the old check here only compared two *stored* values
+    # (`realized_split.realized_sha` vs. the manifest's top-level
+    # `realized_split_sha`) against each other — an attacker who edits
+    # `assignment` but leaves both stored hashes untouched passes it
+    # trivially. Recompute the hash from the actual `assignment`/`swaps`
+    # content and require it to match the stored value, the manifest's
+    # top-level pin, *and* the freeze event's pin.
+    recomputed_realized_sha = _recompute_realized_sha(realized_split)
+    if recomputed_realized_sha != realized_split.realized_sha:
+        raise CampaignStateError(
+            "realized_split content does not match its own realized_sha "
+            "(recomputed hash mismatch — possible tampering of assignment/swaps)"
+        )
     if realized_split.realized_sha != manifest.get("realized_split_sha"):
         raise CampaignStateError("realized_split_sha does not match manifest")
+    if realized_split.realized_sha != freeze_event.get("realized_split_sha"):
+        raise CampaignStateError("realized_split_sha does not match freeze event")
 
     return FrozenCampaign(
         campaign_id=campaign_id,

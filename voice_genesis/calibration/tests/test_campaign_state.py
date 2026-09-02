@@ -90,3 +90,28 @@ def test_phases_passed_and_current_phase_from_synthetic_ledger_entries() -> None
     }
     assert current_phase(passed) == CampaignPhase.BASELINE_AUDITED
     assert gate_monotonicity_ok(passed)
+
+
+def test_load_frozen_campaign_reads_ledger_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """finding #12 regression: `load_frozen_campaign()` reads `ledger.jsonl`
+    exactly once (`Ledger.load_with_verification` builds entries + runs
+    chain verification from the same buffer), rather than once via
+    `Ledger(path)` and a second time via `ledger.verify_chain()`."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    ledger_path = campaign_dir / "ledger.jsonl"
+
+    read_count = {"n": 0}
+    original_read_text = Path.read_text
+
+    def _counting_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        if self == ledger_path:
+            read_count["n"] += 1
+        return original_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", _counting_read_text)
+
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    assert campaign.ledger.entries  # sanity: the ledger still loaded correctly
+    assert read_count["n"] == 1
