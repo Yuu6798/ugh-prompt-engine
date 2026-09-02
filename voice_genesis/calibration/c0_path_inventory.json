@@ -9,6 +9,7 @@
   "voice_genesis/calibration/campaign/_measure_worker.py",
   "voice_genesis/calibration/campaign/_render_worker.py",
   "voice_genesis/calibration/campaign/baseline_stage.py",
+  "voice_genesis/calibration/campaign/caps.py",
   "voice_genesis/calibration/campaign/cli.py",
   "voice_genesis/calibration/campaign/close.py",
   "voice_genesis/calibration/campaign/holdout_stage.py",
