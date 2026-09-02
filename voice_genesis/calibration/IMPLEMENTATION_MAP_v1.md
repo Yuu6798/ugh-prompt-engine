@@ -221,3 +221,59 @@ docstring に `[UNDERSPEC-CAL-nn]` タグで記録し、`README.md` の UNDERSPE
 
 B・C は A 完了後に並行。ファイル所有は排他（共有ファイルは A が作る `__init__.py` と
 README のみ。B/C は README の自セクションのみ追記）。
+
+## 6. Phase D — 未武装の実行基盤（PR #342 マージ後の次段。2026-09-01 設計）
+
+目的: §18 の 3 承認 Gate が通れば**コード変更なしで**C0 freeze と campaign 実行に入れる
+状態まで基盤を完成させる。本 Phase 自身は freeze も実測も行わない（既定 = dry-run）。
+
+### 6.1 武装プロトコル（三要素。1 つでも欠ければ `AUTHORIZATION_REQUIRED` で拒否）
+
+- CLI フラグ `--armed`
+- 環境変数 `VG_CAL_C0_FREEZE_AUTHORIZED=1`（campaign 実行は `VG_CAL_CAMPAIGN_AUTHORIZED=1`）
+- 承認ファイル `voice_genesis/calibration/approvals/gate2_c0_freeze.json`（Gate 2）/
+  `gate1_campaign_execution.json`（Gate 1: cost caps 3 値 + E_use bound 受容）/
+  `gate3_seal_acceptance.json`（Gate 3）。各 {approver, approved_at_utc, campaign_id,
+  design_doc_sha256, memo_sha256} を持ち、sha は**実ファイルのハッシュと照合**
+- `AUTHORIZATION_REQUIRED` は §3.3 閉語彙（BLOCKED_*）とは別軸の pre-campaign 拒否コード
+
+### 6.2 secret と出力レイアウト
+
+- secret（split_secret / render_root_secret）は `VG_CAL_SECRET_DIR`（既定
+  `~/.vg_cal/secrets/<campaign_id>/`、mode 0600）に生成。**リポジトリには commitment
+  `sha256(secret)` のみ**。`.gitignore` に `voice_genesis/calibration/**/secrets/` と
+  `campaigns/*/renders/` を追加
+- `campaign_id = RUN10-CAL-<YYYYMMDD>-<manifest_sha[:8]>`
+- `voice_genesis/calibration/campaigns/<campaign_id>/`: `c0_manifest.json` /
+  `realized_split.json` / `ledger.jsonl` / `events/*.json` / `renders/`（gitignore）/
+  `measurements/`（gitignore）
+
+### 6.3 D1 — freeze producer + 承認 Gate + ユーザー著述入力（`c0_freeze.py`, `approvals.py`, `e_use_table.py`, `cost_caps.py`）
+
+- producer は manifest を**コードから生成**: git HEAD full SHA・dirty-tree・path inventory
+  実ハッシュ・Python/numpy/scipy/librosa/soundfile exact version・sample format policy・
+  frozen design 各節（registry / matrix / memo §2.6–2.7 定数から導出）・independence
+  ledger（registry 99 件）・RNG 宣言台帳・RECORDED_OR_ABSENT 環境項目（取得不能は
+  `ABSENT:<理由>`）→ `validate_c0_manifest` を通す
+- dry-run: manifest を生成・検証して報告するだけ（書込なし・secret なし）
+- armed: secret 生成 → commitment 記入 → splitter 実行 → 実現 split 表 → freeze event を
+  ledger 先頭に記帳 → campaigns/<id>/ へ書込。**git commit はしない**（ユーザー操作）
+- E_use evidence table: §10.2 の 13 列 schema + loader/validator + テンプレート生成
+  （全 construct 行を `evidence_class: UNJUSTIFIED` かつ `e_use_value: null` で出力。
+  数値 placeholder 禁止）。UNJUSTIFIED 行は自動 ceiling（DIRECTIONAL/DIAGNOSTIC_ONLY）
+- cost caps / stop rules: 3 値（compute 時間・storage bytes・課金額）loader、超過判定 API
+
+### 6.4 D2 — campaign runner（`campaign/` サブパッケージ）
+
+- 手続 Gate 単位のサブコマンド: `c1-fixtures`（全 render + determinism 検査 + ledger）
+  → `c2-baseline`（B0 × calibration split・tolerance 導出）→ `c3-selection`（全候補 ×
+  自 family selection 行・fail filter・lexicographic・SELECTION_FROZEN event）→
+  `unseal`（§7 の 5 sha 相互参照検査）→ `c4-holdout`（選択 1 候補 + B0 × holdout・gate・
+  terminal status cascade）→ `close`（CAMPAIGN_CLOSED・debt_discharged 導出・M6）
+- 手続 Gate の単調性を ledger event で強制。各段は ledger 駆動で**再開可能**（記帳済み
+  work unit をスキップ）
+- meter 反復: within-process 3 call + fresh-process 3（subprocess worker）。並列 worker は
+  per-worker JSONL → 直列 append 集約（provenance 契約）
+- cost cap / stop rule 超過 → stop event 記帳 + fail-closed 終了
+- dry-run（既定）: 計画のみ — work unit 件数（instances 2,280 / renders 4,560 / meter
+  calls 13,680 per impl / selection ≈10^5）と cap の照合表を出力
