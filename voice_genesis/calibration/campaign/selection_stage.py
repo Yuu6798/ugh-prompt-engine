@@ -287,9 +287,10 @@ def truth_value_for_row(row: FixtureRow) -> float | None:
 
 #: fail filter 名の閉集合（`candidates.adapter` の 5 種、設計正本 §8、+
 #: `candidate_fail_filter_report()` 自身が定義する `positive_rows_absent`/
-#: `negative_controls_incomplete` の計 7 種。round 17 finding #1 採用で
-#: `negative_controls_incomplete` を追加）。`candidate_fail_filter_report()`
-#: が返す dict のキーと 1:1 対応する。
+#: `negative_controls_incomplete`/`coverage_incomplete` の計 8 種。round 17
+#: finding #1 採用で `negative_controls_incomplete` を追加、round 28 ADOPT (2)
+#: (`[UNDERSPEC-CAL-D64]`) で `coverage_incomplete` を追加）。
+#: `candidate_fail_filter_report()` が返す dict のキーと 1:1 対応する。
 FAIL_FILTER_NAMES: tuple[str, ...] = (
     "schema_violation",
     "unexplained_nonfinite",
@@ -298,6 +299,7 @@ FAIL_FILTER_NAMES: tuple[str, ...] = (
     "positive_control_non_fire",
     "positive_rows_absent",
     "negative_controls_incomplete",
+    "coverage_incomplete",
 )
 
 
@@ -321,6 +323,7 @@ def candidate_fail_filter_report(
     *,
     negative_control_row_ids: frozenset[str] = frozenset(),
     positive_control_row_ids: frozenset[str] = frozenset(),
+    expected_truth_core_instances: frozenset[tuple[str, int]] = frozenset(),
     within_fresh_tol: float = 0.0,
 ) -> dict[str, bool]:
     """finding #8: `candidates.adapter` の共通 5 fail filter（schema 違反 /
@@ -358,7 +361,31 @@ def candidate_fail_filter_report(
     を鏡写しし、宣言された negative control 行のうち 1 件でも record を
     欠けば `negative_controls_incomplete` を発火させ ineligible にする
     （`[UNDERSPEC-CAL-D37]`）。
-    """
+
+    round 28 ADOPT (2) 採用（`[UNDERSPEC-CAL-D64]`, design 引用: §10.1 「control
+    出力の missing/invalid は分子に算入（分母から除外しない。eligibility は
+    C0 入力側条件のみで判定）」+ §11 「score 計算可能だが PRIMARY 一部 output
+    missing で gate 不通過 → DIAGNOSTIC_ONLY/OUTPUT_MISSING」）: `positive_rows_
+    absent`/`negative_controls_incomplete` は control 母集団（row_id 単位）
+    のみを検査し、F0 unusable による instance 単位の record 欠落（同じ row_id
+    の一部 probe_index にのみ record が無い——`measure_stage.
+    F0_DEPENDENT_ALGORITHM_FAMILIES` candidate が `f0_unusable_instances` 上で
+    一切呼ばれない結果、`records` から丸ごと消える）を検出できなかった
+    （row_id が 1 件でも record を持てば「seen」に数えられるため）。
+    `build_candidate_criteria()` は `own_records` からのみ分母/誤差ベクトルを
+    構築するため、この instance 単位の欠落は「N_pos/coverage の分母から
+    除外」ではなく「見えないまま候補が縮小母集団で勝つ」経路になっていた。
+    `expected_truth_core_instances`（`fixtures.controls.
+    positive_detection_instances()` が返す、評価対象 SELECTION split 内の
+    当該 family 全 TRUTH_CORE 行の `(row_id, probe_index)` instance 集合 —
+    `positive_control_row_ids` の instance 版）が **非空**（呼び出し側がこの
+    family の期待 instance 集合を宣言した）にもかかわらず、`own_records` が
+    そのうち 1 件でも instance を欠いていれば `coverage_incomplete` を発火
+    させ ineligible にする（`positive_rows_absent`/
+    `negative_controls_incomplete` と同じ「宣言されたが観測から消えた」
+    fail-closed 規約——設計正本はこの箇所に selection 段階固有の
+    missing-rate 閾値を定義していないため、1 件でも欠ければ ineligible の
+    既定規則を適用する）。"""
     own_records = [r for r in records if r.candidate_id == candidate.candidate_id]
 
     required_field = measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY.get(
@@ -403,6 +430,17 @@ def candidate_fail_filter_report(
     negative_controls_incomplete = bool(negative_control_row_ids) and not (
         negative_control_row_ids <= seen_negative_row_ids
     )
+    # round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`): instance-granular coverage
+    # check against the frozen expected TRUTH_CORE instance set — see the
+    # docstring paragraph above. Deliberately record-presence-only (any
+    # record for the instance, regardless of its value) — a present but
+    # missing/nonfinite-valued record is already counted by
+    # `build_candidate_criteria()`'s `missing_failure_rate`; this filter
+    # targets only the record's *absence*, which that accounting cannot see.
+    seen_instances = {(r.row_id, r.probe_index) for r in own_records}
+    coverage_incomplete = bool(expected_truth_core_instances) and not (
+        expected_truth_core_instances <= seen_instances
+    )
 
     return {
         "schema_violation": schema_violated,
@@ -412,6 +450,7 @@ def candidate_fail_filter_report(
         "positive_control_non_fire": pos_non_fire,
         "positive_rows_absent": positive_rows_absent,
         "negative_controls_incomplete": negative_controls_incomplete,
+        "coverage_incomplete": coverage_incomplete,
     }
 
 

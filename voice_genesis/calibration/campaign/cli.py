@@ -516,7 +516,33 @@ def _build_f0_by_instance(
     reached (this is why merely not injecting the key would not have been
     enough: the call itself must not happen). A non-empty rejection set is
     recorded as an `f0_injection_rejected` ledger event (`reason:
-    "F0_UNUSABLE"`, tagged with `stage`) for provenance."""
+    "F0_UNUSABLE"`, tagged with `stage`) for provenance.
+
+    round 28 ADOPT (1) (`[UNDERSPEC-CAL-D63]`) "Mark empty F0 measurements
+    unusable": the guard above only fires once `by_process` is non-empty.
+    When the selected F0 meter returns `OUTPUT_MISSING` (`f0_hz is None`)
+    for every one of an instance's 6 repeats — either freshly measured here
+    or reconstructed from the ledger by
+    `_reusable_f0_values_by_process()` (which itself returns `None`,
+    routing back through this branch, whenever any single repeat's `f0_hz`
+    is missing/non-numeric) — `by_process` comes back `{}` and the prior
+    code took a bare `continue`: the instance was silently dropped from
+    both `result` *and* `unusable`. `_params_with_f0()` then received no
+    injected F0 for that instance and fell through to
+    `params.get("f0_hz")`'s caller-supplied default of `None`, which
+    `formant_cepstral.cepstral_envelope_db()` — like the non-finite/
+    non-positive case above — treats as "use the default lifter cutoff
+    (64)" rather than reporting missing, producing the exact same
+    plausible-but-unfounded finite output this guard exists to prevent.
+    Ruling: an empty (or, after the repeat-level check below, partially
+    empty) F0 observation set that cannot yield a finite, strictly positive
+    two-stage-median aggregate is `F0_UNUSABLE` exactly like non-finite/
+    non-positive repeats — there is no third outcome. The instance is now
+    added to `unusable` (not silently dropped) whenever `by_process` comes
+    back empty, so it reaches the same `f0_injection_rejected` ledger event
+    and the same `F0_DEPENDENT_ALGORITHM_FAMILIES` skip in
+    `measure_stage.run_measure_stage()`/`holdout_stage.
+    render_and_measure_holdout()` as every other unusable case."""
     f0_candidate = candidate_by_id(f0_candidate_id)
     result: dict[tuple[str, int], float] = {}
     unusable: set[tuple[str, int]] = set()
@@ -524,6 +550,16 @@ def _build_f0_by_instance(
         by_process = _reusable_f0_values_by_process(
             campaign, f0_candidate_id, row_id, probe_index
         )
+        # round 28 ADOPT (1) (`[UNDERSPEC-CAL-D63]`): tracks whether any
+        # repeat came back OUTPUT_MISSING (f0_hz is None) during the manual
+        # `by_process` reconstruction below — the *sole* place a partially-
+        # missing repeat set can arise (`_reusable_f0_values_by_process()`
+        # is all-or-nothing: it returns `None`, routing here, the moment any
+        # one repeat is non-numeric). A repeat dropped by the `continue`
+        # below vanishes from every `all_repeats_usable`/`two_stage_median`
+        # view that only sees `by_process`'s surviving values — so it must
+        # be tracked independently, not inferred from `by_process` alone.
+        missing_repeat = False
         if by_process is None:
             records = measure_stage.run_measurement_for_instance(
                 campaign,
@@ -539,9 +575,17 @@ def _build_f0_by_instance(
             for r in records:
                 f0 = r.output.values.get("f0_hz")
                 if f0 is None:
+                    missing_repeat = True
                     continue
                 by_process.setdefault(r.process_id, []).append(float(f0))
-        if not by_process:
+        if not by_process or missing_repeat:
+            # round 28 ADOPT (1) (`[UNDERSPEC-CAL-D63]`): an empty (every
+            # repeat OUTPUT_MISSING) or partially-empty (some repeats
+            # OUTPUT_MISSING, dropped above rather than surviving into
+            # `by_process`) F0 observation set is F0_UNUSABLE exactly like
+            # non-finite/non-positive repeats — never a silent drop (see
+            # docstring above).
+            unusable.add((row_id, probe_index))
             continue
         all_repeats_usable = all(
             math.isfinite(v) and v > 0.0
@@ -568,9 +612,9 @@ def _build_f0_by_instance(
     return result, frozenset(unusable)
 
 
-def _positive_row_ids_for_selection(
+def _positive_instances_for_selection(
     rows: Sequence[Any], assignment: Mapping[str, Any], family: str
-) -> frozenset[str]:
+) -> frozenset[tuple[str, int]]:
     """round 13 finding #1: positive evidence = every TRUTH_CORE row of the
     evaluated SELECTION split for `family` (`fixtures.controls.
     positive_detection_instances()`, DESIGN RULING per `fixtures/controls.py`
@@ -579,9 +623,19 @@ def _positive_row_ids_for_selection(
     each anchor's home split is HMAC-derived and may not include SELECTION at
     all, in which case `candidate_fail_filter_report()` silently treated the
     positive-control filter as inapplicable instead of ineligible
-    (`[UNDERSPEC-CAL-D25]`)."""
-    instances = positive_detection_instances(rows, assignment, Split.SELECTION, family=family)
-    return frozenset(row_id for row_id, _ in instances)
+    (`[UNDERSPEC-CAL-D25]`).
+
+    round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`): returns the full
+    `(row_id, probe_index)` instance set (not just row_id) — this is also
+    the frozen expected-instance population `_criteria_with_fail_filters`
+    passes to `selection_stage.candidate_fail_filter_report()`'s new
+    `coverage_incomplete` filter, which needs instance granularity to catch
+    an F0-unusable single probe_index gap that a row-id-only view (a row
+    counts as "seen" if any one of its probe_index records exists) cannot
+    see. Callers derive the row-id-only view for the row-level
+    `positive_control_non_fire`/`positive_rows_absent` filters with
+    `frozenset(row_id for row_id, _ in instances)`."""
+    return positive_detection_instances(rows, assignment, Split.SELECTION, family=family)
 
 
 def _criteria_with_fail_filters(
@@ -591,6 +645,7 @@ def _criteria_with_fail_filters(
     *,
     negative_control_ids: frozenset[str],
     positive_control_ids: frozenset[str],
+    expected_positive_instances: frozenset[tuple[str, int]] = frozenset(),
     max_claim_scope: frozenset[str],
 ) -> tuple[Any, dict[str, bool], dict[str, object]]:
     """finding #8: `build_candidate_criteria()`（有限値の有無のみ）に加えて
@@ -598,16 +653,20 @@ def _criteria_with_fail_filters(
     発火していれば `eligible=False` へ落とす。finding #11: さらに
     `max_claim_scope` 外の construct なら ceiling を capping する
     （`select_across_ceilings` へ渡す前に反映 — capping 済み ceiling で
-    ABSOLUTE pool から除外される）。`(criteria, fail_filter_report,
-    claim_scope_report)` を返す — 呼び出し元はこれらを `run_c3a_f0_selection`/
-    `run_c3b_selection` の対応する `*_reports*` へ積み上げて SELECTION_FROZEN
-    payload に記録する。"""
+    ABSOLUTE pool から除外される）。round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`):
+    `expected_positive_instances`（`_positive_instances_for_selection()`）を
+    そのまま `candidate_fail_filter_report()` の `expected_truth_core_
+    instances` へ渡し、新設 `coverage_incomplete` filter を通す。
+    `(criteria, fail_filter_report, claim_scope_report)` を返す — 呼び出し元
+    はこれらを `run_c3a_f0_selection`/`run_c3b_selection` の対応する
+    `*_reports*` へ積み上げて SELECTION_FROZEN payload に記録する。"""
     base = selection_stage.build_candidate_criteria(candidate, records, truth_by_instance)
     report = selection_stage.candidate_fail_filter_report(
         candidate,
         records,
         negative_control_row_ids=negative_control_ids,
         positive_control_row_ids=positive_control_ids,
+        expected_truth_core_instances=expected_positive_instances,
     )
     eligible = base.eligible and selection_stage.eligible_after_fail_filters(report)
     capped, scope_report = selection_stage.claim_scope_report(candidate, max_claim_scope)
@@ -735,9 +794,10 @@ def _run_c3a(
     # control rows).
     f0_rows = [mr for mr in matrix_rows if mr.row.family == FixtureFamily.F0_CONTROL.value]
     neg_ids = negative_control_row_ids(f0_rows)
-    pos_ids = _positive_row_ids_for_selection(
+    pos_instances = _positive_instances_for_selection(
         matrix_rows, assignment, FixtureFamily.F0_CONTROL.value
     )
+    pos_ids = frozenset(row_id for row_id, _ in pos_instances)
     known_truth_by_instance = {k: v for k, v in truth_by_instance.items() if v is not None}
     criteria: list[Any] = []
     fail_filter_reports: dict[str, dict[str, bool]] = {}
@@ -749,6 +809,7 @@ def _run_c3a(
             known_truth_by_instance,
             negative_control_ids=neg_ids,
             positive_control_ids=pos_ids,
+            expected_positive_instances=pos_instances,
             max_claim_scope=max_claim_scope,
         )
         criteria.append(candidate_criteria)
@@ -871,7 +932,8 @@ def _run_c3b(
         )
         family_rows = [mr for mr in matrix_rows if mr.row.family == family.value]
         neg_ids = negative_control_row_ids(family_rows)
-        pos_ids = _positive_row_ids_for_selection(family_rows, assignment, family.value)
+        pos_instances = _positive_instances_for_selection(family_rows, assignment, family.value)
+        pos_ids = frozenset(row_id for row_id, _ in pos_instances)
         family_criteria: list[Any] = []
         family_fail_filter_reports: dict[str, dict[str, bool]] = {}
         family_claim_scope_reports: dict[str, dict[str, object]] = {}
@@ -882,6 +944,7 @@ def _run_c3b(
                 truth_by_instance,
                 negative_control_ids=neg_ids,
                 positive_control_ids=pos_ids,
+                expected_positive_instances=pos_instances,
                 max_claim_scope=max_claim_scope,
             )
             family_criteria.append(candidate_criteria)

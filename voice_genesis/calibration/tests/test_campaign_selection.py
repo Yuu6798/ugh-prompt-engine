@@ -408,6 +408,67 @@ def test_all_negative_control_records_present_is_complete() -> None:
 
 
 # ---------------------------------------------------------------------------
+# round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`) "Count rejected F0 instances as
+# missing coverage": `coverage_incomplete` — instance-granular completion of
+# `negative_controls_incomplete`/`positive_rows_absent`. Skipping an
+# F0-dependent candidate on an F0-unusable instance (`[UNDERSPEC-CAL-D61]`)
+# removes that instance from `records` entirely; `build_candidate_criteria()`
+# only ever sees `records`, so the gap was previously invisible to selection.
+# ---------------------------------------------------------------------------
+
+
+def test_missing_expected_instance_record_is_reported_as_coverage_incomplete() -> None:
+    """A declared (non-empty) expected TRUTH_CORE instance population with
+    at least one instance lacking any record — the exact shape an F0-
+    unusable skip leaves behind — must reject the candidate via
+    `coverage_incomplete`, fail-closed (mirrors `positive_rows_absent`/
+    `negative_controls_incomplete`, but at `(row_id, probe_index)`
+    granularity, not row_id — a row with *some* probe_index records present
+    is not "seen" for the specific missing probe_index)."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [_record("row-a", 0, detected=True)]
+    expected = frozenset({("row-a", 0), ("row-a", 1)})  # probe_index 1 never measured
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        expected_truth_core_instances=expected,
+    )
+    assert report["coverage_incomplete"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+def test_all_expected_instances_present_is_coverage_complete() -> None:
+    """Complete instance-level coverage must not trigger
+    `coverage_incomplete`, regardless of the records' detection outcome."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [
+        _record("row-a", 0, detected=True),
+        _record("row-a", 1, detected=False),
+    ]
+    expected = frozenset({("row-a", 0), ("row-a", 1)})
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        expected_truth_core_instances=expected,
+    )
+    assert report["coverage_incomplete"] is False
+
+
+def test_empty_expected_instance_population_is_not_a_coverage_failure() -> None:
+    """Distinguish "no expected-instance population declared" (a legitimate
+    no-op — the caller passing the default `frozenset()`) from a declared-
+    but-incomplete population (above)."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [_record("row-a", 0, detected=True)]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        expected_truth_core_instances=frozenset(),
+    )
+    assert report["coverage_incomplete"] is False
+
+
+# ---------------------------------------------------------------------------
 # round 19 finding #1 (`[UNDERSPEC-CAL-D43]`): build_candidate_criteria must
 # aggregate repeats with the frozen §10.1 two-stage median, not a flat mean
 # ("Aggregate repeats with the frozen two-stage median" — Codex round 19

@@ -25,7 +25,7 @@ from voice_genesis.calibration.campaign.caps import (
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import candidates_for_meter
-from voice_genesis.calibration.vocab import MeterId
+from voice_genesis.calibration.vocab import MeterId, MissingReason
 
 from ._campaign_fixture import (
     _canonical_candidates_section,
@@ -759,6 +759,25 @@ def _fake_meter_call(
     }
 
 
+def _fake_missing_meter_call(
+    candidate_id: str, row_id: str, probe_index: int, repeat_kind: str, repeat_index: int
+) -> dict[str, object]:
+    """round 28 ADOPT (1) (`[UNDERSPEC-CAL-D63]`): a repeat where the
+    selected F0 meter returned `OUTPUT_MISSING` (no `f0_hz` key in
+    `values` at all — the pre-fix `.get("f0_hz")` in `_build_f0_by_
+    instance()` then reads `None` and silently skips the repeat instead of
+    counting it toward unusability)."""
+    return {
+        "kind": "meter_call",
+        "row_id": row_id,
+        "probe_index": probe_index,
+        "candidate_id": candidate_id,
+        "repeat_kind": repeat_kind,
+        "repeat_index": repeat_index,
+        **measure_stage.meter_output_to_dict(MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)),
+    }
+
+
 def test_f0_reuse_refuses_duplicated_repeat_record_as_stale(tmp_path: Path) -> None:
     """round 14 finding #3 regression: `cli._reusable_f0_values_by_process`
     (used by `_build_f0_by_instance` for C3b/C4's F0 reuse) previously did
@@ -910,6 +929,91 @@ def test_f0_injection_accepts_instance_when_every_repeat_is_valid(tmp_path: Path
         for e in campaign.ledger.entries
         if e.payload.get("kind") == "f0_injection_rejected"
     ]
+
+
+# ---------------------------------------------------------------------------
+# round 28 ADOPT (1) (`[UNDERSPEC-CAL-D63]`) "Mark empty F0 measurements
+# unusable": when the selected F0 meter returns `OUTPUT_MISSING` for every
+# repeat, `by_process` comes back empty and must be treated as F0_UNUSABLE
+# (not silently dropped from both `result` and `unusable`).
+# ---------------------------------------------------------------------------
+
+
+def test_f0_injection_rejects_instance_when_every_repeat_is_output_missing(
+    tmp_path: Path,
+) -> None:
+    """The completion-of-D61 case: all 6 repeats are `OUTPUT_MISSING` (no
+    `f0_hz` at all, not merely non-finite/non-positive). Before this fix,
+    `_build_f0_by_instance()`'s `if not by_process: continue` silently
+    dropped the instance from both `result` and `unusable` — the dependent
+    F0-consuming candidate then ran with no injected F0 and its internal
+    fallback (`formant_cepstral.py`'s default lifter cutoff) produced a
+    plausible result instead of being skipped."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    candidate_id = "F0-B0-CURRENT"
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_missing_meter_call(candidate_id, "r1", 0, "within", i))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_missing_meter_call(candidate_id, "r1", 0, "fresh", i))
+    entries_before = len(campaign.ledger.entries)
+
+    result, unusable = cli._build_f0_by_instance(
+        campaign,
+        [("r1", 0)],
+        candidate_id,
+        {"r1": 48000},
+        max_workers=1,
+        cap_counters=None,
+        cost_caps=None,
+        stage="c3b",
+    )
+    assert result == {}
+    assert unusable == frozenset({("r1", 0)})
+    assert len(campaign.ledger.entries) == entries_before + 1  # + the rejection event
+
+    rejected = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "f0_injection_rejected"
+    ]
+    assert len(rejected) == 1
+    assert rejected[0]["stage"] == "c3b"
+    assert rejected[0]["reason"] == "F0_UNUSABLE"
+    assert rejected[0]["instances"] == [["r1", 0]]
+
+
+def test_f0_injection_rejects_instance_when_one_repeat_is_output_missing(
+    tmp_path: Path,
+) -> None:
+    """A single `OUTPUT_MISSING` repeat among otherwise-valid repeats must
+    also reject the whole instance — `_reusable_f0_values_by_process()`
+    already returns `None` for a partially-missing set (falling through to
+    `run_measurement_for_instance`'s resume, which reconstructs the same
+    partial-`f0_hz` record set from the ledger), so `by_process` again comes
+    back with the missing repeat simply absent from every process group,
+    not merely outvoted."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    candidate_id = "F0-B0-CURRENT"
+    campaign.ledger.append(_fake_missing_meter_call(candidate_id, "r1", 0, "within", 0))
+    for i in range(1, measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "within", i, 150.0))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "fresh", i, 150.0))
+
+    result, unusable = cli._build_f0_by_instance(
+        campaign,
+        [("r1", 0)],
+        candidate_id,
+        {"r1": 48000},
+        max_workers=1,
+        cap_counters=None,
+        cost_caps=None,
+        stage="c3b",
+    )
+    assert result == {}
+    assert unusable == frozenset({("r1", 0)})
 
 
 # ---------------------------------------------------------------------------

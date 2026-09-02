@@ -91,6 +91,56 @@ def test_evaluate_absolute_meter_diagnostic_only_when_gate_fails() -> None:
     assert result.gate_detail["passed"] is False
 
 
+# ---------------------------------------------------------------------------
+# round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`) "Count rejected F0 instances as
+# missing coverage": "Holdout (C4) applies the same explicit-missing rule to
+# its status derivation ... a meter with missing holdout coverage cannot
+# reach CALIBRATED_* status." An F0-dependent candidate skipped entirely by
+# `measure_stage.run_measure_stage()` on an F0-unusable C4 instance
+# (`[UNDERSPEC-CAL-D61]`) produces no `MeasurementRecord`, hence no
+# `RawInstanceObservation`/`InstanceMargin` for that instance — but the
+# frozen `expected_primary_instance_ids` still names it. §10.3 gate 1
+# ("全 PRIMARY instance が eligible（critical missing/undefined なし）") and
+# `gates.absolute_gates`'s `expected_primary_instance_ids` population check
+# already fail this closed; this regression test locks in that the F0-driven
+# coverage gap specifically cannot reach CALIBRATED_ABSOLUTE through this
+# mechanism.
+# ---------------------------------------------------------------------------
+
+
+def test_missing_holdout_coverage_from_f0_unusable_instance_blocks_calibrated_absolute() -> None:
+    observations = _absolute_pass_observations()
+    margins = holdout_stage.build_instance_margins(observations)
+    # frozen declaration names one instance more than was actually measured
+    # -- exactly the shape an F0-unusable skip at C4 leaves behind (the
+    # instance is real and expected, but no record/margin was ever built
+    # for it because measure_stage.run_measure_stage() never called the
+    # F0-dependent candidate on it).
+    instance_ids = [m.instance_id for m in margins] + ["i-f0-unusable-skip"]
+
+    pairs = [
+        InvariancePair(pair_id=f"p{i}", axis="axis-a", ds=0.0, e_use_i0=1.0, e_use_ia=1.0)
+        for i in range(5)
+    ]
+    result = holdout_stage.evaluate_absolute_meter(
+        MeterId.M3_FORMANTS.value,
+        ClaimCeiling.ABSOLUTE,
+        selected_candidate_id="FAKE-ABS-CAND",
+        per_instance_margins=margins,
+        u_rep=0.01,
+        u_proc=0.005,
+        invariance_pairs_by_axis={"axis-a": pairs},
+        declared_invariance_axes=("axis-a",),
+        expected_primary_instance_ids=instance_ids,
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.terminal_status != TerminalStatus.CALIBRATED_ABSOLUTE.value
+    assert result.gate_detail["passed"] is False
+    assert any("gate1" in reason for reason in result.gate_detail["failure_reasons"])
+
+
 def test_evaluate_absolute_meter_not_evaluable_when_no_instances() -> None:
     result = holdout_stage.evaluate_absolute_meter(
         MeterId.M2_APERIODICITY.value,

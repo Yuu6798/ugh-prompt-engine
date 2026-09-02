@@ -999,14 +999,51 @@ def run_measure_stage(
     give any instance this candidate has no record for (their coverage/N_pos
     accounting is denominator-driven from `records`, so an absent instance
     is excluded rather than counted as a measured-but-missing failure).
-    Non-F0-dependent candidates and F0-usable instances are unaffected."""
+    Non-F0-dependent candidates and F0-usable instances are unaffected.
+
+    round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`) "Count rejected F0 instances
+    as missing coverage": the skip above previously left *no* record of any
+    kind behind — not a `MeasurementRecord`, not a ledger event — for the
+    skipped `(row_id, probe_index, candidate_id)` cell. That silent gap is
+    exactly what let a candidate win selection on a reduced subset with no
+    missing-rate penalty: `build_candidate_criteria()`/`candidate_fail_
+    filter_report()` compute every denominator and error vector purely from
+    `records`, so a cell this function never produced a record for is
+    invisible to them rather than counted as a measured-but-missing
+    failure. Every skipped cell is now also recorded as an explicit,
+    durable `measurement_missing` ledger event (`reason: "F0_UNUSABLE"`,
+    `cells: [[row_id, probe_index, candidate_id], ...]`, batched — one event
+    per call, mirroring `cli._build_f0_by_instance()`'s `f0_injection_
+    rejected` event) purely for provenance/audit: this ledger `kind` is
+    distinct from `meter_call`, so `_completed_meter_call_records()`/
+    `cli._reusable_f0_values_by_process()` never see it and resume/ledger-
+    reconstruction behavior for actual measurements is unaffected. The
+    *eligibility* consequence is `selection_stage.candidate_fail_filter_
+    report()`'s new `coverage_incomplete` filter (`[UNDERSPEC-CAL-D64]`),
+    which reads the absence of a `MeasurementRecord` against the frozen
+    expected-instance set directly — this ledger event does not feed it.
+    Idempotent across resume: a cell already recorded as missing by a prior
+    invocation is not re-appended."""
     f0_map = f0_by_instance or {}
+    already_missing: set[tuple[str, int, str]] = set()
+    for entry in campaign.ledger.entries:
+        payload = entry.payload
+        if not isinstance(payload, Mapping) or payload.get("kind") != "measurement_missing":
+            continue
+        for cell in payload.get("cells", []):
+            if isinstance(cell, (list, tuple)) and len(cell) == 3:
+                already_missing.add((cell[0], cell[1], cell[2]))
+
     all_records: list[MeasurementRecord] = []
+    newly_missing: list[tuple[str, int, str]] = []
     for row_id, probe_index in sorted(instances):
         for candidate in sorted(candidates, key=lambda c: c.candidate_id):
             if (row_id, probe_index) in f0_unusable_instances and (
                 candidate.algorithm_family in F0_DEPENDENT_ALGORITHM_FAMILIES
             ):
+                cell = (row_id, probe_index, candidate.candidate_id)
+                if cell not in already_missing:
+                    newly_missing.append(cell)
                 continue
             f0_hz = f0_map.get((row_id, probe_index))
             all_records.extend(
@@ -1022,6 +1059,14 @@ def run_measure_stage(
                     max_workers=max_workers,
                 )
             )
+    if newly_missing:
+        campaign.ledger.append(
+            {
+                "kind": "measurement_missing",
+                "reason": "F0_UNUSABLE",
+                "cells": [[r, p, c] for r, p, c in sorted(newly_missing)],
+            }
+        )
     return all_records
 
 

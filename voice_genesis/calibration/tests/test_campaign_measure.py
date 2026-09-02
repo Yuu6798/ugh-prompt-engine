@@ -1379,6 +1379,51 @@ def test_run_measure_stage_skips_f0_dependent_candidate_on_unusable_instance(
     ]
     assert {m["candidate_id"] for m in meter_calls} == {independent_candidate.candidate_id}
 
+    # round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`): the skip must not be a
+    # silent gap — an explicit, durable `measurement_missing` ledger event
+    # records exactly the skipped (row_id, probe_index, candidate_id) cell.
+    missing_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "measurement_missing"
+    ]
+    assert len(missing_events) == 1
+    assert missing_events[0]["reason"] == "F0_UNUSABLE"
+    assert missing_events[0]["cells"] == [[row.row_id, 0, formant_candidate.candidate_id]]
+
+
+@pytest.mark.slow
+def test_run_measure_stage_missing_coverage_event_is_idempotent_across_resume(
+    tmp_path: Path,
+) -> None:
+    """round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`): re-running
+    `run_measure_stage()` over the same F0-unusable instance (e.g. a resumed
+    campaign) must not re-append a duplicate `measurement_missing` event for
+    a cell already recorded as missing."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+    row = subset[0]
+
+    formant_candidate = next(
+        c
+        for c in candidates_for_meter(MeterId.M3_FORMANTS)
+        if c.algorithm_family == "CEPSTRAL_POLES"
+    )
+    kwargs = dict(
+        campaign=campaign,
+        instances=[(row.row_id, 0)],
+        candidates=[formant_candidate],
+        sr_by_row={row.row_id: row.row.sr_hz},
+        f0_unusable_instances=frozenset({(row.row_id, 0)}),
+    )
+    measure_stage.run_measure_stage(**kwargs)
+    measure_stage.run_measure_stage(**kwargs)
+
+    missing_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "measurement_missing"
+    ]
+    assert len(missing_events) == 1
+
 
 @pytest.mark.slow
 def test_run_measure_stage_measures_f0_dependent_candidate_when_instance_usable(
