@@ -387,9 +387,18 @@ def build_manifest(
     """C0 manifest（"core" — `approvals`/`commitments` 節を含まない）を
     コードから生成する。secret は一切受け取らない・生成しない。
 
-    `cost_caps`/`stop_rules` は Gate 1 承認が無ければ `"ABSENT:GATE1_NOT_APPROVED"`
-    （REQUIRED_BLOCKING の型検査に違反し正しく BLOCK される。IMPLEMENTATION_MAP
-    §6.3: 「validator will BLOCK — correct pre-approval」）。
+    `cost_caps`/`stop_rules`/`max_claim_scope` は Gate 1 承認が無ければ
+    `"ABSENT:GATE1_NOT_APPROVED"`（REQUIRED_BLOCKING の型検査に違反し正しく
+    BLOCK される。IMPLEMENTATION_MAP §6.3: 「validator will BLOCK — correct
+    pre-approval」）。`max_claim_scope`（第 11 巡採用）は Gate 1 が承認する
+    「このキャンペーンで claim してよい construct の上限範囲」を、
+    `frozen_design`（**core payload の一部** — `approvals`/`commitments` の
+    ような非-core 節ではなく、Gate 2 が署名する manifest_core_sha に含まれる
+    設計値。結果を左右するため）へそのまま転記する。空/registry に存在しない
+    construct を含むかどうかの意味論的検証は producer 側の追加ゲート
+    （`_check_max_claim_scope()`、`dry_run()`/`armed_freeze()` が呼ぶ）が
+    別途行う — `build_manifest()` 自体は Gate 1 record の値をそのまま転記
+    するのみで検証しない（`cost_caps`/`e_use_table` と同じ責務分離）。
     """
     root = Path(repo_root)
     head_sha, dirty, _git_error = c0_validate._inspect_checkout_identity(root)
@@ -401,9 +410,11 @@ def build_manifest(
     if gate1_record is not None and gate1_record.cost_caps is not None:
         cost_caps_section: object = gate1_record.cost_caps.as_dict()
         stop_rules_section: object = list(DEFAULT_STOP_RULES)
+        max_claim_scope_section: object = list(gate1_record.max_claim_scope)
     else:
         cost_caps_section = "ABSENT:GATE1_NOT_APPROVED"
         stop_rules_section = "ABSENT:GATE1_NOT_APPROVED"
+        max_claim_scope_section = "ABSENT:GATE1_NOT_APPROVED"
 
     manifest: dict[str, object] = {
         "campaign_meta": {"campaign_date_utc": campaign_date_utc},
@@ -425,6 +436,7 @@ def build_manifest(
             "provenance_spec": _PROVENANCE_SPEC,
             "cost_caps": cost_caps_section,
             "stop_rules": stop_rules_section,
+            "max_claim_scope": max_claim_scope_section,
         },
         "independence_ledger": {
             c.candidate_id: c.independence_tier.value for c in registry.ALL_CANDIDATES
@@ -601,8 +613,12 @@ def _check_e_use_table(
 def _merge_e_use_table_violations(
     validation: c0_validate.C0ValidationResult, extra: Sequence[str]
 ) -> c0_validate.C0ValidationResult:
-    """`extra`（`_check_e_use_table()` が返した `"e_use_table: ..."` 文字列群）
-    を既存の `C0ValidationResult` へ合流させる。空なら no-op（同一オブジェクトを
+    """`extra`（producer 側の追加ゲートが返した prefixed violation 文字列群 —
+    `_check_e_use_table()` の `"e_use_table: ..."` に加え、第 11 巡採用の
+    `_check_max_claim_scope()` の `"max_claim_scope: ..."` もここへ合流する。
+    名前は元の e_use_table 専用実装の名残だが、実装自体は既に汎用: manifest
+    の 1 キーだけでは表現しきれない producer 側の横断検証すべてに使う）を
+    既存の `C0ValidationResult` へ合流させる。空なら no-op（同一オブジェクトを
     返さない点のみ異なる — 呼び出し側は常にこの戻り値を使う）。"""
     if not extra:
         return validation
@@ -614,6 +630,51 @@ def _merge_e_use_table_violations(
         blocked_codes=blocked,
         missing_required_keys=validation.missing_required_keys + tuple(extra),
     )
+
+
+def _check_max_claim_scope(scope: object) -> list[str]:
+    """Gate 1 `max_claim_scope`（設計正本 §18: このキャンペーンで claim して
+    よい construct の上限範囲）の凍結時検証（第 11 巡採用）。`build_manifest()`
+    は Gate 1 record の値をそのまま `frozen_design.max_claim_scope` へ転記
+    するだけで検証しないため（`cost_caps`/`e_use_table` と同じ責務分離）、
+    この producer 側の追加ゲートが意味論的検証を担う。
+
+    `scope` が Gate 1 未承認時の `"ABSENT:GATE1_NOT_APPROVED"` センチネル
+    文字列の場合は何もしない（空 list を返す）— その状態は
+    `frozen_design.cost_caps`/`stop_rules` が REQUIRED_BLOCKING の型検査
+    経由で既に BLOCK するため、ここで重複報告しない。
+
+    `scope` が承認された Gate 1 の実 tuple（`ApprovalRecord.max_claim_scope`
+    由来、または manifest から読み戻した list）の場合:
+
+    - 空（`len(scope) == 0`）なら BLOCK（「何を claim してよいか一つも
+      宣言されていない」承認は無限定の承認と区別がつかず、fail-closed で
+      拒否する）。
+    - `candidates.registry.ALL_CANDIDATES` が宣言するどの候補の
+      `construct` にも一致しない id を含むなら、その id ごとに個別の
+      violation を BLOCK（typo や廃止済み construct が承認スコープへ
+      紛れ込むのを防ぐ）。
+
+    違反は `e_use_table` と同じ prefix 慣例で `"max_claim_scope: <理由>"`
+    形式で返す（`_merge_e_use_table_violations()` で
+    `BLOCKED_C0_MANIFEST_INCOMPLETE` として合流させる）。
+    """
+    if isinstance(scope, str):
+        # "ABSENT:GATE1_NOT_APPROVED" sentinel (or any other non-list string a
+        # caller might pass defensively): already covered elsewhere, skip.
+        return []
+    if not isinstance(scope, (list, tuple)):
+        return [f"max_claim_scope: must be a list, got {type(scope).__name__}"]
+    if len(scope) == 0:
+        return ["max_claim_scope: must be non-empty (Gate 1 approval names no construct)"]
+    known_constructs = {c.construct for c in registry.ALL_CANDIDATES}
+    violations: list[str] = []
+    for construct_id in sorted({str(c) for c in scope} - known_constructs):
+        violations.append(
+            f"max_claim_scope: {construct_id!r} is not a construct declared by any "
+            "candidate in the registry"
+        )
+    return violations
 
 
 @dataclass(frozen=True)
@@ -663,6 +724,14 @@ def dry_run(
         table_path, gate1_e_use_bound_accepted=_gate1_e_use_bound_accepted(all_approvals)
     )
     validation = _merge_e_use_table_violations(validation, e_use_violations)
+
+    frozen_design = manifest.get("frozen_design")
+    max_claim_scope_value = (
+        frozen_design.get("max_claim_scope") if isinstance(frozen_design, Mapping) else None
+    )
+    validation = _merge_e_use_table_violations(
+        validation, _check_max_claim_scope(max_claim_scope_value)
+    )
 
     gate2_arming = check_armed(
         Gate.GATE2_C0_FREEZE, cli_armed, env, approval_dir, repo_root=root,
@@ -846,12 +915,24 @@ def _readback_verify(
     split_secret_expected: bytes,
     render_root_secret_expected: bytes,
     commitments: Mapping[str, str],
+    *,
+    gate1_e_use_bound_accepted: bool,
 ) -> tuple[bool, str]:
     """staging へ書いた内容を読み戻して独立に検証する（PR レビュー第 6 巡 #6:
     従来は `render_root_secret.bin` を一切読み戻さずに公開しており、部分書込み
     やファイル破損があっても検出できなかった — `split_secret.bin` 同様、
     長さ・生成値との一致・commitment ハッシュとの一致を検査してから
-    `armed_freeze()` に公開して良いと伝える）。"""
+    `armed_freeze()` に公開して良いと伝える）。
+
+    第 11 巡採用: `e_use_table.json`（staging へコピーされた E_use evidence
+    table）も同様に読み戻す — sha256 が同じ staged manifest の
+    `frozen_inputs.e_use_table_sha256` pin と一致すること、かつ再パース後の
+    行が `e_use_table.validate_e_use_table()` を再び通ること（無違反）の
+    両方を検査する。staging 書込み後（`_readback_verify()` 呼び出し前）に
+    `e_use_table.json` が別プロセス/破損等で改変された場合、それを検出して
+    公開を拒否する（この検証をすり抜けると、pin された sha256 と実際に
+    campaign dir へ公開される内容が食い違ったまま freeze が完了してしまう）。
+    """
     try:
         manifest_readback = json.loads(
             (campaign_staging / "c0_manifest.json").read_text(encoding="utf-8")
@@ -861,6 +942,36 @@ def _readback_verify(
     validation = c0_validate.validate_c0_manifest(manifest_readback)
     if validation.is_blocked:
         return False, f"read-back manifest failed validation: {validation.blocked_codes}"
+
+    frozen_inputs_readback = manifest_readback.get("frozen_inputs")
+    expected_e_use_table_sha256 = (
+        frozen_inputs_readback.get("e_use_table_sha256")
+        if isinstance(frozen_inputs_readback, Mapping)
+        else None
+    )
+    e_use_table_path_readback = campaign_staging / "e_use_table.json"
+    try:
+        e_use_table_bytes_readback = e_use_table_path_readback.read_bytes()
+    except OSError as exc:
+        return False, f"cannot read back e_use_table.json: {exc}"
+    actual_e_use_table_sha256 = hashlib.sha256(e_use_table_bytes_readback).hexdigest()
+    if actual_e_use_table_sha256 != expected_e_use_table_sha256:
+        return False, (
+            "read-back e_use_table.json sha256 "
+            f"({actual_e_use_table_sha256!r}) does not match staged manifest's "
+            f"frozen_inputs.e_use_table_sha256 pin ({expected_e_use_table_sha256!r})"
+        )
+    try:
+        e_use_rows_readback = _parse_e_use_table_bytes(
+            e_use_table_path_readback, e_use_table_bytes_readback
+        )
+    except (ValueError, KeyError, TypeError) as exc:
+        return False, f"read-back e_use_table.json failed to parse: {exc}"
+    e_use_violations_readback = e_use_table.validate_e_use_table(
+        e_use_rows_readback, gate1_e_use_bound_accepted=gate1_e_use_bound_accepted
+    )
+    if e_use_violations_readback:
+        return False, f"read-back e_use_table.json failed validation: {e_use_violations_readback}"
 
     try:
         split_raw = json.loads((campaign_staging / "realized_split.json").read_text(encoding="utf-8"))
@@ -1102,6 +1213,13 @@ def armed_freeze(
 
     validation = c0_validate.validate_c0_manifest(full_manifest)
     validation = _merge_e_use_table_violations(validation, e_use_violations)
+    frozen_design = core_manifest.get("frozen_design")
+    max_claim_scope_value = (
+        frozen_design.get("max_claim_scope") if isinstance(frozen_design, Mapping) else None
+    )
+    validation = _merge_e_use_table_violations(
+        validation, _check_max_claim_scope(max_claim_scope_value)
+    )
     if validation.is_blocked:
         return ArmedFreezeResult(
             outcome=FreezeOutcome.VALIDATION_BLOCKED,
@@ -1136,8 +1254,22 @@ def armed_freeze(
 
     campaigns_dir = Path(campaigns_dir)
     secret_dir = Path(secret_dir)
-    campaign_staging = campaigns_dir / f".staging-{campaign_id}"
-    secret_staging = secret_dir / f".staging-{campaign_id}"
+    # 第 11 巡採用: staging パスをこの呼び出し (invocation) に一意な token で
+    # 名前空間化する。同じ campaign_id を狙う 2 プロセスが同時に staging を
+    # 構築した場合（同一 nonce の異なる 2 approval、あるいはリトライ）、旧
+    # 実装は両者とも `.staging-<campaign_id>` という**同一パス**を使っていた
+    # ため、一方の staging 書込み中/失敗時のロールバック（`_rmtree_if_exists`）
+    # が **他プロセスの** staging を巻き添えで削除しうる（他プロセスの secret
+    # が消える、または `mkdir(..., exist_ok=False)` で早期に衝突する）。
+    # `invocation_token`（`secrets.token_hex(8)`, manifest 内容とは無関係な
+    # 使い捨て乱数）を両側の staging パスへ付与することで、各呼び出しが
+    # 自分専用の staging root を持つようにし、ロールバックが常に「自分が
+    # 作った staging」だけを対象にすることを構造的に保証する
+    # （`.staging-` prefix は変わらないため `detect_orphans()`/
+    # `_find_existing_nonce_usage()` の `.staging-*` 除外はそのまま機能する）。
+    invocation_token = secrets.token_hex(8)
+    campaign_staging = campaigns_dir / f".staging-{campaign_id}-{invocation_token}"
+    secret_staging = secret_dir / f".staging-{campaign_id}-{invocation_token}"
     campaign_final = campaigns_dir / campaign_id
     secret_final = secret_dir / campaign_id
 
@@ -1197,7 +1329,13 @@ def armed_freeze(
         raise
 
     ok, detail = _readback_verify(
-        campaign_staging, secret_staging, row_inputs, split_secret, render_root_secret, commitments
+        campaign_staging,
+        secret_staging,
+        row_inputs,
+        split_secret,
+        render_root_secret,
+        commitments,
+        gate1_e_use_bound_accepted=_gate1_e_use_bound_accepted(all_approvals),
     )
     if not ok:
         _rmtree_if_exists(campaign_staging)
@@ -1555,6 +1693,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"manifest_core_sha: {report.manifest_core_sha}")
         print(f"campaign_id (if frozen today): {report.campaign_id}")
         print(f"authorization_nonce: {report.authorization_nonce}")
+        _frozen_design = report.manifest.get("frozen_design")
+        _max_claim_scope = (
+            _frozen_design.get("max_claim_scope")
+            if isinstance(_frozen_design, Mapping)
+            else None
+        )
+        print(f"max_claim_scope: {_max_claim_scope}")
         print(f"blocked_codes: {[c.value for c in report.validation.blocked_codes]}")
         print(f"missing_required_keys: {list(report.validation.missing_required_keys)}")
         print(f"gate2.armed: {report.gate2_arming.armed}")

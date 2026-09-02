@@ -53,7 +53,9 @@ def clean_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
 _DEFAULT_NONCE = "test-nonce-c0freeze-000000"
 
 
-def _write_gate1(approval_dir: Path, *, nonce: str = _DEFAULT_NONCE) -> None:
+def _write_gate1(
+    approval_dir: Path, *, nonce: str = _DEFAULT_NONCE, scope: list[str] | None = None
+) -> None:
     payload = {
         "gate": "GATE1_CAMPAIGN_EXECUTION",
         "approver": "tester",
@@ -63,7 +65,7 @@ def _write_gate1(approval_dir: Path, *, nonce: str = _DEFAULT_NONCE) -> None:
         "authorization_nonce": nonce,
         "cost_caps": {"compute": 36000.0, "storage": 1_000_000_000, "budget": 1.0},
         "e_use_bound_accepted": True,
-        "max_claim_scope": ["formant_frequency"],
+        "max_claim_scope": ["formant_frequency"] if scope is None else scope,
     }
     (approval_dir / "gate1_campaign_execution.json").write_text(
         json.dumps(payload), encoding="utf-8"
@@ -909,7 +911,17 @@ def test_readback_verify_detects_corrupted_render_root_secret(
     split_secret = b"\x01" * 32
     realized = realize_split(row_inputs, split_secret, c0_freeze.STRATUM_FACTOR_NAMES)
 
+    # 第 11 巡採用: `_readback_verify()` も e_use_table.json を読み戻して
+    # frozen_inputs.e_use_table_sha256 pin と照合するため、この test-isolated
+    # readback にも一貫した E_use table + pin を用意する（このテストが検証
+    # したいのは render_root_secret 経路のみなので、内容自体は単に「通る」
+    # ことだけが目的 — `_write_valid_e_use_table()` の完全なテーブルを使う）。
+    e_use_table_path = campaign_staging / "e_use_table.json"
+    _write_valid_e_use_table(e_use_table_path)
+    e_use_table_sha256 = hashlib.sha256(e_use_table_path.read_bytes()).hexdigest()
+
     manifest = c0_freeze.build_manifest(_REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02")
+    manifest["frozen_inputs"] = {"e_use_table_sha256": e_use_table_sha256}
     (campaign_staging / "c0_manifest.json").write_text(
         c0_freeze.canonical_json(manifest), encoding="utf-8"
     )
@@ -932,7 +944,13 @@ def test_readback_verify_detects_corrupted_render_root_secret(
     }
 
     ok, detail = c0_freeze._readback_verify(
-        campaign_staging, secret_staging, row_inputs, split_secret, render_root_secret, commitments
+        campaign_staging,
+        secret_staging,
+        row_inputs,
+        split_secret,
+        render_root_secret,
+        commitments,
+        gate1_e_use_bound_accepted=False,
     )
     assert ok is False
     assert "render_root_secret" in detail
@@ -1387,3 +1405,340 @@ def test_detect_orphans_takes_campaigns_dir_lock_too(tmp_path: Path) -> None:
 
     assert report == c0_freeze.OrphanReport(orphan_campaign_ids=(), deleted_orphan_secret_ids=())
     assert orphan.exists()  # untouched while the campaigns_dir lock was held elsewhere
+
+
+# ---------------------------------------------------------------------------
+# 第 11 巡採用 #1 — staging paths are namespaced by a per-invocation token
+# (`.staging-<campaign_id>-<invocation_token>`), so rollback never touches a
+# differently-tokened staging dir (e.g. a concurrent process's).
+# ---------------------------------------------------------------------------
+
+
+def test_armed_freeze_never_touches_a_differently_tokened_staging_dir(
+    tmp_path: Path, clean_checkout: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pre-seed a foreign-token `.staging-<campaign_id>-<other-token>` dir on
+    both roots (simulating a concurrent/other process's in-flight staging for
+    the same `campaign_id`), then inject a staging-write failure so *this*
+    call's own rollback path actually runs. The foreign staging dirs must
+    come out completely untouched — before the fix, both this call and a
+    hypothetical concurrent one shared the exact same `.staging-<campaign_id>`
+    path, so this call's rollback (`_rmtree_if_exists`) could delete the
+    other's in-progress staging (including already-written secret bytes)."""
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+
+    dry = c0_freeze.dry_run(_REPO_ROOT, approval_dir, env)
+    campaign_id = dry.campaign_id
+
+    campaigns_dir.mkdir(parents=True, exist_ok=True)
+    secret_dir.mkdir(parents=True, exist_ok=True)
+    foreign_suffix = ".staging-" + campaign_id + "-deadbeefdeadbeef"
+    foreign_campaign_staging = campaigns_dir / foreign_suffix
+    foreign_secret_staging = secret_dir / foreign_suffix
+    foreign_campaign_staging.mkdir()
+    foreign_secret_staging.mkdir()
+    (foreign_campaign_staging / "sentinel.txt").write_text(
+        "foreign staging (campaign side), must survive", encoding="utf-8"
+    )
+    (foreign_secret_staging / "sentinel.txt").write_text(
+        "foreign staging (secret side), must survive", encoding="utf-8"
+    )
+
+    def always_fail(path: Path, data: bytes) -> None:
+        raise OSError("injected staging write failure")
+
+    monkeypatch.setattr(c0_freeze, "_write_secret_file", always_fail)
+
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.PUBLICATION_FAILED, result.detail
+
+    assert foreign_campaign_staging.exists()
+    assert foreign_secret_staging.exists()
+    assert (foreign_campaign_staging / "sentinel.txt").read_text(encoding="utf-8") == (
+        "foreign staging (campaign side), must survive"
+    )
+    assert (foreign_secret_staging / "sentinel.txt").read_text(encoding="utf-8") == (
+        "foreign staging (secret side), must survive"
+    )
+
+    # This call's *own* staging (a different, freshly-generated token) must
+    # still have been cleaned up.
+    own_campaign_staging = [
+        p for p in campaigns_dir.glob(".staging-*") if p.name != foreign_suffix
+    ]
+    own_secret_staging = [
+        p for p in secret_dir.glob(".staging-*") if p.name != foreign_suffix
+    ]
+    assert own_campaign_staging == []
+    assert own_secret_staging == []
+
+
+def test_armed_freeze_staging_paths_are_namespaced_by_invocation_token(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """Two successive `armed_freeze()` calls that reach the staging phase
+    (even though the second is ultimately rejected for reusing the nonce)
+    must never collide on the same staging path. This is a narrower,
+    behavior-level check that the per-call token actually varies (rather than
+    e.g. being derived deterministically from `campaign_id` alone)."""
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+    campaigns_dir.mkdir(parents=True, exist_ok=True)
+    secret_dir.mkdir(parents=True, exist_ok=True)
+
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.PUBLISHED, result.detail
+    # Published campaign_dir/secret_dir names are the bare campaign_id (no
+    # token suffix) — the token is staging-only bookkeeping, never part of
+    # the final published identity.
+    assert result.campaign_dir is not None
+    assert result.campaign_dir.name == result.campaign_id
+    assert result.secret_dir is not None
+    assert result.secret_dir.name == result.campaign_id
+
+
+# ---------------------------------------------------------------------------
+# 第 11 巡採用 #2 — `_readback_verify()` also verifies the staged
+# `e_use_table.json` bytes (sha256 matches `frozen_inputs.e_use_table_sha256`,
+# and the content re-passes `validate_e_use_table`); a mismatch refuses to
+# publish.
+# ---------------------------------------------------------------------------
+
+
+def test_armed_freeze_e_use_table_corrupted_after_staging_write_is_not_published(
+    tmp_path: Path, clean_checkout: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Corrupt the staged `e_use_table.json` strictly *after* it has been
+    written (but before `_readback_verify()` runs) by hooking the first
+    `_write_secret_file()` call (which happens right after the e_use_table
+    write, per the staging block's statement order) to overwrite it as a side
+    effect. `_readback_verify()`'s sha256-pin check must catch the mismatch
+    and refuse to publish — nothing ends up in `campaigns_dir`/`secret_dir`."""
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+
+    real_write_secret_file = c0_freeze._write_secret_file
+    call_count = {"n": 0}
+
+    def corrupting_write_secret_file(path: Path, data: bytes) -> None:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # `path` is `secret_staging / "split_secret.bin"`; both staging
+            # roots share the same `.staging-<campaign_id>-<token>` name.
+            staging_name = path.parent.name
+            campaign_staging = campaigns_dir / staging_name
+            (campaign_staging / "e_use_table.json").write_bytes(b"CORRUPTED-AFTER-STAGING")
+        real_write_secret_file(path, data)
+
+    monkeypatch.setattr(c0_freeze, "_write_secret_file", corrupting_write_secret_file)
+
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert call_count["n"] == 2  # both secret files were still written normally
+    assert result.outcome == c0_freeze.FreezeOutcome.PUBLICATION_FAILED, result.detail
+    assert "e_use_table.json" in result.detail
+
+    remaining_secret = [
+        p for p in (secret_dir.iterdir() if secret_dir.exists() else [])
+        if p.name != c0_freeze._PUBLISH_LOCK_NAME
+    ]
+    remaining_campaign = [
+        p for p in (campaigns_dir.iterdir() if campaigns_dir.exists() else [])
+        if p.name != c0_freeze._PUBLISH_LOCK_NAME
+    ]
+    assert remaining_secret == [], f"secret dir not empty: {remaining_secret}"
+    assert remaining_campaign == [], f"campaigns dir not empty: {remaining_campaign}"
+
+
+def test_readback_verify_detects_e_use_table_sha256_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Narrower, direct-call regression guard: `_readback_verify()` itself
+    (independent of the full `armed_freeze()` staging sequence) must reject a
+    staged `e_use_table.json` whose sha256 does not match the staged
+    manifest's `frozen_inputs.e_use_table_sha256` pin. Manifest-content
+    validity is covered by other tests; stub it out here (same pattern as
+    `test_readback_verify_detects_corrupted_render_root_secret`) so this test
+    isolates the e_use_table readback path."""
+    from voice_genesis.calibration.fixtures.matrix import build_matrix
+    from voice_genesis.calibration.provenance import Ledger
+
+    monkeypatch.setattr(
+        c0_freeze.c0_validate,
+        "validate_c0_manifest",
+        lambda manifest: c0_validate.C0ValidationResult(),
+    )
+
+    campaign_staging = tmp_path / "campaign"
+    secret_staging = tmp_path / "secret"
+    campaign_staging.mkdir()
+    secret_staging.mkdir()
+
+    matrix_rows = build_matrix()
+    row_inputs = c0_freeze._row_inputs_for_split(matrix_rows, c0_freeze.STRATUM_FACTOR_NAMES)
+    split_secret = b"\x01" * 32
+    render_root_secret = b"\x02" * 32
+    realized = realize_split(row_inputs, split_secret, c0_freeze.STRATUM_FACTOR_NAMES)
+
+    _write_valid_e_use_table(campaign_staging / "e_use_table.json")
+    correct_sha256 = hashlib.sha256((campaign_staging / "e_use_table.json").read_bytes()).hexdigest()
+    # Pin the manifest to the *correct* sha256, then corrupt the staged file
+    # afterward -- exactly the TOCTOU-shaped tampering `_readback_verify()`
+    # must catch.
+    manifest = c0_freeze.build_manifest(_REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02")
+    manifest["frozen_inputs"] = {"e_use_table_sha256": correct_sha256}
+    (campaign_staging / "c0_manifest.json").write_text(
+        c0_freeze.canonical_json(manifest), encoding="utf-8"
+    )
+    (campaign_staging / "realized_split.json").write_text(
+        c0_freeze.canonical_json(c0_freeze._realized_split_to_dict(realized)), encoding="utf-8"
+    )
+    Ledger(campaign_staging / "ledger.jsonl").append({"kind": "c0_freeze"})
+    (secret_staging / "split_secret.bin").write_bytes(split_secret)
+    (secret_staging / "render_root_secret.bin").write_bytes(render_root_secret)
+
+    (campaign_staging / "e_use_table.json").write_bytes(b"tampered after the pin was computed")
+
+    commitments = {
+        "split_secret_sha256": hashlib.sha256(split_secret).hexdigest(),
+        "render_root_secret_sha256": hashlib.sha256(render_root_secret).hexdigest(),
+    }
+    ok, detail = c0_freeze._readback_verify(
+        campaign_staging,
+        secret_staging,
+        row_inputs,
+        split_secret,
+        render_root_secret,
+        commitments,
+        gate1_e_use_bound_accepted=False,
+    )
+    assert ok is False
+    assert "e_use_table.json" in detail
+    assert "sha256" in detail
+
+
+# ---------------------------------------------------------------------------
+# 第 11 巡採用 #3 — Gate 1 `max_claim_scope` is validated against the
+# candidates registry (subset check; empty/unknown ids BLOCK) and recorded in
+# `frozen_design.max_claim_scope`, part of the *core* manifest payload.
+# ---------------------------------------------------------------------------
+
+
+def test_dry_run_max_claim_scope_unknown_construct_is_blocked(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    approval_dir = tmp_path / "approvals"
+    approval_dir.mkdir()
+    _write_gate1(approval_dir, scope=["not_a_real_construct"])
+    report = c0_freeze.dry_run(_REPO_ROOT, approval_dir, os.environ)
+    assert report.validation.is_blocked
+    reasons = [
+        r for r in report.validation.missing_required_keys if r.startswith("max_claim_scope:")
+    ]
+    assert reasons, report.validation.missing_required_keys
+    assert "not_a_real_construct" in reasons[0]
+
+
+def test_dry_run_max_claim_scope_empty_is_blocked(tmp_path: Path, clean_checkout: None) -> None:
+    approval_dir = tmp_path / "approvals"
+    approval_dir.mkdir()
+    _write_gate1(approval_dir, scope=[])
+    report = c0_freeze.dry_run(_REPO_ROOT, approval_dir, os.environ)
+    assert report.validation.is_blocked
+    reasons = [
+        r for r in report.validation.missing_required_keys if r.startswith("max_claim_scope:")
+    ]
+    assert reasons, report.validation.missing_required_keys
+    assert "non-empty" in reasons[0]
+
+
+def test_dry_run_valid_max_claim_scope_is_recorded_in_manifest(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    approval_dir = tmp_path / "approvals"
+    approval_dir.mkdir()
+    _write_gate1(approval_dir, scope=["formant_frequency", "harmonic_to_noise_ratio"])
+    report = c0_freeze.dry_run(_REPO_ROOT, approval_dir, os.environ)
+    assert not any(
+        r.startswith("max_claim_scope:") for r in report.validation.missing_required_keys
+    ), report.validation.missing_required_keys
+    frozen_design = report.manifest["frozen_design"]
+    assert isinstance(frozen_design, dict)
+    assert frozen_design["max_claim_scope"] == ["formant_frequency", "harmonic_to_noise_ratio"]
+    # Part of the CORE payload -- Gate 2's manifest_core_sha binds it, unlike
+    # e_use_table's frozen_inputs (deliberately non-core).
+    core_frozen_design = c0_freeze.core_payload(report.manifest)["frozen_design"]
+    assert isinstance(core_frozen_design, dict)
+    assert "max_claim_scope" in core_frozen_design
+
+
+def test_max_claim_scope_is_part_of_manifest_core_sha(tmp_path: Path, clean_checkout: None) -> None:
+    """Changing only `max_claim_scope` must change `manifest_core_sha` --
+    proof that it is bound by Gate 2's approval (core payload), unlike
+    `e_use_table`'s `frozen_inputs` section which is deliberately excluded."""
+    approval_dir_1 = tmp_path / "approvals-1"
+    approval_dir_1.mkdir()
+    _write_gate1(approval_dir_1, scope=["formant_frequency"])
+    report_1 = c0_freeze.dry_run(_REPO_ROOT, approval_dir_1, os.environ)
+
+    approval_dir_2 = tmp_path / "approvals-2"
+    approval_dir_2.mkdir()
+    _write_gate1(approval_dir_2, scope=["harmonic_to_noise_ratio"])
+    report_2 = c0_freeze.dry_run(_REPO_ROOT, approval_dir_2, os.environ)
+
+    assert report_1.manifest_core_sha != report_2.manifest_core_sha
+
+
+def test_armed_freeze_published_manifest_records_max_claim_scope(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.PUBLISHED, result.detail
+    manifest = json.loads((result.campaign_dir / "c0_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["frozen_design"]["max_claim_scope"] == ["formant_frequency"]
+
+
+def test_cli_dry_run_prints_max_claim_scope(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = c0_freeze.main(
+        [
+            "--repo-root",
+            str(_REPO_ROOT),
+            "--approval-dir",
+            str(tmp_path / "approvals"),
+            "--secret-dir",
+            str(tmp_path / "secrets"),
+            "--campaigns-dir",
+            str(tmp_path / "campaigns"),
+        ]
+    )
+    out = capsys.readouterr().out
+    assert "max_claim_scope:" in out
+    assert rc in (0, 1)

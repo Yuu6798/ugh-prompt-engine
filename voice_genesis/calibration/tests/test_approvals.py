@@ -98,6 +98,17 @@ def test_load_approval_valid_gate1(tmp_path: Path) -> None:
     assert result.content_sha256 is not None
 
 
+def test_load_approval_gate1_duplicate_max_claim_scope_is_not_approved(tmp_path: Path) -> None:
+    """第 11 巡採用: `max_claim_scope` に同じ construct-id が重複していると
+    shape 検証で fail-closed に拒否される（registry との突合は
+    `c0_freeze._check_max_claim_scope()` の責務なので、ここでは重複という
+    shape の問題のみを見る）。"""
+    _write_gate1(tmp_path, max_claim_scope=["formant_frequency", "formant_frequency"])
+    result = approvals.load_approval(approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path)
+    assert result.approved is False
+    assert any("duplicate" in r and "max_claim_scope" in r for r in result.reasons)
+
+
 def test_load_approval_gate1_missing_nonce_is_not_approved(tmp_path: Path) -> None:
     payload = {
         "gate": "GATE1_CAMPAIGN_EXECUTION",

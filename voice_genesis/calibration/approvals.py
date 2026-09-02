@@ -201,6 +201,17 @@ def _parse_gate1_payload(
     scope = payload.get("max_claim_scope")
     if not isinstance(scope, list) or any(not isinstance(x, str) or not x for x in scope):
         reasons.append("max_claim_scope: must be a list of non-empty construct-id strings")
+    elif len(scope) != len(set(scope)):
+        # 第 11 巡採用: 承認スコープに重複 construct-id があるのは、承認者が
+        # 「この construct を claim してよい」という意思表示を意図せず二重に
+        # 書いてしまった手入力ミスの兆候であり、`c0_freeze.build_manifest()`
+        # がそのまま `frozen_design.max_claim_scope`（core payload の一部）へ
+        # 転記した先で無意味な重複として残る。承認内容そのものの shape 検証と
+        # して、ここで fail-closed に拒否する（registry construct 集合との
+        # 突合— 空/未知 id の検査— は `c0_freeze._check_max_claim_scope()` が
+        # 別途 manifest 側で行う責務であり、本モジュールは registry に依存
+        # しないため踏み込まない）。
+        reasons.append("max_claim_scope: must not contain duplicate construct-id strings")
     else:
         out["max_claim_scope"] = tuple(scope)
     return out
