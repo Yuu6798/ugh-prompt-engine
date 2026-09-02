@@ -245,6 +245,13 @@ README のみ。B/C は README の自セクションのみ追記）。
   **1 回のバイト読み取り**で取得し、parse（JSON decode）と sha256 計算は**同一バッファ**
   から行う（読み取りを重ねない。TOCTOU・二重読み不整合の回避）（PR #343 第 4 巡採用）
 - `AUTHORIZATION_REQUIRED` は §3.3 閉語彙（BLOCKED_*）とは別軸の pre-campaign 拒否コード
+- **one-time authorization nonce**（承認ファイル再利用による別日 freeze と支出倍増の
+  遮断）: 各承認ファイルは上記フィールドに加えて `authorization_nonce` を持つ
+  （`dry-run` が発行する値をそのまま転記する。発行・照合・記録の手続きは §6.3）。
+  Gate 1（`gate1_campaign_execution.json`）と Gate 2（`gate2_c0_freeze.json`）の
+  承認ファイルは**同一の** `authorization_nonce` を保持しなければならず、不一致は
+  `AUTHORIZATION_REQUIRED`（理由コード `"nonce_mismatch"`）で拒否する（PR #343 第 5
+  巡採用）
 
 ### 6.2 secret と出力レイアウト
 
@@ -296,8 +303,16 @@ README のみ。B/C は README の自セクションのみ追記）。
   `ABSENT:<理由>`）→ `validate_c0_manifest` を通す
 - dry-run: manifest を生成・検証して報告するだけ（書込なし・secret なし）。この際
   `manifest_core_sha`（§6.2）を報告し、Gate 2 承認はこの値を束縛対象とする
-  （PR #343 第 2 巡採用）
-- armed: secret 生成 → commitment 記入 → splitter 実行 → 実現 split 表 → freeze event を
+  （PR #343 第 2 巡採用）。**同時に** `authorization_nonce`（`secrets.token_hex(16)`）
+  を新規発行して報告する。Gate 1・Gate 2 双方の承認ファイルはこの nonce をそのまま
+  転記する（nonce の一致要件・不一致時の拒否コードは §6.1）（PR #343 第 5 巡採用）
+- armed: **secret 生成に入る前**に one-time authorization nonce を検査する（PR #343
+  第 5 巡採用）——既存の全 `campaigns/*/c0_manifest.json` を走査し、同一
+  `authorization_nonce`（§6.1）を保持する manifest が**既に存在する**場合は副作用なし
+  （secret 生成・書込のいずれも行わない）で拒否する（理由コード `"nonce_already_used"`）。
+  この検査を通過した場合のみ armed 手続きへ進み、凍結 manifest には検査済みの
+  `authorization_nonce` をそのまま記録する（次回以降の armed 実行が同じ承認ファイルを
+  再利用しても上記走査で検出できるようにするため。PR #343 第 5 巡採用）→ secret 生成 → commitment 記入 → splitter 実行 → 実現 split 表 → freeze event を
   ledger 先頭に記帳 → **全成果物を staging に書く**（同一 FS 上の
   `campaigns/.staging-<id>/` と secret_dir 側 staging）→ read-back で
   `validate_c0_manifest` / `verify_split` / `Ledger.verify_chain` を再実行 → 全て通れば
@@ -341,13 +356,27 @@ README のみ。B/C は README の自セクションのみ追記）。
 ### 6.4 D2 — campaign runner（`campaign/` サブパッケージ）
 
 - 手続 Gate 単位のサブコマンド: `c1-fixtures`（**calibration + selection split の行と
-  negative control 行のみ** render + determinism 検査（同部分集合）+ ledger。holdout
+  negative control 行のみ** render + determinism 検査（同部分集合）+ ledger。**negative
+  control 行の render 済み artifact は sha256 で ledger へ pin し、`c4-holdout` 段では
+  再 render せずそのまま再利用する**（render 会計は本節末尾の union 式を参照。PR #343
+  第 5 巡採用）。holdout
   行の render は行わない — `unseal` 後の `c4-holdout` 段で行う。これは §7 leakage
   契約（holdout 非 control 行の unseal 前 render は `BLOCKED_LEAKAGE`）と整合させる
   ための制約（PR #343 第 1 巡採用））→ `c2-baseline`（B0 × calibration split・
-  tolerance 導出）→ `c3-selection`（全候補 × 自 family selection 行・fail filter・
-  lexicographic・SELECTION_FROZEN event）→ `unseal`（§7 の 5 sha 相互参照検査）→
-  `c4-holdout`（選択 1 候補 + B0 × holdout・**holdout 行の render**（C1 と**同一の**
+  tolerance 導出）→ `c3a-f0-selection`（**F0_CONTROL candidates × selection 行 →
+  F0 selection → `F0_SELECTION_FROZEN` event**。F0_CONTROL は唯一 F0 を出力する
+  meter であり、F0 依存候補の入力を確定させるため他の selection に**先立って**完了
+  させなければならない）→ `c3b-selection`（**F0_CONTROL を除く**全候補 × 自 family
+  selection 行・fail filter・lexicographic・`SELECTION_FROZEN` event。**F0 依存候補
+  （D4C・harmonic-residual）は fixture の truth F0 ではなく `c3a-f0-selection` で
+  選択された F0 candidate の実測出力を instance 単位で入力とする**（fixture truth F0
+  を直接使うことは絶対にない。設計正本 §8）。`c3a-f0-selection` 完了（`F0_SELECTION_FROZEN`
+  event の記帳）前に `c3b-selection` を開始することはできない（PR #343 第 5 巡採用。
+  旧稿の単一 `c3-selection` を F0 選択の先行完了を強制する 2 段に分割））→
+  `unseal`（§7 の 5 sha 相互参照検査）→
+  `c4-holdout`（選択 1 候補 + B0 × holdout・**holdout 非 control 行の render**（control
+  行は `c1-fixtures` で render 済みの artifact を ledger sha256 突合の上で再利用し、
+  再 render しない。PR #343 第 5 巡採用）（C1 と**同一の**
   generator determinism 検査を holdout 行にも適用する: 2 回の fresh-process
   render で byte-identical PCM を確認し、両 render を holdout evidence 受理前に
   ledger へ記帳する。`HOLDOUT_EXECUTED_VALID` はこの determinism 検査通過を必須
@@ -365,10 +394,17 @@ README のみ。B/C は README の自セクションのみ追記）。
   4,560。**4,560 = 2,280 instances × 2 fresh-process renders**（各 instance を
   generator determinism 検査のため 2 回 fresh-process render し byte 一致を確認する
   ——上記 `c1-fixtures` の determinism 検査・`c4-holdout` の determinism 検査の
-  双方がこの 2 render を構成する）。内訳は `c1-fixtures`: calibration + selection
-  split 行 + control 行の instances × 2、`c4-holdout`: holdout 行の instances × 2
-  に分かれる（realized split は secret 依存のため確定内訳は freeze
-  後に定まり、dry-run 段階は §5.2 の想定 split 比で概算表示。合計 4,560 は不変）（PR
+  双方がこの 2 render を構成する）。**render 会計は和集合（union）で定まる**（PR #343
+  第 5 巡採用。`c1-fixtures` と `c4-holdout` の render 対象 instance 集合は互いに素
+  であり二重計上しない）: `c1-fixtures` = (calibration + selection split の
+  non-control instances + **全 control instances**) × 2、`c4-holdout` = holdout
+  split の **non-control** instances × 2（control instances は `c1-fixtures` で
+  render 済みの artifact を再利用し `c4-holdout` では再 render しない）。realized
+  split は secret 依存のため確定内訳は freeze
+  後に定まり、dry-run 段階は §5.2 の想定 split 比で概算表示。**合計 4,560（=
+  2,280 instances × 2）は不変**（PR
   #343 第 1 巡採用。render 内訳の算出式を「instances × 2 fresh-process renders」に
-  訂正 = PR #343 第 4 巡採用） / meter calls 13,680 per impl / selection ≈10^5）と
+  訂正 = PR #343 第 4 巡採用。render 会計を「union: c1 = (non-control + 全 control) ×2
+  / c4 = holdout non-control ×2」として明確化し、control instances の c4 再 render を
+  否定 = PR #343 第 5 巡採用） / meter calls 13,680 per impl / selection ≈10^5）と
   cap の照合表を出力
