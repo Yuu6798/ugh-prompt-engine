@@ -247,9 +247,11 @@ README のみ。B/C は README の自セクションのみ追記）。
 ### 6.2 secret と出力レイアウト
 
 - secret（split_secret / render_root_secret）は `VG_CAL_SECRET_DIR`（既定
-  `~/.vg_cal/secrets/<campaign_id>/`、mode 0600）に生成。**リポジトリには commitment
-  `sha256(secret)` のみ**。`.gitignore` に `voice_genesis/calibration/**/secrets/` と
-  `campaigns/*/renders/` を追加
+  `~/.vg_cal/secrets/<campaign_id>/`）に生成。**ディレクトリ
+  `<VG_CAL_SECRET_DIR>/<campaign_id>/` は mode 0700**（探索可能）、**ファイル
+  （split_secret / render_root_secret）は mode 0600**（PR #343 第 3 巡採用）。
+  **リポジトリには commitment `sha256(secret)` のみ**。`.gitignore` に
+  `voice_genesis/calibration/**/secrets/` と `campaigns/*/renders/` を追加
 - 承認ファイル（Gate 1–3）も同様にチェックアウト外に置く: `VG_CAL_APPROVAL_DIR`
   （既定 `~/.vg_cal/approvals/`）配下の `gate1_campaign_execution.json` /
   `gate2_c0_freeze.json` / `gate3_seal_acceptance.json`（配置理由・sha256 記録先 =
@@ -287,16 +289,25 @@ README のみ。B/C は README の自セクションのみ追記）。
   `campaigns/.staging-<id>/` と secret_dir 側 staging）→ read-back で
   `validate_c0_manifest` / `verify_split` / `Ledger.verify_chain` を再実行 → 全て通れば
   **公開順序を固定**する: まず secret 側を `os.replace`、続いて campaign 側を
-  `os.replace`（secret を先に公開してから campaign を公開する）。campaign 側の
-  rename が失敗した場合は**既に公開済みの secret dir を削除し、何も公開されていない
-  状態へロールバック**する（PR #343 第 2 巡採用）。staging 検証段の失敗時は staging を
-  削除し何も公開しない（secret も残さない）。テスト要件: **2 回の `os.replace` の間**
-  に例外を注入しても `campaigns/<id>/` と secret のどちらも残らないこと（PR #343
-  第 2 巡採用。旧稿の「公開直前の例外注入」から対象タイミングを訂正）。**git commit
-  はしない**（ユーザー操作）
+  `os.replace`（secret を先に公開してから campaign を公開する）。**公開（2 回の
+  `os.replace`）と `detect_orphans()` は単一の排他ロック `<secret_dir>/.publish.lock`
+  （`fcntl.flock`）の下で実行し、両者が競合しないことを保証する**（PR #343 第 3 巡
+  採用）。**最初の `os.replace` の直前**に secret dir 側へ in-progress マーカー
+  `.publishing` を置き、campaign 側の公開が完了した時点で削除する（PR #343 第 3 巡
+  採用）。campaign 側の rename が失敗した場合は**既に公開済みの secret dir を削除し、
+  何も公開されていない状態へロールバック**する（PR #343 第 2 巡採用）。staging 検証段
+  の失敗時は staging を削除し何も公開しない（secret も残さない）。テスト要件: **2 回の
+  `os.replace` の間**に例外を注入しても `campaigns/<id>/` と secret のどちらも残らない
+  こと（PR #343 第 2 巡採用。旧稿の「公開直前の例外注入」から対象タイミングを訂正）。
+  **git commit はしない**（ユーザー操作）
 - `detect_orphans()`: campaign dir はあるが対応する secret が無い → fail-closed
   （runner は当該 campaign の実行を拒否する）。secret はあるが対応する campaign dir
-  が無い → orphan secret として削除する（PR #343 第 2 巡採用）
+  が無い → orphan secret として削除する（PR #343 第 2 巡採用）。**ただし `.staging-*`
+  ディレクトリは削除対象から除外し、in-progress マーカー（`.publishing`）を持つ
+  secret dir も削除しない**（公開途中の secret を誤って orphan 扱いしないため）。
+  `detect_orphans()` 自体も上記の `.publish.lock` を取得してから走査する（PR #343
+  第 3 巡採用）。テスト要件: in-progress（`.publishing` マーカーあり）の secret dir
+  が `detect_orphans()` によって削除されないこと（PR #343 第 3 巡採用）
 - E_use evidence table: §10.2 の 13 列 schema + loader/validator + テンプレート生成
   （全 construct 行を `evidence_class: UNJUSTIFIED` かつ `e_use_value: null` で出力。
   数値 placeholder 禁止）。UNJUSTIFIED 行は自動 ceiling（DIRECTIONAL/DIAGNOSTIC_ONLY）
