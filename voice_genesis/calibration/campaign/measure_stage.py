@@ -1,0 +1,1103 @@
+"""meter call stage: within-process 3 call + fresh-process 3 call
+（IMPLEMENTATION_MAP_v1.md §6.4, 設計正本 §6, §8）。
+
+`implementation_ref`（`candidates.registry.Candidate.implementation_ref`、
+`<module>:<function>` 形式）を `importlib` で解決し `measure(signal, sr,
+params) -> MeterOutput` として呼ぶ。within-process repeat はプロセス内で
+直接呼ぶ（同一 bytes・同一 process — 設計正本 §6「同一 artifact 再読の
+within-process repeat」）。fresh-process repeat は subprocess worker
+`_measure_worker.py` を都度起動し、PCM ファイルを再読込してから呼ぶ。
+
+**単一 writer 境界**（`provenance.py` 契約）: worker（subprocess）は結果を
+stdout 経由で親プロセスへ返すのみで ledger には一切触れない。ledger
+`meter_call` event の append は常に呼び出し元プロセス（本モジュールの
+`run_measurement_for_instance`）が直列に行う。`[UNDERSPEC-CAL-D14]`
+memo の「per-worker JSONL → 直列 append 集約」は、worker が中間 JSONL
+ファイルを書いてから別途集約する 2 段構成を示唆するが、本実装は
+`subprocess.run(capture_output=True)` の同期 stdout 捕捉で worker の結果を
+直接受け取り、単一 writer（呼び出し元プロセス）がそのまま `Ledger.append()`
+する 1 段構成を採る（中間ファイル I/O を経ずに同じ契約——「ledger に触れる
+のは 1 writer のみ」——を満たす、より単純な実装）。`max_workers>1` の場合、
+`ThreadPoolExecutor` で複数 fresh-process subprocess を並行起動する（各
+thread は subprocess の完了待ちで I/O-bound であり GIL の制約を受けない。
+ledger への append は future 完了順に main thread から直列に行う）。
+
+**render bytes 検証**（finding #4）: `run_measurement_for_instance` は
+measure する直前に render 済み PCM の実バイト列 sha256 を計算し、
+`.sha256` sidecar と ledger 上の `render` event に pin された sha256 の
+**両方**と照合する（`_verify_and_load_rendered_pcm`）。存在検査のみだった
+旧実装は、render 後に何らかの経路で置き換えられた/破損した PCM を無言で
+測定し得た — 一致しなければ `stale` ledger event を記帳した上で
+`StaleRenderError` により fail-closed する（測定は一切行わない）。
+
+**測定段の resume**（finding #10 巡 #9）: `run_measurement_for_instance` は
+測定を始める前に、ledger 上に既に記帳済みの `meter_call` を
+`(row_id, probe_index, candidate_id, repeat_kind, repeat_index)` キーで
+再構成する（`_completed_meter_call_records`）。within 3 + fresh 3 が
+ちょうど揃っていれば **再測定・再記帳せず**その結果を返す（二重追記の
+禁止）。1 件も無ければ通常どおり測定する。それ以外（部分的にしか揃って
+いない、または同一キーに複数件記帳されている）は `stop_event` ledger
+event を記帳した上で `StaleMeasurementError` により fail-closed する
+（測定・記帳は一切行わない — 中断状態からの自動再開は安全に決定できない
+ため、明示的な運用判断に委ねる）。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import importlib
+import json
+import math
+import resource
+import subprocess
+import sys
+import time
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+from voice_genesis.calibration.campaign import render_stage
+from voice_genesis.calibration.campaign.caps import (
+    CostCapExceededError,
+    WorkerCpuSecondsInvalidError,
+    charge_worker_attempts_before_raising,
+    reported_cpu_seconds_or_none,
+    save_cap_counters,
+    validate_worker_cpu_seconds,
+)
+from voice_genesis.calibration.campaign.state import FrozenCampaign
+from voice_genesis.calibration.candidates.adapter import MeterOutput
+from voice_genesis.calibration.candidates.registry import Candidate
+from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
+from voice_genesis.calibration.cost_caps import check as cost_caps_check
+from voice_genesis.calibration.provenance import LedgerEntry
+from voice_genesis.calibration.vocab import MissingReason
+
+WITHIN_PROCESS_REPEATS = 3
+FRESH_PROCESS_REPEATS = 3
+
+#: `campaign.caps.CostCapExceededError` を本モジュール名前空間へ再公開する
+#: （finding #1: render_stage/measure_stage で単一の cap 超過 error 型を
+#: 共有する。既存呼び出し元は `measure_stage.CostCapExceededError` を参照
+#: するため、import 元の変更後もこの属性名を保つ）。
+
+
+def _process_cpu_seconds() -> float:
+    """This process's own cumulative user+sys CPU seconds
+    (`resource.getrusage(RUSAGE_SELF)`). Used by
+    `run_measurement_for_instance` to charge the within-process 3 calls
+    (round 14 finding #2) — those run serially in-process (never under
+    `ThreadPoolExecutor`), so a before/after delta of this value is exact
+    CPU time, not merely a wall-clock approximation of it."""
+    ru_self = resource.getrusage(resource.RUSAGE_SELF)
+    return ru_self.ru_utime + ru_self.ru_stime
+
+
+def _children_cpu_seconds() -> float:
+    """round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): this process's cumulative
+    child user+sys CPU seconds (`resource.getrusage(RUSAGE_CHILDREN)`).
+    Used as the parent-observed fallback for charging a fresh-process worker
+    that failed post-spawn (timeout / nonzero exit / malformed JSON) and so
+    never reported its own `cpu_seconds` — a before/after delta around one
+    `subprocess.run()` call, taken by `_run_one_fresh_call`. On POSIX,
+    `subprocess.run(timeout=...)` reaps the killed child (calls
+    `process.wait()`) before re-raising `TimeoutExpired`, so this delta
+    already reflects that child's accumulated CPU by the time it is taken."""
+    ru_children = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return ru_children.ru_utime + ru_children.ru_stime
+
+
+def resolve_measure_callable(implementation_ref: str) -> Callable[..., MeterOutput]:
+    """`<module>:<function>` を解決する。`candidates.impl.<mod>` 形式は
+    `voice_genesis.calibration.` を補って完全修飾する
+    （`candidates.registry.Candidate.implementation_ref` docstring 参照）。
+    M6 のような完全修飾 `voice_genesis.calibration.<mod>:<function>` 形式は
+    そのまま解決する。"""
+    module_path, sep, func_name = implementation_ref.partition(":")
+    if not sep or not module_path or not func_name:
+        raise ValueError(f"measure_stage: invalid implementation_ref {implementation_ref!r}")
+    if module_path.startswith("candidates."):
+        module_path = f"voice_genesis.calibration.{module_path}"
+    module = importlib.import_module(module_path)
+    return getattr(module, func_name)
+
+
+def pcm_bytes_to_signal(pcm_bytes: bytes, sr_hz: int) -> tuple[np.ndarray, int]:
+    """render 済み PCM16 bytes を `[-1, 1]` 正規化 float64 signal へ変換する
+    （`tests/test_generators.py` が使う `pcm.astype(np.float64) / 32767.0`
+    規約と同一）。"""
+    pcm = np.frombuffer(pcm_bytes, dtype=np.int16)
+    signal = pcm.astype(np.float64) / 32767.0
+    return signal, sr_hz
+
+
+def load_pcm_signal(pcm_path: str | Path, sr_hz: int) -> tuple[np.ndarray, int]:
+    """render 済み PCM16 ファイルを読み、`[-1, 1]` 正規化 float64 signal へ
+    変換する。fresh-process worker（`_measure_worker.py`）が自プロセス内で
+    PCM を再読込する際に使う — within-process 経路は `run_measurement_for_instance`
+    が事前に検証済みの bytes（`_verify_and_load_rendered_pcm`）を直接使い、
+    本関数を経由しない。"""
+    return pcm_bytes_to_signal(Path(pcm_path).read_bytes(), sr_hz)
+
+
+class StaleRenderError(RuntimeError):
+    """finding #4: render 済み PCM の実バイト列が `.sha256` sidecar または
+    ledger に pin された `render` event の sha256 と一致しない（＝差し替え・
+    破損・欠損）際の fail-closed error。測定は一切行わない。"""
+
+    def __init__(self, row_id: str, probe_index: int, detail: str) -> None:
+        self.row_id = row_id
+        self.probe_index = probe_index
+        super().__init__(
+            f"measure_stage: stale render for row_id={row_id!r} probe_index={probe_index}: "
+            f"{detail}"
+        )
+
+
+def _verify_and_load_rendered_pcm(
+    campaign: FrozenCampaign, row_id: str, probe_index: int, sr_hz: int
+) -> tuple[np.ndarray, int]:
+    """finding #4: 測定の直前に render 済み PCM の実バイト列を読み、sha256 を
+    計算して **`.sha256` sidecar と ledger に pin された `render` event の
+    sha256 の両方**と照合する。一方でも欠落/不一致なら測定を一切行わず
+    `StaleRenderError`（ledger `stale` event 付き）で fail-closed する
+    （差し替えられた/破損した bytes を測定しない — `render_stage.py` の
+    resume 判定が sidecar 無しの sha だけを見ていたのに対し、本関数は
+    ledger 側の pin も独立に要求する二重照合）。PCM ファイル自体が存在
+    しない場合は（render が一度も行われていない、より基本的な状態）
+    `FileNotFoundError` のまま送出する — こちらは「差し替え」ではなく
+    「まだ render していない」なので既存呼び出し元の分岐と型を変えない。
+    """
+    pcm_path = campaign.renders_dir / row_id / f"{probe_index}.pcm"
+    if not pcm_path.is_file():
+        raise FileNotFoundError(
+            f"measure_stage: pcm not rendered for row_id={row_id!r} "
+            f"probe_index={probe_index}: {pcm_path}"
+        )
+    pcm_bytes = pcm_path.read_bytes()
+    actual_sha = hashlib.sha256(pcm_bytes).hexdigest()
+
+    def _stale(detail: str) -> StaleRenderError:
+        campaign.ledger.append(
+            {
+                "kind": "stale",
+                "row_id": row_id,
+                "probe_index": probe_index,
+                "detail": detail,
+            }
+        )
+        return StaleRenderError(row_id, probe_index, detail)
+
+    sha_path = pcm_path.with_suffix(".sha256")
+    if not sha_path.is_file():
+        raise _stale(f"sha256 sidecar missing: {sha_path}")
+    sidecar_sha = sha_path.read_text(encoding="utf-8").strip()
+    if sidecar_sha != actual_sha:
+        raise _stale(
+            f"pcm sha256={actual_sha!r} does not match sidecar {sha_path}={sidecar_sha!r}"
+        )
+
+    ledger_sha = render_stage._recorded_render_sha(campaign.ledger.entries, row_id, probe_index)
+    if ledger_sha is None:
+        raise _stale(
+            f"no ledger 'render' event pinning sha256 for row_id={row_id!r} "
+            f"probe_index={probe_index}"
+        )
+    if ledger_sha != actual_sha:
+        raise _stale(
+            f"pcm sha256={actual_sha!r} does not match ledger-pinned render "
+            f"sha256={ledger_sha!r}"
+        )
+
+    return pcm_bytes_to_signal(pcm_bytes, sr_hz)
+
+
+#: `[UNDERSPEC-CAL-D12]` `candidates.adapter.MeterOutput.values` は候補ごとに
+#: 異なるフィールド集合を持つ（`candidates/adapter.py` docstring）。設計正本は
+#: どのフィールドを selection/holdout criteria の主要スカラー値として使うか
+#: を規定しないため、各 `algorithm_family`（`candidates.registry.Candidate.
+#: algorithm_family`）が実際に返す `values` のキーを実装から機械的に転記した
+#: 対応表を用いる（`candidates/impl/*.py` の `MeterOutput(values={...})` を
+#: 直接参照）。formant 系（BURG_LPC/CEPSTRAL_POLES）は F1（`f1_hz`）を代表値
+#: として採る（F2/F3 個別 gate は本 D2 infra の範囲外 — フルの multi-formant
+#: margin 計算は E_use を formant index 別に持つ拡張が必要）。
+PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY: Mapping[str, str] = {
+    "B0_CURRENT_NACF_YIN": "f0_hz",
+    "PYIN": "f0_hz",
+    "B0_CURRENT_CEPSTRAL_CENTROID": "f1_est_hz",
+    "CEPSTRAL_POLES": "f1_hz",
+    "BURG_LPC": "f1_hz",
+    "B0_CURRENT_HYBRID": "value",
+    "HARMONIC_OLS": "tilt_db_per_oct",
+    "HARMONIC_THEILSEN": "tilt_db_per_oct",
+    "B0_CURRENT_HNR_APPROX": "hnr_db",
+    "HNR_ACF": "hnr_db",
+    "HARMONIC_RESIDUAL": "residual_fraction",
+    "D4C_WORLD": "aperiodicity",
+    "LOCAL_PROMINENCE": "center_hz",
+    "WAVE_DISCONTINUITY": "magnitude",
+    "SPECTRAL_FLUX": "magnitude",
+}
+
+
+#: round 27 ADOPT (1) (`[UNDERSPEC-CAL-D61]`): `algorithm_family` values whose
+#: `measure()` reads an injected `f0_hz` from `params` (mechanically
+#: transcribed from `candidates/impl/{aperiodicity,tilt_harmonic,
+#: formant_cepstral}.py` — the only implementations that call
+#: `params.get("f0_hz", ...)`; `F0_CONTROL` family candidates derive F0
+#: themselves and are excluded). `run_measure_stage()` uses this set together
+#: with `f0_unusable_instances` to make sure a candidate in this set is never
+#: even called (never receives an injected `f0_hz` key at all) on an instance
+#: whose selected-F0 aggregate failed the finite/strictly-positive guard in
+#: `cli._build_f0_by_instance()` — see that function's docstring for the full
+#: rationale (`formant_cepstral.py`'s own cutoff substitution on invalid F0
+#: is why "not injected" alone is not enough; the call itself must not
+#: happen).
+F0_DEPENDENT_ALGORITHM_FAMILIES: frozenset[str] = frozenset(
+    {
+        "HARMONIC_OLS",
+        "HARMONIC_THEILSEN",
+        "HARMONIC_RESIDUAL",
+        "D4C_WORLD",
+        "CEPSTRAL_POLES",
+    }
+)
+
+
+def primary_output_value(candidate: Candidate, output: MeterOutput) -> float | None:
+    """`candidate.algorithm_family` の主要出力フィールド（`values` の 1 キー）
+    を返す。missing/ineligible、または該当フィールド不在なら `None`。"""
+    if output.missing_reason is not None or output.ineligible:
+        return None
+    field = PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY.get(candidate.algorithm_family)
+    if field is None:
+        return None
+    value = output.values.get(field)
+    return float(value) if value is not None else None
+
+
+#: round 26 ADOPT (1) (`[UNDERSPEC-CAL-D58]`): the 3 non-finite kinds a
+#: `MeterOutput.values` field can take, sufficient (together with the
+#: sanitized `None` standing in for the actual float) to losslessly
+#: reconstruct the original `nan`/`inf`/`-inf` value — see
+#: `meter_output_to_dict`/`meter_output_from_dict`.
+def _nonfinite_kind(value: float) -> str:
+    if math.isnan(value):
+        return "nan"
+    return "inf" if value > 0.0 else "-inf"
+
+
+def meter_output_to_dict(output: MeterOutput) -> dict[str, object]:
+    """round 26 ADOPT (1) (`[UNDERSPEC-CAL-D58]`) "Classify non-finite values
+    before ledger serialization": a candidate that violates the adapter
+    contract (`candidates/adapter.py` docstring: an unexplained field should
+    be OMITTED, never returned as NaN/Inf) and returns a non-finite float in
+    `output.values` without `missing_reason`/`ineligible` used to pass this
+    conversion unchanged, carrying the raw `nan`/`inf`/`-inf` straight into
+    the `meter_call` ledger payload — `canonical.canonical_json()` (which
+    `provenance.Ledger.append()` uses for `entry_sha`) then rejects the FIRST
+    such non-finite float with `ValueError` (`vgcal-canon/1` forbids
+    NaN/Infinity), and because that happens inside `Ledger.append()`'s
+    exclusive-lock write path (no bytes written on the raise) *before* this
+    work unit's compute charge (`run_measurement_for_instance` charges
+    AFTER its full `for record in records: ... ledger.append(...)` loop),
+    the candidate's already-spent CPU (within-process + every fresh-process
+    worker) went uncharged, no `meter_call` was durably recorded either, and
+    every retry of that candidate/instance repeated the same wasted work.
+
+    Fix: sanitize each non-finite entry of `values` to `None` here (valid
+    JSON, passes `canonical_json` unchanged) and record which entries were
+    sanitized — and which of the 3 non-finite kinds each was — in a sibling
+    `nonfinite_kind` mapping (`{field_name: "nan" | "inf" | "-inf"}`, `None`
+    when `values` has no non-finite entries so the payload shape for the
+    common case is unchanged). This is enough for `meter_output_from_dict`
+    to reconstruct the EXACT original float on read-back (a plain `None`
+    could not distinguish `nan` from `inf` from `-inf`), so every downstream
+    consumer that inspects `MeterOutput.values` — `candidates.adapter.
+    unexplained_nonfinite()` (the fail filter this contract already
+    designates for exactly this case), `is_finite_and_explained()`,
+    `within_fresh_process_mismatch()`, `observables.two_stage_median()`/
+    `u_rep()` (never coerce a non-finite repeat to 0 — see their own
+    docstrings) — sees the identical `math.isnan`/`math.isinf` value it
+    would have seen had `canonical_json` not existed, whether the record was
+    freshly measured or reconstructed via `_completed_meter_call_records`
+    resume. The `values`/`missing_reason`/`ineligible`/`ineligible_reason`
+    keys and their meaning are otherwise unchanged — only the added
+    `nonfinite_kind` key and `values`' use of `None` for a sanitized entry
+    are new. `_measure_worker.py` calls this same function to build its
+    stdout payload, so a NaN/Inf from a fresh-process worker is sanitized at
+    the exact same boundary as one from a within-process call — both charge
+    and record identically."""
+    sanitized_values: dict[str, float | None] = {}
+    nonfinite_kind: dict[str, str] = {}
+    for key, value in output.values.items():
+        if math.isfinite(value):
+            sanitized_values[key] = value
+        else:
+            sanitized_values[key] = None
+            nonfinite_kind[key] = _nonfinite_kind(value)
+    return {
+        "values": sanitized_values,
+        "missing_reason": output.missing_reason.value if output.missing_reason is not None else None,
+        "ineligible": output.ineligible,
+        "ineligible_reason": output.ineligible_reason,
+        "nonfinite_kind": nonfinite_kind or None,
+    }
+
+
+_NONFINITE_KIND_VALUES: Mapping[str, float] = {
+    "nan": math.nan,
+    "inf": math.inf,
+    "-inf": -math.inf,
+}
+
+
+def meter_output_from_dict(d: Mapping[str, object]) -> MeterOutput:
+    """round 26 ADOPT (1) (`[UNDERSPEC-CAL-D58]`): the inverse of
+    `meter_output_to_dict`'s sanitization — a `values` entry of `None`
+    (whether freshly parsed from a `meter_call`/fresh-worker payload or
+    reconstructed on resume) is reconstructed back to the exact original
+    `nan`/`inf`/`-inf` float using the paired `nonfinite_kind` entry, so
+    `MeterOutput.values` is indistinguishable from what a freshly-measured
+    candidate would have produced in-memory. A `None` entry with no matching
+    `nonfinite_kind` (or an unrecognized kind string) is malformed — raises
+    `ValueError` exactly like the pre-existing `float(v)` on a genuinely
+    invalid entry did, so the existing `_run_one_fresh_call`/
+    `_completed_meter_call_records` callers' fail-closed handling of a
+    malformed payload is unchanged."""
+    missing = d.get("missing_reason")
+    values_raw = d.get("values") or {}
+    if not isinstance(values_raw, Mapping):
+        raise ValueError("measure_stage: MeterOutput payload 'values' must be an object")
+    nonfinite_kind_raw = d.get("nonfinite_kind") or {}
+    if not isinstance(nonfinite_kind_raw, Mapping):
+        raise ValueError("measure_stage: MeterOutput payload 'nonfinite_kind' must be an object")
+    values: dict[str, float] = {}
+    for k, v in values_raw.items():
+        key = str(k)
+        if v is None:
+            kind = nonfinite_kind_raw.get(key)
+            if not isinstance(kind, str) or kind not in _NONFINITE_KIND_VALUES:
+                raise ValueError(
+                    f"measure_stage: MeterOutput payload has null values[{key!r}] "
+                    f"without a matching nonfinite_kind entry (got {kind!r})"
+                )
+            values[key] = _NONFINITE_KIND_VALUES[kind]
+        else:
+            values[key] = float(v)
+    ineligible_reason = d.get("ineligible_reason")
+    return MeterOutput(
+        values=values,
+        missing_reason=MissingReason(missing) if isinstance(missing, str) else None,
+        ineligible=bool(d.get("ineligible", False)),
+        ineligible_reason=str(ineligible_reason) if isinstance(ineligible_reason, str) else None,
+    )
+
+
+@dataclass(frozen=True)
+class MeasurementRecord:
+    row_id: str
+    probe_index: int
+    candidate_id: str
+    repeat_kind: str  # "within" | "fresh"
+    repeat_index: int
+    process_id: str
+    output: MeterOutput
+
+
+class StaleMeasurementError(RuntimeError):
+    """finding #9: ledger 上の `meter_call` 記録が (row_id, probe_index,
+    candidate_id) について部分的にしか揃っていない、または同一
+    (repeat_kind, repeat_index) キーに複数件（重複・矛盾のいずれでも）
+    記帳されている場合の fail-closed error。測定・記帳のいずれも一切行わ
+    ない — 中断状態からの自動再開（欠けている分だけ測定して埋める）は、
+    なぜ中断したかが分からない以上安全に決定できないため、明示的な運用
+    判断（ledger 調査の上での手動復旧）に委ねる。"""
+
+    def __init__(self, row_id: str, probe_index: int, candidate_id: str, detail: str) -> None:
+        self.row_id = row_id
+        self.probe_index = probe_index
+        self.candidate_id = candidate_id
+        super().__init__(
+            f"measure_stage: stale meter_call state for row_id={row_id!r} "
+            f"probe_index={probe_index} candidate_id={candidate_id!r}: {detail}"
+        )
+
+
+#: 1 instance × 1 candidate が完了したとみなす repeat キーの閉集合
+#: （within `WITHIN_PROCESS_REPEATS` 件 + fresh `FRESH_PROCESS_REPEATS` 件）。
+_EXPECTED_REPEAT_KEYS: frozenset[tuple[str, int]] = frozenset(
+    {("within", i) for i in range(WITHIN_PROCESS_REPEATS)}
+    | {("fresh", i) for i in range(FRESH_PROCESS_REPEATS)}
+)
+
+
+def _completed_meter_call_records(
+    ledger_entries: Sequence[LedgerEntry],
+    row_id: str,
+    probe_index: int,
+    candidate_id: str,
+) -> list[MeasurementRecord] | None:
+    """finding #9: ledger から (row_id, probe_index, candidate_id) の
+    `meter_call` を `(repeat_kind, repeat_index)` キーで再構成する。
+
+    - 1 件も無ければ `None`（未着手 — 呼び出し元は通常どおり測定する）。
+    - within `WITHIN_PROCESS_REPEATS` 件 + fresh `FRESH_PROCESS_REPEATS`
+      件がちょうど 1 件ずつ揃っていれば、その内容から再構成した
+      `MeasurementRecord` 列を返す（呼び出し元は再測定・再記帳しない —
+      二重追記の禁止）。
+    - それ以外（部分的にしか揃っていない、または同一キーに複数件記帳）は
+      `StaleMeasurementError` を送出する（呼び出し元は ledger `stop_event`
+      を記帳してから re-raise する）。
+    """
+    by_key: dict[tuple[str, int], list[Mapping[str, object]]] = {}
+    for entry in ledger_entries:
+        payload = entry.payload
+        if not isinstance(payload, Mapping) or payload.get("kind") != "meter_call":
+            continue
+        if (
+            payload.get("row_id") != row_id
+            or payload.get("probe_index") != probe_index
+            or payload.get("candidate_id") != candidate_id
+        ):
+            continue
+        repeat_kind = payload.get("repeat_kind")
+        repeat_index = payload.get("repeat_index")
+        if repeat_kind not in ("within", "fresh") or not isinstance(repeat_index, int):
+            continue
+        by_key.setdefault((repeat_kind, repeat_index), []).append(payload)
+
+    if not by_key:
+        return None
+
+    duplicate_keys = sorted(k for k, v in by_key.items() if len(v) > 1)
+    if duplicate_keys:
+        raise StaleMeasurementError(
+            row_id,
+            probe_index,
+            candidate_id,
+            f"duplicate ledger meter_call entries for repeat keys {duplicate_keys!r} "
+            "(single-writer contract violated, or conflicting re-measurement)",
+        )
+
+    present_keys = frozenset(by_key.keys())
+    if present_keys != _EXPECTED_REPEAT_KEYS:
+        missing = sorted(_EXPECTED_REPEAT_KEYS - present_keys)
+        unexpected = sorted(present_keys - _EXPECTED_REPEAT_KEYS)
+        raise StaleMeasurementError(
+            row_id,
+            probe_index,
+            candidate_id,
+            f"incomplete meter_call state: missing={missing!r} unexpected={unexpected!r}",
+        )
+
+    records: list[MeasurementRecord] = []
+    for (repeat_kind, repeat_index), entries in sorted(by_key.items()):
+        payload = entries[0]
+        process_id = (
+            "within-process" if repeat_kind == "within" else f"fresh-process-{repeat_index}"
+        )
+        records.append(
+            MeasurementRecord(
+                row_id=row_id,
+                probe_index=probe_index,
+                candidate_id=candidate_id,
+                repeat_kind=repeat_kind,
+                repeat_index=repeat_index,
+                process_id=process_id,
+                output=meter_output_from_dict(payload),
+            )
+        )
+    return records
+
+
+def _params_with_f0(candidate: Candidate, f0_hz: float | None) -> dict[str, object]:
+    """F0 依存候補（D4C・harmonic-residual）へ選択済み F0 candidate の per-instance
+    出力を注入する（memo §6.4: 「fixture の truth F0 ではなく c3a-f0-selection で
+    選択された F0 candidate の実測出力を instance 単位で入力とする」）。"""
+    params = dict(candidate.params_dict())
+    if f0_hz is not None:
+        params["f0_hz"] = float(f0_hz)
+    return params
+
+
+def run_within_process_calls(
+    candidate: Candidate,
+    signal: np.ndarray,
+    sr: int,
+    *,
+    f0_hz: float | None,
+    row_id: str,
+    probe_index: int,
+    repeats: int = WITHIN_PROCESS_REPEATS,
+) -> list[MeasurementRecord]:
+    """同一 process・同一 signal bytes 上で `repeats` 回直接呼ぶ。"""
+    fn = resolve_measure_callable(candidate.implementation_ref)
+    params = _params_with_f0(candidate, f0_hz)
+    records: list[MeasurementRecord] = []
+    for i in range(repeats):
+        output = fn(signal, sr, params)
+        records.append(
+            MeasurementRecord(
+                row_id=row_id,
+                probe_index=probe_index,
+                candidate_id=candidate.candidate_id,
+                repeat_kind="within",
+                repeat_index=i,
+                process_id="within-process",
+                output=output,
+            )
+        )
+    return records
+
+
+class _FreshWorkerFailure(RuntimeError):
+    """round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): internal-only carrier.
+    `_run_one_fresh_call` raises this instead of letting a post-spawn
+    subprocess failure (timeout / nonzero exit / malformed JSON) propagate
+    directly, so `run_fresh_process_calls` — which holds the
+    ledger/`cap_counters`/`cost_caps` this needs to be charged against — can
+    charge the attempted work (`caps.charge_worker_failure()`) before
+    re-raising `cause` unchanged. Never crosses this module's public
+    boundary (not in `__all__`, never returned/raised to callers of
+    `run_fresh_process_calls`/`run_measurement_for_instance`)."""
+
+    def __init__(self, failure_kind: str, compute: float, cause: BaseException) -> None:
+        self.failure_kind = failure_kind
+        self.compute = compute
+        self.cause = cause
+        super().__init__(f"measure_stage: fresh worker {failure_kind}: {cause}")
+
+
+def _run_one_fresh_call(
+    candidate_id: str, pcm_path: Path, sr: int, f0_hz: float | None, timeout_s: float
+) -> tuple[MeterOutput, float]:
+    """Returns `(output, cpu_seconds)`. `cpu_seconds` is the worker's own
+    reported CPU time (round 14 finding #2) — validated here (fail-closed
+    via `WorkerCpuSecondsInvalidError` on a missing/non-finite/negative
+    value) so a caller running these concurrently under `ThreadPoolExecutor`
+    sees the failure surface through `future.result()` exactly like any
+    other error from this call.
+
+    round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): a worker that times out,
+    exits nonzero, or emits JSON that fails to parse raises `_FreshWorkerFailure`
+    instead (caught and charged by `run_fresh_process_calls`) — carrying
+    `failure_kind` and the compute to charge for the attempt: the worker's
+    own reported `cpu_seconds` when a well-formed report is actually
+    recoverable (a nonzero-exit worker's captured stdout, via
+    `caps.reported_cpu_seconds_or_none()`), otherwise the parent-observed
+    `RUSAGE_CHILDREN` delta around this call (`_children_cpu_seconds()`) — a
+    timed-out worker never gets a report-recovery attempt (it was killed
+    before it could reliably finish writing one; `caps.charge_worker_failure()`
+    docstring).
+
+    round 25 (`[UNDERSPEC-CAL-D57]`) finding "Charge parseable but invalid
+    worker results": a worker that exits 0 with parseable JSON but an
+    invalid `cpu_seconds` field, or a result shape `meter_output_from_dict()`
+    cannot construct a `MeterOutput` from, now ALSO raises
+    `_FreshWorkerFailure("malformed_output", ...)` instead of letting
+    `WorkerCpuSecondsInvalidError`/`ValueError`/`TypeError` escape this
+    function's `_FreshWorkerFailure` contract uncharged — the round 14
+    finding #2 "stays uncharged" posture this supersedes meant such a worker
+    could be retried indefinitely for free. The charged compute prefers the
+    worker's own reported `cpu_seconds` when it validated fine (a
+    result-shape failure AFTER a valid `cpu_seconds`) — only falling back to
+    the `RUSAGE_CHILDREN` delta when `cpu_seconds` itself is the unusable
+    field."""
+    payload = {
+        "candidate_id": candidate_id,
+        "pcm_path": str(pcm_path),
+        "sr_hz": sr,
+        "f0_hz": f0_hz,
+    }
+    argv = [
+        sys.executable,
+        "-m",
+        "voice_genesis.calibration.campaign._measure_worker",
+        json.dumps(payload),
+    ]
+    children_t0 = _children_cpu_seconds()
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout_s, check=True)
+    except subprocess.TimeoutExpired as exc:
+        raise _FreshWorkerFailure(
+            "timeout", _children_cpu_seconds() - children_t0, exc
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        compute = reported_cpu_seconds_or_none(exc.stdout)
+        if compute is None:
+            compute = _children_cpu_seconds() - children_t0
+        raise _FreshWorkerFailure("nonzero_exit", compute, exc) from exc
+    try:
+        raw = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise _FreshWorkerFailure(
+            "malformed_output", _children_cpu_seconds() - children_t0, exc
+        ) from exc
+    if not isinstance(raw, Mapping):
+        raise _FreshWorkerFailure(
+            "malformed_output",
+            _children_cpu_seconds() - children_t0,
+            ValueError(f"measure_stage: fresh worker returned non-object JSON: {raw!r}"),
+        )
+    try:
+        cpu_seconds = validate_worker_cpu_seconds(
+            raw.get("cpu_seconds"),
+            context=f"measure_stage: fresh-process worker for candidate_id={candidate_id!r}",
+        )
+    except WorkerCpuSecondsInvalidError as exc:
+        # round 25 (`[UNDERSPEC-CAL-D57]`): cpu_seconds itself is the
+        # unusable field here, so it cannot be the charge -- fall back to
+        # the RUSAGE_CHILDREN delta.
+        raise _FreshWorkerFailure(
+            "malformed_output", _children_cpu_seconds() - children_t0, exc
+        ) from exc
+    try:
+        output = meter_output_from_dict(raw)
+    except (KeyError, TypeError, ValueError) as exc:
+        # round 25 (`[UNDERSPEC-CAL-D57]`): cpu_seconds validated fine above
+        # -- it is itself a usable figure, so charge it rather than the
+        # coarser RUSAGE_CHILDREN delta.
+        raise _FreshWorkerFailure("malformed_output", cpu_seconds, exc) from exc
+    return output, cpu_seconds
+
+
+def run_fresh_process_calls(
+    candidate: Candidate,
+    pcm_path: Path,
+    sr: int,
+    *,
+    f0_hz: float | None,
+    row_id: str,
+    probe_index: int,
+    campaign: FrozenCampaign,
+    repeats: int = FRESH_PROCESS_REPEATS,
+    timeout_s: float = 60.0,
+    max_workers: int = 1,
+    cap_counters: CapCounters | None = None,
+    cost_caps: CostCaps | None = None,
+) -> tuple[list[MeasurementRecord], float]:
+    """`repeats` 回、subprocess worker (`_measure_worker.py`) を起動して測定
+    する。`max_workers>1` なら `ThreadPoolExecutor` で並行起動する（結果は
+    repeat_index 順に整列して返す — ledger への append 順を決定論的に保つ
+    ため）。戻り値は `(records, cpu_seconds_total)` —
+    `cpu_seconds_total` は各 worker が報告した `cpu_seconds` の合計
+    （round 14 finding #2: 並行実行時の wall-clock 過小計上を避けるため、
+    呼び出し元はこれを compute cap へ課金する。wall time ではない）。
+    いずれかの worker が無効な `cpu_seconds` を報告した場合は
+    `WorkerCpuSecondsInvalidError` を伝播する（測定結果ごと破棄 — fail
+    closed）。
+
+    round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): a worker that fails
+    post-spawn (timeout / nonzero exit / malformed JSON — `_run_one_fresh_call`
+    raising `_FreshWorkerFailure`) must not be free.
+
+    round 25 (`[UNDERSPEC-CAL-D57]`) "Charge every worker attempt before
+    propagating a repeat failure": this function now runs **every** attempt
+    in the batch to completion regardless of `max_workers` — a sequential
+    (`max_workers<=1`) repeat that fails no longer skips the remaining
+    not-yet-started repeats, and a `ThreadPoolExecutor` batch (`max_workers>1`)
+    no longer discards the results of futures the executor had already
+    started (never cancelled either way) just because one future raised.
+    Once every attempt's outcome is collected: if none failed, this is the
+    ordinary success path (`cpu_seconds_total` is simply the sum, as
+    before). If one or more failed, `caps.charge_worker_attempts_before_raising()`
+    charges the WHOLE batch in one shot — every successful attempt's own
+    `cpu_seconds` (its `MeasurementRecord` is discarded, never becomes a
+    `meter_call` event, but the compute it already spent is charged via a
+    `worker_attempts_discarded` ledger event) plus every failed attempt's
+    charge (`worker_failed` ledger event each, same shape
+    `charge_worker_failure()` used alone before this revision) — persists,
+    cap-checks once, then re-raises the FIRST failed attempt's original
+    cause (cap breach still takes priority via `CostCapExceededError`, same
+    priority as every other charge-then-check call site in this package).
+    `ThreadPoolExecutor` futures are read via `future.result()` from this
+    function's own thread in submission order, so both the collection and
+    the eventual charging stay single-threaded/deterministic."""
+    outcomes: list[tuple[MeterOutput, float] | _FreshWorkerFailure] = []
+    if max_workers <= 1:
+        for _ in range(repeats):
+            try:
+                outcomes.append(
+                    _run_one_fresh_call(candidate.candidate_id, pcm_path, sr, f0_hz, timeout_s)
+                )
+            except _FreshWorkerFailure as exc:
+                outcomes.append(exc)
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [
+                pool.submit(
+                    _run_one_fresh_call, candidate.candidate_id, pcm_path, sr, f0_hz, timeout_s
+                )
+                for _ in range(repeats)
+            ]
+            for future in futures:
+                try:
+                    outcomes.append(future.result())
+                except _FreshWorkerFailure as exc:
+                    outcomes.append(exc)
+
+    failures = [outcome for outcome in outcomes if isinstance(outcome, _FreshWorkerFailure)]
+    if failures:
+        successes = [
+            cpu_seconds
+            for outcome in outcomes
+            if not isinstance(outcome, _FreshWorkerFailure)
+            for _output, cpu_seconds in [outcome]
+        ]
+        charge_worker_attempts_before_raising(
+            campaign.ledger,
+            campaign.campaign_dir,
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            stage="measure",
+            row_id=row_id,
+            probe_index=probe_index,
+            candidate_id=candidate.candidate_id,
+            successes=successes,
+            failures=[(exc.failure_kind, exc.compute, exc.cause) for exc in failures],
+        )
+
+    # No failures reached this point (the branch above always raises) -- every
+    # outcome is a real `(output, cpu_seconds)` pair.
+    cpu_seconds_total = sum(cpu_seconds for _output, cpu_seconds in outcomes)  # type: ignore[misc]
+    records = [
+        MeasurementRecord(
+            row_id=row_id,
+            probe_index=probe_index,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="fresh",
+            repeat_index=i,
+            process_id=f"fresh-process-{i}",
+            output=output,
+        )
+        for i, (output, _cpu_seconds) in enumerate(outcomes)  # type: ignore[misc]
+    ]
+    return records, cpu_seconds_total
+
+
+def run_measurement_for_instance(
+    campaign: FrozenCampaign,
+    candidate: Candidate,
+    *,
+    row_id: str,
+    probe_index: int,
+    sr_hz: int,
+    f0_hz: float | None = None,
+    cap_counters: CapCounters | None = None,
+    cost_caps: CostCaps | None = None,
+    max_workers: int = 1,
+) -> list[MeasurementRecord]:
+    """1 instance × 1 candidate = within 3 + fresh 3 の 6 call を実行し、
+    ledger `meter_call` event を直列に記帳する。cap 超過を検出したら
+    `stop_event` を記帳し `CostCapExceededError` で fail-closed する。
+
+    測定前に render 済み PCM の実バイト列を `.sha256` sidecar + ledger の
+    `render` event pin の両方と照合する（finding #4: 差し替えられた/破損した
+    bytes を測定しない — `_verify_and_load_rendered_pcm` 参照）。不一致・
+    pin 欠落は `StaleRenderError`、PCM ファイル自体が無ければ従来どおり
+    `FileNotFoundError`。
+
+    測定前に resume 判定も行う（finding #9）: この (row_id, probe_index,
+    candidate) が既に ledger 上で within3+fresh3 ちょうど記帳済みなら、
+    その結果をそのまま返し、再測定・再記帳は一切しない。部分的にしか
+    揃っていない/同一キー重複があれば `stop_event` を記帳し
+    `StaleMeasurementError` で fail-closed する（この場合も測定・記帳は
+    一切行わない）。
+
+    **compute 課金**（round 14 finding #2、round 16 finding #3 で改訂）:
+    `--workers>1` では fresh-process 3 call が `ThreadPoolExecutor` で並行
+    実行されるため、親プロセスの wall-clock 経過時間（`elapsed`）は実際に
+    消費した CPU 秒数を過小計上する。fresh 側は各 worker が報告した
+    `cpu_seconds`（`resource.getrusage` RUSAGE_SELF+RUSAGE_CHILDREN、
+    `run_fresh_process_calls()` が合算して返す）を compute counter へ課金
+    する。within 側は本関数自身の `resource.getrusage(RUSAGE_SELF)` 差分
+    （within は並行化されず本プロセス内で直列実行されるため、この差分は
+    正確な CPU 秒数そのもの）で `within_cpu_seconds` として引き続き測定
+    するが、**compute counter へは課金しない**（round 16 finding #3、
+    `[UNDERSPEC-CAL-D35]`）: within-process 3 call の CPU は `cli.py`
+    `main()` が dispatch 全体の親プロセス CPU として既に
+    `resource.getrusage(RUSAGE_SELF)` 差分で丸ごと課金・`stage_summary`
+    event へ記帳している（round 15 finding #5, 1351736）ため、ここで
+    さらに課金すると二重計上になる。`within_cpu_seconds` は ledger
+    `meter_call` event へ informational として記帳する（`cpu_seconds`
+    フィールドは従来どおり within+fresh の合計を保つ——`wall_seconds` と
+    並ぶ informational な全体像であり、課金額そのものは `cap_counters.add()`
+    へ渡す fresh 側の値のみ）。wall time はどちらの計上にも使わず、
+    `wall_seconds` として ledger `meter_call` event へ informational にのみ
+    記録する。fresh worker が無効な `cpu_seconds` を報告した場合は
+    `WorkerCpuSecondsInvalidError` を stale/invalid work unit として
+    `stop_event` 記帳の上 fail-closed する（`meter_call` 記帳は一切行わない
+    —round 25 (`[UNDERSPEC-CAL-D57]`) 以降はこの attempt 自体は
+    `worker_failed`/`malformed_output` として下記のとおり課金される。§下記参照）。
+
+    **worker 失敗時の課金**（round 24 ADOPT (1) `[UNDERSPEC-CAL-D55]`、
+    round 25 `[UNDERSPEC-CAL-D57]` で統一規則へ改訂）: fresh worker が
+    起動後に timeout / nonzero exit / malformed JSON で失敗した場合
+    （exit 0 かつ parseable JSON だが `cpu_seconds` 無効/結果形状不正——旧実装で
+    無課金だった経路——も round 25 でこの扱いに合流した）は
+    `run_fresh_process_calls()` が、同一 batch の**全** attempt（成功・失敗
+    問わず全 `repeats` 回、`--workers>1` でも既に開始済みの future を
+    途中キャンセルせず全員完走させる）の結果を集めてから、
+    `caps.charge_worker_attempts_before_raising()` を経由して一括課金する:
+    失敗した各 attempt は `worker_failed` event（`failure_kind` 別）、
+    同一 batch 内で成功したが結果を破棄する attempt（他の repeat が失敗した
+    ため）は `worker_attempts_discarded` event（`discarded_success_attempts`
+    に各自の `cpu_seconds`）として記帳・課金・cap 再検査してから、
+    batch 内で最初に失敗した attempt の元の例外を再送出する — 旧実装
+    （round 24 時点）は失敗した 1 attempt のみを課金し、既に完了していた
+    兄弟 attempt（sequential では先行する成功、concurrent では他の future）
+    を無課金で破棄していた。"""
+    try:
+        resumed = _completed_meter_call_records(
+            campaign.ledger.entries, row_id, probe_index, candidate.candidate_id
+        )
+    except StaleMeasurementError as exc:
+        campaign.ledger.append(
+            {
+                "kind": "stop_event",
+                "reason": "STALE_MEASUREMENT_STATE",
+                "row_id": row_id,
+                "probe_index": probe_index,
+                "candidate_id": candidate.candidate_id,
+                "detail": str(exc),
+            }
+        )
+        raise
+    if resumed is not None:
+        return resumed
+
+    pcm_path = campaign.renders_dir / row_id / f"{probe_index}.pcm"
+    signal, sr = _verify_and_load_rendered_pcm(campaign, row_id, probe_index, sr_hz)
+
+    wall_t0 = time.perf_counter()
+    within_cpu_t0 = _process_cpu_seconds()
+    within = run_within_process_calls(
+        candidate, signal, sr, f0_hz=f0_hz, row_id=row_id, probe_index=probe_index
+    )
+    within_cpu_seconds = _process_cpu_seconds() - within_cpu_t0
+    try:
+        fresh, fresh_cpu_seconds = run_fresh_process_calls(
+            candidate,
+            pcm_path,
+            sr,
+            f0_hz=f0_hz,
+            row_id=row_id,
+            probe_index=probe_index,
+            campaign=campaign,
+            max_workers=max_workers,
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+        )
+    except WorkerCpuSecondsInvalidError as exc:
+        campaign.ledger.append(
+            {
+                "kind": "stop_event",
+                "reason": "INVALID_MEASURE_WORKER_CPU_SECONDS",
+                "row_id": row_id,
+                "probe_index": probe_index,
+                "candidate_id": candidate.candidate_id,
+                "detail": str(exc),
+            }
+        )
+        raise
+    wall_seconds = time.perf_counter() - wall_t0
+    # round 16 finding #3 (`[UNDERSPEC-CAL-D35]`): `compute_seconds` here
+    # stays the informational within+fresh total recorded on the
+    # `cpu_seconds` ledger field below (unchanged meaning); the *charged*
+    # compute (`cap_counters.add()` further down) uses `fresh_cpu_seconds`
+    # alone — within-process CPU is already covered by the parent
+    # RUSAGE_SELF stage charge (`cli.py` `main()`'s `stage_summary` event,
+    # round 15 finding #5 / 1351736) and charging it again here would
+    # double-count it against the frozen compute cap.
+    compute_seconds = within_cpu_seconds + fresh_cpu_seconds
+
+    records = within + fresh
+    storage_bytes = 0
+    for record in records:
+        payload = {
+            "kind": "meter_call",
+            "row_id": row_id,
+            "probe_index": probe_index,
+            "candidate_id": candidate.candidate_id,
+            "repeat_kind": record.repeat_kind,
+            "repeat_index": record.repeat_index,
+            # round 14 finding #2: instance x candidate work-unit aggregate
+            # (same value on every one of the 6 records — this is a per-work-
+            # unit figure, not a per-call one; matches the existing
+            # per-work-unit granularity of `cap_counters.add()` below).
+            "wall_seconds": wall_seconds,
+            "cpu_seconds": compute_seconds,
+            # round 16 finding #3 (`[UNDERSPEC-CAL-D35]`): the within-process
+            # portion of `cpu_seconds` above, broken out purely as
+            # informational provenance (not charged — see the compute
+            # charging docstring paragraph above and the `cap_counters.add()`
+            # call below, which uses `fresh_cpu_seconds` only).
+            "within_cpu_seconds": within_cpu_seconds,
+            **meter_output_to_dict(record.output),
+        }
+        # round 15 finding #3 (`[UNDERSPEC-CAL-D31]`): unlike `cpu_seconds`
+        # above, this is the record's *own* individual serialized size (not
+        # a repeated per-work-unit aggregate) — computed from the payload
+        # before this field is added, so it does not self-reference its own
+        # eventual size. `campaign.caps.cap_counters_from_ledger()` sums it
+        # across all 6 records without dedup (genuinely additive per
+        # record), reproducing the same total charged to `storage_used`
+        # below.
+        record_bytes = len(json.dumps(payload).encode("utf-8"))
+        payload["storage_bytes"] = record_bytes
+        campaign.ledger.append(payload)
+        storage_bytes += record_bytes
+
+    if cap_counters is not None:
+        # round 13 finding #3: this measurement (1 instance x 1 candidate =
+        # within3 + fresh3) is 1 budget work unit — same accounting rule and
+        # granularity as render_stage.render_instance().
+        budget_charge = cost_caps.budget_charge_per_work_unit() if cost_caps is not None else 0.0
+        # round 16 finding #3 (`[UNDERSPEC-CAL-D35]`): fresh-worker CPU only
+        # — `within_cpu_seconds` is deliberately excluded here (see the
+        # docstring paragraph above); it is already charged once, in
+        # `cli.py` `main()`'s parent RUSAGE_SELF `stage_summary` charge.
+        cap_counters.add(compute=fresh_cpu_seconds, storage=storage_bytes, budget=budget_charge)
+        # Persist immediately (finding #1: counters must survive across
+        # subcommands) — before the breach check, so a unit's consumption is
+        # never lost even when this same unit trips a fail-closed exit below.
+        save_cap_counters(campaign.campaign_dir, cap_counters)
+        if cost_caps is not None:
+            decision = cost_caps_check(cap_counters, cost_caps)
+            if decision is not None:
+                campaign.ledger.append(decision.event_payload)
+                raise CostCapExceededError(decision.detail)
+    return records
+
+
+def run_measure_stage(
+    campaign: FrozenCampaign,
+    instances: Sequence[tuple[str, int]],
+    candidates: Sequence[Candidate],
+    *,
+    sr_by_row: Mapping[str, int],
+    f0_by_instance: Mapping[tuple[str, int], float] | None = None,
+    f0_unusable_instances: frozenset[tuple[str, int]] = frozenset(),
+    cap_counters: CapCounters | None = None,
+    cost_caps: CostCaps | None = None,
+    max_workers: int = 1,
+    missing_reason: str = "F0_UNUSABLE",
+) -> list[MeasurementRecord]:
+    """`instances × candidates` の全 work unit を決定論的順序（instance →
+    candidate_id 昇順）で処理する。
+
+    round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): `missing_reason` names the
+    `measurement_missing` event's `reason` field for every cell this call
+    skips via `f0_unusable_instances` (default `"F0_UNUSABLE"`, the D61/D63/
+    D64 per-instance-rejection reason). Callers pass `"F0_SELECTION_FAILED"`
+    when `f0_unusable_instances` covers every instance because C3a itself
+    recorded no F0 winner (`SELECTION_FAILED_CLOSED`) — a distinct cause from
+    a per-instance non-finite/missing F0 aggregate, kept distinguishable in
+    the ledger.
+
+    round 27 ADOPT (1) (`[UNDERSPEC-CAL-D61]`): `f0_unusable_instances`
+    names instances whose selected-F0 per-instance aggregate was rejected by
+    `cli._build_f0_by_instance()`'s finite/strictly-positive guard. Any
+    candidate whose `algorithm_family` is in `F0_DEPENDENT_ALGORITHM_FAMILIES`
+    is skipped entirely (not called, no `MeasurementRecord` produced) for
+    those instances — the same "absent, as if unmeasured" treatment
+    `build_candidate_criteria()`/`candidate_fail_filter_report()` already
+    give any instance this candidate has no record for (their coverage/N_pos
+    accounting is denominator-driven from `records`, so an absent instance
+    is excluded rather than counted as a measured-but-missing failure).
+    Non-F0-dependent candidates and F0-usable instances are unaffected.
+
+    round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`) "Count rejected F0 instances
+    as missing coverage": the skip above previously left *no* record of any
+    kind behind — not a `MeasurementRecord`, not a ledger event — for the
+    skipped `(row_id, probe_index, candidate_id)` cell. That silent gap is
+    exactly what let a candidate win selection on a reduced subset with no
+    missing-rate penalty: `build_candidate_criteria()`/`candidate_fail_
+    filter_report()` compute every denominator and error vector purely from
+    `records`, so a cell this function never produced a record for is
+    invisible to them rather than counted as a measured-but-missing
+    failure. Every skipped cell is now also recorded as an explicit,
+    durable `measurement_missing` ledger event (`reason: "F0_UNUSABLE"`,
+    `cells: [[row_id, probe_index, candidate_id], ...]`, batched — one event
+    per call, mirroring `cli._build_f0_by_instance()`'s `f0_injection_
+    rejected` event) purely for provenance/audit: this ledger `kind` is
+    distinct from `meter_call`, so `_completed_meter_call_records()`/
+    `cli._reusable_f0_values_by_process()` never see it and resume/ledger-
+    reconstruction behavior for actual measurements is unaffected. The
+    *eligibility* consequence is `selection_stage.candidate_fail_filter_
+    report()`'s new `coverage_incomplete` filter (`[UNDERSPEC-CAL-D64]`),
+    which reads the absence of a `MeasurementRecord` against the frozen
+    expected-instance set directly — this ledger event does not feed it.
+    Idempotent across resume: a cell already recorded as missing by a prior
+    invocation is not re-appended."""
+    f0_map = f0_by_instance or {}
+    already_missing: set[tuple[str, int, str]] = set()
+    for entry in campaign.ledger.entries:
+        payload = entry.payload
+        if not isinstance(payload, Mapping) or payload.get("kind") != "measurement_missing":
+            continue
+        for cell in payload.get("cells", []):
+            if isinstance(cell, (list, tuple)) and len(cell) == 3:
+                already_missing.add((cell[0], cell[1], cell[2]))
+
+    all_records: list[MeasurementRecord] = []
+    newly_missing: list[tuple[str, int, str]] = []
+    for row_id, probe_index in sorted(instances):
+        for candidate in sorted(candidates, key=lambda c: c.candidate_id):
+            if (row_id, probe_index) in f0_unusable_instances and (
+                candidate.algorithm_family in F0_DEPENDENT_ALGORITHM_FAMILIES
+            ):
+                cell = (row_id, probe_index, candidate.candidate_id)
+                if cell not in already_missing:
+                    newly_missing.append(cell)
+                continue
+            f0_hz = f0_map.get((row_id, probe_index))
+            all_records.extend(
+                run_measurement_for_instance(
+                    campaign,
+                    candidate,
+                    row_id=row_id,
+                    probe_index=probe_index,
+                    sr_hz=sr_by_row[row_id],
+                    f0_hz=f0_hz,
+                    cap_counters=cap_counters,
+                    cost_caps=cost_caps,
+                    max_workers=max_workers,
+                )
+            )
+    if newly_missing:
+        campaign.ledger.append(
+            {
+                "kind": "measurement_missing",
+                "reason": missing_reason,
+                "cells": [[r, p, c] for r, p, c in sorted(newly_missing)],
+            }
+        )
+    return all_records
+
+
+__all__ = [
+    "WITHIN_PROCESS_REPEATS",
+    "FRESH_PROCESS_REPEATS",
+    "CostCapExceededError",
+    "WorkerCpuSecondsInvalidError",
+    "StaleRenderError",
+    "StaleMeasurementError",
+    "resolve_measure_callable",
+    "pcm_bytes_to_signal",
+    "load_pcm_signal",
+    "PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY",
+    "F0_DEPENDENT_ALGORITHM_FAMILIES",
+    "primary_output_value",
+    "meter_output_to_dict",
+    "meter_output_from_dict",
+    "MeasurementRecord",
+    "run_within_process_calls",
+    "run_fresh_process_calls",
+    "run_measurement_for_instance",
+    "run_measure_stage",
+]

@@ -221,3 +221,247 @@ docstring に `[UNDERSPEC-CAL-nn]` タグで記録し、`README.md` の UNDERSPE
 
 B・C は A 完了後に並行。ファイル所有は排他（共有ファイルは A が作る `__init__.py` と
 README のみ。B/C は README の自セクションのみ追記）。
+
+## 6. Phase D — 未武装の実行基盤（PR #342 マージ後の次段。2026-09-01 設計）
+
+目的: §18 の 3 承認 Gate が通れば**コード変更なしで**C0 freeze と campaign 実行に入れる
+状態まで基盤を完成させる。本 Phase 自身は freeze も実測も行わない（既定 = dry-run）。
+
+### 6.1 武装プロトコル（三要素。1 つでも欠ければ `AUTHORIZATION_REQUIRED` で拒否）
+
+- CLI フラグ `--armed`
+- 環境変数 `VG_CAL_C0_FREEZE_AUTHORIZED=1`（campaign 実行は `VG_CAL_CAMPAIGN_AUTHORIZED=1`）
+- 承認ファイルは**チェックアウト外**の `VG_CAL_APPROVAL_DIR`（既定
+  `~/.vg_cal/approvals/`）配下に置く: `gate1_campaign_execution.json`（Gate 1: cost
+  caps 3 値 + E_use bound 受容）/ `gate2_c0_freeze.json`（Gate 2）/
+  `gate3_seal_acceptance.json`（Gate 3）。理由: checkout 内の未追跡ファイルは
+  dirty-tree 判定で武装経路を自己否定し、コミットすれば HEAD が変わり manifest 派生の
+  campaign identity が動くため（PR #343 第 1 巡採用）。各 {approver, approved_at_utc,
+  design_doc_sha256, memo_sha256} を持ち、**campaign_id は含まない**——campaign_id は
+  `manifest_core_sha` から事後導出される値であり承認ファイル作成時点では確定しない
+  （導出規則は §6.2）（PR #343 第 2 巡採用）。sha は**実ファイルのハッシュと
+  照合**。各承認ファイルの content sha256 は manifest（`approvals.<gate>_sha256`）と
+  freeze event の双方に記録する（content-pin）（PR #343 第 1 巡採用）。承認ファイルは
+  **1 回のバイト読み取り**で取得し、parse（JSON decode）と sha256 計算は**同一バッファ**
+  から行う（読み取りを重ねない。TOCTOU・二重読み不整合の回避）（PR #343 第 4 巡採用）
+- `AUTHORIZATION_REQUIRED` は §3.3 閉語彙（BLOCKED_*）とは別軸の pre-campaign 拒否コード
+- **one-time authorization nonce**（承認ファイル再利用による別日 freeze と支出倍増の
+  遮断）: 各承認ファイルは上記フィールドに加えて `authorization_nonce` を持つ
+  （`dry-run` が発行する値をそのまま転記する。発行・照合・記録の手続きは §6.3）。
+  Gate 1（`gate1_campaign_execution.json`）と Gate 2（`gate2_c0_freeze.json`）の
+  承認ファイルは**同一の** `authorization_nonce` を保持しなければならず、不一致は
+  `AUTHORIZATION_REQUIRED`（理由コード `"nonce_mismatch"`）で拒否する（PR #343 第 5
+  巡採用）
+
+### 6.2 secret と出力レイアウト
+
+- secret（split_secret / render_root_secret）は `VG_CAL_SECRET_DIR`（既定
+  `~/.vg_cal/secrets/<campaign_id>/`）に生成。**ディレクトリ
+  `<VG_CAL_SECRET_DIR>/<campaign_id>/` は mode 0700**（探索可能）、**ファイル
+  （split_secret / render_root_secret）は mode 0600**（PR #343 第 3 巡採用）。
+  **リポジトリには commitment `sha256(secret)` のみ**。`.gitignore` に
+  `voice_genesis/calibration/**/secrets/` と `campaigns/*/renders/` を追加
+- 承認ファイル（Gate 1–3）も同様にチェックアウト外に置く: `VG_CAL_APPROVAL_DIR`
+  （既定 `~/.vg_cal/approvals/`）配下の `gate1_campaign_execution.json` /
+  `gate2_c0_freeze.json` / `gate3_seal_acceptance.json`（配置理由・sha256 記録先 =
+  §6.1）（PR #343 第 1 巡採用）
+- `manifest_core_sha` = manifest 本体から `approvals` セクション・secret-commitment
+  フィールド・`realized_split` セクション・`campaign_id` を除いた**凍結前
+  authorization payload**の canonical sha（dry-run 時点で計算可能な値）。
+  `campaign_id = RUN10-CAL-<YYYYMMDD>-<manifest_core_sha[:8]>`。Gate 2 承認
+  （`gate2_c0_freeze.json`）はこの `manifest_core_sha` を束縛対象とする（PR #343
+  第 2 巡採用。定義を「凍結前 authorization payload の sha」として明確化 =
+  PR #343 第 4 巡採用）
+- freeze 済み manifest は上記 authorization payload に加えて `realized_split`
+  （設計正本 §7 の「正本は C0 manifest に列挙した実現済み row→split 表」に従う、
+  実現済み row_id→split 表）を**インライン**で保持し、`realized_split_sha`・
+  commitments・`approvals`（gate1/gate2 の sha256）を併せ持つ。この最終形全体の
+  sha は `manifest_core_sha` とは別に freeze event へ `manifest_sha` として記録
+  する。`realized_split.json` はこのインライン表の convenience copy（写し）で
+  あり、正本はあくまで manifest 内のインライン表である（PR #343 第 2 巡採用。
+  realized_split の正本所在とインライン保持を明確化 = PR #343 第 4 巡採用）
+- Gate 3（seal 受容）は freeze **後**に成立するため manifest には含まれない: D2
+  runner は sealed-stage 作業に入る前に、承認ファイルの sha256 を伴う
+  `GATE3_ACCEPTED` ledger event で束縛する（PR #343 第 2 巡採用）
+- `voice_genesis/calibration/campaigns/<campaign_id>/`: `c0_manifest.json` /
+  `realized_split.json` / `ledger.jsonl` / `events/*.json` / `renders/`（gitignore）/
+  `measurements/`（gitignore）
+
+### 6.3 D1 — freeze producer + 承認 Gate + ユーザー著述入力（`c0_freeze.py`, `approvals.py`, `approvals/README.md`, `e_use_table.py`, `cost_caps.py`）
+
+- `approvals/README.md` は**外部配置場所の説明のみ**を記す（`VG_CAL_APPROVAL_DIR` /
+  既定 `~/.vg_cal/approvals/` 配下の 3 ファイル名。承認 json 実体はリポジトリに
+  一切格納しない）（PR #343 第 1 巡採用）
+- `approvals.py` の承認ファイル読み取りは §6.1 と同じ**1 回のバイト読み取り**を
+  実装契約とする: parse と sha256 は同一バッファから計算し、ファイルを 2 度読まない
+  （PR #343 第 4 巡採用）
+
+- producer は manifest を**コードから生成**: git HEAD full SHA・dirty-tree・path inventory
+  実ハッシュ・Python/numpy/scipy/librosa/soundfile exact version・sample format policy・
+  frozen design 各節（registry / matrix / memo §2.6–2.7 定数から導出）・independence
+  ledger（registry 99 件）・RNG 宣言台帳・RECORDED_OR_ABSENT 環境項目（取得不能は
+  `ABSENT:<理由>`）→ `validate_c0_manifest` を通す
+- dry-run: manifest を生成・検証して報告するだけ（書込なし・secret なし）。この際
+  `manifest_core_sha`（§6.2）を報告し、Gate 2 承認はこの値を束縛対象とする
+  （PR #343 第 2 巡採用）。**同時に** `authorization_nonce`（`secrets.token_hex(16)`）
+  を新規発行して報告する。Gate 1・Gate 2 双方の承認ファイルはこの nonce をそのまま
+  転記する（nonce の一致要件・不一致時の拒否コードは §6.1）（PR #343 第 5 巡採用）
+- armed: **secret 生成に入る前**に one-time authorization nonce を検査する（PR #343
+  第 5 巡採用）——既存の全 `campaigns/*/c0_manifest.json` を走査し、同一
+  `authorization_nonce`（§6.1）を保持する manifest が**既に存在する**場合は副作用なし
+  （secret 生成・書込のいずれも行わない）で拒否する（理由コード `"nonce_already_used"`）。
+  この検査を通過した場合のみ armed 手続きへ進み、凍結 manifest には検査済みの
+  `authorization_nonce` をそのまま記録する（次回以降の armed 実行が同じ承認ファイルを
+  再利用しても上記走査で検出できるようにするため。PR #343 第 5 巡採用）→ secret 生成 → commitment 記入 → splitter 実行 → 実現 split 表 → `c0_freeze` event を
+  ledger 先頭に記帳 → **直後に `split_frozen` event（`realized_split_map_hash`/
+  `seal_commitment`）を記帳**（`c0_freeze.split_frozen_event_payload()` が正本。
+  round 14 finding #1: `provenance.Ledger.check_leakage()` の
+  `_verified_split_freeze_commitment()` はこの event を要求するが、旧稿はこの
+  producer 側の記帳を欠いており実際の C0→...→C4 flow が常に `BLOCKED_LEAKAGE` に
+  なっていた。`[UNDERSPEC-CAL-D28]`）→ **全成果物を staging に書く**（同一 FS 上の
+  `campaigns/.staging-<id>/` と secret_dir 側 staging）→ read-back で
+  `validate_c0_manifest` / `verify_split` / `Ledger.verify_chain` を再実行 → 全て通れば
+  **公開順序を固定**する: まず secret 側を `os.replace`、続いて campaign 側を
+  `os.replace`（secret を先に公開してから campaign を公開する）。**公開（2 回の
+  `os.replace`）と `detect_orphans()` は単一の排他ロック `<secret_dir>/.publish.lock`
+  （`fcntl.flock`）の下で実行し、両者が競合しないことを保証する**（PR #343 第 3 巡
+  採用）。**最初の `os.replace` の直前**に secret dir 側へ in-progress マーカー
+  `.publishing` を置き、campaign 側の公開が完了した時点で削除する（PR #343 第 3 巡
+  採用）。campaign 側の rename が失敗した場合は**既に公開済みの secret dir を削除し、
+  何も公開されていない状態へロールバック**する（PR #343 第 2 巡採用）。staging 検証段
+  の失敗時は staging を削除し何も公開しない（secret も残さない）。テスト要件: **2 回の
+  `os.replace` の間**に例外を注入しても `campaigns/<id>/` と secret のどちらも残らない
+  こと（PR #343 第 2 巡採用。旧稿の「公開直前の例外注入」から対象タイミングを訂正）。
+  **git commit はしない**（ユーザー操作）
+- `detect_orphans()`: campaign dir はあるが対応する secret が無い → fail-closed
+  （runner は当該 campaign の実行を拒否する）。secret はあるが対応する campaign dir
+  が無い → orphan secret として削除する（PR #343 第 2 巡採用）。**ただし `.staging-*`
+  ディレクトリは削除対象から除外する**。`detect_orphans()` 自体も上記の
+  `.publish.lock` を取得してから走査する（PR #343 第 3 巡採用）。
+  **`.publishing` マーカーを持つ secret dir の回収規則**: `.publish.lock` を
+  **取得できた場合**（= 他 fd がロックを保持していない = 生存中の公開処理が無い
+  ことを意味する）、対応する campaign dir の有無で分岐する——campaign dir が
+  **無ければ**公開が完了しなかった stale な中断とみなし secret dir ごと削除する。
+  campaign dir が**あれば**公開自体は完了済みでマーカー削除だけが中断したとみなし、
+  マーカーのみを削除して当該 campaign を正当なものとして扱う（secret 本体は
+  削除しない）。**ロックが他 fd に保持されている（= 生存中の公開処理が進行中）場合は
+  マーカーの有無・campaign dir の有無に関わらず一切触れない**（PR #343 第 4 巡
+  採用）。テスト要件: marker あり・対応する campaign dir 無し・lock 取得可能 →
+  secret dir が削除されること／lock が他 fd に保持されている場合はマーカー付き
+  secret dir が一切変更されないこと（PR #343 第 4 巡採用。旧稿の「in-progress
+  マーカーは常に削除しない」という一律規則を、lock 取得可否と campaign dir 有無に
+  基づく上記の回収規則へ訂正）
+- E_use evidence table: §10.2 の 13 列 schema + loader/validator + テンプレート生成
+  （全 construct 行を `evidence_class: UNJUSTIFIED` かつ `e_use_value: null` で出力。
+  数値 placeholder 禁止）。UNJUSTIFIED 行は自動 ceiling（DIRECTIONAL/DIAGNOSTIC_ONLY）
+- cost caps / stop rules: `c0_validate.COST_CAPS_REQUIRED_KEYS` と一致する 3 キー
+  `compute`（**CPU 秒数**。wall-clock ではない — round 14 finding #2:
+  `--workers>1` 下では wall time は並行実行分の CPU 時間を過小計上するため、
+  各 fresh-process worker が自身の `resource.getrusage` 由来の `cpu_seconds` を
+  報告しそれを課金する。`[UNDERSPEC-CAL-D29]`）/ `storage`（bytes）/ `budget`
+  （通貨単位）の loader、超過判定 API
+  （PR #343 第 2 巡採用）
+
+### 6.4 D2 — campaign runner（`campaign/` サブパッケージ）
+
+**runner 運用契約**（round 15 finding #2 見送り・境界宣言。`[UNDERSPEC-CAL-D32]`、
+README 参照）: 1 campaign に対して armed プロセスは同時に 1 つのみを運用契約とする
+（single-operator の逐次起動。並行複数プロセスはロックで排除するのではなく、
+round 13/14 の duplicate-key 再構成 fail-closed（`StaleMeasurementError` 等）と
+`[UNDERSPEC-CAL-D31]`（round 15 finding #3。counters を ledger 由来に束縛）により
+過小計上を防ぐ形で運用契約違反を検出する）。
+
+**プロセス境界の運用契約**（round 17 finding #4 見送り・境界宣言。
+`[UNDERSPEC-CAL-D40]`、README 参照）: `cli.py` の canonical path 照合
+（`_canonical_path_violations`。§6.4 上記の finding #7）が保証するのは
+「stage 呼び出しごとに新規 `python -m voice_genesis.calibration.campaign`
+プロセスを起動し、各プロセスが自身の起動時に path-hash 照合を実行してから
+（同一プロセス内で既に import 済みの）モジュールを使う」運用を前提とした
+場合に限る。in-process で `main()` を長時間・繰り返し呼ぶ、またはモジュールを
+プロセスをまたいで再利用するような呼び出し方は本運用契約の対象外（その
+ような呼び出し方の下では、照合後にファイルが書き換わってもプロセスが
+再 import しない限り検出できない）。
+
+**変更禁止の運用契約**（round 18 finding 2 件見送り・境界宣言。
+`[UNDERSPEC-CAL-D41]`/`[UNDERSPEC-CAL-D42]`、README 参照）: armed stage の実行中は
+checkout（凍結済み generator/candidate ファイル）も campaign dir 配下の artifact
+（render 済み PCM 等）も一切変更してはならない。canonical な変更は新規 campaign を
+要する。
+
+- 手続 Gate 単位のサブコマンド: `c1-fixtures`（**calibration + selection split の行と
+  negative control 行のみ** render + determinism 検査（同部分集合）+ ledger。**negative
+  control 行の render 済み artifact は sha256 で ledger へ pin し、`c4-holdout` 段では
+  再 render せずそのまま再利用する**（render 会計は本節末尾の union 式を参照。PR #343
+  第 5 巡採用）。holdout
+  行の render は行わない — `unseal` 後の `c4-holdout` 段で行う。これは §7 leakage
+  契約（holdout 非 control 行の unseal 前 render は `BLOCKED_LEAKAGE`）と整合させる
+  ための制約（PR #343 第 1 巡採用））→ `c2-baseline`（B0 × calibration split・
+  tolerance 導出）→ `c3a-f0-selection`（**F0_CONTROL candidates × (selection 行 ∪
+  F0_CONTROL の全 negative control instance、home split に依らない) →
+  F0 selection → `F0_SELECTION_FROZEN` event**。F0_CONTROL は唯一 F0 を出力する
+  meter であり、F0 依存候補の入力を確定させるため他の selection に**先立って**完了
+  させなければならない）→ `c3b-selection`（**F0_CONTROL を除く**全候補 × (自 family
+  selection 行 ∪ 当該 family の全 negative control instance、home split に依らない)・
+  fail filter・lexicographic・`SELECTION_FROZEN` event（round 17 finding #1 採用:
+  §2.7 control 共有契約により negative control は home split が CALIBRATION/
+  HOLDOUT でも C3a/C3b の測定・fail filter 対象に含める——C1 で「全 control」として
+  既に render 済みのため追加 render は発生しない。宣言された negative control 行の
+  一部でも record を欠けば `negative_controls_incomplete` fail filter で
+  ineligible とする。`[UNDERSPEC-CAL-D37]`）。**F0 依存候補
+  （D4C・harmonic-residual）は fixture の truth F0 ではなく `c3a-f0-selection` で
+  選択された F0 candidate の実測出力を instance 単位で入力とする**（fixture truth F0
+  を直接使うことは絶対にない。設計正本 §8）。`c3a-f0-selection` 完了（`F0_SELECTION_FROZEN`
+  event の記帳）前に `c3b-selection` を開始することはできない（PR #343 第 5 巡採用。
+  旧稿の単一 `c3-selection` を F0 選択の先行完了を強制する 2 段に分割））→
+  `unseal`（§7 の 5 sha 相互参照検査）→
+  `c4-holdout`（選択 1 候補 + B0 × holdout・**holdout 非 control 行の render**（control
+  行は `c1-fixtures` で render 済みの artifact を ledger sha256 突合の上で再利用し、
+  再 render しない。PR #343 第 5 巡採用）（C1 と**同一の**
+  generator determinism 検査を holdout 行にも適用する: 2 回の fresh-process
+  render で byte-identical PCM を確認し、両 render を holdout evidence 受理前に
+  ledger へ記帳する。`HOLDOUT_EXECUTED_VALID` はこの determinism 検査通過を必須
+  とする（PR #343 第 4 巡採用））・gate・terminal
+  status cascade）→ `close`（CAMPAIGN_CLOSED・debt_discharged 導出・M6）
+- 手続 Gate の単調性を ledger event で強制。各段は ledger 駆動で**再開可能**だが、
+  work unit をスキップしてよいのは**ledger に記帳された artifact の sha256 が
+  render/measurement ファイルの現在バイト列と一致する場合のみ**。ファイル欠損また
+  は sha 不一致は stale 扱いで fail-closed（無言スキップ・無言再 render のいずれも
+  禁止）（PR #343 第 2 巡採用）
+- meter 反復: within-process 3 call + fresh-process 3（subprocess worker）。並列 worker は
+  per-worker JSONL → 直列 append 集約（provenance 契約）
+- cost cap / stop rule 超過 → stop event 記帳 + fail-closed 終了。`cli.py main()` は
+  `counters.json` を読み戻した**直後**（stage dispatch の前）にも同じ超過判定を
+  1 回実行し、既に breach 済みの永続化 counter を再読込しただけで dispatch が
+  素通りする（retry のたびに 1 work unit 分課金が進む）ことを防ぐ。この事前
+  チェックは既に記録済みの stop_event と同一内容なら重複記帳しない（idempotent。
+  round 13 finding #2、`[UNDERSPEC-CAL-D26]`）
+- **budget accounting mode**（round 13 finding #3、`[UNDERSPEC-CAL-D27]`）:
+  `cost_caps.CostCaps` は `compute`/`storage`/`budget` の 3 値に加え
+  `budget_accounting_mode`（closed vocabulary: `"local_zero_cost"` | `"per_unit_fixed"`
+  + `"per_unit_fixed"` 時必須の `budget_unit_cost`）を持つ。render/measurement の
+  各 work unit はこの宣言に従って `budget_used` へ加算する（`"local_zero_cost"` は
+  常に 0、`"per_unit_fixed"` は `budget_unit_cost` を一律加算）— 会計規則が
+  存在しないまま `CostCaps.budget` cap が常に非発火という状態を終端させた。mode が
+  欠落/閉語彙外なら `BudgetAccountingUndeclaredError`（`BUDGET_ACCOUNTING_UNDECLARED`）
+  で dispatch を fail-closed に拒否する。Gate 1 承認 payload の `cost_caps` に
+  この mode を含め、凍結 manifest の `frozen_design.cost_caps` へそのまま埋め込む
+  ため `manifest_core_sha` の対象。本キャンペーンの承認値は `"local_zero_cost"`
+  （`approvals/records/GATE1_DECISION_RECORD.md` §2 参照）
+- dry-run（既定）: 計画のみ — work unit 件数（instances 2,280 / renders = campaign 合計
+  4,560。**4,560 = 2,280 instances × 2 fresh-process renders**（各 instance を
+  generator determinism 検査のため 2 回 fresh-process render し byte 一致を確認する
+  ——上記 `c1-fixtures` の determinism 検査・`c4-holdout` の determinism 検査の
+  双方がこの 2 render を構成する）。**render 会計は和集合（union）で定まる**（PR #343
+  第 5 巡採用。`c1-fixtures` と `c4-holdout` の render 対象 instance 集合は互いに素
+  であり二重計上しない）: `c1-fixtures` = (calibration + selection split の
+  non-control instances + **全 control instances**) × 2、`c4-holdout` = holdout
+  split の **non-control** instances × 2（control instances は `c1-fixtures` で
+  render 済みの artifact を再利用し `c4-holdout` では再 render しない）。realized
+  split は secret 依存のため確定内訳は freeze
+  後に定まり、dry-run 段階は §5.2 の想定 split 比で概算表示。**合計 4,560（=
+  2,280 instances × 2）は不変**（PR
+  #343 第 1 巡採用。render 内訳の算出式を「instances × 2 fresh-process renders」に
+  訂正 = PR #343 第 4 巡採用。render 会計を「union: c1 = (non-control + 全 control) ×2
+  / c4 = holdout non-control ×2」として明確化し、control instances の c4 再 render を
+  否定 = PR #343 第 5 巡採用） / meter calls 13,680 per impl / selection ≈10^5）と
+  cap の照合表を出力

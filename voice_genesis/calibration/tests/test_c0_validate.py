@@ -51,10 +51,13 @@ def _current_checkout_sha() -> str:
 
 
 def _classify_path(path: str) -> str:
-    """分類規則: `candidates/` 配下 → meter、`fixtures/generators/` 配下 →
-    generator、`tests/` 配下 → test、それ以外 → schema。分類そのものは記録上
-    の区分であり `_check_path_inventory_coverage` は合併集合の網羅性のみを
-    要求する。"""
+    """分類規則: `voice_genesis/harness/` 配下 → meter_implementation
+    （`[UNDERSPEC-CAL-D49]`）、`candidates/` 配下 → meter、
+    `fixtures/generators/` 配下 → generator、`tests/` 配下 → test、それ以外 →
+    schema。分類そのものは記録上の区分であり `_check_path_inventory_coverage`
+    は合併集合の網羅性のみを要求する。"""
+    if path.startswith("voice_genesis/harness/"):
+        return "meter_implementation_paths_sha256"
     if path.startswith("voice_genesis/calibration/candidates/"):
         return "meter_paths_sha256"
     if path.startswith("voice_genesis/calibration/fixtures/generators/"):
@@ -66,12 +69,13 @@ def _classify_path(path: str) -> str:
 
 def _full_path_inventory_maps() -> dict[str, dict[str, str]]:
     """`c0_validate.calibration_path_inventory()`（本体側と同一の inventory
-    helper。Codex レビュー 2026-09-01 P1）から 4 カテゴリの path+hash マップを
+    helper。Codex レビュー 2026-09-01 P1）から 5 カテゴリの path+hash マップを
     機械生成する。宣言する sha256 は実ファイルバイトの実測値
     （`_real_sha256`。finding #1: 内容と無関係な任意ハッシュでは通過させない）。
     """
     out: dict[str, dict[str, str]] = {
         "meter_paths_sha256": {},
+        "meter_implementation_paths_sha256": {},
         "generator_paths_sha256": {},
         "schema_paths_sha256": {},
         "test_paths_sha256": {},
@@ -366,6 +370,7 @@ def test_hollow_empty_container_manifest_is_blocked() -> None:
         "measurement_directory_status": "",
         "candidates": {
             "meter_paths_sha256": {},
+            "meter_implementation_paths_sha256": {},
             "generator_paths_sha256": {},
             "schema_paths_sha256": {},
             "test_paths_sha256": {},
@@ -425,16 +430,17 @@ def test_hash_map_entry_with_empty_path_blocks() -> None:
 
 
 def test_path_inventory_covers_full_calibration_package() -> None:
-    """fixture 自体の健全性: `_full_path_inventory_maps()` の 4 カテゴリ合併集合
+    """fixture 自体の健全性: `_full_path_inventory_maps()` の 5 カテゴリ合併集合
     が `calibration_path_inventory()` と厳密一致すること。"""
     maps = _full_path_inventory_maps()
-    declared = set(maps["meter_paths_sha256"]) | set(maps["generator_paths_sha256"])
+    declared = set(maps["meter_paths_sha256"]) | set(maps["meter_implementation_paths_sha256"])
+    declared |= set(maps["generator_paths_sha256"])
     declared |= set(maps["schema_paths_sha256"]) | set(maps["test_paths_sha256"])
     assert declared == c0_validate.calibration_path_inventory()
 
 
 def test_path_inventory_dropped_file_blocks() -> None:
-    """[Codex レビュー 2026-09-01 P1] ある実ファイルを 4 マップいずれからも
+    """[Codex レビュー 2026-09-01 P1] ある実ファイルを 5 マップいずれからも
     省略すると、supplied entries の形状は妥当なままでも BLOCK する
     （従来は "供給された entry のみ" しか検証していなかったため通過していた）。
     """
@@ -556,17 +562,32 @@ def test_path_inventory_immune_to_missing_file_in_incomplete_checkout(
     scanned = c0_validate.scan_calibration_tree_inventory(repo_root=tmp_path)
     assert dropped not in scanned  # 物理的に欠けているので live scan には現れない
 
+    # `scan_calibration_tree_inventory` は `voice_genesis/calibration/` 配下
+    # しか rglob しないため、`meter_implementation_paths_sha256` の harness
+    # path（`resolve_b0_wrapper_harness_paths`。`[UNDERSPEC-CAL-D49]`）は
+    # `scanned` には現れない。tmp_path 上には harness ファイルも物理的に
+    # 存在する（`dropped` 以外は全 committed path を空ファイルとして書いた）
+    # ため、ここへ別途合流させないと「dropped だけが欠けた checkout」では
+    # なく「meter_implementation カテゴリ全体が空の checkout」になってしまい、
+    # 本テストが検証したい「1 file だけの欠落検出」が別カテゴリ丸ごと欠落の
+    # ノイズに埋もれる。tmp_path 上の `b0_wrappers.py` は中身が空ファイルの
+    # ため `repo_root=tmp_path` では静的解析できない — 実リポジトリ（既定の
+    # `_REPO_ROOT`）に対して解決し、どの harness path が「このシナリオでは
+    # 欠けていない」とみなすかを求める。
+    harness_paths = c0_validate.resolve_b0_wrapper_harness_paths()
+
     # (2) manifest の hash map は「実際に checkout 上に存在するファイルだけ」を
     #     反映して生成したとする（不完全な checkout をそのまま反映した現実的な
     #     シナリオ）。
     manifest = _complete_manifest()
     grouped: dict[str, dict[str, str]] = {
         "meter_paths_sha256": {},
+        "meter_implementation_paths_sha256": {},
         "generator_paths_sha256": {},
         "schema_paths_sha256": {},
         "test_paths_sha256": {},
     }
-    for path in sorted(scanned):
+    for path in sorted(scanned | harness_paths):
         grouped[_classify_path(path)][path] = _fake_sha256(path)
     manifest["candidates"] = grouped
 

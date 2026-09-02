@@ -68,6 +68,70 @@ def test_auto_ceiling_for_unjustified() -> None:
 
 
 # ---------------------------------------------------------------------------
+# EUseEvidenceRow.e_use_mode (`[UNDERSPEC-CAL-D11]`, Part B — absolute/relative)
+# ---------------------------------------------------------------------------
+
+
+def test_e_use_evidence_row_e_use_mode_defaults_to_absolute() -> None:
+    row = EUseEvidenceRow(
+        construct_id="c1",
+        unit="hz",
+        domain="PRIMARY",
+        intended_use="x",
+        maximum_claim="ABSOLUTE",
+        e_use_value=1.0,
+        derivation_rule="none",
+        evidence_class=EvidenceClass.NORMATIVE_SPEC,
+        source_id_or_url="",
+        source_checked_at="",
+        source_hash_or_version="",
+        applicability_argument="",
+        review_status="draft",
+    )
+    assert row.e_use_mode == "absolute"
+
+
+def test_e_use_evidence_row_e_use_mode_relative_accepted() -> None:
+    row = EUseEvidenceRow(
+        construct_id="c1",
+        unit="hz",
+        domain="PRIMARY",
+        intended_use="x",
+        maximum_claim="ABSOLUTE",
+        e_use_value=0.05,
+        derivation_rule="5% of declared truth",
+        evidence_class=EvidenceClass.USER_ACCEPTED_USE_BOUND,
+        source_id_or_url="",
+        source_checked_at="",
+        source_hash_or_version="",
+        applicability_argument="",
+        review_status="draft",
+        e_use_mode="relative",
+    )
+    assert row.e_use_mode == "relative"
+
+
+def test_e_use_evidence_row_e_use_mode_invalid_value_rejected() -> None:
+    with pytest.raises(ValueError):
+        EUseEvidenceRow(
+            construct_id="c1",
+            unit="hz",
+            domain="PRIMARY",
+            intended_use="x",
+            maximum_claim="ABSOLUTE",
+            e_use_value=1.0,
+            derivation_rule="none",
+            evidence_class=EvidenceClass.NORMATIVE_SPEC,
+            source_id_or_url="",
+            source_checked_at="",
+            source_hash_or_version="",
+            applicability_argument="",
+            review_status="draft",
+            e_use_mode="percent",
+        )
+
+
+# ---------------------------------------------------------------------------
 # ABSOLUTE gates
 # ---------------------------------------------------------------------------
 

@@ -117,6 +117,32 @@ def positive_detection_instances(
     return frozenset(out)
 
 
+def negative_control_instances(
+    rows: Iterable[MatrixRow],
+    *,
+    family: str | None = None,
+) -> frozenset[tuple[str, int]]:
+    """round 17 finding #1（採用）: §2.7 control 共有契約「negative control 行は
+    ... 全段階（selection の共通 fail filter / holdout gate 5）で評価可とする」の
+    「全段階」には C3a/C3b の測定対象 instance 集合そのものが含まれる——これらの行は
+    C1 で「全 control」としてすでに render 済みである（`workunits.
+    enumerate_c1_render_units`）。`assignment`/`split` に依らず（HMAC home split が
+    CALIBRATION/HOLDOUT の行も含め）、`family`（省略時は全 family）の負の control 行
+    全件の `(row_id, probe_index)` instance 集合を返す。`positive_detection_instances()`
+    が正 control（truth-core 行）に対して行う「評価対象 split 内の全 truth-core 行」
+    という拡張の、負 control 側の対応物（ただし split 制約自体を持たない点が異なる —
+    負 control は sweep truth を運ばないため、どの split に home していようと C3 の
+    fail filter 母集団としては常に含める）。"""
+    out: set[tuple[str, int]] = set()
+    for mr in rows:
+        if mr.row.control_class is None:
+            continue
+        if family is not None and mr.row.family != family:
+            continue
+        out.update((mr.row_id, p) for p in range(PROBE_REPEATS))
+    return frozenset(out)
+
+
 def negative_controls_by_class(
     rows: Iterable[MatrixRow],
 ) -> dict[str, tuple[str, ...]]:
