@@ -119,6 +119,7 @@ from voice_genesis.calibration.cost_caps import check as cost_caps_check
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
 from voice_genesis.calibration.fixtures.controls import (
     negative_control_row_ids,
+    non_boundary_selection_instances,
     positive_detection_instances,
 )
 from voice_genesis.calibration.fixtures.matrix import build_matrix
@@ -626,16 +627,36 @@ def _positive_instances_for_selection(
     (`[UNDERSPEC-CAL-D25]`).
 
     round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`): returns the full
-    `(row_id, probe_index)` instance set (not just row_id) — this is also
-    the frozen expected-instance population `_criteria_with_fail_filters`
-    passes to `selection_stage.candidate_fail_filter_report()`'s new
-    `coverage_incomplete` filter, which needs instance granularity to catch
-    an F0-unusable single probe_index gap that a row-id-only view (a row
-    counts as "seen" if any one of its probe_index records exists) cannot
-    see. Callers derive the row-id-only view for the row-level
-    `positive_control_non_fire`/`positive_rows_absent` filters with
-    `frozenset(row_id for row_id, _ in instances)`."""
+    `(row_id, probe_index)` instance set (not just row_id). Callers derive
+    the row-id-only view for the row-level `positive_control_non_fire`/
+    `positive_rows_absent` filters with `frozenset(row_id for row_id, _ in
+    instances)`.
+
+    round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`): this TRUTH_CORE
+    -only instance set no longer feeds `coverage_incomplete` directly — that
+    filter's expected-instance population was widened to TRUTH_CORE +
+    CONFOUND (see `_expected_coverage_instances_for_selection()` below).
+    This function's row-id-only derivative still exclusively backs
+    `positive_control_row_ids`/`positive_control_non_fire`/
+    `positive_rows_absent`, which must stay TRUTH_CORE-scoped (a CONFOUND
+    row is not a positive-detection anchor)."""
     return positive_detection_instances(rows, assignment, Split.SELECTION, family=family)
+
+
+def _expected_coverage_instances_for_selection(
+    rows: Sequence[Any], assignment: Mapping[str, Any], family: str
+) -> frozenset[tuple[str, int]]:
+    """round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`): the expected
+    non-BOUNDARY (TRUTH_CORE + CONFOUND) instance population for `family`'s
+    evaluated SELECTION split (`fixtures.controls.
+    non_boundary_selection_instances()`), passed as `candidate_fail_filter_
+    report()`'s `expected_coverage_instances` — deliberately a *separate*
+    function from `_positive_instances_for_selection()` above (whose
+    TRUTH_CORE-only set must stay narrow for `positive_control_row_ids`).
+    See `non_boundary_selection_instances()`'s docstring for the fail-open
+    scenario this closes (a candidate consistently missing on hard CONFOUND
+    rows was invisible to D64's TRUTH_CORE-only `coverage_incomplete`)."""
+    return non_boundary_selection_instances(rows, assignment, Split.SELECTION, family=family)
 
 
 def _criteria_with_fail_filters(
@@ -645,7 +666,7 @@ def _criteria_with_fail_filters(
     *,
     negative_control_ids: frozenset[str],
     positive_control_ids: frozenset[str],
-    expected_positive_instances: frozenset[tuple[str, int]] = frozenset(),
+    expected_coverage_instances: frozenset[tuple[str, int]] = frozenset(),
     max_claim_scope: frozenset[str],
 ) -> tuple[Any, dict[str, bool], dict[str, object]]:
     """finding #8: `build_candidate_criteria()`（有限値の有無のみ）に加えて
@@ -653,20 +674,22 @@ def _criteria_with_fail_filters(
     発火していれば `eligible=False` へ落とす。finding #11: さらに
     `max_claim_scope` 外の construct なら ceiling を capping する
     （`select_across_ceilings` へ渡す前に反映 — capping 済み ceiling で
-    ABSOLUTE pool から除外される）。round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`):
-    `expected_positive_instances`（`_positive_instances_for_selection()`）を
-    そのまま `candidate_fail_filter_report()` の `expected_truth_core_
-    instances` へ渡し、新設 `coverage_incomplete` filter を通す。
-    `(criteria, fail_filter_report, claim_scope_report)` を返す — 呼び出し元
-    はこれらを `run_c3a_f0_selection`/`run_c3b_selection` の対応する
-    `*_reports*` へ積み上げて SELECTION_FROZEN payload に記録する。"""
+    ABSOLUTE pool から除外される）。round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`)
+    →round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`): `expected_
+    coverage_instances`（`_expected_coverage_instances_for_selection()` —
+    TRUTH_CORE + CONFOUND、D64 時点の TRUTH_CORE 限定から拡張済み）を
+    `candidate_fail_filter_report()` の同名引数へそのまま渡し、
+    `coverage_incomplete` filter を通す。`(criteria, fail_filter_report,
+    claim_scope_report)` を返す — 呼び出し元はこれらを
+    `run_c3a_f0_selection`/`run_c3b_selection` の対応する `*_reports*` へ
+    積み上げて SELECTION_FROZEN payload に記録する。"""
     base = selection_stage.build_candidate_criteria(candidate, records, truth_by_instance)
     report = selection_stage.candidate_fail_filter_report(
         candidate,
         records,
         negative_control_row_ids=negative_control_ids,
         positive_control_row_ids=positive_control_ids,
-        expected_truth_core_instances=expected_positive_instances,
+        expected_coverage_instances=expected_coverage_instances,
     )
     eligible = base.eligible and selection_stage.eligible_after_fail_filters(report)
     capped, scope_report = selection_stage.claim_scope_report(candidate, max_claim_scope)
@@ -798,6 +821,12 @@ def _run_c3a(
         matrix_rows, assignment, FixtureFamily.F0_CONTROL.value
     )
     pos_ids = frozenset(row_id for row_id, _ in pos_instances)
+    # round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`): apply the same
+    # widened (TRUTH_CORE + CONFOUND) expected-instance semantics to C3a's
+    # F0_CONTROL family selection, not just C3b/C4's non-F0 families.
+    coverage_instances = _expected_coverage_instances_for_selection(
+        matrix_rows, assignment, FixtureFamily.F0_CONTROL.value
+    )
     known_truth_by_instance = {k: v for k, v in truth_by_instance.items() if v is not None}
     criteria: list[Any] = []
     fail_filter_reports: dict[str, dict[str, bool]] = {}
@@ -809,7 +838,7 @@ def _run_c3a(
             known_truth_by_instance,
             negative_control_ids=neg_ids,
             positive_control_ids=pos_ids,
-            expected_positive_instances=pos_instances,
+            expected_coverage_instances=coverage_instances,
             max_claim_scope=max_claim_scope,
         )
         criteria.append(candidate_criteria)
@@ -956,6 +985,13 @@ def _run_c3b(
         neg_ids = negative_control_row_ids(family_rows)
         pos_instances = _positive_instances_for_selection(family_rows, assignment, family.value)
         pos_ids = frozenset(row_id for row_id, _ in pos_instances)
+        # round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`): widened
+        # (TRUTH_CORE + CONFOUND) expected-instance population for
+        # `coverage_incomplete`, separate from `pos_instances` above (which
+        # must stay TRUTH_CORE-only for `positive_control_row_ids`).
+        coverage_instances = _expected_coverage_instances_for_selection(
+            family_rows, assignment, family.value
+        )
         family_criteria: list[Any] = []
         family_fail_filter_reports: dict[str, dict[str, bool]] = {}
         family_claim_scope_reports: dict[str, dict[str, object]] = {}
@@ -966,7 +1002,7 @@ def _run_c3b(
                 truth_by_instance,
                 negative_control_ids=neg_ids,
                 positive_control_ids=pos_ids,
-                expected_positive_instances=pos_instances,
+                expected_coverage_instances=coverage_instances,
                 max_claim_scope=max_claim_scope,
             )
             family_criteria.append(candidate_criteria)
@@ -1160,32 +1196,63 @@ def _run_c4(
         # skipped on every C4 holdout instance (`[UNDERSPEC-CAL-D61]`/
         # `[UNDERSPEC-CAL-D65]`: `render_and_measure_holdout()` never calls
         # it, so its cells are simply absent from `records_by_family`, not
-        # present-with-missing_reason). The DIAGNOSTIC_ONLY branch below
-        # would then close under `selected_id` despite zero
-        # selected-candidate outputs. design 引用 (`DESIGN_VG_METER_CAL_DEBT_
-        # v1.0.md` §11): 「score 計算可能だが PRIMARY 一部 output missing で
-        # gate 不通過 → DIAGNOSTIC_ONLY/OUTPUT_MISSING」——ここはその手前、
-        # PRIMARY output が selected candidate について**丸ごと**無い（score
-        # 計算材料自体が無い）場合であり、§11 の全欠損側の帰結
-        # `NOT_EVALUABLE`/`OUTPUT_NOT_EVALUABLE` を適用する。coverage は
-        # `selected_id` 自身の record 集合で判定する（B0 の record 存在は
-        # 無関係）。`[UNDERSPEC-CAL-D64]` と同じ「record-presence-only」規約
-        # （値の欠損ではなく instance の欠落のみを検査）を holdout 側に適用
-        # し、`records_by_family[family.value]` を構築した際の期待 instance
-        # 集合そのもの（`workunits.c4_holdout_instances`）と突き合わせる —
-        # 部分被覆（一部 instance のみ record あり）も同じ D64 規則（1 件でも
-        # 欠ければ不合格）で NOT_EVALUABLE にする。完全被覆時は下の
-        # DIAGNOSTIC_ONLY 経路のまま変更しない。
+        # present-with-missing_reason). coverage は `selected_id` 自身の
+        # record 集合で判定する（B0 の record 存在は無関係）——
+        # `records_by_family[family.value]` を構築した際の期待 instance 集合
+        # そのもの（`workunits.c4_holdout_instances`）と突き合わせる。
+        #
+        # round 30 self-review ADOPT 採用（finding #2/#3/#4）: `[UNDERSPEC-
+        # CAL-D66]` の record-presence-only 規約は §11 の 2 帰結を取り違えて
+        # いた。design 引用（`DESIGN_VG_METER_CAL_DEBT_v1.0.md` §11）:
+        # 「critical output 全欠損 or 最小数割れで score/gate 計算不能 →
+        # NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE」対「score 計算可能だが PRIMARY
+        # 一部 output missing で gate 不通過 → DIAGNOSTIC_ONLY/OUTPUT_
+        # MISSING」——1 件の instance を欠くだけでは score 計算不能にはならず
+        # `NOT_EVALUABLE` の対象ではない（finding #2）。**全欠損**（usable な
+        # record が 1 件も無い）のみ `NOT_EVALUABLE`/`OUTPUT_NOT_EVALUABLE`
+        # とし、**部分被覆**（1 件以上は usable だが期待集合の一部を欠く）は
+        # `DIAGNOSTIC_ONLY`/`OUTPUT_MISSING` へ倒す（gate 1 不通過の事実は
+        # `gate_detail` に記録する）。完全被覆時は無変更。
+        #
+        # finding #3: 判定を **値の有無** にする——record が存在するだけでは
+        # 「usable」と数えない。`measure_stage.primary_output_value()`（missing_
+        # reason/ineligible を除外）+ `math.isfinite()` で有限値が読み取れる
+        # record のみ usable instance に数える。`selected_candidate_obj` が
+        # プールに見つからない（`selected_id` が stale/無効）場合は
+        # `algorithm_family` が引けないため record-presence へフォールバック
+        # する——この場合 `own_selected_records` 自体が空であることがほとんど
+        # で、いずれにせよ全欠損 NOT_EVALUABLE 枝に落ちる。
+        #
+        # finding #4: `claim_scope_report()` を分岐の**前**で計算し、
+        # NOT_EVALUABLE/DIAGNOSTIC_ONLY いずれの `gate_detail` にも
+        # `claim_scope` を含める（旧実装は早期 `continue` でこの監査事実を
+        # 落としていた）。
         own_selected_records = [
             r for r in records_by_family[family.value] if r.candidate_id == selected_id
         ]
         expected_holdout_instances = frozenset(
             workunits.c4_holdout_instances(matrix_rows, assignment, family=family.value)
         )
-        seen_holdout_instances = {(r.row_id, r.probe_index) for r in own_selected_records}
-        if not own_selected_records or (
-            expected_holdout_instances and not expected_holdout_instances <= seen_holdout_instances
-        ):
+        selected_candidate_obj = candidate_by_candidate_id.get(selected_id)
+        claim_scope_detail: dict[str, object] = {}
+        if selected_candidate_obj is not None:
+            _capped, claim_scope_detail = selection_stage.claim_scope_report(
+                selected_candidate_obj, max_claim_scope
+            )
+            usable_holdout_instances = {
+                (r.row_id, r.probe_index)
+                for r in own_selected_records
+                if (
+                    (value := measure_stage.primary_output_value(selected_candidate_obj, r.output))
+                    is not None
+                    and math.isfinite(value)
+                )
+            }
+        else:
+            usable_holdout_instances = {(r.row_id, r.probe_index) for r in own_selected_records}
+        missing_expected_instances = expected_holdout_instances - usable_holdout_instances
+
+        if not usable_holdout_instances:
             results.append(
                 holdout_stage.MeterHoldoutResult(
                     meter_id=meter.value,
@@ -1195,13 +1262,36 @@ def _run_c4(
                     selected_candidate_id=selected_id,
                     gate_detail={
                         "reason": (
-                            "[UNDERSPEC-CAL-D66] selected holdout candidate has no "
-                            "usable output for one or more expected C4 instances"
+                            "[UNDERSPEC-CAL-D69] selected holdout candidate has no "
+                            "measurement record with a usable (finite, non-missing) "
+                            "primary value for any expected C4 instance"
+                        ),
+                        "expected_instance_count": len(expected_holdout_instances),
+                        "seen_instance_count": 0,
+                        "claim_scope": claim_scope_detail,
+                    },
+                )
+            )
+            continue
+        if expected_holdout_instances and missing_expected_instances:
+            results.append(
+                holdout_stage.MeterHoldoutResult(
+                    meter_id=meter.value,
+                    terminal_status=TerminalStatus.DIAGNOSTIC_ONLY.value,
+                    reason_code=MissingReason.OUTPUT_MISSING.value,
+                    ceiling=ClaimCeiling.DIAGNOSTIC_ONLY.value,
+                    selected_candidate_id=selected_id,
+                    gate_detail={
+                        "reason": (
+                            "[UNDERSPEC-CAL-D69] gate 1 not passed: selected holdout "
+                            "candidate has a usable primary value for some but not all "
+                            "expected C4 instances"
                         ),
                         "expected_instance_count": len(expected_holdout_instances),
                         "seen_instance_count": len(
-                            seen_holdout_instances & expected_holdout_instances
+                            usable_holdout_instances & expected_holdout_instances
                         ),
+                        "claim_scope": claim_scope_detail,
                     },
                 )
             )
@@ -1213,12 +1303,6 @@ def _run_c4(
         # ([UNDERSPEC-CAL-D17]); real gate assembly (out of CLI scope) is
         # where `evaluate_absolute_meter`/`evaluate_directional_meter`
         # would receive the capped ceiling directly as their `ceiling` arg.
-        selected_candidate_obj = candidate_by_candidate_id.get(selected_id)
-        claim_scope_detail: dict[str, object] = {}
-        if selected_candidate_obj is not None:
-            _capped, claim_scope_detail = selection_stage.claim_scope_report(
-                selected_candidate_obj, max_claim_scope
-            )
         results.append(
             holdout_stage.MeterHoldoutResult(
                 meter_id=meter.value,

@@ -33,6 +33,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 
 from voice_genesis.calibration.fixtures.matrix import MatrixRow
+from voice_genesis.calibration.vocab import Domain
 
 #: §10.1「instance 数 = logical cell × probe repeat」の repeat 数（`tolerance.py`
 #: 冒頭 docstring「per-cell n=5 (probe repeat)」と同じ campaign 定数）。
@@ -108,6 +109,51 @@ def positive_detection_instances(
     out: set[tuple[str, int]] = set()
     for mr in rows:
         if mr.row.block != "TRUTH_CORE":
+            continue
+        if family is not None and mr.row.family != family:
+            continue
+        if assignment.get(mr.row_id) != split:
+            continue
+        out.update((mr.row_id, probe_index) for probe_index in range(PROBE_REPEATS))
+    return frozenset(out)
+
+
+def non_boundary_selection_instances(
+    rows: Iterable[MatrixRow],
+    assignment: Mapping[str, object],
+    split: object,
+    *,
+    family: str | None = None,
+) -> frozenset[tuple[str, int]]:
+    """round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`): `positive_
+    detection_instances()` の "評価対象 split 内の当該 family の全 truth-core
+    行" という population を、`block == "TRUTH_CORE"` 限定から **`domain ==
+    Domain.PRIMARY`**（`fixtures.matrix.compute_domain()` が D2 boundary-axis
+    混入検査 + §3.3 F0 帯域整合検査のいずれにも該当しない行に付与する tag）
+    へ拡張したもの——`row.block` の語彙で言えば `TRUTH_CORE` ∪ `CONFOUND`
+    （非 BOUNDARY の全行）を返す。`compute_domain()` は `block == "BOUNDARY"`
+    の行だけでなく `row.control_class is not None`（negative control 行）に
+    も `Domain.BOUNDARY` を付与するため、この関数は特別扱いなしに negative
+    control 行を自動的に除外する（negative control の coverage 判定は既存の
+    `negative_control_row_ids`/`negative_controls_incomplete` filter が別途
+    担う——ここへ合流させない）。
+
+    採用理由（selection stage 側 self-review round 30 MAJOR finding #1）:
+    `positive_detection_instances()` ベースの `coverage_incomplete`（D64）は
+    TRUTH_CORE 行のみを母集団としており、hard CONFOUND 行（`block ==
+    "CONFOUND"`、114 行）で一貫して `OUTPUT_MISSING` を返す candidate は
+    coverage 判定の対象外のまま、縮小された instance 母集団の上で
+    MAE/bias/q95 が計算され、`missing_failure_rate` による比較（lexicographic
+    順位の末尾側）より **先に** primary_normalized_mae で正直に測定した
+    candidate に勝ち得た——D64 が閉じたはずの「縮小母集団で勝つ」fail-open
+    を、D64 が対象にしなかった CONFOUND 母集団の上で再現する経路だった。
+    BOUNDARY-domain 行は §1 D2「domain 外は自動外挿せず NOT_EVALUABLE」の
+    設計判断どおり本 filter の対象外のままとする（missing はそこでは
+    design-sanctioned であり、`missing_failure_rate` にのみ反映されればよい）。
+    """
+    out: set[tuple[str, int]] = set()
+    for mr in rows:
+        if mr.domain != Domain.PRIMARY:
             continue
         if family is not None and mr.row.family != family:
             continue

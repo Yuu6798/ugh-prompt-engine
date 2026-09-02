@@ -289,7 +289,9 @@ def truth_value_for_row(row: FixtureRow) -> float | None:
 #: `candidate_fail_filter_report()` 自身が定義する `positive_rows_absent`/
 #: `negative_controls_incomplete`/`coverage_incomplete` の計 8 種。round 17
 #: finding #1 採用で `negative_controls_incomplete` を追加、round 28 ADOPT (2)
-#: (`[UNDERSPEC-CAL-D64]`) で `coverage_incomplete` を追加）。
+#: (`[UNDERSPEC-CAL-D64]`) で `coverage_incomplete` を追加、round 30
+#: self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`) で `coverage_incomplete` の
+#: 母集団・判定を拡張（filter 名自体は増えない）。
 #: `candidate_fail_filter_report()` が返す dict のキーと 1:1 対応する。
 FAIL_FILTER_NAMES: tuple[str, ...] = (
     "schema_violation",
@@ -323,7 +325,7 @@ def candidate_fail_filter_report(
     *,
     negative_control_row_ids: frozenset[str] = frozenset(),
     positive_control_row_ids: frozenset[str] = frozenset(),
-    expected_truth_core_instances: frozenset[tuple[str, int]] = frozenset(),
+    expected_coverage_instances: frozenset[tuple[str, int]] = frozenset(),
     within_fresh_tol: float = 0.0,
 ) -> dict[str, bool]:
     """finding #8: `candidates.adapter` の共通 5 fail filter（schema 違反 /
@@ -375,17 +377,48 @@ def candidate_fail_filter_report(
     `build_candidate_criteria()` は `own_records` からのみ分母/誤差ベクトルを
     構築するため、この instance 単位の欠落は「N_pos/coverage の分母から
     除外」ではなく「見えないまま候補が縮小母集団で勝つ」経路になっていた。
-    `expected_truth_core_instances`（`fixtures.controls.
-    positive_detection_instances()` が返す、評価対象 SELECTION split 内の
-    当該 family 全 TRUTH_CORE 行の `(row_id, probe_index)` instance 集合 —
-    `positive_control_row_ids` の instance 版）が **非空**（呼び出し側がこの
-    family の期待 instance 集合を宣言した）にもかかわらず、`own_records` が
-    そのうち 1 件でも instance を欠いていれば `coverage_incomplete` を発火
-    させ ineligible にする（`positive_rows_absent`/
-    `negative_controls_incomplete` と同じ「宣言されたが観測から消えた」
-    fail-closed 規約——設計正本はこの箇所に selection 段階固有の
+    `expected_coverage_instances`（当初 `fixtures.controls.
+    positive_detection_instances()` が返す TRUTH_CORE 限定の instance 集合
+    だった。`positive_control_row_ids` の instance 版）が **非空**（呼び出し
+    側がこの family の期待 instance 集合を宣言した）にもかかわらず、
+    `own_records` がそのうち 1 件でも instance を欠いていれば
+    `coverage_incomplete` を発火させ ineligible にする（`positive_rows_
+    absent`/`negative_controls_incomplete` と同じ「宣言されたが観測から
+    消えた」fail-closed 規約——設計正本はこの箇所に selection 段階固有の
     missing-rate 閾値を定義していないため、1 件でも欠ければ ineligible の
-    既定規則を適用する）。"""
+    既定規則を適用する）。
+
+    round 30 self-review ADOPT (1) 採用（`[UNDERSPEC-CAL-D68]`, design 引用:
+    §10.1 「control 出力の missing/invalid は分子に算入（分母から除外
+    しない）」+ §11 「score 計算可能だが PRIMARY 一部 output missing で
+    gate 不通過 → DIAGNOSTIC_ONLY/OUTPUT_MISSING」）: D64 の
+    `coverage_incomplete` は 2 点で不十分だった。(a) 母集団が TRUTH_CORE
+    限定で、hard CONFOUND 行（114 行）は対象外——CONFOUND 行の全 within/fresh
+    call で一貫して `OUTPUT_MISSING` を返す candidate は coverage 判定を
+    素通りし、縮小 instance 母集団の上で `primary_normalized_mae`/`signed_
+    bias`/`primary_q95_ae` が計算され、`missing_failure_rate`（lexicographic
+    順位の末尾側、`selection.py` の `_ranking_key`）による比較より **先に**
+    正直に測定した candidate へ勝ち得た——D64 が閉じたはずの「縮小母集団で
+    勝つ」fail-open を、D64 が対象にしなかった CONFOUND 母集団の上で再現する
+    経路。(b) `seen_instances` が **record-presence-only**（値の有無を見ない）
+    だったため、record 自体は存在するが `missing_reason` 付きで values が
+    空の instance（F0-unusable による丸ごと欠落とは別に、candidate 自身が
+    正しく `OUTPUT_MISSING` を返すケースを含む）を「観測済み」と誤カウント
+    していた。本 ADOPT は両方を是正する: `expected_coverage_instances` の
+    母集団を `fixtures.controls.non_boundary_selection_instances()`
+    （`domain == Domain.PRIMARY` = TRUTH_CORE ∪ CONFOUND、BOUNDARY-domain 行
+    は D2「domain 外は自動外挿せず NOT_EVALUABLE」により除外）へ拡張し、
+    判定を **値の有無**（`measure_stage.primary_output_value()` が有限値を
+    返す record が 1 件でもあるか）へ切り替える——`required_field`（=
+    `measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY` に candidate の
+    `algorithm_family` が無い）が未定義の candidate のみ、判定材料が無い
+    ため旧来の record-presence 判定へフォールバックする。BOUNDARY-domain
+    行の missing は design-sanctioned であり本 filter の対象外のまま
+    （`missing_failure_rate` にのみ反映される）。negative control 行は
+    `non_boundary_selection_instances()` 自体が domain=BOUNDARY として除外
+    するため無関係（`[UNDERSPEC-CAL-D67]` の「negative control の一貫した
+    非検出は不一致ではない」規約とは独立に、そもそも本 filter の母集団に
+    入らない）。"""
     own_records = [r for r in records if r.candidate_id == candidate.candidate_id]
 
     required_field = measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY.get(
@@ -430,16 +463,32 @@ def candidate_fail_filter_report(
     negative_controls_incomplete = bool(negative_control_row_ids) and not (
         negative_control_row_ids <= seen_negative_row_ids
     )
-    # round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`): instance-granular coverage
-    # check against the frozen expected TRUTH_CORE instance set — see the
-    # docstring paragraph above. Deliberately record-presence-only (any
-    # record for the instance, regardless of its value) — a present but
-    # missing/nonfinite-valued record is already counted by
-    # `build_candidate_criteria()`'s `missing_failure_rate`; this filter
-    # targets only the record's *absence*, which that accounting cannot see.
-    seen_instances = {(r.row_id, r.probe_index) for r in own_records}
-    coverage_incomplete = bool(expected_truth_core_instances) and not (
-        expected_truth_core_instances <= seen_instances
+    # round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`, supersedes round
+    # 28 ADOPT (2) `[UNDERSPEC-CAL-D64]`): instance-granular coverage check
+    # against the expected non-BOUNDARY (TRUTH_CORE + CONFOUND) instance set
+    # — see the docstring paragraph above. Value-aware, not record-presence
+    # -only: an instance counts as covered only if at least one own record
+    # for it carries a finite primary value (`measure_stage.
+    # primary_output_value()`); a record that exists but is `missing_reason`
+    # -explained or non-finite does NOT count (D64's "already counted by
+    # missing_failure_rate" reasoning under-penalized a candidate that is
+    # consistently missing across an entire instance — see docstring). When
+    # `required_field` is undefined for this candidate's `algorithm_family`
+    # (`primary_output_value()` has no field to read), there is no value to
+    # check, so this falls back to D64's original record-presence semantics.
+    if required_field is not None:
+        covered_instances = set()
+        for r in own_records:
+            key = (r.row_id, r.probe_index)
+            if key not in expected_coverage_instances:
+                continue
+            value = measure_stage.primary_output_value(candidate, r.output)
+            if value is not None and math.isfinite(value):
+                covered_instances.add(key)
+    else:
+        covered_instances = {(r.row_id, r.probe_index) for r in own_records}
+    coverage_incomplete = bool(expected_coverage_instances) and not (
+        expected_coverage_instances <= covered_instances
     )
 
     return {

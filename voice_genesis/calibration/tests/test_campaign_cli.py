@@ -1043,25 +1043,137 @@ def test_c4_never_calls_f0_dependent_candidate_when_selection_failed_closed(
     assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
 
 
+@pytest.mark.slow
+def test_c4_f0_unusable_selected_candidate_through_real_holdout_path_closes_not_evaluable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """round 30 self-review ADOPT (finding #5(a), test gap): the production
+    shape `test_c4_never_calls_f0_dependent_candidate_when_selection_failed_
+    closed` above verifies via a monkeypatched `holdout_stage.
+    render_and_measure_holdout` — this test drives the real function
+    instead (real `render_stage.run_render_stage(stage="c4")` audio synth +
+    real `measure_stage.run_measure_stage()` measurement, exactly what
+    `render_and_measure_holdout()` itself calls), so the coverage check
+    under test (`[UNDERSPEC-CAL-D66]`/`[UNDERSPEC-CAL-D69]`) is exercised
+    against real `MeasurementRecord`s the real production function returns,
+    not a hand-fabricated dict that could silently diverge from its actual
+    shape.
+
+    `render_stage._refuse_if_pre_unseal_holdout()` — the pre-unseal leakage
+    guard `run_render_stage(stage="c4")` also calls — is stubbed out: that
+    guard's `provenance.Ledger.check_leakage()` hard-requires the row-id set
+    to equal the *full* canonical `fixtures.matrix.build_matrix()` (§7's
+    "verification rows contain the complete canonical frozen matrix row-id
+    set"), which a tiny per-test fixture can never satisfy, and a real
+    unseal run against the full canonical matrix is far too expensive for a
+    unit test — it is an orthogonal, already-dedicated-tested concern
+    (`tests/test_render_stage.py`/`tests/test_provenance_unseal_
+    prerequisites.py`), not what this test isolates (the CLI-side coverage
+    check on real `MeasurementRecord`s)."""
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+
+    subset = small_matrix_subset(4, family="APERIODICITY_GT")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+
+    # F0 selection genuinely failed closed (no F0 winner) — the deterministic
+    # way to force every F0-dependent candidate's C4 instances F0_UNUSABLE
+    # without needing a real F0_CONTROL family measurement in this tiny
+    # fixture (mirrors the setup `test_c4_never_calls_f0_dependent_candidate_
+    # when_selection_failed_closed` above uses).
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": None,
+            "outcome": "SELECTION_FAILED_CLOSED",
+        }
+    )
+    campaign.ledger.append(
+        {
+            "kind": "selection_frozen",
+            "selected_by_family": {"APERIODICITY_GT": harmonic_residual.candidate_id},
+        }
+    )
+
+    trimmed_pool = (harmonic_residual, independent_candidate)
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.APERIODICITY_GT:
+            return trimmed_pool
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+    monkeypatch.setattr(render_stage, "_refuse_if_pre_unseal_holdout", lambda *a, **kw: None)
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    # real measurement really did run for the non-dependent B0 candidate
+    # (proof this is the real, unmocked path — the family key IS present in
+    # `records_by_family` via B0, unlike the fully-mocked sibling test above
+    # whose `records_by_family == {}`).
+    meter_calls = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"
+    ]
+    assert any(m.get("candidate_id") == independent_candidate.candidate_id for m in meter_calls)
+    assert not any(m.get("candidate_id") == harmonic_residual.candidate_id for m in meter_calls)
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    assert holdout_events
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+    assert m2a_result["selected_candidate_id"] == harmonic_residual.candidate_id
+    assert "claim_scope" in m2a_result["gate_detail"]
+
+
 # ---------------------------------------------------------------------------
 # round 30 ADOPT (`[UNDERSPEC-CAL-D66]`, Codex round 30 PR #343 finding #1
-# 「Require records from the selected holdout candidate」採用): the
-# `family.value not in records_by_family` guard in `_run_c4`'s per-family
-# loop only proves *some* candidate in the family (B0 always runs) produced
-# a record — not that the *selected* candidate itself has any usable C4
-# output. These three tests fabricate `render_and_measure_holdout()`'s
-# return value directly (real render/measure of a genuinely F0-unusable
-# selected candidate is exercised end-to-end by
+# 「Require records from the selected holdout candidate」採用) → round 30
+# self-review ADOPT (`[UNDERSPEC-CAL-D69]`/`[UNDERSPEC-CAL-D70]`, findings
+# #2/#3/#4 採用): the `family.value not in records_by_family` guard in
+# `_run_c4`'s per-family loop only proves *some* candidate in the family (B0
+# always runs) produced a record — not that the *selected* candidate itself
+# has any usable C4 output. Most of these tests fabricate
+# `render_and_measure_holdout()`'s return value directly (real render/measure
+# of a genuinely F0-unusable selected candidate is exercised end-to-end by
 # `test_c3b_selection_blocks_f0_dependent_candidate_when_selection_failed_
-# closed` and friends above; this isolates the CLI-side coverage check
-# itself, mirroring how `test_c4_never_calls_f0_dependent_candidate_when_
-# selection_failed_closed` isolates the F0_UNUSABLE-instance guard).
+# closed` above, and by `test_c4_f0_unusable_selected_candidate_through_
+# real_holdout_path_closes_not_evaluable` immediately above this comment
+# block (finding #5(a): drives the real C4 path, not a monkeypatched
+# holdout, per the self-review's test-gap finding); this isolates the
+# CLI-side coverage check itself, mirroring how `test_c4_never_calls_f0_
+# dependent_candidate_when_selection_failed_closed` isolates the
+# F0_UNUSABLE-instance guard).
 #
-# Design line (`DESIGN_VG_METER_CAL_DEBT_v1.0.md` §11): 「score 計算可能だが
-# PRIMARY 一部 output missing で gate 不通過 → DIAGNOSTIC_ONLY/OUTPUT_MISSING」
-# — ここで扱うのはその手前、selected candidate の PRIMARY output が丸ごと
-# （または D64 の期待 instance 集合の一部が）無い場合であり、§11 の全欠損側
-# の帰結 `NOT_EVALUABLE`/`OUTPUT_NOT_EVALUABLE` を適用する。
+# Design line (`DESIGN_VG_METER_CAL_DEBT_v1.0.md` §11): 「critical output
+# 全欠損 or 最小数割れで score/gate 計算不能 → NOT_EVALUABLE/OUTPUT_NOT_
+# EVALUABLE」対「score 計算可能だが PRIMARY 一部 output missing で gate
+# 不通過 → DIAGNOSTIC_ONLY/OUTPUT_MISSING」——self-review round 30 MAJOR
+# finding #2 が指摘したとおり、D66 は前者を「selected candidate の PRIMARY
+# output が丸ごと**または一部**無い」場合の両方に適用しており、後者（部分
+# 被覆）の帰結を取り違えていた。本 ADOPT は両者を分離する: 全欠損（usable
+# instance が 0 件）のみ `NOT_EVALUABLE`/`OUTPUT_NOT_EVALUABLE`、部分被覆
+# （1 件以上は usable だが期待集合の一部を欠く）は `DIAGNOSTIC_ONLY`/
+# `OUTPUT_MISSING`（gate 1 不通過の事実を `gate_detail` に記録）。finding
+# #3: 判定は record の有無ではなく**値の有無**（`measure_stage.
+# primary_output_value()` + 有限性）。finding #4: `claim_scope_report()` を
+# 分岐の前で計算し、NOT_EVALUABLE/DIAGNOSTIC_ONLY いずれの `gate_detail`
+# にも含める。
 # ---------------------------------------------------------------------------
 
 
@@ -1076,6 +1188,26 @@ def _c4_measurement_record(
         repeat_index=0,
         process_id="p0",
         output=MeterOutput(values={field: 1.0}),
+    )
+
+
+def _c4_measurement_record_missing(
+    row_id: str, probe_index: int, candidate_id: str
+) -> measure_stage.MeasurementRecord:
+    """finding #3: a record that *exists* (unlike the fully-skipped case
+    above, where `render_and_measure_holdout()` never calls the candidate at
+    all and the cell is simply absent from `records_by_family`) but carries
+    no finite primary value — the shape a candidate that runs and correctly
+    reports `OUTPUT_MISSING` leaves behind. The old record-presence-only
+    check treated this as "usable"; the value-aware check must not."""
+    return measure_stage.MeasurementRecord(
+        row_id=row_id,
+        probe_index=probe_index,
+        candidate_id=candidate_id,
+        repeat_kind="within",
+        repeat_index=0,
+        process_id="p0",
+        output=MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING),
     )
 
 
@@ -1184,6 +1316,9 @@ def test_c4_selected_candidate_fully_skipped_closes_not_evaluable(
     assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
     assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
     assert m2a_result["selected_candidate_id"] == harmonic_residual.candidate_id
+    # finding #4: claim_scope must be recorded even on the NOT_EVALUABLE
+    # early-close branch (previously dropped by the early `continue`).
+    assert "claim_scope" in m2a_result["gate_detail"]
 
     # the authoritative close report must carry the same terminal status
     # (close.close_campaign() copies `per_meter` from this event verbatim).
@@ -1198,14 +1333,64 @@ def test_c4_selected_candidate_fully_skipped_closes_not_evaluable(
     )
 
 
-def test_c4_selected_candidate_partially_covered_closes_not_evaluable(
+def test_c4_selected_candidate_present_but_all_missing_values_closes_not_evaluable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The selected candidate has usable records for *some* but not all of
-    the expected C4 instances (D64's `coverage_incomplete` shape, applied
-    here to holdout coverage per the ruling's "or fewer than the expected
-    instance set per D64" clause) — 1 missing instance out of N must still
-    close NOT_EVALUABLE, not DIAGNOSTIC_ONLY."""
+    """finding #3: unlike the fully-skipped case above (candidate never
+    called, cells absent), here the selected candidate *is* called on every
+    expected instance and *does* produce a record for each — but every
+    record is `OUTPUT_MISSING` (no finite primary value). The old
+    record-presence-only check (`seen_holdout_instances = {(r.row_id,
+    r.probe_index) for r in own_selected_records}`) would have treated this
+    as full coverage and closed DIAGNOSTIC_ONLY; the value-aware check must
+    still close NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE (zero *usable* records)."""
+    campaign, subset, harmonic_residual, expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(tmp_path, monkeypatch)
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+
+    records = [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in sorted(expected_instances)
+    ] + [
+        _c4_measurement_record_missing(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in sorted(expected_instances)
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+
+
+def test_c4_selected_candidate_partially_covered_closes_diagnostic_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 30 self-review ADOPT (finding #2, `[UNDERSPEC-CAL-D69]`): the
+    selected candidate has usable records for *some* but not all of the
+    expected C4 instances. Design line (`DESIGN_VG_METER_CAL_DEBT_v1.0.md`
+    §11): 「score 計算可能だが PRIMARY 一部 output missing で gate 不通過 →
+    DIAGNOSTIC_ONLY/OUTPUT_MISSING」——1 missing instance out of N does not by
+    itself make the score uncomputable, so this must close DIAGNOSTIC_ONLY/
+    OUTPUT_MISSING (with the gate-1 failure recorded in `gate_detail`), not
+    NOT_EVALUABLE (that terminal status is reserved for zero usable records —
+    see `test_c4_selected_candidate_fully_skipped_closes_not_evaluable`
+    above)."""
     campaign, subset, harmonic_residual, expected_instances = (
         _c4_setup_selected_candidate_coverage_test(tmp_path, monkeypatch)
     )
@@ -1239,8 +1424,26 @@ def test_c4_selected_candidate_partially_covered_closes_not_evaluable(
     ]
     per_meter = holdout_events[-1]["per_meter"]
     m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
-    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
-    assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+    assert m2a_result["terminal_status"] == "DIAGNOSTIC_ONLY"
+    assert m2a_result["reason_code"] == "OUTPUT_MISSING"
+    assert m2a_result["selected_candidate_id"] == harmonic_residual.candidate_id
+    # finding #4: the gate-1 coverage failure fact, and the claim_scope
+    # audit fact (previously dropped on the NOT_EVALUABLE early `continue`),
+    # must both be present in gate_detail.
+    gate_detail = m2a_result["gate_detail"]
+    assert gate_detail["expected_instance_count"] == len(expected_instances)
+    assert gate_detail["seen_instance_count"] == len(partial_instances)
+    assert "claim_scope" in gate_detail
+
+    # the authoritative close report must carry the same terminal status.
+    close_result = cli.close_stage.close_campaign(campaign, holdout_events[-1])
+    assert close_result.campaign_closed_entry_sha
+    close_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "campaign_closed"
+    ]
+    assert close_events[-1]["per_meter"][MeterId.M2_APERIODICITY.value]["terminal_status"] == (
+        "DIAGNOSTIC_ONLY"
+    )
 
 
 def test_c4_selected_candidate_fully_covered_is_unchanged(

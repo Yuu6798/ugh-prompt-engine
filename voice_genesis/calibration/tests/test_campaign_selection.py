@@ -14,9 +14,11 @@ import pytest
 from voice_genesis.calibration.campaign import holdout_stage, measure_stage, selection_stage
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.candidates.adapter import MeterOutput
-from voice_genesis.calibration.candidates.registry import candidate_by_id
+from voice_genesis.calibration.candidates.registry import candidate_by_id, candidates_for_meter
+from voice_genesis.calibration.fixtures import controls as controls_module
+from voice_genesis.calibration.fixtures.matrix import build_matrix
 from voice_genesis.calibration.selection import CandidateCriteria, select_across_ceilings
-from voice_genesis.calibration.vocab import ClaimCeiling, Domain, MissingReason
+from voice_genesis.calibration.vocab import ClaimCeiling, Domain, MeterId, MissingReason, Split
 
 from ._campaign_fixture import build_tiny_campaign
 
@@ -410,49 +412,82 @@ def test_all_negative_control_records_present_is_complete() -> None:
 
 # ---------------------------------------------------------------------------
 # round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`) "Count rejected F0 instances as
-# missing coverage": `coverage_incomplete` — instance-granular completion of
+# missing coverage" → round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`):
+# `coverage_incomplete` — instance-granular completion of
 # `negative_controls_incomplete`/`positive_rows_absent`. Skipping an
 # F0-dependent candidate on an F0-unusable instance (`[UNDERSPEC-CAL-D61]`)
 # removes that instance from `records` entirely; `build_candidate_criteria()`
 # only ever sees `records`, so the gap was previously invisible to selection.
+# D68 widened the expected population (TRUTH_CORE + CONFOUND, see
+# `tests/test_controls.py` for the domain-population tests) and made the
+# check value-aware (a present-but-`missing_reason`-explained record no
+# longer counts as covered — see
+# `test_present_but_missing_valued_record_is_still_coverage_incomplete`
+# below, the direct regression test for self-review round 30 MAJOR finding
+# #1's "縮小母集団で勝つ" scenario).
 # ---------------------------------------------------------------------------
 
 
 def test_missing_expected_instance_record_is_reported_as_coverage_incomplete() -> None:
-    """A declared (non-empty) expected TRUTH_CORE instance population with
-    at least one instance lacking any record — the exact shape an F0-
-    unusable skip leaves behind — must reject the candidate via
-    `coverage_incomplete`, fail-closed (mirrors `positive_rows_absent`/
-    `negative_controls_incomplete`, but at `(row_id, probe_index)`
-    granularity, not row_id — a row with *some* probe_index records present
-    is not "seen" for the specific missing probe_index)."""
+    """A declared (non-empty) expected instance population with at least one
+    instance lacking any record — the exact shape an F0-unusable skip leaves
+    behind — must reject the candidate via `coverage_incomplete`, fail-closed
+    (mirrors `positive_rows_absent`/`negative_controls_incomplete`, but at
+    `(row_id, probe_index)` granularity, not row_id — a row with *some*
+    probe_index records present is not "seen" for the specific missing
+    probe_index)."""
     candidate = candidate_by_id("F0-B0-CURRENT")
     records = [_record("row-a", 0, detected=True)]
     expected = frozenset({("row-a", 0), ("row-a", 1)})  # probe_index 1 never measured
     report = selection_stage.candidate_fail_filter_report(
         candidate,
         records,
-        expected_truth_core_instances=expected,
+        expected_coverage_instances=expected,
     )
     assert report["coverage_incomplete"] is True
     assert selection_stage.eligible_after_fail_filters(report) is False
 
 
-def test_all_expected_instances_present_is_coverage_complete() -> None:
-    """Complete instance-level coverage must not trigger
-    `coverage_incomplete`, regardless of the records' detection outcome."""
+def test_all_expected_instances_present_with_finite_values_is_coverage_complete() -> None:
+    """Complete instance-level coverage — every expected instance has at
+    least one record with a finite primary value — must not trigger
+    `coverage_incomplete`."""
     candidate = candidate_by_id("F0-B0-CURRENT")
     records = [
         _record("row-a", 0, detected=True),
-        _record("row-a", 1, detected=False),
+        _record("row-a", 1, detected=True),
     ]
     expected = frozenset({("row-a", 0), ("row-a", 1)})
     report = selection_stage.candidate_fail_filter_report(
         candidate,
         records,
-        expected_truth_core_instances=expected,
+        expected_coverage_instances=expected,
     )
     assert report["coverage_incomplete"] is False
+
+
+def test_present_but_missing_valued_record_is_still_coverage_incomplete() -> None:
+    """round 30 self-review ADOPT (1) MAJOR finding #1 regression: a record
+    that *exists* for an expected instance but carries no finite primary
+    value (here `detected=False` -> `MissingReason.OUTPUT_MISSING`, the
+    shape a candidate that consistently misses on a hard CONFOUND row
+    leaves behind) must still count as missing coverage — D64's original
+    record-presence-only check would have wrongly treated this instance as
+    "seen" and let the candidate through to compete on a reduced instance
+    set before `missing_failure_rate` is ever consulted."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [
+        _record("row-a", 0, detected=True),
+        _record("row-a", 1, detected=False),  # present record, no finite value
+    ]
+    expected = frozenset({("row-a", 0), ("row-a", 1)})
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        expected_coverage_instances=expected,
+    )
+    assert report["coverage_incomplete"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
 
 
 def test_empty_expected_instance_population_is_not_a_coverage_failure() -> None:
@@ -464,9 +499,228 @@ def test_empty_expected_instance_population_is_not_a_coverage_failure() -> None:
     report = selection_stage.candidate_fail_filter_report(
         candidate,
         records,
-        expected_truth_core_instances=frozenset(),
+        expected_coverage_instances=frozenset(),
     )
     assert report["coverage_incomplete"] is False
+
+
+def _field_record(
+    row_id: str,
+    probe_index: int,
+    candidate_id: str,
+    *,
+    field: str,
+    missing: bool = False,
+    value: float = 1.0,
+    repeat_kind: str = "within",
+    repeat_index: int = 0,
+    process_id: str = "p0",
+) -> measure_stage.MeasurementRecord:
+    output = (
+        MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
+        if missing
+        else MeterOutput(values={field: value})
+    )
+    return measure_stage.MeasurementRecord(
+        row_id=row_id,
+        probe_index=probe_index,
+        candidate_id=candidate_id,
+        repeat_kind=repeat_kind,
+        repeat_index=repeat_index,
+        process_id=process_id,
+        output=output,
+    )
+
+
+def _instance_records(
+    row_id: str,
+    probe_index: int,
+    candidate_id: str,
+    *,
+    field: str,
+    missing: bool = False,
+    value: float = 1.0,
+) -> list[measure_stage.MeasurementRecord]:
+    """1 within-process + 1 fresh-process record for `(row_id, probe_index)`
+    with a consistent missing-status/value on both sides (so
+    `adapter.within_fresh_process_mismatch()` does not itself flag the
+    instance — `[UNDERSPEC-CAL-D67]`: consistent missing across every
+    within/fresh call is not a mismatch)."""
+    return [
+        _field_record(
+            row_id,
+            probe_index,
+            candidate_id,
+            field=field,
+            missing=missing,
+            value=value,
+            repeat_kind="within",
+            process_id="within-p0",
+        ),
+        _field_record(
+            row_id,
+            probe_index,
+            candidate_id,
+            field=field,
+            missing=missing,
+            value=value,
+            repeat_kind="fresh",
+            process_id="fresh-p0",
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`): the real-matrix,
+# real-domain-population regression the self-review finding asked for
+# directly (test gap 5(b) in the self-review): a candidate consistently
+# missing on a hard CONFOUND row must become ineligible via
+# `coverage_incomplete`; the same shape on a BOUNDARY-only row must not
+# (BOUNDARY missing is design-sanctioned, §1 D2); TRUTH_CORE behaviour is
+# unchanged (still caught, now via both `coverage_incomplete` and the
+# pre-existing `positive_control_non_fire`).
+# ---------------------------------------------------------------------------
+
+_D68_FAMILY = "APERIODICITY_GT"
+
+
+def _d68_candidate_and_field():
+    candidate = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    field = measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY[candidate.algorithm_family]
+    return candidate, field
+
+
+def test_confound_row_consistent_missing_is_ineligible_via_coverage_incomplete() -> None:
+    rows = build_matrix()
+    # force every row of the family home to SELECTION (deterministic, no
+    # dependence on split-secret randomness reaching a CONFOUND row) — the
+    # instance-set filtering under test is entirely a function of `row.block`
+    # /`domain` + `assignment`, not of how the assignment was produced.
+    assignment = {mr.row_id: Split.SELECTION for mr in rows if mr.row.family == _D68_FAMILY}
+    expected = controls_module.non_boundary_selection_instances(
+        rows, assignment, Split.SELECTION, family=_D68_FAMILY
+    )
+    row_by_id = {mr.row_id: mr for mr in rows}
+    confound_row_id = next(
+        row_id for row_id, _p in sorted(expected) if row_by_id[row_id].row.block == "CONFOUND"
+    )
+
+    candidate, field = _d68_candidate_and_field()
+    records = [
+        r
+        for row_id, probe_index in sorted(expected)
+        for r in _instance_records(
+            row_id,
+            probe_index,
+            candidate.candidate_id,
+            field=field,
+            missing=(row_id == confound_row_id),
+        )
+    ]
+
+    report = selection_stage.candidate_fail_filter_report(
+        candidate, records, expected_coverage_instances=expected
+    )
+    assert report["coverage_incomplete"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+def test_boundary_row_consistent_missing_stays_eligible_via_missing_failure_rate() -> None:
+    rows = build_matrix()
+    assignment = {mr.row_id: Split.SELECTION for mr in rows if mr.row.family == _D68_FAMILY}
+    expected = controls_module.non_boundary_selection_instances(
+        rows, assignment, Split.SELECTION, family=_D68_FAMILY
+    )
+    boundary_rows = [
+        mr for mr in rows if mr.row.family == _D68_FAMILY and mr.row.block == "BOUNDARY"
+    ]
+    assert boundary_rows, "test setup needs >=1 BOUNDARY row for the family"
+    boundary_row_id = boundary_rows[0].row_id
+    assert (boundary_row_id, 0) not in expected, (
+        "BOUNDARY rows must be exempt from the non-BOUNDARY expected-coverage population"
+    )
+
+    candidate, field = _d68_candidate_and_field()
+    covered_records = [
+        r
+        for row_id, probe_index in sorted(expected)
+        for r in _instance_records(row_id, probe_index, candidate.candidate_id, field=field)
+    ]
+    boundary_missing_records = [
+        r
+        for probe_index in range(controls_module.PROBE_REPEATS)
+        for r in _instance_records(
+            boundary_row_id, probe_index, candidate.candidate_id, field=field, missing=True
+        )
+    ]
+    records = covered_records + boundary_missing_records
+
+    report = selection_stage.candidate_fail_filter_report(
+        candidate, records, expected_coverage_instances=expected
+    )
+    assert report["coverage_incomplete"] is False
+    assert selection_stage.eligible_after_fail_filters(report) is True
+
+    # the BOUNDARY-row missing records are still counted (as missing) in
+    # `missing_failure_rate` — they are simply not what `coverage_incomplete`
+    # itself polices (§1 D2: BOUNDARY missing is design-sanctioned).
+    truth_by_instance = {
+        (mr.row_id, p): selection_stage.truth_value_for_row(mr.row)
+        for mr in rows
+        if mr.row.family == _D68_FAMILY
+        for p in range(controls_module.PROBE_REPEATS)
+    }
+    truth_by_instance = {k: v for k, v in truth_by_instance.items() if v is not None}
+    criteria = selection_stage.build_candidate_criteria(candidate, records, truth_by_instance)
+    assert criteria.missing_failure_rate > 0.0
+
+
+def test_truth_core_row_consistent_missing_behaviour_is_unchanged() -> None:
+    """The pre-existing guarantee (verified NOT broken by the self-review):
+    a TRUTH_CORE row with consistent missing still makes the candidate
+    ineligible — previously solely via `positive_control_non_fire`, now also
+    via the widened `coverage_incomplete` (both fire; eligibility outcome is
+    unchanged)."""
+    rows = build_matrix()
+    assignment = {mr.row_id: Split.SELECTION for mr in rows if mr.row.family == _D68_FAMILY}
+    expected = controls_module.non_boundary_selection_instances(
+        rows, assignment, Split.SELECTION, family=_D68_FAMILY
+    )
+    pos_instances = controls_module.positive_detection_instances(
+        rows, assignment, Split.SELECTION, family=_D68_FAMILY
+    )
+    pos_ids = frozenset(row_id for row_id, _p in pos_instances)
+    row_by_id = {mr.row_id: mr for mr in rows}
+    truth_core_row_id = next(
+        row_id for row_id, _p in sorted(expected) if row_by_id[row_id].row.block == "TRUTH_CORE"
+    )
+
+    candidate, field = _d68_candidate_and_field()
+    records = [
+        r
+        for row_id, probe_index in sorted(expected)
+        for r in _instance_records(
+            row_id,
+            probe_index,
+            candidate.candidate_id,
+            field=field,
+            missing=(row_id == truth_core_row_id),
+        )
+    ]
+
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        positive_control_row_ids=pos_ids,
+        expected_coverage_instances=expected,
+    )
+    assert report["coverage_incomplete"] is True
+    assert report["positive_control_non_fire"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
 
 
 # ---------------------------------------------------------------------------

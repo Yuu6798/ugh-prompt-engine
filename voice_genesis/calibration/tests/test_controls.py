@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from voice_genesis.calibration import splitter
 from voice_genesis.calibration.fixtures import controls, matrix
-from voice_genesis.calibration.vocab import Split
+from voice_genesis.calibration.vocab import Domain, Split
 
 _DUMMY_SPLIT_SECRET = b"dummy-secret-for-controls-test-only"
 
@@ -130,3 +130,76 @@ def test_positive_detection_instances_reaches_min_n_pos_for_every_family_both_sp
                 rows, realized.assignment, split, family=family
             )
             assert len(instances) >= 10, (family, split)
+
+
+# ---------------------------------------------------------------------------
+# round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`): `non_boundary_
+# selection_instances` widens `positive_detection_instances`'s TRUTH_CORE
+# -only population to TRUTH_CORE + CONFOUND (all `domain == Domain.PRIMARY`
+# rows), so `campaign.selection_stage.candidate_fail_filter_report()`'s
+# `coverage_incomplete` filter can catch a candidate that consistently
+# returns `OUTPUT_MISSING` on every hard CONFOUND row of a family (a
+# population D64's TRUTH_CORE-only check did not cover).
+# ---------------------------------------------------------------------------
+
+
+def test_non_boundary_selection_instances_excludes_boundary_and_negative_control_rows() -> None:
+    rows = _real_matrix_rows()
+    realized = _realize_dummy_split(rows)
+    row_by_id = {mr.row_id: mr for mr in rows}
+    families = sorted({mr.row.family for mr in rows})
+
+    for family in families:
+        instances = controls.non_boundary_selection_instances(
+            rows, realized.assignment, Split.SELECTION, family=family
+        )
+        row_ids_in_instances = {row_id for row_id, _probe_index in instances}
+        for row_id in row_ids_in_instances:
+            mr = row_by_id[row_id]
+            assert realized.assignment[row_id] == Split.SELECTION
+            assert mr.row.family == family
+            assert mr.domain is Domain.PRIMARY
+            assert mr.row.block in ("TRUTH_CORE", "CONFOUND")
+            assert mr.row.control_class is None
+
+
+def test_non_boundary_selection_instances_is_superset_of_positive_detection_instances() -> None:
+    """TRUTH_CORE ⊆ non-BOUNDARY, so widening the population must never drop
+    an instance `positive_detection_instances()` already counted."""
+    rows = _real_matrix_rows()
+    realized = _realize_dummy_split(rows)
+    families = sorted({mr.row.family for mr in rows})
+
+    for family in families:
+        for split in (Split.SELECTION, Split.HOLDOUT):
+            truth_core_only = controls.positive_detection_instances(
+                rows, realized.assignment, split, family=family
+            )
+            non_boundary = controls.non_boundary_selection_instances(
+                rows, realized.assignment, split, family=family
+            )
+            assert truth_core_only <= non_boundary, (family, split)
+
+
+def test_non_boundary_selection_instances_includes_confound_rows_somewhere() -> None:
+    """Regression guard for the self-review round finding this closes:
+    confirm the widened population actually reaches CONFOUND-block rows (not
+    just a no-op that happens to equal the TRUTH_CORE-only set for every
+    family/split under the dummy split secret)."""
+    rows = _real_matrix_rows()
+    realized = _realize_dummy_split(rows)
+    families = sorted({mr.row.family for mr in rows})
+    row_by_id = {mr.row_id: mr for mr in rows}
+
+    confound_row_ids_seen: set[str] = set()
+    for family in families:
+        instances = controls.non_boundary_selection_instances(
+            rows, realized.assignment, Split.SELECTION, family=family
+        )
+        for row_id, _probe_index in instances:
+            if row_by_id[row_id].row.block == "CONFOUND":
+                confound_row_ids_seen.add(row_id)
+    assert confound_row_ids_seen, (
+        "expected at least one CONFOUND row assigned to SELECTION split across all "
+        "families under the dummy split secret"
+    )
