@@ -40,11 +40,15 @@ class BlockedCode(str, Enum):
     BLOCKED_DOMAIN_MANIFEST_INCOMPLETE = "BLOCKED_DOMAIN_MANIFEST_INCOMPLETE"
     BLOCKED_C0_MANIFEST_INCOMPLETE = "BLOCKED_C0_MANIFEST_INCOMPLETE"
     BLOCKED_C0_UNSEEDED_RNG = "BLOCKED_C0_UNSEEDED_RNG"
-    #: UNDERSPEC-CAL-D75 ruling (2): 凍結 matrix (`fixtures.matrix.build_matrix()`)
-    #: が宣言する sweep（`fixtures.matrix.declared_sweeps_by_family()`）のうち
-    #: 1 件でも PRIMARY domain 内の行数が `gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP`
-    #: (3) 未満なら発行する（`c0_validate._check_sweep_capacity`）。
-    BLOCKED_C0_SWEEP_CAPACITY_INSUFFICIENT = "BLOCKED_C0_SWEEP_CAPACITY_INSUFFICIENT"
+    #: UNDERSPEC-CAL-D76 ruling (2)（D75 の `BLOCKED_C0_SWEEP_CAPACITY_
+    #: INSUFFICIENT` を SUPERSEDE。sweep 定義そのものが誤りだったため名称・
+    #: 意味論を改める）: 凍結 matrix (`fixtures.matrix.build_matrix()`) が
+    #: 宣言する declared sweep（`fixtures.matrix.declared_sweeps_by_family()`、
+    #: def A: truth-core block の nuisance-constant series）のうち 1 件でも
+    #: 相異なる truth level 数が 3 未満（`gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP`
+    #: 未満の pair しか作れない）なら発行する（`c0_validate.
+    #: _check_declared_sweep_truth_levels`）。
+    BLOCKED_C0_SWEEP_DECLARATION_INVALID = "BLOCKED_C0_SWEEP_DECLARATION_INVALID"
     BLOCKED_C1_GENERATOR_NONDETERMINISTIC = "BLOCKED_C1_GENERATOR_NONDETERMINISTIC"
     BLOCKED_LEAKAGE = "BLOCKED_LEAKAGE"
     BLOCKED_CANONICAL_MUTATION_REQUIRED = "BLOCKED_CANONICAL_MUTATION_REQUIRED"

@@ -136,13 +136,24 @@ def test_dry_run_determinism_same_manifest_core_sha(tmp_path: Path) -> None:
     assert report1.manifest_core_sha == report2.manifest_core_sha
 
 
-def test_fixture_spec_confound_axes_matches_declared_sweeps_by_family() -> None:
-    """UNDERSPEC-CAL-D75 ruling (1): `frozen_design.fixture_spec.<FAMILY>.
-    confound_axes` (as `c0_freeze._fixture_specs()` records it into the
-    manifest `campaign.holdout_stage.declared_axes_for_family()` later reads
-    back) must be exactly `fixtures.matrix.declared_sweeps_by_family(build_
-    matrix())[FAMILY]` — the single canonical derivation `c0_freeze.py`/
-    `campaign/cli.py` both share, replacing the old fabricated flat 6-tuple.
+def test_fixture_spec_confound_axes_is_the_flat_invariance_axis_tuple() -> None:
+    """UNDERSPEC-CAL-D76 (supersedes D75 ruling (1)): `confound_axes` reverts
+    to the flat, family-uniform 6-tuple (gate4' invariance-axis declaration
+    only) — D75's `declared_sweeps_by_family()`-as-`confound_axes` mapping
+    was a category error (nuisance axis != DIRECTIONAL sweep)."""
+    manifest = c0_freeze.build_manifest(_REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02")
+    fixture_spec = manifest["frozen_design"]["fixture_spec"]
+    expected = ["f0_hz", "sr_hz", "gain_dbfs", "duration_s", "noise_snr_db", "context"]
+    for entry in fixture_spec.values():
+        assert list(entry["confound_axes"]) == expected
+
+
+def test_fixture_spec_declared_sweeps_matches_declared_sweeps_by_family() -> None:
+    """UNDERSPEC-CAL-D76 ruling (2): `frozen_design.fixture_spec.<FAMILY>.
+    declared_sweeps` (a new key, separate from `confound_axes`) must be
+    exactly `fixtures.matrix.declared_sweeps_by_family(build_matrix())
+    [FAMILY]` (def A: truth-core block, nuisance-constant series) — the
+    single canonical derivation `c0_freeze.py`/`campaign/cli.py` both share.
     """
     from voice_genesis.calibration.fixtures.axes import FixtureFamily
     from voice_genesis.calibration.fixtures.matrix import build_matrix, declared_sweeps_by_family
@@ -151,11 +162,12 @@ def test_fixture_spec_confound_axes_matches_declared_sweeps_by_family() -> None:
     declared = declared_sweeps_by_family(build_matrix())
     fixture_spec = manifest["frozen_design"]["fixture_spec"]
     for family in FixtureFamily:
-        assert list(fixture_spec[family.value]["confound_axes"]) == list(declared[family.value])
-    # f0_hz/sr_hz are the truth-core grid, never a declared sweep.
-    for entry in fixture_spec.values():
-        assert "f0_hz" not in entry["confound_axes"]
-        assert "sr_hz" not in entry["confound_axes"]
+        recorded = fixture_spec[family.value]["declared_sweeps"]
+        expected = {
+            sweep_id: list(row_ids) for sweep_id, row_ids in declared[family.value].items()
+        }
+        assert recorded == expected
+        assert len(recorded) >= 1, f"{family.value} declares no sweeps"
 
 
 def test_dry_run_gate1_approved_reduces_blocking(tmp_path: Path) -> None:

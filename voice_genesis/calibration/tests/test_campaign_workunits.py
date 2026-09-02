@@ -12,12 +12,10 @@ STRATUM_FACTOR_NAMES = ("truth_level", "boundary_class")
 
 
 def test_plan_counts_match_design_totals() -> None:
-    # UNDERSPEC-CAL-D75 ruling (2): 456->462 logical cells (2280/4560/13680 ->
-    # 2310/4620/13860); see fixtures/axes.py TOTAL_LOGICAL_CELLS.
     counts = workunits.plan_counts()
-    assert counts.instances_total == 2310
-    assert counts.renders_total == 4620
-    assert counts.meter_calls_per_implementation == 13860
+    assert counts.instances_total == 2280
+    assert counts.renders_total == 4560
+    assert counts.meter_calls_per_implementation == 13680
     assert counts.selection_order_of_magnitude == 10**5
 
 
@@ -55,7 +53,7 @@ def test_c1_c4_render_union_covers_all_instances_exactly_once_on_full_matrix() -
     assert len(c4_instances) == len(c4_units), "no duplicate render work units within C4"
 
     union = c1_instances | c4_instances
-    assert len(union) == 462 * 5
+    assert len(union) == 456 * 5
 
     # every control instance must be in C1 regardless of its home split
     control_ids = control_row_ids(matrix_rows)
@@ -147,6 +145,6 @@ def test_realized_plan_totals_are_consistent_with_matrix() -> None:
     matrix_rows, realized = _full_realized_split()
     plan = workunits.realized_plan(matrix_rows, realized.assignment)
     total_selection = plan.c3a_instances + sum(plan.c3b_instances_by_family.values())
-    # sanity: selection-split instance count should be << full 2310 and > 0
-    assert 0 < total_selection < 2310
-    assert plan.c1_render_instances + plan.c4_render_instances == 2310
+    # sanity: selection-split instance count should be << full 2280 and > 0
+    assert 0 < total_selection < 2280
+    assert plan.c1_render_instances + plan.c4_render_instances == 2280

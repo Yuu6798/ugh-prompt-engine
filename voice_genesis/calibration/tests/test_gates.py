@@ -986,22 +986,25 @@ def test_directional_multi_sweep_each_meeting_minimum_passes() -> None:
     assert result.sweeps_with_warning == ("sweep-A",)  # sweep-B has 4, not exactly 3
 
 
-def test_directional_full_coverage_with_real_frozen_sweep_names_passes() -> None:
-    """UNDERSPEC-CAL-D75 ruling (1): `directional_gates()` itself is agnostic
-    to what the `sweep_id` strings mean — the tests above already exercise
-    the per-sweep minimum with arbitrary names — but this test wires in the
-    *real* declared sweep set a production family actually gets
-    (`fixtures.matrix.declared_sweeps_by_family()`), replacing the fabricated
-    `"default"` sweep D74 left in place. A full-coverage synthetic record set
-    (3 resolvable pairs per declared sweep) for `TILT_GT` can PASS."""
+def test_directional_full_coverage_with_real_frozen_sweep_ids_passes() -> None:
+    """UNDERSPEC-CAL-D76 (supersedes D75 ruling (1)): `directional_gates()`
+    itself is agnostic to what the `sweep_id` strings mean — the tests above
+    already exercise the per-sweep minimum with arbitrary names — but this
+    test wires in the *real* declared sweep set a production family
+    actually gets (`fixtures.matrix.declared_sweeps_by_family()`, def A:
+    truth-core block, nuisance-constant series), replacing the fabricated
+    `"default"` sweep D74 left in place and D75's (incorrect, nuisance-axis)
+    sweep ids. A full-coverage synthetic record set (3 resolvable pairs per
+    declared sweep) for `TILT_GT` (6 declared sweeps under def A) can
+    PASS."""
     from voice_genesis.calibration.fixtures.matrix import build_matrix, declared_sweeps_by_family
 
     declared = declared_sweeps_by_family(build_matrix())["TILT_GT"]
-    assert declared == ("context", "duration", "gain", "noise")
+    assert len(declared) == 6, sorted(declared)
 
     pairs = [
-        _pair(f"{sweep}-{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=True, sweep_id=sweep)
-        for sweep in declared
+        _pair(f"{sweep_id}-{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=True, sweep_id=sweep_id)
+        for sweep_id in declared
         for i in range(3)
     ]
     result = directional_gates(
@@ -1015,7 +1018,7 @@ def test_directional_full_coverage_with_real_frozen_sweep_names_passes() -> None
     )
     assert result.passed is True
     assert result.sweeps_below_minimum == ()
-    assert result.sweep_resolvable_counts == {sweep: 3 for sweep in declared}
+    assert result.sweep_resolvable_counts == {sweep_id: 3 for sweep_id in declared}
 
 
 def test_directional_expected_sweep_with_no_observed_pairs_fails() -> None:

@@ -26,8 +26,8 @@ from voice_genesis.calibration.campaign.caps import (
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import candidates_for_meter
-from voice_genesis.calibration.fixtures.matrix import build_matrix, nuisance_axis_family
-from voice_genesis.calibration.vocab import MeterId, MissingReason
+from voice_genesis.calibration.fixtures.matrix import build_matrix, declared_sweeps_by_family
+from voice_genesis.calibration.vocab import MeterId, MissingReason, Split
 
 from ._campaign_fixture import (
     _canonical_candidates_section,
@@ -45,8 +45,7 @@ def test_plan_subcommand_reports_design_totals_even_without_campaign(
     )
     assert exit_code == 0
     out = capsys.readouterr().out
-    # UNDERSPEC-CAL-D75 ruling (2): 456->462 logical cells (2280->2310).
-    assert '"instances_total": 2310' in out
+    assert '"instances_total": 2280' in out
     assert '"campaign_state": "UNAVAILABLE"' in out
 
 
@@ -1213,32 +1212,55 @@ def _c4_measurement_record_missing(
     )
 
 
-def _aperiodicity_single_sweep_subset() -> list[Any]:
-    """4 TRUTH_CORE rows (unchanged base) + the 3 real `"duration"`-sweep
-    CONFOUND rows of `APERIODICITY_GT` (`nuisance_axis_family() == "duration"`
-    — `duration_s in {0.25, 0.50, 2.00}`, the frozen `axes.
-    CANONICAL_NUISANCE_SEQUENCE` items). round 5 #344 ADOPT
-    (`[UNDERSPEC-CAL-D75]`): `declared_sweeps_by_family()` now derives its
-    sweep set from the `matrix_rows` actually passed to `_run_c4` — the
-    plain `small_matrix_subset(4, family=...)` TRUTH_CORE-only subset used
-    below declares *zero* sweeps (no `nuisance_tag` row at all), which would
-    make the DIRECTIONAL minimum-count check fail closed unconditionally
-    regardless of coverage (`gates.resolvable_pairs_possible()` returns
-    `False` for an empty `expected_sweep_ids`). Restricting to a single real
-    declared sweep (`"duration"`, `APERIODICITY_GT`'s other 2 declared
-    sweeps — `"gain"`/`"context"` — are simply absent from this subset, so
-    they are not declared at all here) keeps the two DIRECTIONAL coverage
-    tests below single-sweep and easy to reason about, while still
-    exercising the real `fixtures.matrix.declared_sweeps_by_family()`/
-    `nuisance_axis_family()` partition end to end."""
-    truth = small_matrix_subset(4, family="APERIODICITY_GT")
-    duration_confound = [
-        mr
-        for mr in build_matrix()
-        if mr.row.family == "APERIODICITY_GT" and nuisance_axis_family(mr.row) == "duration"
-    ]
-    assert len(duration_confound) == 3, duration_confound
-    return truth + duration_confound
+def _aperiodicity_family_subset() -> list[Any]:
+    """`APERIODICITY_GT` subset that declares **exactly one** def-A sweep
+    (`fixtures.matrix.declared_sweeps_by_family()`): the chosen sweep's 6
+    TRUTH_CORE rows + every non-TRUTH_CORE row of the family (CONFOUND +
+    BOUNDARY + NEGATIVE_CONTROL). round 6-7 #344 ADOPT (`[UNDERSPEC-CAL-
+    D76]`, supersedes D75's `_aperiodicity_single_sweep_subset()`): declared
+    sweep membership is now def A (truth-core block rows sharing identical
+    nuisance settings, truth level varying), not a nuisance axis
+    (`nuisance_axis_family()` no longer exists) — so a single declared
+    sweep is exactly "the TRUTH_CORE rows of one sweep, no other TRUTH_CORE
+    rows in the subset" (any other family's/sweep's TRUTH_CORE row would
+    declare a second sweep, and `gates.resolvable_pairs_possible()` demands
+    *every* declared sweep clear the minimum independently — D76 ruling
+    (2)). Excluding the other 9 sweeps' TRUTH_CORE rows keeps
+    `expected_sweep_ids` a singleton. The non-TRUTH_CORE rows are kept
+    (unlike D75's narrower 7-row subset) because split-coverage repair
+    (`splitter._repair_coverage`) needs the family's fuller row population
+    to find a feasible donor/victim assignment — a bare 6-row single-sweep
+    subset raises `CoverageRepairInfeasible`."""
+    family_rows = [mr for mr in build_matrix() if mr.row.family == "APERIODICITY_GT"]
+    non_truth_core = [mr for mr in family_rows if mr.row.block != "TRUTH_CORE"]
+    truth_core = [mr for mr in family_rows if mr.row.block == "TRUTH_CORE"]
+    declared = declared_sweeps_by_family(family_rows)["APERIODICITY_GT"]
+    sweep_id, member_row_ids = sorted(declared.items())[0]
+    member_row_id_set = set(member_row_ids)
+    sweep_truth_core = [mr for mr in truth_core if mr.row_id in member_row_id_set]
+    assert len(sweep_truth_core) == len(member_row_ids) == 6, sweep_truth_core
+    return sweep_truth_core + non_truth_core
+
+
+def _force_rows_into_holdout(campaign: Any, row_ids: list[str]) -> Any:
+    """Override `campaign.realized_split.assignment` so each of `row_ids` is
+    unconditionally `Split.HOLDOUT`, leaving every other row's assignment as
+    the (frozen-secret) stratified split already produced. `FrozenCampaign`/
+    `RealizedSplitMap` are both frozen dataclasses, so this returns a new
+    `campaign` object (`dataclasses.replace`) rather than mutating in place.
+
+    Used by the DIRECTIONAL coverage tests below to deterministically place
+    a chosen declared sweep's member rows into holdout — natural (50/25/25,
+    `(block, domain)`-stratified) splitting of a handful of rows from one
+    6-row `APERIODICITY_GT` sweep is not reliable enough (varies with which
+    sweep is picked) to guarantee a specific holdout row count on demand."""
+    import dataclasses
+
+    new_assignment = dict(campaign.realized_split.assignment)
+    for row_id in row_ids:
+        new_assignment[row_id] = Split.HOLDOUT
+    new_split = dataclasses.replace(campaign.realized_split, assignment=new_assignment)
+    return dataclasses.replace(campaign, realized_split=new_split)
 
 
 def _c4_setup_selected_candidate_coverage_test(
@@ -1585,27 +1607,28 @@ def test_c4_directional_partial_coverage_below_minimum_count_closes_not_evaluabl
     """round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`): the DIRECTIONAL-ceiling
     counterpart of the ABSOLUTE test above — `M2A-B0-AUTOCORR-PERIODICITY`
     (`-B0-`, asserted DIRECTIONAL in the shared fixture) is named the
-    family's selected candidate here (`select_directional=True`). With only
-    2 usable PRIMARY instances out of the 5 expected, at most C(2,2)=1
-    distinct pair exists — below `gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP == 3`
-    (design §10.4 ~L375: "resolvable pair は各 sweep で >= 3") regardless of
-    the actual measured values — so §11's cascade (~L395-396: "critical
-    output 全欠損 or 最小数割れで score/gate 計算不能 → NOT_EVALUABLE/
-    OUTPUT_NOT_EVALUABLE") applies, exactly as D73 originally intended, now
-    correctly scoped to a DIRECTIONAL effective ceiling.
+    family's selected candidate here (`select_directional=True`). §11's
+    cascade (~L395-396: "critical output 全欠損 or 最小数割れで score/gate
+    計算不能 → NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE") applies, exactly as D73
+    originally intended, now correctly scoped to a DIRECTIONAL effective
+    ceiling.
 
-    round 5 #344 ADOPT (`[UNDERSPEC-CAL-D75]`): `usable_instances` is now
-    scoped to the real declared `"duration"` sweep
-    (`_aperiodicity_single_sweep_subset()`) — the minimum-count check
-    partitions by `fixtures.matrix.nuisance_axis_family()`, not by a raw
-    total-instance count, so the 2 usable instances below must actually
-    belong to the one declared sweep this subset exercises."""
-    campaign, subset, independent_candidate, expected_instances = (
+    round 6-7 #344 ADOPT (`[UNDERSPEC-CAL-D76]` ruling (3), supersedes D75):
+    the structural minimum-count check now counts DISTINCT TRUTH LEVELS
+    (row-level, never probe repeats) among usable instances **within one
+    declared sweep** (`fixtures.matrix.declared_sweeps_by_family()`, def
+    A), not a raw usable-instance count. `usable_instances` below covers
+    exactly 2 distinct rows of the chosen declared sweep
+    (`_aperiodicity_holdout_sweep_row_ids()`) — 2 distinct truth levels, so
+    at most C(2,2)=1 resolvable pair exists, below `gates.
+    MIN_RESOLVABLE_PAIRS_PER_SWEEP == 3` regardless of how many probe
+    instances or measured values are attached to those 2 rows."""
+    campaign, subset, independent_candidate, _stale_expected_instances = (
         _c4_setup_selected_candidate_coverage_test(
             tmp_path,
             monkeypatch,
             select_directional=True,
-            subset_override=_aperiodicity_single_sweep_subset(),
+            subset_override=_aperiodicity_family_subset(),
         )
     )
     harmonic_residual = next(
@@ -1613,20 +1636,24 @@ def test_c4_directional_partial_coverage_below_minimum_count_closes_not_evaluabl
         for c in candidates_for_meter(MeterId.M2_APERIODICITY)
         if c.algorithm_family == "HARMONIC_RESIDUAL"
     )
-    row_by_id = {mr.row_id: mr.row for mr in subset}
-    duration_instances = sorted(
-        inst for inst in expected_instances if nuisance_axis_family(row_by_id[inst[0]]) == "duration"
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.fixtures.controls import non_boundary_selection_instances
+    from voice_genesis.calibration.vocab import Split as _Split
+
+    _sweep_id, member_row_ids = sorted(declared_sweeps_by_family(subset)["APERIODICITY_GT"].items())[0]
+    usable_row_ids = list(member_row_ids[:2])  # 2 distinct rows -> below minimum
+    campaign = _force_rows_into_holdout(campaign, usable_row_ids)
+    expected_instances = frozenset(
+        workunits.c4_holdout_instances(
+            subset, campaign.realized_split.assignment, family="APERIODICITY_GT"
+        )
     )
-    assert len(duration_instances) >= 3, (
-        "test setup needs >=3 expected 'duration'-sweep instances to leave "
-        "room for a below-minimum usable subset"
+    expected_primary_instances = non_boundary_selection_instances(
+        subset, campaign.realized_split.assignment, _Split.HOLDOUT, family="APERIODICITY_GT"
     )
+    usable_instances = [(row_id, 0) for row_id in usable_row_ids]
+    assert all(inst in expected_instances for inst in usable_instances)
     ordered_instances = sorted(expected_instances)
-    usable_instances = duration_instances[:2]  # only 2 usable in the declared sweep -> below minimum
-    assert len(expected_instances) > len(usable_instances) >= 2, (
-        "test setup needs >=3 expected instances with exactly 2 usable to "
-        "exercise the below-minimum branch"
-    )
 
     records = [
         _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
@@ -1655,9 +1682,12 @@ def test_c4_directional_partial_coverage_below_minimum_count_closes_not_evaluabl
     assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
     assert m2a_result["selected_candidate_id"] == independent_candidate.candidate_id
     gate_detail = m2a_result["gate_detail"]
-    assert gate_detail["expected_instance_count"] == len(expected_instances)
+    assert gate_detail["gate_detail_reason_code"] == "DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT"
+    assert gate_detail["expected_instance_count"] == len(expected_primary_instances)
     assert gate_detail["seen_instance_count"] == len(usable_instances)
     assert gate_detail["min_resolvable_pairs_per_sweep"] == 3
+    assert gate_detail["usable_truth_level_counts_by_sweep"].get(_sweep_id) == 2
+    assert _sweep_id in gate_detail["sweeps_below_minimum"]
     assert gate_detail["effective_ceiling"] == "DIRECTIONAL"
     assert "claim_scope" in gate_detail
 
@@ -1672,30 +1702,24 @@ def test_c4_directional_partial_coverage_below_minimum_count_closes_not_evaluabl
     )
 
 
-def test_c4_directional_partial_coverage_at_minimum_count_closes_diagnostic_only(
+def test_c4_directional_sweep_with_repeated_truth_level_still_unresolvable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`): a DIRECTIONAL effective
-    ceiling with usable PRIMARY coverage that *does* structurally admit the
-    frozen minimum (3 of 5 usable, C(3,2)=3 >= `gates.
-    MIN_RESOLVABLE_PAIRS_PER_SWEEP == 3`) is still partial coverage (1
-    instance short of the 5 expected — see `missing_expected_instances`), so
-    §11's "score 計算可能だが PRIMARY 一部 output missing で gate 不通過 →
-    DIAGNOSTIC_ONLY/OUTPUT_MISSING" applies, mirroring the ABSOLUTE-ceiling
-    control case `test_c4_selected_candidate_partially_covered_closes_
-    diagnostic_only` (4 of 5 usable) but for a DIRECTIONAL-ceiling selected
-    candidate.
-
-    round 5 #344 ADOPT (`[UNDERSPEC-CAL-D75]`): `usable_instances` is now
-    scoped to the real declared `"duration"` sweep
-    (`_aperiodicity_single_sweep_subset()`) — see the below-minimum test
-    above for the same rationale."""
-    campaign, subset, independent_candidate, expected_instances = (
+    """UNDERSPEC-CAL-D76 ruling (3) — the specific defect a raw usable-
+    instance count (D75's approach) would miss: multiple usable *instances*
+    (probe repeats) at the SAME truth level (same row_id, several
+    probe_index values) never add a second resolvable pair, because
+    `Delta_truth(i,j) == 0` for same-row pairs is unresolvable by
+    construction (§10.4). 5 usable probe instances, all on the SAME single
+    row (1 distinct truth level) must still fail exactly like the
+    below-minimum test above — not pass because "5 >= 3 usable
+    instances"."""
+    campaign, subset, independent_candidate, _stale_expected_instances = (
         _c4_setup_selected_candidate_coverage_test(
             tmp_path,
             monkeypatch,
             select_directional=True,
-            subset_override=_aperiodicity_single_sweep_subset(),
+            subset_override=_aperiodicity_family_subset(),
         )
     )
     harmonic_residual = next(
@@ -1703,24 +1727,109 @@ def test_c4_directional_partial_coverage_at_minimum_count_closes_diagnostic_only
         for c in candidates_for_meter(MeterId.M2_APERIODICITY)
         if c.algorithm_family == "HARMONIC_RESIDUAL"
     )
-    row_by_id = {mr.row_id: mr.row for mr in subset}
-    duration_instances = sorted(
-        inst for inst in expected_instances if nuisance_axis_family(row_by_id[inst[0]]) == "duration"
+    from voice_genesis.calibration.campaign import workunits
+
+    _sweep_id, member_row_ids = sorted(declared_sweeps_by_family(subset)["APERIODICITY_GT"].items())[0]
+    single_row_id = member_row_ids[0]
+    campaign = _force_rows_into_holdout(campaign, [single_row_id])
+    expected_instances = frozenset(
+        workunits.c4_holdout_instances(
+            subset, campaign.realized_split.assignment, family="APERIODICITY_GT"
+        )
     )
-    assert len(duration_instances) >= 3, (
-        "test setup needs >=3 expected 'duration'-sweep instances to leave "
-        "room for an at-minimum usable subset"
+    usable_instances = sorted(
+        inst for inst in expected_instances if inst[0] == single_row_id
+    )
+    assert len(usable_instances) >= 3, (
+        "test setup needs >=3 probe instances on the single chosen row",
+        usable_instances,
     )
     ordered_instances = sorted(expected_instances)
-    usable_instances = duration_instances[:3]  # exactly 3 usable in the declared sweep, C(3,2)=3 >= 3
-    assert len(expected_instances) - len(usable_instances) >= 1, (
+
+    records = [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in ordered_instances
+    ] + [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in usable_instances
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+    gate_detail = m2a_result["gate_detail"]
+    assert gate_detail["gate_detail_reason_code"] == "DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT"
+    # >=3 usable probe *instances*, but only 1 distinct truth level (row).
+    assert gate_detail["seen_instance_count"] == len(usable_instances)
+    assert gate_detail["usable_truth_level_counts_by_sweep"].get(_sweep_id) == 1
+
+
+def test_c4_directional_partial_coverage_at_minimum_count_closes_diagnostic_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`): a DIRECTIONAL effective
+    ceiling with usable PRIMARY coverage that *does* structurally admit the
+    frozen minimum is still partial coverage (many fewer usable instances
+    than the family-wide expected set — see `missing_expected_instances`),
+    so §11's "score 計算可能だが PRIMARY 一部 output missing で gate 不通過 →
+    DIAGNOSTIC_ONLY/OUTPUT_MISSING" applies, mirroring the ABSOLUTE-ceiling
+    control case `test_c4_selected_candidate_partially_covered_closes_
+    diagnostic_only` but for a DIRECTIONAL-ceiling selected candidate.
+
+    round 6-7 #344 ADOPT (`[UNDERSPEC-CAL-D76]` ruling (3), supersedes D75):
+    `usable_instances` covers exactly 3 distinct rows of the chosen
+    declared sweep (`_aperiodicity_holdout_sweep_row_ids()`) — 3 distinct
+    truth levels, `C(3,2)=3 >= gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP`, so the
+    structural check passes and coverage completeness (family-wide, not
+    sweep-scoped) is what determines DIAGNOSTIC_ONLY here."""
+    campaign, subset, independent_candidate, _stale_expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(
+            tmp_path,
+            monkeypatch,
+            select_directional=True,
+            subset_override=_aperiodicity_family_subset(),
+        )
+    )
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.fixtures.controls import non_boundary_selection_instances
+    from voice_genesis.calibration.vocab import Split as _Split
+
+    _sweep_id, member_row_ids = sorted(declared_sweeps_by_family(subset)["APERIODICITY_GT"].items())[0]
+    usable_row_ids = list(member_row_ids[:3])  # 3 distinct rows, C(3,2)=3
+    campaign = _force_rows_into_holdout(campaign, usable_row_ids)
+    expected_instances = frozenset(
+        workunits.c4_holdout_instances(
+            subset, campaign.realized_split.assignment, family="APERIODICITY_GT"
+        )
+    )
+    expected_primary_instances = non_boundary_selection_instances(
+        subset, campaign.realized_split.assignment, _Split.HOLDOUT, family="APERIODICITY_GT"
+    )
+    usable_instances = [(row_id, 0) for row_id in usable_row_ids]
+    assert all(inst in expected_instances for inst in usable_instances)
+    assert len(expected_primary_instances) - len(usable_instances) >= 1, (
         "test setup needs a genuine coverage gap to exercise partial coverage"
     )
-    import math as _math
-
-    assert _math.comb(len(usable_instances), 2) >= 3, (
-        "test setup needs >=3 usable instances to clear the frozen minimum"
-    )
+    ordered_instances = sorted(expected_instances)
 
     records = [
         _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
@@ -1749,7 +1858,7 @@ def test_c4_directional_partial_coverage_at_minimum_count_closes_diagnostic_only
     assert m2a_result["reason_code"] == "OUTPUT_MISSING"
     assert m2a_result["selected_candidate_id"] == independent_candidate.candidate_id
     gate_detail = m2a_result["gate_detail"]
-    assert gate_detail["expected_instance_count"] == len(expected_instances)
+    assert gate_detail["expected_instance_count"] == len(expected_primary_instances)
     assert gate_detail["seen_instance_count"] == len(usable_instances)
     assert "claim_scope" in gate_detail
 

@@ -125,7 +125,7 @@ from voice_genesis.calibration.fixtures.controls import (
 from voice_genesis.calibration.fixtures.matrix import (
     build_matrix,
     declared_sweeps_by_family,
-    nuisance_axis_family,
+    truth_identity_for_row,
 )
 from voice_genesis.calibration.gates import (
     MIN_RESOLVABLE_PAIRS_PER_SWEEP,
@@ -1117,16 +1117,20 @@ def _run_c4(
 
     assignment = campaign.realized_split.assignment
     sr_by_row = {mr.row_id: mr.row.sr_hz for mr in matrix_rows}
-    # UNDERSPEC-CAL-D75 ruling (1): sweep_id 分割の唯一の入力
-    # （`declared_sweeps_by_family()`/`nuisance_axis_family()` — 両方とも
-    # frozen matrix の `nuisance_tag` から決定的に導出する。`gates.
-    # resolvable_pairs_possible()` へ渡す `expected_sweep_ids`/
-    # `usable_primary_instance_counts_by_sweep` はこの 2 つだけを使い、
-    # fabricated `"default"` sweep を経由しない）。
+    # UNDERSPEC-CAL-D76 ruling (2)（D75 の nuisance-axis 写像を SUPERSEDE）:
+    # sweep_id 分割の唯一の入力は `fixtures.matrix.declared_sweeps_by_
+    # family()`（def A: truth-core block の nuisance-constant series）——
+    # frozen matrix から決定的に導出する。`gates.resolvable_pairs_
+    # possible()` へ渡す `expected_sweep_ids` と、C4 側で数える「usable
+    # instance の distinct truth level 数」（ruling (3)）の両方がこの宣言を
+    # 単一の入口として共有する（fabricated `"default"` sweep は経由しない）。
     declared_sweeps_by_family_map = declared_sweeps_by_family(matrix_rows)
-    nuisance_axis_family_by_row_id = {
-        mr.row_id: nuisance_axis_family(mr.row) for mr in matrix_rows
-    }
+    row_id_to_sweep_id: dict[str, dict[str, str]] = {}
+    for family_value, family_sweeps in declared_sweeps_by_family_map.items():
+        for sweep_id, member_row_ids in family_sweeps.items():
+            for row_id in member_row_ids:
+                row_id_to_sweep_id.setdefault(family_value, {})[row_id] = sweep_id
+    row_by_id = {mr.row_id: mr.row for mr in matrix_rows}
     all_instances = sorted(
         {
             inst
@@ -1288,15 +1292,16 @@ def _run_c4(
             effective_ceiling, claim_scope_detail = selection_stage.claim_scope_report(
                 selected_candidate_obj, max_claim_scope
             )
-            usable_holdout_instances = {
-                (r.row_id, r.probe_index)
-                for r in own_selected_records
-                if (
-                    (value := measure_stage.primary_output_value(selected_candidate_obj, r.output))
-                    is not None
-                    and math.isfinite(value)
-                )
-            }
+            # UNDERSPEC-CAL-D76 ruling (4): an instance counts as usable
+            # only if ALL of its within/fresh repeats are present, finite,
+            # and mutually consistent (D67) — see
+            # `measure_stage.usable_primary_instances()`. The prior set
+            # comprehension marked an instance usable if ANY single repeat
+            # (out of 6) happened to be finite, an existential collapse that
+            # let 5 missing/divergent repeats hide behind 1 lucky one.
+            usable_holdout_instances = measure_stage.usable_primary_instances(
+                selected_candidate_obj, own_selected_records
+            )
         else:
             usable_holdout_instances = {(r.row_id, r.probe_index) for r in own_selected_records}
         missing_expected_instances = expected_holdout_instances - usable_holdout_instances
@@ -1365,41 +1370,45 @@ def _run_c4(
             # missing で gate 不通過"), matching D69/D72's original rule.
             # When the check does apply, `gates.resolvable_pairs_possible()`
             # is still the sole threshold authority (`gates.
-            # MIN_RESOLVABLE_PAIRS_PER_SWEEP`) — D74 also corrected that
-            # helper itself to require every *declared* sweep to clear the
-            # minimum independently (no cross-sweep pair counting). round 5
-            # #344 ADOPT (`[UNDERSPEC-CAL-D75]` ruling (1)): D74 left the
-            # fabricated single `"default"` sweep in place ("this CLI call
-            # site has no per-instance sweep partition to plumb through") —
-            # but `nuisance_axis_family_by_row_id`/`declared_sweeps_by_
-            # family_map` (both derived once above from the same frozen
-            # `matrix_rows` via `fixtures.matrix.nuisance_axis_family()`/
-            # `declared_sweeps_by_family()`) now give exactly that partition,
-            # so the degenerate single-sweep case is replaced with the real
-            # per-family declared sweep set and a genuine per-sweep usable-
-            # instance count (`DirectionalPair.sweep_id`'s own semantics —
-            # `gates.py` docstring).
+            # MIN_RESOLVABLE_PAIRS_PER_SWEEP`). round 6-7 #344 ADOPT
+            # (`[UNDERSPEC-CAL-D76]` ruling (2)/(3), SUPERSEDES D75 ruling
+            # (1)): D75 partitioned usable PRIMARY instances by nuisance
+            # axis (`nuisance_axis_family()`) and counted raw usable-
+            # instance rows per axis — but nuisance axis is not sweep (see
+            # `sweep_truth_investigation.md`: a nuisance-axis group holds
+            # truth fixed at the family anchor, so every pair inside it has
+            # `delta_truth == 0` and can never be resolvable under §10.4).
+            # The real declared sweep partition is `fixtures.matrix.
+            # declared_sweeps_by_family()` (def A: truth-core block,
+            # nuisance-constant series — `row_id_to_sweep_id` above), and
+            # the count that matters is the number of DISTINCT TRUTH LEVELS
+            # among usable instances in that sweep (row-level `row_id`,
+            # never `probe_index` repeats) — two usable rows at the SAME
+            # truth level still form an unresolvable `delta_truth == 0`
+            # pair, so counting raw instances (as D75 did) over-counts.
             n_usable_primary = len(usable_primary_instances)
-            usable_primary_counts_by_sweep: dict[str, int] = {}
+            usable_row_ids_by_sweep: dict[str, set[str]] = {}
             for row_id, _probe_index in usable_primary_instances:
-                axis_family = nuisance_axis_family_by_row_id.get(row_id)
-                if axis_family is None:
-                    continue  # truth-core/interaction row: not a declared sweep member
-                usable_primary_counts_by_sweep[axis_family] = (
-                    usable_primary_counts_by_sweep.get(axis_family, 0) + 1
-                )
-            expected_sweep_ids = set(declared_sweeps_by_family_map.get(family.value, ()))
+                sweep_id = row_id_to_sweep_id.get(family.value, {}).get(row_id)
+                if sweep_id is None:
+                    continue  # not a declared-sweep member (e.g. a targeted-interaction row)
+                usable_row_ids_by_sweep.setdefault(sweep_id, set()).add(row_id)
+            usable_truth_level_counts_by_sweep: dict[str, int] = {
+                sweep_id: len({truth_identity_for_row(row_by_id[rid]) for rid in row_ids})
+                for sweep_id, row_ids in usable_row_ids_by_sweep.items()
+            }
+            expected_sweep_ids = set(declared_sweeps_by_family_map.get(family.value, {}))
             directional_minimum_not_met = (
                 effective_ceiling is ClaimCeiling.DIRECTIONAL
                 and not resolvable_pairs_possible(
-                    usable_primary_counts_by_sweep, expected_sweep_ids
+                    usable_truth_level_counts_by_sweep, expected_sweep_ids
                 )
             )
             if directional_minimum_not_met:
                 sweeps_below_minimum = sorted(
                     s
                     for s in expected_sweep_ids
-                    if math.comb(usable_primary_counts_by_sweep.get(s, 0), 2)
+                    if math.comb(usable_truth_level_counts_by_sweep.get(s, 0), 2)
                     < MIN_RESOLVABLE_PAIRS_PER_SWEEP
                 )
                 results.append(
@@ -1411,20 +1420,27 @@ def _run_c4(
                         selected_candidate_id=selected_id,
                         gate_detail={
                             "reason": (
-                                "[UNDERSPEC-CAL-D75] DIRECTIONAL effective ceiling: "
-                                "frozen minimum-count condition not met for declared "
-                                f"sweep(s) {sweeps_below_minimum}: each needs "
-                                f"C(n,2) >= gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP="
-                                f"{MIN_RESOLVABLE_PAIRS_PER_SWEEP} (design §10.4 "
-                                "~L375); score/gate is uncomputable regardless of "
-                                "measured values"
+                                "[UNDERSPEC-CAL-D76] DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_"
+                                "HOLDOUT: declared sweep(s) "
+                                f"{sweeps_below_minimum} have too few distinct truth "
+                                "levels among usable holdout instances: each needs "
+                                f"C(levels,2) >= gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP="
+                                f"{MIN_RESOLVABLE_PAIRS_PER_SWEEP} (design §10.4 ~L375); "
+                                "score/gate is uncomputable regardless of measured "
+                                "values. This is the expected, honest outcome for "
+                                "DIRECTIONAL-ceiling candidates under the canonical "
+                                "456-cell matrix + (block, domain) holdout split "
+                                "(README ledger D76 — a design fact, not a bug to "
+                                "work around; sweep-aware stratification is a "
+                                "candidate for a future design v1.1 revision)."
                             ),
+                            "gate_detail_reason_code": "DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT",
                             "expected_instance_count": len(expected_holdout_instances),
                             "seen_instance_count": n_usable_primary,
                             "min_resolvable_pairs_per_sweep": MIN_RESOLVABLE_PAIRS_PER_SWEEP,
                             "expected_sweep_ids": sorted(expected_sweep_ids),
-                            "usable_primary_instance_counts_by_sweep": dict(
-                                sorted(usable_primary_counts_by_sweep.items())
+                            "usable_truth_level_counts_by_sweep": dict(
+                                sorted(usable_truth_level_counts_by_sweep.items())
                             ),
                             "sweeps_below_minimum": sweeps_below_minimum,
                             "effective_ceiling": (

@@ -101,15 +101,33 @@ Codex レビュー 2026-09-01（第 2 巡）採用分。正本改訂は §0 保�
   - M5-WAVE-DISCONTINUITY 3 = 検出窓 {2, 5, 10} ms
   - M5-SPECTRAL-FLUX 4 = frame {512, 1024} × flux ノルム {L1, L2}
   - F0-PYIN 4 = frame {2048, 4096} × hop {256, 512}（設計正本で確定済み・再掲）
-- **declared sweep（§10.4 DIRECTIONAL gate 前提。UNDERSPEC-CAL-D75 ruling (1)）**:
-  family の declared sweep = PRIMARY domain の凍結 fixture matrix が `nuisance_tag` を介して
-  実際に変動させる confound 軸そのもの（`fixtures.matrix.declared_sweeps_by_family()`）——
-  truth-core grid（f0_hz/sr_hz）は sweep ではなく、family の除外軸（§2.7 の適用外規則）は
-  自然に集合から漏れる——であり、C0 freeze 時にこの関数で導出し `frozen_design.
-  fixture_spec.<FAMILY>.confound_axes` として記録する（`manifest_core_sha` に含まれる）
+- **declared sweep（§10.4 DIRECTIONAL gate 前提。UNDERSPEC-CAL-D76 def A、
+  D75 ruling (1)/(2) を SUPERSEDE — 詳細は `README.md` D76 entry）**: family
+  の declared sweep は、PRIMARY domain の凍結 fixture matrix のうち
+  nuisance/covariate 設定（gain/duration/noise/context 等）を固定し truth
+  水準だけが動く truth-core block の行集合（`fixtures.matrix.
+  declared_sweeps_by_family()`。旧 D75 の「nuisance_tag が変動させる
+  confound 軸そのもの」という定義は誤りで、group 内 truth が anchor 固定
+  になり全 pair `delta_truth == 0` を生む構造的欠陥があった）。C0 freeze
+  時にこの関数で導出し `frozen_design.fixture_spec.<FAMILY>.declared_
+  sweeps`（sweep_id → member row_id 一覧）として記録する（`manifest_
+  core_sha` に含まれる）。`campaign.holdout_stage.declared_axes_for_
+  family()`（`confound_axes` 読み戻し）は gate4' invariance 軸専用のまま
+  変更しない——D18 の「同じ confound_axes 列を DIRECTIONAL sweep_id
+  としても再利用する」という旧写像は誤りとして訂正した（`holdout_
+  stage.py` の D18 note 参照）。
+- **holdout 上の DIRECTIONAL 到達不能性（既知の設計事実。UNDERSPEC-CAL-
+  D76）**: 上記 def A を凍結 matrix 全体で評価すれば 7 family 全てが
+  「各 declared sweep で truth level >= 3」を満たすが、HOLDOUT split
+  （`STRATUM_FACTOR_NAMES = (block, domain)` 層別 25%）は sweep 構造を
+  層別因子に含まないため、各 sweep の holdout 残存行が構造的に 1–2 行へ
+  薄まる。結果として DIRECTIONAL-ceiling 候補は holdout 上で
+  `NOT_EVALUABLE`（`DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT`）に
+  倒れるのが通常の帰結であり、これは matrix/split の設計事実であって
+  回避すべきバグではない（sweep-aware stratification は design v1.1
+  改訂候補）。
 
-## 2.7 fixture matrix の設計時凍結（Codex レビュー第 5 巡採用。§5.2 件数と厳密一致。
-UNDERSPEC-CAL-D75 ruling (2) により件数改訂）
+## 2.7 fixture matrix の設計時凍結（Codex レビュー第 5 巡採用。§5.2 件数と厳密一致）
 
 実装は本節の機械的転記とし、行選択の裁量を残さない。
 
@@ -132,21 +150,15 @@ RESONANCE = center 1000・bw 150・prom 12、TRANSITION = amplitude step・中 s
 IDENTITY A1 = founder 1・trait 1・delta 0 / A2 = founder 3・trait 2・delta 0。
 
 **confound block（決定的レシピ）**: 正準 nuisance 系列 =
-`[gain→−24, gain→−6, gain→−12, dur→0.25, dur→0.50, dur→2.00, noise→40, noise→20, noise→10,
-context→ramp, context→prefix/suffix, context→transition-adjacent]`（12 行、family anchor に
+`[gain→−24, gain→−6, dur→0.25, dur→0.50, dur→2.00, noise→40, noise→20, noise→10,
+context→ramp, context→prefix/suffix, context→transition-adjacent]`（11 行、family anchor に
 適用）→ §5.1 の 6 targeted interactions（記載順）→ 第 2 anchor（A2）への同系列、の順に連結し、
 **family の confound 件数 N の先頭 N 件**を採る。ただし family の truth construct を変える軸は
 「適用外」として系列から除外する（APERIODICITY は noise 軸・その関与 interaction を除外、
 TRANSITION は context 軸を除外。§10.1「truth 自体が変わる軸は invariance に混ぜない」準拠）。
-**gain 軸は 3 水準**（旧 2 水準 −24/−6 dBFS に、anchor 自身が使う既存 frozen 語彙の中央水準
-−12 dBFS を追加。UNDERSPEC-CAL-D75 ruling (2)）: 単一 anchor family（TILT/RESONANCE/
-TRANSITION/APERIODICITY）は anchor1 の gain nuisance 行しか持たず、旧 2 水準では declared
-sweep "gain" が PRIMARY domain で 2 行にしかならず、§10.4「resolvable pair は各 sweep で
->= 3」を構造的に満たせなかった（多 anchor family は A1+A2 の合算で無影響）。件数検算:
-F0 24 = 12+6+6、FORMANT 24 = 12+6+6、TILT 13 = 12+1、APER 9 =（noise 除外 9 行系列の）
-全 9 件（旧 target_n=6 の先頭切り捨てを廃止——旧実装は declared sweep "context" を 1 行まで
-飢餓させていた）、RESONANCE 13 = 12+1、TRANSITION 13 =（context 除外 9 行系列）+ 適用可
-interaction 4 = 13、IDENTITY 24 = 12+6+6。
+件数検算: F0 24 = 11+6+7、FORMANT 24 = 11+6+7、TILT 12 = 11+1、APER 6 =（noise 除外 8 行系列の）
+先頭 6、RESONANCE 12 = 11+1、TRANSITION 12 =（context 除外 8 行系列）+ 適用可 interaction 4
+= 12、IDENTITY 24 = 11+6+7。
 
 **boundary/negative block（決定的レシピ）**: 正準 boundary 系列 =
 `[F0→G2, F0→C5, SR→16k, SR→96k, gain→−36, gain→−1, dur→0.10, dur→4.00, noise→0dB]`
@@ -166,8 +178,8 @@ truth construct を変える軸が関与するものは適用外。第 6 巡レ�
 - TRANSITION_GT (k=4): high-F0×low-SR, high-F0×short-duration, high-F0×low-SNR,
   low-F0×high-SR（context 軸関与の transition×short-duration と、次順の low-gain×noise を
   規則により不採用）
-- APERIODICITY_GT (k=0): noise 軸関与 2 件を除いた 4 件は N=9 が noise 除外後の
-  nuisance 系列（gain 3 + duration 3 + context 3 = 9 行）で丸ごと埋まるため不採用
+- APERIODICITY_GT (k=0): noise 軸関与 2 件を除いた 4 件は N=6 が nuisance 系列で
+  埋まるため不採用
 
 **control 共有契約**（第 6 巡レビュー採用。N_neg≥10 と split 配分の構造矛盾の解消）:
 

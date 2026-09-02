@@ -144,7 +144,7 @@ from pathlib import Path
 from . import streams, vocab
 from .candidates import registry as candidate_registry
 from .fixtures import axes as fixture_axes
-from .fixtures.matrix import build_matrix, sweep_primary_row_counts
+from .fixtures.matrix import build_matrix, declared_sweeps_by_family, truth_identity_for_row
 from .gates import MIN_RESOLVABLE_PAIRS_PER_SWEEP
 
 # ---------------------------------------------------------------------------
@@ -648,10 +648,11 @@ class C0ValidationResult:
     d4c_ineligible: bool = False
     d4c_ineligibility_reason: str | None = None
     unseeded_rng_streams: tuple[str, ...] = field(default_factory=tuple)
-    #: UNDERSPEC-CAL-D75 ruling (2): `_check_sweep_capacity()` の violation
-    #: 列（非空なら `BLOCKED_C0_SWEEP_CAPACITY_INSUFFICIENT` が `blocked_codes`
-    #: に入る）。
-    sweep_capacity_violations: tuple[str, ...] = field(default_factory=tuple)
+    #: UNDERSPEC-CAL-D76 ruling (2)（D75 の `sweep_capacity_violations`/
+    #: `_check_sweep_capacity()` を SUPERSEDE）: `_check_declared_sweep_
+    #: truth_levels()` の violation 列（非空なら
+    #: `BLOCKED_C0_SWEEP_DECLARATION_INVALID` が `blocked_codes` に入る）。
+    sweep_declaration_violations: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def is_blocked(self) -> bool:
@@ -1253,41 +1254,45 @@ def _check_rng_ledger_unseeded(manifest: Mapping[str, object]) -> tuple[str, ...
     return tuple(unseeded)
 
 
-def _check_sweep_capacity(manifest: Mapping[str, object]) -> tuple[str, ...]:
-    """UNDERSPEC-CAL-D75 ruling (2), 設計正本 §10.4「resolvable pair は各
-    sweep で >= 3」: family ごとの宣言済み sweep 集合
-    (`fixtures.matrix.declared_sweeps_by_family()`) が、それぞれ PRIMARY
-    domain 内で `gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP` (3) 件以上の行を
-    持つことを検査する。
+def _check_declared_sweep_truth_levels(manifest: Mapping[str, object]) -> tuple[str, ...]:
+    """UNDERSPEC-CAL-D76 ruling (2)（`_check_sweep_capacity`/D75 を
+    SUPERSEDE）, 設計正本 §10.4「resolvable pair は各 sweep で >= 3」: family
+    ごとの宣言済み declared sweep（`fixtures.matrix.declared_sweeps_by_
+    family()`、def A — truth-core block の nuisance-constant series）が、
+    それぞれ相異なる truth level（`fixtures.matrix.truth_identity_for_row()`）
+    を `gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP` (3) 種以上持つ（= `C(levels,
+    2) >= 3` 個の resolvable pair 候補が理論上作れる）ことを検査する。
 
     `_check_hash_content_match` と同じ「宣言でなく実体を検査する」規約を
-    採る: `manifest` の `frozen_design.fixture_spec.<FAMILY>.confound_axes`
+    採る: `manifest` の `frozen_design.fixture_spec.<FAMILY>.declared_sweeps`
     宣言値ではなく、`fixtures.matrix.build_matrix()` が返す実際の凍結
-    matrix を直接数える（`manifest` 引数は他の `_check_*` と呼び出し規約を
-    揃えるためだけに受け取り、内容は参照しない — この検査は「matrix
-    生成ロジックが §10.4 の前提を構造的に満たせるか」という manifest 非依存
-    の構造検査であり、`declared_sweeps_by_family()` が今後もこの
-    `build_matrix()` を唯一の権威として使う限り `confound_axes` の宣言値は
-    定義上ここで数える値と一致する）。
+    matrix から直接再導出する（`manifest` 引数は他の `_check_*` と呼び出し
+    規約を揃えるためだけに受け取り、内容は参照しない — 「matrix 生成ロジック
+    自体が §10.4 の前提を構造的に満たせるか」という manifest 非依存の構造
+    検査であり、`declared_sweeps_by_family()` が今後もこの `build_matrix()`
+    を唯一の権威として使う限り、manifest の宣言値は定義上ここで数える値と
+    一致する）。
 
     違反があれば `frozen_design.fixture_spec.*` の hollow/shape 違反とは
     独立した意味論的欠陥として、専用の `vocab.BlockedCode.
-    BLOCKED_C0_SWEEP_CAPACITY_INSUFFICIENT` で別途 fail-closed する
+    BLOCKED_C0_SWEEP_DECLARATION_INVALID` で別途 fail-closed する
     （`BLOCKED_C0_MANIFEST_INCOMPLETE` とは排他ではなく併発しうる）。
     """
     del manifest  # 構造検査: 凍結 matrix 生成器自体から直接導出する
     rows = build_matrix()
-    counts = sweep_primary_row_counts(rows)
+    row_by_id = {mr.row_id: mr.row for mr in rows}
+    declared = declared_sweeps_by_family(rows)
     violations: list[str] = []
     for family in fixture_axes.FixtureFamily:
         fam = family.value
-        family_counts = counts.get(fam, {})
-        for sweep in sorted(family_counts):
-            n = family_counts[sweep]
-            if n < MIN_RESOLVABLE_PAIRS_PER_SWEEP:
+        family_sweeps = declared.get(fam, {})
+        for sweep_id in sorted(family_sweeps):
+            member_row_ids = family_sweeps[sweep_id]
+            n_levels = len({truth_identity_for_row(row_by_id[rid]) for rid in member_row_ids})
+            if n_levels < MIN_RESOLVABLE_PAIRS_PER_SWEEP:
                 violations.append(
-                    f"frozen_design.fixture_spec.{fam}.confound_axes[{sweep!r}] "
-                    f"({n} PRIMARY row(s) in the frozen matrix, need >= "
+                    f"frozen_design.fixture_spec.{fam}.declared_sweeps[{sweep_id!r}] "
+                    f"({n_levels} distinct truth level(s) in the frozen matrix, need >= "
                     f"{MIN_RESOLVABLE_PAIRS_PER_SWEEP})"
                 )
     return tuple(violations)
@@ -1316,7 +1321,7 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
 
     d4c_ineligible, d4c_reason = _check_pyworld(manifest)
     unseeded_streams = _check_rng_ledger_unseeded(manifest)
-    sweep_violations = _check_sweep_capacity(manifest)
+    sweep_violations = _check_declared_sweep_truth_levels(manifest)
 
     blocked: list[vocab.BlockedCode] = []
     if all_missing:
@@ -1324,7 +1329,7 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
     if unseeded_streams:
         blocked.append(vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG)
     if sweep_violations:
-        blocked.append(vocab.BlockedCode.BLOCKED_C0_SWEEP_CAPACITY_INSUFFICIENT)
+        blocked.append(vocab.BlockedCode.BLOCKED_C0_SWEEP_DECLARATION_INVALID)
 
     return C0ValidationResult(
         blocked_codes=tuple(blocked),
@@ -1333,5 +1338,5 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
         d4c_ineligible=d4c_ineligible,
         d4c_ineligibility_reason=d4c_reason,
         unseeded_rng_streams=unseeded_streams,
-        sweep_capacity_violations=sweep_violations,
+        sweep_declaration_violations=sweep_violations,
     )

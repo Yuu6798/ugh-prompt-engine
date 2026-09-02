@@ -10,7 +10,7 @@ API からも一切生成・実行されない:
 - C0 freeze の実行（manifest/registry の凍結 artifact 生成・freeze event 記録）
 - secret（`split_secret` / `render_root_secret`）の生成・保存
   （全 API は secret を呼び出し側からの引数として受け取るのみ）
-- 462×5 campaign の実測走行・selection/holdout 実行
+- 456×5 campaign の実測走行・selection/holdout 実行
 - 既存 meter（`voice_genesis/harness/*` 等）の変更
 - RUN11 関連の一切
 

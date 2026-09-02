@@ -741,48 +741,57 @@ def test_fixture_spec_generator_version_blank_string_blocks() -> None:
 
 
 # ---------------------------------------------------------------------------
-# sweep 容量検査（UNDERSPEC-CAL-D75 ruling (2)）
+# declared sweep 真値水準検査（UNDERSPEC-CAL-D76 ruling (2). supersedes D75
+# ruling (2)'s sweep-capacity (raw-row-count) check)
 # ---------------------------------------------------------------------------
 
 
-def test_sweep_capacity_check_passes_on_the_real_frozen_matrix() -> None:
-    """`_check_sweep_capacity()` は manifest の宣言値ではなく実際の凍結
-    matrix (`fixtures.matrix.build_matrix()`) を数える構造検査であり、
-    `manifest` 引数の内容とは独立している。"""
-    assert c0_validate._check_sweep_capacity({}) == ()
-    assert c0_validate._check_sweep_capacity(_complete_manifest()) == ()
+def test_declared_sweep_truth_levels_check_passes_on_the_real_frozen_matrix() -> None:
+    """`_check_declared_sweep_truth_levels()` は manifest の宣言値ではなく
+    実際の凍結 matrix (`fixtures.matrix.build_matrix()`) を数える構造検査
+    であり、`manifest` 引数の内容とは独立している。canonical 456-cell
+    matrix は 7 family 全てで各 declared sweep が >= 3 distinct truth level
+    を持つ（`sweep_truth_investigation.md` の per-family table）。"""
+    assert c0_validate._check_declared_sweep_truth_levels({}) == ()
+    assert c0_validate._check_declared_sweep_truth_levels(_complete_manifest()) == ()
 
 
-def test_starved_matrix_blocks_with_sweep_capacity_insufficient(
+def test_starved_matrix_blocks_with_sweep_declaration_invalid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`fixtures.matrix.build_matrix()` を人工的に飢餓状態（TILT_GT の
-    `"gain"` sweep を 3 行から 2 行へ）へ差し替えると、`validate_c0_manifest`
-    は専用の `BLOCKED_C0_SWEEP_CAPACITY_INSUFFICIENT` で fail-closed する
-    （`BLOCKED_C0_MANIFEST_INCOMPLETE` とは独立に発火することも確認する）。"""
-    from voice_genesis.calibration.fixtures.matrix import build_matrix as real_build_matrix
+    最初の declared sweep — `f0_hz=130.813|sr_hz=24000`、5 truth level —
+    を 2 truth level まで削る）へ差し替えると、`validate_c0_manifest` は
+    専用の `BLOCKED_C0_SWEEP_DECLARATION_INVALID` で fail-closed する
+    （`BLOCKED_C0_MANIFEST_INCOMPLETE` とは独立に発火することも確認する）。
+    """
+    from voice_genesis.calibration.fixtures.matrix import (
+        build_matrix as real_build_matrix,
+    )
+    from voice_genesis.calibration.fixtures.matrix import declared_sweeps_by_family
 
-    starved = [
-        mr
-        for mr in real_build_matrix()
-        if not (mr.row.family == "TILT_GT" and mr.row.nuisance_tag == "gain_dbfs=-6.0")
-    ]
+    rows = real_build_matrix()
+    tilt_sweeps = declared_sweeps_by_family(rows)["TILT_GT"]
+    sweep_id, member_row_ids = sorted(tilt_sweeps.items())[0]
+    assert len(member_row_ids) == 5, member_row_ids
+    to_drop = set(member_row_ids[2:])  # keep 2 of 5 -> 2 distinct truth levels
+    starved = [mr for mr in rows if mr.row_id not in to_drop]
     monkeypatch.setattr(c0_validate, "build_matrix", lambda: starved)
 
-    violations = c0_validate._check_sweep_capacity({})
+    violations = c0_validate._check_declared_sweep_truth_levels({})
     assert len(violations) == 1
-    assert "TILT_GT.confound_axes['gain']" in violations[0]
-    assert "2 PRIMARY row(s)" in violations[0]
+    assert f"TILT_GT.declared_sweeps[{sweep_id!r}]" in violations[0]
+    assert "2 distinct truth level(s)" in violations[0]
 
     result = c0_validate.validate_c0_manifest(_complete_manifest())
     assert result.is_blocked
-    assert vocab.BlockedCode.BLOCKED_C0_SWEEP_CAPACITY_INSUFFICIENT in result.blocked_codes
-    assert result.sweep_capacity_violations == tuple(violations)
+    assert vocab.BlockedCode.BLOCKED_C0_SWEEP_DECLARATION_INVALID in result.blocked_codes
+    assert result.sweep_declaration_violations == tuple(violations)
     # this is a structural defect independent of manifest content — none of
-    # the manifest-completeness violations mention confound_axes/sweeps for
-    # this cause (unrelated causes, e.g. an actually-dirty checkout, may
-    # still coexist and are not this test's concern).
-    assert not any("confound_axes" in key for key in result.missing_required_keys)
+    # the manifest-completeness violations mention declared_sweeps for this
+    # cause (unrelated causes, e.g. an actually-dirty checkout, may still
+    # coexist and are not this test's concern).
+    assert not any("declared_sweeps" in key for key in result.missing_required_keys)
 
 
 def test_meter_spec_parameter_grid_scalar_int_blocks() -> None:

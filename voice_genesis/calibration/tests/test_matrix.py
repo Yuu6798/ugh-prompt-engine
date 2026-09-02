@@ -13,7 +13,7 @@ from voice_genesis.calibration.fixtures.matrix import (
     compute_domain,
     declared_sweeps_by_family,
     f0_band_ok,
-    sweep_primary_row_counts,
+    truth_identity_for_row,
     validate_matrix,
 )
 from voice_genesis.calibration.gates import MIN_RESOLVABLE_PAIRS_PER_SWEEP
@@ -50,16 +50,16 @@ def _to_row_inputs(rows):
 # ---------------------------------------------------------------------------
 
 
-def test_total_is_462() -> None:
+def test_total_is_456() -> None:
     rows = build_matrix()
-    assert len(rows) == 462
+    assert len(rows) == 456
 
 
 def test_per_family_totals_and_block_breakdown_match_section_5_2() -> None:
     rows = build_matrix()
     report = validate_matrix(rows)
     assert report.ok is True
-    assert report.total == 462
+    assert report.total == 456
     for family, (truth_n, confound_n, boundary_n, total_n) in axes.FAMILY_COUNTS.items():
         fam_key = family.value
         assert report.per_family_total[fam_key] == total_n
@@ -69,61 +69,110 @@ def test_per_family_totals_and_block_breakdown_match_section_5_2() -> None:
         assert blocks.get("BOUNDARY", 0) + blocks.get("NEGATIVE_CONTROL", 0) == boundary_n
 
 
-def test_sum_of_family_totals_is_462() -> None:
+def test_sum_of_family_totals_is_456() -> None:
     total = sum(t for (_, _, _, t) in axes.FAMILY_COUNTS.values())
-    assert total == 462
+    assert total == 456
 
 
 # ---------------------------------------------------------------------------
-# 宣言済み sweep（UNDERSPEC-CAL-D75 ruling (1)/(2)）
+# 宣言済み sweep（UNDERSPEC-CAL-D76 def A。supersedes D75's nuisance-axis
+# definition, tested above through round 5 — see `sweep_truth_investigation.md`
+# for the full derivation and the four candidate definitions it rules out）
 # ---------------------------------------------------------------------------
 
+#: per-family (n_sweeps, rows_per_sweep) expected under def A on the
+#: canonical 456-cell matrix (`sweep_truth_investigation.md` §Q3 table,
+#: reproduced/verified here). FORMANT_GT's 5 distinct truth levels use the
+#: *full* `pole_freqs_hz` tuple as truth identity (not the F1-only scalar
+#: `campaign.selection_stage.truth_value_for_row()` uses for ranking) — this
+#: sidesteps the known F1-collision ambiguity (`[UNDERSPEC-CAL-D13]`: two
+#: pole sets share F1=500Hz) that would otherwise reduce one sweep's count
+#: to 4 distinct levels / 9 resolvable pairs instead of 5 levels / 10 pairs.
+_EXPECTED_DEF_A_SHAPE: dict[str, tuple[int, int]] = {
+    "F0_CONTROL": (3, 4),
+    "FORMANT_GT": (12, 5),
+    "TILT_GT": (6, 5),
+    "APERIODICITY_GT": (10, 6),
+    "RESONANCE_GT": (6, 4),
+    "TRANSITION_GT": (8, 3),
+    "IDENTITY_CAUSAL_SWEEP": (12, 5),
+}
 
-def test_declared_sweeps_by_family_matches_expected_sets_per_family() -> None:
-    """§2.7 exclude_axis_family どおり: APERIODICITY_GT は noise を、
-    TRANSITION_GT は context を除外する。f0_hz/sr_hz は truth-core grid で
-    あり、いずれの family でも宣言されない。"""
+
+def test_declared_sweeps_by_family_matches_investigation_table() -> None:
+    """def A（sweep = nuisance/covariate 設定を固定し truth 水準だけを動かす
+    truth-core block の行集合）の per-family (sweep 数, sweep あたり行数) が
+    `sweep_truth_investigation.md` の調査結果と一致する。"""
     rows = build_matrix()
+    row_by_id = {mr.row_id: mr.row for mr in rows}
     declared = declared_sweeps_by_family(rows)
-    all_four = ("context", "duration", "gain", "noise")
-    assert declared["F0_CONTROL"] == all_four
-    assert declared["FORMANT_GT"] == all_four
-    assert declared["TILT_GT"] == all_four
-    assert declared["RESONANCE_GT"] == all_four
-    assert declared["IDENTITY_CAUSAL_SWEEP"] == all_four
-    assert declared["APERIODICITY_GT"] == ("context", "duration", "gain")
-    assert declared["TRANSITION_GT"] == ("duration", "gain", "noise")
-    for sweeps in declared.values():
-        assert "f0_hz" not in sweeps
-        assert "sr_hz" not in sweeps
+    for family, (expected_n_sweeps, expected_rows_per_sweep) in _EXPECTED_DEF_A_SHAPE.items():
+        sweeps = declared[family]
+        assert len(sweeps) == expected_n_sweeps, (family, sorted(sweeps))
+        for sweep_id, member_row_ids in sweeps.items():
+            assert len(member_row_ids) == expected_rows_per_sweep, (family, sweep_id, member_row_ids)
+            # every member row must actually belong to this family's TRUTH_CORE/PRIMARY block.
+            for row_id in member_row_ids:
+                row = row_by_id[row_id]
+                assert row.family == family
+                assert row.block == "TRUTH_CORE"
+    # f0_hz/sr_hz are truth-core grid axes, not sweep-defining fields, for
+    # every family except F0_CONTROL itself (whose truth field *is* f0_hz).
+    assert set(declared) == set(_EXPECTED_DEF_A_SHAPE)
 
 
-def test_every_declared_sweep_has_at_least_the_frozen_minimum_primary_rows() -> None:
-    """§10.4「resolvable pair は各 sweep で >= 3」の構造的前提
-    (`gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP`)。"""
+def test_declared_sweeps_never_split_by_positive_control_or_block() -> None:
+    """UNDERSPEC-CAL-D76: sweep key は `positive_control`/`block` を含んでは
+    ならない——含めると同じ nuisance 条件の行が anchor/non-anchor で別 sweep
+    に誤って分断される（family anchor 行にのみ `positive_control=True` が
+    立つため）。"""
     rows = build_matrix()
+    row_by_id = {mr.row_id: mr.row for mr in rows}
     declared = declared_sweeps_by_family(rows)
-    counts = sweep_primary_row_counts(rows)
+    saw_mixed_positive_control_sweep = False
+    for family, sweeps in declared.items():
+        for member_row_ids in sweeps.values():
+            flags = {row_by_id[rid].positive_control for rid in member_row_ids}
+            if len(flags) > 1:
+                saw_mixed_positive_control_sweep = True
+    assert saw_mixed_positive_control_sweep, (
+        "expected at least one declared sweep whose members mix "
+        "positive_control True/False (anchor rows are TRUTH_CORE members "
+        "too) — otherwise this test cannot distinguish the correct key from "
+        "one that wrongly includes positive_control"
+    )
+
+
+def test_every_declared_sweep_has_at_least_3_distinct_truth_levels() -> None:
+    """§10.4「resolvable pair は各 sweep で >= 3」の構造的前提: def A の下
+    では sweep 内の PRIMARY 行数そのものではなく、相異なる truth level 数
+    （`truth_identity_for_row()`）が `C(levels, 2) >= 3` を満たす必要が
+    ある。"""
+    rows = build_matrix()
+    row_by_id = {mr.row_id: mr.row for mr in rows}
+    declared = declared_sweeps_by_family(rows)
     for family, sweeps in declared.items():
         assert sweeps, f"{family} declares no sweeps at all"
-        for sweep in sweeps:
-            n = counts[family].get(sweep, 0)
-            assert n >= MIN_RESOLVABLE_PAIRS_PER_SWEEP, (family, sweep, n)
+        for sweep_id, member_row_ids in sweeps.items():
+            n_levels = len({truth_identity_for_row(row_by_id[rid]) for rid in member_row_ids})
+            assert n_levels >= MIN_RESOLVABLE_PAIRS_PER_SWEEP, (family, sweep_id, n_levels)
 
 
-def test_starved_matrix_drops_a_family_below_the_minimum() -> None:
-    """`declared_sweeps_by_family`/`sweep_primary_row_counts` は与えられた
-    `matrix_rows` から素直に再計算するだけなので、matrix を人工的に飢餓状態
-    へ書き換えれば違反を検出できる（`c0_validate` 側の fail-closed 検査が
-    使うのと同じ入力形）。"""
+def test_starved_matrix_drops_a_sweep_below_the_minimum_truth_levels() -> None:
+    """`declared_sweeps_by_family` は与えられた `matrix_rows` から素直に
+    再計算するだけなので、matrix を人工的に飢餓状態へ書き換えれば違反を
+    検出できる（`c0_validate` 側の fail-closed 検査が使うのと同じ入力形）。
+    """
     rows = build_matrix()
-    starved = [
-        mr
-        for mr in rows
-        if not (mr.row.family == "TILT_GT" and mr.row.nuisance_tag == "gain_dbfs=-6.0")
-    ]
-    counts = sweep_primary_row_counts(starved)
-    assert counts["TILT_GT"]["gain"] == MIN_RESOLVABLE_PAIRS_PER_SWEEP - 1
+    tilt_sweeps = declared_sweeps_by_family(rows)["TILT_GT"]
+    sweep_id, member_row_ids = sorted(tilt_sweeps.items())[0]
+    assert len(member_row_ids) == 5
+    to_drop = set(member_row_ids[2:])  # keep 2 of 5 -> 2 distinct truth levels
+    starved = [mr for mr in rows if mr.row_id not in to_drop]
+    row_by_id = {mr.row_id: mr.row for mr in starved}
+    starved_sweeps = declared_sweeps_by_family(starved)["TILT_GT"]
+    n_levels = len({truth_identity_for_row(row_by_id[rid]) for rid in starved_sweeps[sweep_id]})
+    assert n_levels == MIN_RESOLVABLE_PAIRS_PER_SWEEP - 1
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +217,7 @@ def test_domain_tag_present_and_split_between_primary_and_boundary() -> None:
     assert domains == {Domain.PRIMARY, Domain.BOUNDARY}
     primary_n = sum(1 for mr in rows if mr.domain == Domain.PRIMARY)
     boundary_n = sum(1 for mr in rows if mr.domain == Domain.BOUNDARY)
-    assert primary_n + boundary_n == 462
+    assert primary_n + boundary_n == 456
     assert boundary_n > 0
 
 
@@ -331,21 +380,17 @@ def test_enumeration_is_deterministic_across_calls() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_splitter_over_full_matrix_yields_232_115_115() -> None:
-    # UNDERSPEC-CAL-D75 ruling (2): 456->462 行への改訂で 228/114/114 ->
-    # 232/115/115 (largest-remainder の丸め先が変わっただけで 50/25/25 の
-    # 近似は維持される: 462*0.5=231 に family 境界の largest-remainder 補正
-    # で +1 が乗る)。
+def test_splitter_over_full_matrix_yields_228_114_114() -> None:
     rows = build_matrix()
     row_inputs = _to_row_inputs(rows)
     realized = realize_split(row_inputs, SPLIT_SECRET, ["family"])
     counts = {Split.CALIBRATION: 0, Split.SELECTION: 0, Split.HOLDOUT: 0}
     for s in realized.assignment.values():
         counts[s] += 1
-    assert counts[Split.CALIBRATION] == 232
-    assert counts[Split.SELECTION] == 115
-    assert counts[Split.HOLDOUT] == 115
-    assert sum(counts.values()) == 462
+    assert counts[Split.CALIBRATION] == 228
+    assert counts[Split.SELECTION] == 114
+    assert counts[Split.HOLDOUT] == 114
+    assert sum(counts.values()) == 456
     assert set(realized.assignment.keys()) == {mr.row_id for mr in rows}
 
 

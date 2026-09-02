@@ -217,7 +217,7 @@ def _nuisance_noise_component(
 
     `context` 系列（20ms-cosine-ramp 等）由来で `core` 配列長が伸びる行との
     組合せは、正準 nuisance 系列が「1 行につき 1 軸のみ変更」（`axes.
-    CANONICAL_NUISANCE_SEQUENCE`）のため RESONANCE_GT の固定 462-cell 行列には
+    CANONICAL_NUISANCE_SEQUENCE`）のため RESONANCE_GT の固定 456-cell 行列には
     現れない（noise 軸と context 軸が同一行で同時に変わる行が存在しない）。
     """
     if row.noise_clean or row.noise_snr_db is None:
