@@ -1477,7 +1477,16 @@ def test_run_measure_stage_partial_slice_skips_completed_prefix_without_reconstr
     function whose growing per-slice cost rehearsal 4 measured). Asserts
     the reconstruction function is called exactly 0 times while this slice
     walks a 10-instance already-complete prefix and never reaches
-    unfinished work."""
+    unfinished work.
+
+    Codex PR #345 round 4 finding #3 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): the budget boundary check is now gated on
+    `_instance_has_pending_candidate()` — an already-complete instance
+    never calls `time_budget.expired()` at all (short-circuited), so the
+    budget double below is calibrated to expire on the FIRST call it
+    actually receives (from the first genuinely pending instance), not
+    after walking half the completed prefix — the whole completed prefix
+    is walked for free regardless of the budget."""
     subset = small_matrix_subset(3, family="F0_CONTROL")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
@@ -1511,13 +1520,16 @@ def test_run_measure_stage_partial_slice_skips_completed_prefix_without_reconstr
         measure_stage.MeterCallIndex, "completed_records", _counting_completed_records
     )
 
-    budget = _CountingBudget(expire_after_calls=len(completed_prefix) // 2)
+    budget = _CountingBudget(expire_after_calls=0)
     records, slice_status = measure_stage.run_measure_stage(
         campaign, all_instances, [candidate], sr_by_row=sr_by_row, time_budget=budget
     )
 
     assert slice_status.completed_all is False
-    assert slice_status.instances_completed_this_run == len(completed_prefix) // 2
+    # the entire already-complete prefix is walked for free (never gated
+    # by the budget) -- only the first genuinely pending instance trips
+    # the (already-expired) budget double and stops the slice.
+    assert slice_status.instances_completed_this_run == len(completed_prefix)
     # zero reconstructions for the walked already-complete prefix (0, not
     # merely "constant" -- this call never reaches unfinished work at all).
     assert call_count["n"] == 0
@@ -1578,11 +1590,19 @@ def test_run_measure_stage_time_budget_remaining_matches_true_completed_state(
     """rehearsal 4 finding G: with a campaign half-measured and a budget
     guaranteed already-expired before this call's loop starts,
     `instances_remaining` must equal the TRUE remaining count (`total -
-    already_complete`, read from the ledger-built index) and
-    `instances_completed_this_run` must be 0 -- not `total_instances - 0
-    == total_instances`, which silently ignored every instance a PRIOR
-    invocation had already finished (rehearsal 4 observed
-    `instances_remaining` jump backward 77->85 at a 0.001s budget)."""
+    already_complete`, read from the ledger-built index) -- not
+    `total_instances - 0 == total_instances`, which silently ignored every
+    instance a PRIOR invocation had already finished (rehearsal 4 observed
+    `instances_remaining` jump backward 77->85 at a 0.001s budget).
+
+    Codex PR #345 round 4 finding #3 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): `instances_completed_this_run` is no longer 0
+    here -- the already-measured `half` is walked for free regardless of
+    the expired budget (`_instance_has_pending_candidate()` gates the
+    budget check, so an instance with nothing pending never calls
+    `time_budget.expired()`), so this call's own loop DOES walk (and count)
+    every one of those instances before stopping at the first genuinely
+    pending one."""
     subset = small_matrix_subset(2, family="F0_CONTROL")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
@@ -1607,12 +1627,59 @@ def test_run_measure_stage_time_budget_remaining_matches_true_completed_state(
 
     assert records == []
     assert slice_status.completed_all is False
-    assert slice_status.instances_completed_this_run == 0
+    assert slice_status.instances_completed_this_run == len(half)
     true_remaining = len(all_instances) - len(half)
     assert slice_status.instances_remaining == true_remaining
     # not the pre-fix bug: remaining must NOT regress to the full instance
     # count just because this call's own loop never walked an instance.
     assert slice_status.instances_remaining < len(all_instances)
+
+
+@pytest.mark.slow
+def test_run_measure_stage_all_cells_complete_transitions_despite_expired_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex PR #345 round 4 finding #3 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`, mirrors `render_stage.run_render_stage()`'s
+    identical fix): a measure stage whose ledger already has every cell
+    measured (mirrors a process interrupted after the final cell was
+    recorded but before the caller's own stage-completion handling) must
+    still report `completed_all=True` on a resumed call, EVEN with a
+    budget that is already expired before the call's own loop reaches its
+    first instance boundary check — the budget check must never block an
+    instance with nothing pending, only a genuinely pending dispatch."""
+    subset = small_matrix_subset(2, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_outcomes = render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    monkeypatch.setattr(
+        measure_stage.subprocess, "run", _fake_subprocess_run_with_cpu_seconds(2.0)
+    )
+
+    all_instances = sorted({(o.row_id, o.probe_index) for o in render_outcomes})
+    sr_by_row = {mr.row_id: mr.row.sr_hz for mr in subset}
+    # measure every cell first — no `time_budget` at all, so this call is
+    # the whole invocation and every cell is genuinely complete afterward.
+    measure_stage.run_measure_stage(campaign, all_instances, [candidate], sr_by_row=sr_by_row)
+
+    # already-expired-before-the-first-check budget double (same contract
+    # `render_stage`'s equivalent test uses): `.expired()` returns `True`
+    # from its very first call, simulating a budget consumed entirely by
+    # rebuilding `MeterCallIndex` before the loop's own boundary check runs.
+    already_expired_budget = _CountingBudget(expire_after_calls=0)
+    records, slice_status = measure_stage.run_measure_stage(
+        campaign, all_instances, [candidate], sr_by_row=sr_by_row, time_budget=already_expired_budget
+    )
+
+    assert slice_status.completed_all is True
+    assert slice_status.instances_remaining == 0
+    # the completing invocation rebuilds every already-complete cell's
+    # `MeasurementRecord`s once — the caller of a sliced call still needs
+    # the full record set when the stage actually completes.
+    per_instance_calls = measure_stage.WITHIN_PROCESS_REPEATS + measure_stage.FRESH_PROCESS_REPEATS
+    assert len(records) == len(all_instances) * per_instance_calls
 
 
 # ---------------------------------------------------------------------------

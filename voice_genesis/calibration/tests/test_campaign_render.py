@@ -143,9 +143,17 @@ def test_c1_render_time_budget_remaining_matches_true_completed_state(tmp_path: 
     0.001s budget on a half-complete campaign — this pins the fix: with
     half of `subset` already rendered by a prior invocation, a call whose
     budget is guaranteed already-expired must report the TRUE remaining
-    count (`total - already_complete`), zero newly-completed, and zero
-    outcomes — never treat the untouched half-complete prefix as if it
-    were still fully unrendered."""
+    count (`total - already_complete`) and zero newly-completed — never
+    treat the untouched half-complete prefix as if it were still fully
+    unrendered.
+
+    Codex PR #345 round 4 finding #3 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): `outcomes` itself is no longer empty here — the
+    O(1) index skip for the already-completed half is now checked BEFORE
+    the budget boundary, so every one of those units still comes back
+    `skipped_resume` even though the budget is already expired; only the
+    genuinely pending (not-yet-rendered) other half is blocked by the
+    expired budget and never dispatched."""
     subset = small_matrix_subset(4, family="F0_CONTROL")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
@@ -175,7 +183,11 @@ def test_c1_render_time_budget_remaining_matches_true_completed_state(tmp_path: 
     outcomes, slice_status = render_stage.run_render_stage(
         campaign, subset, stage="c1", time_budget=budget
     )
-    assert outcomes == ()
+    # every already-completed unit is skipped regardless of the expired
+    # budget (index consulted before the budget check) — none of them are
+    # newly rendered, and no not-yet-rendered unit is dispatched.
+    assert len(outcomes) == true_completed
+    assert all(o.status == "skipped_resume" for o in outcomes)
     assert slice_status.completed_all is False
     assert slice_status.instances_completed_this_run == 0
     assert slice_status.instances_remaining == total_units - true_completed
@@ -289,6 +301,117 @@ def test_c1_render_slice_status_counts_only_newly_rendered_units(tmp_path: Path)
     assert zero_new_status.instances_completed_this_run == 0
     assert zero_new_status.instances_remaining == 0
     assert zero_new_status.completed_all is True
+
+
+@pytest.mark.slow
+def test_c4_slice_remaining_excludes_prior_c1_render_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex PR #345 round 4 finding #2 (adopted, category ②,
+    `[UNDERSPEC-CAL-D79]`): `completed_units` (`_render_index_from_ledger`)
+    indexes every `render` event in the WHOLE ledger, so on a sliced
+    `c4-holdout` render sub-phase it also holds every prior C1 render
+    event — those belong to a disjoint unit set (`units` here holds only
+    C4 units) and must not count toward C4's own completed/remaining
+    tally. Pre-fix, `instances_remaining = len(units) - (len(completed_
+    units) + newly_rendered_count)` used the WHOLE index size, so with
+    more C1 renders on the ledger than C4 has units at all (asserted
+    below), `instances_remaining` went negative even on the very first
+    C4 slice."""
+    subset = small_matrix_subset(4, family="APERIODICITY_GT")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    c1_outcomes = render_stage.run_render_stage(campaign, subset, stage="c1")
+    assert c1_outcomes
+    assert all(o.status == "rendered" for o in c1_outcomes)
+
+    from voice_genesis.calibration.campaign import workunits
+
+    c4_units = workunits.enumerate_c4_render_units(subset, campaign.realized_split.assignment)
+    total_c4_units = len({(u.row_id, u.probe_index) for u in c4_units})
+    assert total_c4_units > 0
+    # sanity: the C1 ledger already holds MORE render events than C4 has
+    # units at all — the exact condition that drove the pre-fix formula
+    # negative (`total_c4_units - (len(c1_events) + 0)`).
+    assert len(c1_outcomes) >= total_c4_units
+
+    monkeypatch.setattr(render_stage, "_refuse_if_pre_unseal_holdout", lambda *a, **kw: None)
+
+    # a modest budget: real progress on C4, but not necessarily every unit.
+    outcomes1, slice1 = render_stage.run_render_stage(
+        campaign, subset, stage="c4", time_budget=TimeBudget.start_now(0.01)
+    )
+    rendered_so_far = sum(1 for o in outcomes1 if o.status == "rendered")
+    assert 0 <= rendered_so_far <= total_c4_units
+    # exact intersection-scoped count — never derived from (nor inflated
+    # by) the C1 render events sharing the same ledger.
+    assert slice1.instances_remaining == total_c4_units - rendered_so_far
+    assert slice1.instances_remaining >= 0
+
+    # resume with a generous budget: finishes every remaining C4 unit.
+    outcomes2, slice2 = render_stage.run_render_stage(
+        campaign, subset, stage="c4", time_budget=TimeBudget.start_now(30.0)
+    )
+    assert slice2.completed_all is True
+    assert slice2.instances_remaining == 0
+    total_c4_rendered = len(
+        {(o.row_id, o.probe_index) for o in (*outcomes1, *outcomes2) if o.status == "rendered"}
+    )
+    assert total_c4_rendered == total_c4_units
+
+
+@pytest.mark.slow
+def test_c1_render_all_units_complete_transitions_despite_zero_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex PR #345 round 4 finding #3 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): a campaign whose ledger already has every C1
+    unit rendered but no `fixture_valid` event yet (mirrors a process
+    interrupted after the final unit was written but before the phase
+    transition) must still transition on a resumed call, EVEN with a
+    `--time-budget-seconds` so small it is already expired before the
+    call's own index rebuild finishes — the budget check must never block
+    a unit that is already complete, only a genuinely pending dispatch."""
+    subset = small_matrix_subset(2, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    # simulate the interrupted-before-transition state directly: render
+    # every unit (each `render` event goes through the real, disk-backed
+    # `Ledger.append()`), but swallow only the trailing `fixture_valid`
+    # event — `entries` has no public setter (append-only ledger, `entries`
+    # is a read-only property over the on-disk-backed cache), so this is
+    # the faithful way to leave "every unit rendered, stage not yet
+    # transitioned" on both the in-memory and on-disk ledger.
+    real_append = campaign.ledger.append
+
+    def _append_except_fixture_valid(payload):
+        if payload.get("kind") == "fixture_valid":
+            return None
+        return real_append(payload)
+
+    monkeypatch.setattr(campaign.ledger, "append", _append_except_fixture_valid)
+    outcomes = render_stage.run_render_stage(campaign, subset, stage="c1")
+    assert outcomes
+    assert all(o.status == "rendered" for o in outcomes)
+    assert not any(e.payload.get("kind") == "fixture_valid" for e in campaign.ledger.entries)
+    monkeypatch.undo()  # restore real `append()` before the resumed call below
+
+    # force the budget to already be expired by the time the loop's first
+    # boundary check runs, regardless of how long the index rebuild takes.
+    monkeypatch.setattr(render_stage.TimeBudget, "expired", lambda self: True)
+
+    resumed_outcomes, slice_status = render_stage.run_render_stage(
+        campaign, subset, stage="c1", time_budget=TimeBudget.start_now(0.0001)
+    )
+    assert all(o.status == "skipped_resume" for o in resumed_outcomes)
+    assert slice_status.completed_all is True
+    assert slice_status.instances_remaining == 0
+    fixture_valid_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "fixture_valid"
+    ]
+    assert len(fixture_valid_events) == 1
 
 
 def _render_instance_directly(campaign, subset, outcome):

@@ -1298,6 +1298,18 @@ def run_measure_stage(
     が `None`（既定）のときは従来どおり `records` 単体を返す — 呼び出し元
     の挙動・シグネチャは不変）。
 
+    Codex PR #345 round 4 finding #3（adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`, `render_stage.run_render_stage()` と同一修正）:
+    上記の予算境界検査は `_instance_has_pending_candidate()` で「真に
+    pending な instance」と判定された場合のみ発動する。既に全 candidate が
+    `is_complete()`（または F0-unusable による恒久解決）済みの instance は
+    budget に関わらず内側の `for candidate` ループへ進む（そこでの処理は
+    O(1) skip のみで dispatch は発生しない）。これにより、直前の呼び出しが
+    最終 instance の測定完了後・stage 完了記帳前に中断され、かつ `Meter
+    CallIndex.build()`（全 ledger スキャン）自体が time_budget を使い切る
+    場合でも、完了済み instance の skip が budget 切れを理由にブロック
+    されず、stage は完了/遷移へ進める。
+
     rehearsal 4 finding D/G（adopted, `[UNDERSPEC-CAL-D79]`。c3b parent CPU
     71.7s→78.9s→84.3s→88.3s の growth 実測）: 既に `MeterCallIndex.
     is_complete()` で完了済みと分かるセルは `run_measurement_for_instance()`
@@ -1391,10 +1403,33 @@ def run_measure_stage(
     instances_completed_this_run = 0
     completed_all = True
     for row_id, probe_index in sorted_instances:
+        # Codex PR #345 round 4 finding #3 (adopted, category ③,
+        # `[UNDERSPEC-CAL-D79]`, mirrors `render_stage.run_render_stage()`'s
+        # identical fix): the budget check below must only block dispatch
+        # of a GENUINELY pending instance. Pre-fix ordering checked
+        # `time_budget.expired()` before consulting `meter_call_index` at
+        # all — so if building `MeterCallIndex.build()` above (a full
+        # ledger scan) itself consumed the whole `time_budget`, the very
+        # first instance would trip the budget check and `break`
+        # immediately, even when every instance's every candidate was
+        # already `is_complete()` (or permanently resolved as F0-unusable)
+        # and only the stage's own completion/transition was left.
+        # Repeated resumes with the same small budget would then never
+        # finish. `_instance_has_pending_candidate()` (already used below
+        # for `instances_remaining`) is the same O(1) index-only check —
+        # use it here first: an instance with nothing pending falls through
+        # to the `for candidate` loop, which then only does the cheap
+        # `is_complete()`/F0-unusable skip path (no PCM read, no dispatch),
+        # budget-independent, same as `render_stage`'s already-completed
+        # unit skip.
+        has_pending = _instance_has_pending_candidate(
+            row_id, probe_index, candidates, meter_call_index, f0_unusable_instances
+        )
         # R2 instance boundary: checked before starting a NEW (row_id,
-        # probe_index) group — an instance already in flight (its own
-        # `for candidate` loop below) always runs to completion.
-        if time_budget is not None and time_budget.expired():
+        # probe_index) group that actually has pending work — an instance
+        # already in flight (its own `for candidate` loop below) always
+        # runs to completion.
+        if has_pending and time_budget is not None and time_budget.expired():
             completed_all = False
             break
         for candidate in sorted(candidates, key=lambda c: c.candidate_id):

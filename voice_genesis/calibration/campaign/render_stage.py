@@ -642,7 +642,16 @@ def run_render_stage(
     しない（phase transition は次回の resume 呼び出しに委ねる）。戻り値は
     `(outcomes, SliceStatus)` の 2-tuple になる。`time_budget` が `None`
     （既定）のときは従来どおり `outcomes` 単体を返す（呼び出し元の挙動・
-    シグネチャは不変）。"""
+    シグネチャは不変）。
+
+    Codex PR #345 round 4 finding #3（adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`, `measure_stage.run_measure_stage()` と同一修正）:
+    上記の予算境界検査は、次に dispatch する unit が既に `completed_units`
+    に載っている（＝真に pending ではない）場合は発動しない — index 参照
+    を budget 検査より先に行う。直前の呼び出しが最終 unit の render 完了後・
+    stage 完了記帳前に中断され、かつ `_render_index_from_ledger()`（全
+    ledger スキャン）自体が time_budget を使い切る場合でも、完了済み unit
+    の O(1) skip が budget 切れでブロックされず、stage は完了/遷移へ進む。"""
     assignment = campaign.realized_split.assignment
     if stage == "c1":
         units = workunits.enumerate_c1_render_units(matrix_rows, assignment)
@@ -662,11 +671,22 @@ def run_render_stage(
     # sha256) each time this stage resumes.
     completed_units = _render_index_from_ledger(campaign.ledger.entries)
     for unit in units:
-        # R2 instance boundary: checked before dispatching a NEW unit — a
-        # unit already in flight always runs to completion.
-        if time_budget is not None and time_budget.expired():
-            completed_all = False
-            break
+        # Codex PR #345 round 4 finding #3 (adopted, category ③,
+        # `[UNDERSPEC-CAL-D79]`): the O(1) index skip below is checked
+        # BEFORE the budget expiry check — an already-completed unit is
+        # never a "genuinely pending" dispatch, so it must not be blocked
+        # by an expired budget. Pre-fix ordering had the budget check run
+        # first: if rebuilding `completed_units` above (a full ledger scan)
+        # itself consumed the whole `time_budget`, the very first loop
+        # iteration would see `time_budget.expired() == True` and `break`
+        # immediately — even when every remaining unit (up to and including
+        # the last one) was already completed and only the phase transition
+        # below (`fixture_valid` / handoff to measure) was left. Repeated
+        # resumes with the same small budget would then never reach that
+        # transition. Consulting the index first makes every already-
+        # completed unit's O(1) skip budget-independent; only a unit that
+        # actually needs `render_instance()` dispatched is subject to the
+        # budget boundary below.
         recorded_sha = completed_units.get((unit.row_id, unit.probe_index))
         if recorded_sha is not None:
             # Already completed in a prior invocation — skip re-entering
@@ -687,6 +707,13 @@ def run_render_stage(
                 )
             )
             continue
+        # R2 instance boundary: checked before dispatching a NEW (genuinely
+        # pending) unit — a unit already in flight always runs to
+        # completion. An already-completed unit above never reaches this
+        # check (see finding #3 note above).
+        if time_budget is not None and time_budget.expired():
+            completed_all = False
+            break
         row = rows_by_id[unit.row_id]
         try:
             outcome = render_instance(
@@ -802,7 +829,21 @@ def run_render_stage(
     # it already covers every unit finished in an earlier invocation) plus
     # `newly_rendered_count` (this call's own new work) — never dependent
     # on how far this call's own loop happened to walk.
-    instances_remaining = len(units) - (len(completed_units) + newly_rendered_count)
+    #
+    # Codex PR #345 round 4 finding #2 (adopted, category ②,
+    # `[UNDERSPEC-CAL-D79]`): `completed_units` is built from the WHOLE
+    # ledger (`_render_index_from_ledger`), so on a sliced `c4-holdout`
+    # render sub-phase it also contains every prior `render` event from the
+    # `c1` stage — `len(completed_units)` over-counts against `len(units)`,
+    # which holds only THIS stage's units. Scope the completed count to the
+    # intersection with `units` (this stage's own `(row_id, probe_index)`
+    # keys) instead of the raw index size, so a c4 slice run after C1 has
+    # already rendered instances no longer under/over-counts (and never
+    # goes negative).
+    completed_in_stage = sum(
+        1 for u in units if (u.row_id, u.probe_index) in completed_units
+    )
+    instances_remaining = len(units) - (completed_in_stage + newly_rendered_count)
     slice_status = SliceStatus(
         time_budget_seconds=time_budget.seconds,
         elapsed_seconds=time_budget.elapsed(),
