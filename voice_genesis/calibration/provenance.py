@@ -769,7 +769,7 @@ def _parse_ledger_lines(
 
 def _read_and_verify(
     path: Path,
-) -> tuple[list[LedgerEntry], list[MalformedLedgerLine], ChainVerification, int]:
+) -> tuple[list[LedgerEntry], list[MalformedLedgerLine], ChainVerification, int, list[str]]:
     """`path` を一度だけ読み、entries 構築 (`_parse_ledger_lines`)・chain 検証
     (`_verify_chain_prefix`)・検証済みバイト長の取得を同一バッファから行う
     純粋 I/O ヘルパー（UNDERSPEC-CAL-D84）。`Ledger.__init__` と
@@ -777,7 +777,9 @@ def _read_and_verify(
     `load_with_verification` 用に導入した「1 回読取」パターンを構築経路
     全体へ拡張したもので、ここで得る `ChainVerification`/バイト長が
     `Ledger.append()` の増分検証で使う「検証済み watermark」の元になる。
-    ファイルが存在しない場合は空とみなす。"""
+    ファイルが存在しない場合は空とみなす。戻り値の `raw_lines` は
+    `_set_watermark()` が watermark 末尾エントリの生バイト列 fingerprint
+    （`#345 指摘③`: rollback/tamper 検出用）を導出するために使う。"""
     if path.exists():
         content = path.read_text(encoding="utf-8")
     else:
@@ -785,7 +787,7 @@ def _read_and_verify(
     raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(content)
     entries, malformed = _parse_ledger_lines(raw_lines)
     chain = _verify_chain_prefix(raw_lines, truncated_tail, missing_final_newline)
-    return entries, malformed, chain, len(content.encode("utf-8"))
+    return entries, malformed, chain, len(content.encode("utf-8")), raw_lines
 
 
 class Ledger:
@@ -811,16 +813,17 @@ class Ledger:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        entries, malformed, chain, content_bytes = _read_and_verify(path)
+        entries, malformed, chain, content_bytes, raw_lines = _read_and_verify(path)
         self._entries = entries
         self._malformed = malformed
-        self._set_watermark(chain, entries, content_bytes)
+        self._set_watermark(chain, entries, content_bytes, raw_lines)
 
     def _set_watermark(
         self,
         chain: ChainVerification,
         entries: Sequence[LedgerEntry],
         content_bytes: int,
+        raw_lines: Sequence[str],
     ) -> None:
         """`append()` の増分検証（UNDERSPEC-CAL-D84）が使う「検証済み
         watermark」を設定する。`__init__`/`load_with_verification`（構築時）
@@ -835,22 +838,36 @@ class Ledger:
         フォールバックし、fail-closed 契約を一切弱めない
         （`test_ledger_append_refuses_when_middle_entry_tampered` 等が
         これを検証する）。
-        """
+
+        `_v_last_line_len`/`_v_last_line_sha256`（`#345 指摘③` 採用）:
+        watermark 末尾エントリ 1 行分の生バイト長と sha256。`append()` は
+        次回呼び出し時、これを使って watermark 直下の 1 行だけを O(1) で
+        再読取・再検証する（`raw_lines` 全体の再検証ではない）。これにより
+        「ファイルサイズは watermark と同じだが末尾エントリの内容だけが
+        同じ長さの別内容に差し替えられている」改竄（O(1) suffix 検証では
+        素通りする）も fail-closed で検出する。"""
         if chain.ok:
             self._v_bytes = content_bytes
             if entries:
                 tail = entries[-1]
                 self._v_seq = tail.seq
                 self._v_sha = tail.entry_sha
+                last_line_bytes = raw_lines[-1].encode("utf-8") if raw_lines else b""
+                self._v_last_line_len = len(last_line_bytes)
+                self._v_last_line_sha256 = hashlib.sha256(last_line_bytes).hexdigest()
             else:
                 self._v_seq = -1
                 self._v_sha = GENESIS_PREV_SHA
+                self._v_last_line_len = 0
+                self._v_last_line_sha256 = None
             self._v_missing_final_newline = chain.missing_final_newline
         else:
             self._v_bytes = 0
             self._v_seq = -1
             self._v_sha = GENESIS_PREV_SHA
             self._v_missing_final_newline = False
+            self._v_last_line_len = 0
+            self._v_last_line_sha256 = None
 
     @classmethod
     def load_with_verification(cls, path: Path) -> tuple["Ledger", ChainVerification]:
@@ -862,13 +879,13 @@ class Ledger:
         — 本メソッドは追加の入口であり、`_read_and_verify` という既存の
         純関数を薄く呼ぶだけ。返す `chain` はここで確立した watermark の
         根拠でもある（UNDERSPEC-CAL-D84: `Ledger.append()` の増分検証）。"""
-        entries, malformed, chain, content_bytes = _read_and_verify(path)
+        entries, malformed, chain, content_bytes, raw_lines = _read_and_verify(path)
 
         instance = cls.__new__(cls)
         instance.path = path
         instance._entries = entries
         instance._malformed = malformed
-        instance._set_watermark(chain, entries, content_bytes)
+        instance._set_watermark(chain, entries, content_bytes, raw_lines)
         return instance, chain
 
     @property
@@ -927,15 +944,33 @@ class Ledger:
         - watermark **以降**に他プロセス/他 `Ledger` インスタンスが書いた
           内容の改竄・truncated tail・malformed 行（suffix を通常どおり
           `_verify_chain_prefix` で検証するため）
-        - ファイルが watermark のバイト位置より短くなっている場合
-          （truncate/差し替え）— watermark を信用せず、フォールバックして
-          ファイル全体を検証する
+        - watermark 末尾エントリ 1 行そのものが（truncate を伴わず）同じ
+          長さの別内容へ差し替えられている場合（`_v_last_line_sha256` との
+          O(1) 再照合で検出。`#345 指摘③` 採用）
 
-        弱まるのは 1 点のみ: watermark **より前**（＝このインスタンス自身が
-        構築時または直前の append 時に検証済みの prefix）に対する、それ以降
-        ファイルサイズを変えない形の改竄が、次の append までの間に検出
-        されるタイミング。この prefix は同じロックを保持した状態でこの
-        プロセス自身がつい先ほど検証したばかりであり、プロセス起動時
+        **`#345` 指摘③（fail-closed 化。旧: watermark 未満へのフォール
+        バック）**: ファイルが watermark のバイト位置より短くなっている
+        場合（restore/sync rollback 等で VALID だが短い prefix へ戻された
+        ケースを含む）、旧実装は watermark を `0` にリセットしてファイル
+        全体を再検証するフォールバックへ落ちていた。この再検証自体は
+        通っても、`append()` 末尾で `self._entries` に suffix（＝ロール
+        バック後のファイル全体）を単純 `extend` していたため、ロール
+        バック前の古いキャッシュ（例: 3 エントリ）の後ろへロールバック後の
+        内容（例: 2 エントリ）が継ぎ足され、`self._entries` の `seq` 列が
+        `[0,1,2,0,1]` のように disk（`[0,1]`）と乖離する
+        （in-memory キャッシュの再同期）。本実装はこの再同期を行わず、
+        watermark 未満へのサイズ減少を **無条件に** rollback/tamper とみなし
+        `LedgerChainInvalidError` で fail-closed する（書き込みなし・
+        `self._entries` 等の in-memory 状態も不変）。呼び出し側は
+        `Ledger(path)`/`load_with_verification(path)` で明示的に作り直して
+        から再試行すること。
+
+        弱まるのは 1 点のみ: watermark 末尾エントリより **さらに前**
+        （＝このインスタンス自身が構築時または直前の append 時に検証済みの
+        prefix の、末尾エントリを除いた部分）に対する、ファイルサイズも
+        watermark 末尾エントリの内容も変えない形の改竄が、次の append まで
+        の間に検出されるタイミング。この prefix は同じロックを保持した状態
+        でこのプロセス自身がつい先ほど検証したばかりであり、プロセス起動時
         (`load_with_verification`) と `verify_chain()` の明示呼び出しでは
         引き続き全 chain を検証する。モジュール docstring が宣言する保護
         水準（事故的 leakage / 事後改竄の検出、台帳の外側で動く敵対的な
@@ -952,14 +987,51 @@ class Ledger:
                 v_seq = self._v_seq
                 v_sha = self._v_sha
                 v_missing_final_newline = self._v_missing_final_newline
-                if current_size < v_bytes:
-                    # watermark より短い＝外部からの truncate/差し替え。
-                    # watermark を信用せず、フォールバックしてファイル全体
-                    # を検証する（fail-closed を弱めない）。
-                    v_bytes = 0
-                    v_seq = -1
-                    v_sha = GENESIS_PREV_SHA
-                    v_missing_final_newline = False
+                if v_bytes > 0:
+                    if current_size < v_bytes:
+                        # watermark より短い＝restore/sync rollback 等の
+                        # 外部要因によるロールバック（VALID だが短い prefix
+                        # を含む）。watermark を再同期して受理してはならない
+                        # （#345 指摘③: 旧実装はここで watermark を 0 に
+                        # 戻してフォールバック検証していたため、on-disk が
+                        # [0,1] へ縮んでも in-memory `self._entries` は
+                        # ロールバック前の内容を保持したまま suffix を
+                        # extend し、`[0,1,2,0,1]` のような重複キャッシュを
+                        # 生んでいた）。in-memory 状態を変更せず、書き込みも
+                        # 一切行わずに fail-closed する。
+                        raise LedgerChainInvalidError(
+                            self.path,
+                            f"on-disk ledger size ({current_size} bytes) is smaller than "
+                            f"this instance's verified watermark ({v_bytes} bytes, "
+                            f"seq={v_seq}): rollback or truncation detected; refusing to "
+                            "re-sync onto a shortened chain. Reconstruct via Ledger(path) "
+                            "or load_with_verification(path) to re-verify from scratch "
+                            "before appending again.",
+                            v_seq,
+                        )
+                    # サイズは watermark 以上でも、watermark 末尾エントリ
+                    # そのものが同じ長さの別内容へ差し替えられていれば
+                    # （truncate を伴わない改竄）、suffix 検証だけでは
+                    # 素通りする（suffix はまさにこの 1 行の直後から読む
+                    # ため）。watermark 末尾 1 行分だけを O(1) で読み直し、
+                    # 記録済み sha256 と一致するか確認する（#345 指摘③）。
+                    last_len = self._v_last_line_len
+                    last_end = v_bytes if v_missing_final_newline else v_bytes - 1
+                    last_start = last_end - last_len
+                    f.seek(last_start)
+                    last_bytes = f.read(last_len)
+                    if (
+                        len(last_bytes) != last_len
+                        or hashlib.sha256(last_bytes).hexdigest() != self._v_last_line_sha256
+                    ):
+                        raise LedgerChainInvalidError(
+                            self.path,
+                            f"on-disk content at this instance's verified watermark "
+                            f"(seq={v_seq}) no longer matches what was last verified: "
+                            "content tamper at/behind the watermark; refusing to append "
+                            "without re-verifying the full chain.",
+                            v_seq,
+                        )
 
                 f.seek(v_bytes)
                 suffix_raw = f.read()
@@ -1037,6 +1109,9 @@ class Ledger:
         self._v_seq = entry.seq
         self._v_sha = entry.entry_sha
         self._v_missing_final_newline = False
+        line_bytes = line.encode("utf-8")
+        self._v_last_line_len = len(line_bytes)
+        self._v_last_line_sha256 = hashlib.sha256(line_bytes).hexdigest()
         return entry
 
     def verify_chain(self) -> ChainVerification:

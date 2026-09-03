@@ -500,6 +500,75 @@ def test_ledger_append_cost_independent_of_ledger_size(tmp_path, monkeypatch) ->
     assert large_n_suffix_len == 0
 
 
+def test_ledger_append_refuses_when_rolled_back_to_valid_shorter_prefix(tmp_path) -> None:
+    """[#345 指摘③] 既に open 済みの `Ledger`（watermark = 3 エントリ分）が、
+    その後 disk 上でその watermark より短い、それ自体は chain-valid な
+    prefix（先頭 2 エントリのみ）へロールバックされた（restore/sync
+    rollback を模する）のを観測した場合、watermark を再同期せず
+    `LedgerChainInvalidError` で fail-closed する。旧実装は watermark を 0
+    にリセットしてロールバック後の内容を「フォールバック全体検証 OK」として
+    受理し、`append()` 末尾で `self._entries` にそれを単純 extend していた
+    ため、in-memory キャッシュが `[0,1,2,0,1]` のように disk（`[0,1]`）と
+    乖離する状態を作っていた（重複 seq を含む壊れたキャッシュ）。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+    ledger.append({"kind": "meter_call", "row_id": "r2"})
+    assert [e.seq for e in ledger.entries] == [0, 1, 2]
+
+    full_content = path.read_text(encoding="utf-8")
+    lines = [ln for ln in full_content.splitlines() if ln.strip()]
+    rolled_back_content = lines[0] + "\n" + lines[1] + "\n"
+    path.write_text(rolled_back_content, encoding="utf-8")
+
+    # sanity: the rolled-back file is a chain-valid 2-entry ledger on its own
+    # (this is the "VALID shorter prefix" case the finding describes — not a
+    # truncated/malformed tail).
+    fresh_view = Ledger(path)
+    assert fresh_view.verify_chain().ok is True
+    assert [e.seq for e in fresh_view.entries] == [0, 1]
+
+    with pytest.raises(LedgerChainInvalidError):
+        ledger.append({"kind": "meter_call", "row_id": "r3"})
+
+    # fail-closed: nothing written to disk, stale instance's in-memory state
+    # untouched (not silently re-synced onto the shortened chain).
+    assert path.read_text(encoding="utf-8") == rolled_back_content
+    assert [e.seq for e in ledger.entries] == [0, 1, 2]
+
+
+def test_ledger_append_refuses_when_watermark_entry_same_length_substituted(
+    tmp_path,
+) -> None:
+    """[#345 指摘③] watermark 末尾エントリ（size は不変）が、同じバイト長の
+    別内容へ差し替えられた場合も `LedgerChainInvalidError` で fail-closed
+    する。ファイルサイズが watermark と一致するため suffix は空文字列となり
+    `_verify_chain_prefix` は 0 行を検証して素通りしてしまう —
+    watermark 直下 1 行の sha256 再照合がこのケースを捕まえる。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+
+    full_content = path.read_text(encoding="utf-8")
+    lines = [ln for ln in full_content.splitlines() if ln.strip()]
+    tampered_line = lines[-1].replace('"r1"', '"rX"')
+    assert tampered_line != lines[-1]
+    assert len(tampered_line.encode("utf-8")) == len(lines[-1].encode("utf-8"))
+    lines[-1] = tampered_line
+    tampered_content = "\n".join(lines) + "\n"
+    assert len(tampered_content.encode("utf-8")) == len(full_content.encode("utf-8"))
+    path.write_text(tampered_content, encoding="utf-8")
+
+    with pytest.raises(LedgerChainInvalidError):
+        ledger.append({"kind": "meter_call", "row_id": "r2"})
+
+    # fail-closed: nothing written, file left exactly as tampered.
+    assert path.read_text(encoding="utf-8") == tampered_content
+    assert [e.seq for e in ledger.entries] == [0, 1]
+
+
 def test_check_leakage_pre_unseal_access_is_blocked() -> None:
     entries = [
         LedgerEntry(
