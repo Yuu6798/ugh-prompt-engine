@@ -627,6 +627,160 @@ def test_ledger_append_succeeds_after_two_trailing_blank_lines(tmp_path) -> None
     assert result.tamper_at_seq is None
 
 
+def test_ledger_append_g1_detects_early_entry_same_length_tamper(tmp_path) -> None:
+    """[#345 指摘③ G1, Codex finding P1] 既に open 済みの `Ledger`
+    （watermark = 3 エントリ分）に対し、watermark 末尾（seq=2）ではなく
+    **より前** の seq=0 エントリが同じバイト長の別内容へ差し替えられた場合。
+    旧実装（watermark 末尾 1 行だけの fingerprint 再照合 + suffix のみの
+    chain 検証）はサイズも末尾行も不変なため素通りしていた。stat の
+    `mtime_ns` は on-disk への書き込みで必ず変化するため、G1 の安価な変更
+    検出器がこれを捉え、次の `append()` は on-disk ledger 全体をフル
+    再検証してから `LedgerChainInvalidError` で fail-closed する（書き込み
+    なし・`self._entries` も不変）。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+    ledger.append({"kind": "meter_call", "row_id": "r2"})
+    assert [e.seq for e in ledger.entries] == [0, 1, 2]
+
+    full_content = path.read_text(encoding="utf-8")
+    lines = [ln for ln in full_content.splitlines() if ln.strip()]
+    tampered_line = lines[0].replace('"r0"', '"rX"')
+    assert tampered_line != lines[0]
+    assert len(tampered_line.encode("utf-8")) == len(lines[0].encode("utf-8"))
+    lines[0] = tampered_line
+    tampered_content = "\n".join(lines) + "\n"
+    assert len(tampered_content.encode("utf-8")) == len(full_content.encode("utf-8"))
+    path.write_text(tampered_content, encoding="utf-8")
+
+    with pytest.raises(LedgerChainInvalidError) as excinfo:
+        ledger.append({"kind": "meter_call", "row_id": "r3"})
+    assert excinfo.value.tamper_at_seq == 0
+
+    # fail-closed: nothing written, tampered content untouched, in-memory
+    # cache not extended with the bogus tail.
+    assert path.read_text(encoding="utf-8") == tampered_content
+    assert [e.seq for e in ledger.entries] == [0, 1, 2]
+
+
+def test_ledger_append_g2_catches_transition_kind_even_with_spoofed_stat(
+    tmp_path, monkeypatch
+) -> None:
+    """[#345 指摘③ G1/G2, Codex finding P1 test (b)] stat（ino/mtime_ns/
+    size）が（何らかの理由で）watermark 確立時と見分けが付かないよう
+    monkeypatch で偽装された状態で、watermark より前の seq=0 エントリが
+    同じバイト長で改ざんされている最悪ケースをシミュレートする。
+
+    - G2: 追記しようとしている payload の `kind` がフェーズ遷移/terminal
+      summary（`_TRANSITION_EVENT_KINDS`。ここでは `campaign_closed`）なら、
+      stat が unchanged に見えても無条件にフル再検証へ回るため、依然として
+      `LedgerChainInvalidError` で fail-closed する — G1 が欺かれていても
+      G2 は独立して機能する。
+    - 残余露出（意図された仕様）: 続けて `meter_call`（遷移 kind ではない）
+      を追記すると、stat が unchanged に見える限り G1 は発火せず、この
+      1 回の append は「成功」してしまう。ただし、プロセス再起動後の
+      `Ledger(path)`（構築時は常にフル検証）が改竄を確実に検出することを
+      末尾で確認し、露出が一時的・境界付きであることを示す。"""
+    import voice_genesis.calibration.provenance as provenance_mod
+
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+    ledger.append({"kind": "meter_call", "row_id": "r2"})
+
+    spoofed_ino = ledger._v_ino
+    spoofed_mtime_ns = ledger._v_mtime_ns
+    spoofed_size = ledger._v_stat_size
+
+    full_content = path.read_text(encoding="utf-8")
+    lines = [ln for ln in full_content.splitlines() if ln.strip()]
+    tampered_line = lines[0].replace('"r0"', '"rX"')
+    assert tampered_line != lines[0]
+    assert len(tampered_line.encode("utf-8")) == len(lines[0].encode("utf-8"))
+    lines[0] = tampered_line
+    tampered_content = "\n".join(lines) + "\n"
+    assert len(tampered_content.encode("utf-8")) == len(full_content.encode("utf-8"))
+    path.write_text(tampered_content, encoding="utf-8")
+
+    class _FakeStat:
+        st_ino = spoofed_ino
+        st_mtime_ns = spoofed_mtime_ns
+        st_size = spoofed_size
+
+    def fake_fstat(fd):
+        return _FakeStat()
+
+    with monkeypatch.context() as m:
+        m.setattr(provenance_mod.os, "fstat", fake_fstat)
+
+        # G2 still fires for a transition-kind event even though the cheap
+        # G1 stat check is defeated.
+        with pytest.raises(LedgerChainInvalidError) as excinfo:
+            ledger.append({"kind": "campaign_closed", "row_id": "closer"})
+        assert excinfo.value.tamper_at_seq == 0
+        assert path.read_text(encoding="utf-8") == tampered_content
+        assert [e.seq for e in ledger.entries] == [0, 1, 2]
+
+        # documented residual exposure: a non-transition append is NOT
+        # caught while the stat check is defeated (accepted per design
+        # ruling; bounded by the next transition/restart, see below).
+        entry = ledger.append({"kind": "meter_call", "row_id": "r3"})
+        assert entry.seq == 3
+
+    # the residual exposure is bounded, not permanent: a fresh instance
+    # (real fstat, full verification at construction) unconditionally
+    # detects the still-present tamper.
+    result = Ledger(path).verify_chain()
+    assert result.ok is False
+    assert result.tamper_at_seq == 0
+
+
+def test_ledger_append_updates_stat_bookkeeping_after_each_write(tmp_path) -> None:
+    """[#345 指摘③ G1] `append()` は write→flush→`fsync` の直後に再 `fstat`
+    し、`_v_ino`/`_v_mtime_ns`/`_v_stat_size` を実際の on-disk 値へ更新する
+    （次回 append() の安価な変更検出器 G1 の baseline）。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    st1 = path.stat()
+    assert ledger._v_ino == st1.st_ino
+    assert ledger._v_mtime_ns == st1.st_mtime_ns
+    assert ledger._v_stat_size == st1.st_size
+
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+    st2 = path.stat()
+    assert ledger._v_ino == st2.st_ino
+    assert ledger._v_mtime_ns == st2.st_mtime_ns
+    assert ledger._v_stat_size == st2.st_size
+
+
+def test_ledger_append_transition_kind_forces_full_verify_and_succeeds_when_valid(
+    tmp_path,
+) -> None:
+    """[#345 指摘③ G2] フェーズ遷移/terminal summary kind
+    （`_TRANSITION_EVENT_KINDS`）を追記する際は、stat が unchanged でも
+    無条件にフル chain 再検証を行う。台帳が正当であれば通常どおり成功する
+    （G2 が偽陽性で正当な遷移を拒否しないことの確認。Codex finding P1
+    test (d)）。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+
+    entry = ledger.append(
+        {"kind": "stage_summary", "stage": "c2", "parent_cpu_seconds": 1.0}
+    )
+    assert entry.seq == 2
+
+    result = Ledger(path).verify_chain()
+    assert result.ok is True
+    assert result.entries_verified == 3
+    assert result.tamper_at_seq is None
+
+
 def test_check_leakage_pre_unseal_access_is_blocked() -> None:
     entries = [
         LedgerEntry(

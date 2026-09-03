@@ -501,6 +501,34 @@ _UNSEAL_COMMITMENT_KEYS: tuple[str, ...] = tuple(_UNSEAL_PREREQUISITE_KINDS)
 #: authorized boundary by `Ledger.check_leakage`.
 _GATE3_ACCEPTED_KIND = "gate3_accepted"
 
+#: `Ledger.append()` G2（`#345` 指摘③）: これらの `payload["kind"]` を追記する
+#: 直前は、watermark 経由の O(1) 増分検証をスキップし、on-disk ledger 全体を
+#: seq 0 から `_verify_chain_prefix` でフル検証してから書き込む（fail-closed）。
+#: `campaign/state.py::LEDGER_KIND_FOR_PHASE`（D2 runner のフェーズ到達判定が
+#: 見る kind 語彙）を権威とし、実際に emit される表記ゆれ（`baseline_audit`
+#: 実装 vs `state.py` 側の `baseline_audited`）双方を含める。加えて
+#: `campaign/unseal.py`/`render_stage.py`/`close.py` が記帳する `kind`（
+#: `LEDGER_KIND_FOR_PHASE` 未収載の `gate3_accepted`/`holdout_render_valid`/
+#: `split_secret_revealed`）と、`stage_summary`/`slice_summary`（フェーズでは
+#: ないが campaign 進行の要約 terminal event）を明示的に加える。
+_TRANSITION_EVENT_KINDS: frozenset[str] = frozenset(
+    {
+        "fixture_valid",
+        "baseline_audit",
+        "baseline_audited",
+        "f0_selection_frozen",
+        "selection_frozen",
+        "holdout_render_valid",
+        "holdout_executed_valid",
+        "gate3_accepted",
+        "holdout_unseal",
+        "campaign_closed",
+        "split_secret_revealed",
+        "stage_summary",
+        "slice_summary",
+    }
+)
+
 
 def _is_sha256_hex(value: object) -> bool:
     return (
@@ -804,6 +832,7 @@ def _read_and_verify(
     int,
     list[str],
     tuple[int, int] | None,
+    tuple[int, int, int] | None,
 ]:
     """`path` を一度だけ読み、entries 構築 (`_parse_ledger_lines`)・chain 検証
     (`_verify_chain_prefix`)・検証済みバイト長の取得を同一バッファから行う
@@ -817,9 +846,20 @@ def _read_and_verify(
     （`#345 指摘③`: rollback/tamper 検出用）を導出するために使う。同じく
     戻り値の `last_line_byte_range`（`#345 指摘③` 追補）は、その fingerprint
     バイト列を次回 `append()` が O(1) で再読取する際の実際のファイル内
-    バイト範囲（末尾空行の有無に依存しない）を渡すために使う。"""
+    バイト範囲（末尾空行の有無に依存しない）を渡すために使う。
+
+    戻り値の `stat_info`（`(st_ino, st_mtime_ns, st_size)`。ファイルが存在
+    しなければ `None`）は `#345` 指摘③ G1（`Ledger.append()` の安価な変更
+    検出器）が使う「検証済み時点の stat」の起点。この読取と同じファイル
+    ディスクリプタから `os.fstat()` するため、content と stat の間に
+    別々の `exists()`/`stat()` 呼び出しが持つ TOCTOU の隙間がない。"""
+    stat_info: tuple[int, int, int] | None = None
     if path.exists():
-        content = path.read_text(encoding="utf-8")
+        with path.open("rb") as f:
+            st = os.fstat(f.fileno())
+            raw_bytes = f.read()
+        content = raw_bytes.decode("utf-8")
+        stat_info = (st.st_ino, st.st_mtime_ns, st.st_size)
     else:
         content = ""
     raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(content)
@@ -833,6 +873,7 @@ def _read_and_verify(
         len(content.encode("utf-8")),
         raw_lines,
         last_line_byte_range,
+        stat_info,
     )
 
 
@@ -859,12 +900,14 @@ class Ledger:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        entries, malformed, chain, content_bytes, raw_lines, last_line_byte_range = (
+        entries, malformed, chain, content_bytes, raw_lines, last_line_byte_range, stat_info = (
             _read_and_verify(path)
         )
         self._entries = entries
         self._malformed = malformed
-        self._set_watermark(chain, entries, content_bytes, raw_lines, last_line_byte_range)
+        self._set_watermark(
+            chain, entries, content_bytes, raw_lines, last_line_byte_range, stat_info
+        )
 
     def _set_watermark(
         self,
@@ -873,6 +916,7 @@ class Ledger:
         content_bytes: int,
         raw_lines: Sequence[str],
         last_line_byte_range: tuple[int, int] | None = None,
+        stat_info: tuple[int, int, int] | None = None,
     ) -> None:
         """`append()` の増分検証（UNDERSPEC-CAL-D84）が使う「検証済み
         watermark」を設定する。`__init__`/`load_with_verification`（構築時）
@@ -908,9 +952,24 @@ class Ledger:
         バイト範囲を読み、正当な台帳を `LedgerChainInvalidError` で拒否して
         いた（`#345` 指摘: append の偽失敗でリカバリを阻害する欠陥）。本
         オフセットは末尾空行の有無や `missing_final_newline` に関わらず常に
-        最終非空行そのものを指すため、この逆算が不要になる。"""
+        最終非空行そのものを指すため、この逆算が不要になる。
+
+        `_v_ino`/`_v_mtime_ns`/`_v_stat_size`（`#345` 指摘③ G1 採用）: この
+        watermark を確立した読取直後（`stat_info`。構築時は `_read_and_verify`
+        が同一 fd から `os.fstat` した値、`append()` 成功時は自身の write→
+        flush→`fsync` 直後に再 `fstat` した値）の `(st_ino, st_mtime_ns,
+        st_size)`。`chain.ok=False`（watermark 未確立）の場合は `None` —
+        この場合 `append()` は `v_bytes=0` 経由で常に全体検証へ落ちるため
+        G1 の出番がない。mtime 粒度の注意: Linux では `st_mtime_ns` はナノ秒
+        単位で記録され、実務上は同一秒内の書き込みでも異なる値になるが、
+        OS/ファイルシステム/`utimensat` による意図的な時刻偽装までは
+        保証しない（モジュール docstring の保護水準宣言のとおり、台帳の外側
+        で動く敵対的な実行者は対象外）。"""
         if chain.ok:
             self._v_bytes = content_bytes
+            self._v_ino, self._v_mtime_ns, self._v_stat_size = (
+                stat_info if stat_info is not None else (None, None, None)
+            )
             if entries:
                 tail = entries[-1]
                 self._v_seq = tail.seq
@@ -937,6 +996,7 @@ class Ledger:
             self._v_last_line_len = 0
             self._v_last_line_sha256 = None
             self._v_last_line_start = self._v_last_line_end = 0
+            self._v_ino = self._v_mtime_ns = self._v_stat_size = None
 
     @classmethod
     def load_with_verification(cls, path: Path) -> tuple["Ledger", ChainVerification]:
@@ -948,7 +1008,7 @@ class Ledger:
         — 本メソッドは追加の入口であり、`_read_and_verify` という既存の
         純関数を薄く呼ぶだけ。返す `chain` はここで確立した watermark の
         根拠でもある（UNDERSPEC-CAL-D84: `Ledger.append()` の増分検証）。"""
-        entries, malformed, chain, content_bytes, raw_lines, last_line_byte_range = (
+        entries, malformed, chain, content_bytes, raw_lines, last_line_byte_range, stat_info = (
             _read_and_verify(path)
         )
 
@@ -956,7 +1016,9 @@ class Ledger:
         instance.path = path
         instance._entries = entries
         instance._malformed = malformed
-        instance._set_watermark(chain, entries, content_bytes, raw_lines, last_line_byte_range)
+        instance._set_watermark(
+            chain, entries, content_bytes, raw_lines, last_line_byte_range, stat_info
+        )
         return instance, chain
 
     @property
@@ -1036,19 +1098,61 @@ class Ledger:
         `Ledger(path)`/`load_with_verification(path)` で明示的に作り直して
         から再試行すること。
 
-        弱まるのは 1 点のみ: watermark 末尾エントリより **さらに前**
-        （＝このインスタンス自身が構築時または直前の append 時に検証済みの
-        prefix の、末尾エントリを除いた部分）に対する、ファイルサイズも
-        watermark 末尾エントリの内容も変えない形の改竄が、次の append まで
-        の間に検出されるタイミング。この prefix は同じロックを保持した状態
-        でこのプロセス自身がつい先ほど検証したばかりであり、プロセス起動時
-        (`load_with_verification`) と `verify_chain()` の明示呼び出しでは
-        引き続き全 chain を検証する。モジュール docstring が宣言する保護
-        水準（事故的 leakage / 事後改竄の検出、台帳の外側で動く敵対的な
-        実行者は対象外）を弱めるものではない。
+        **`#345` 指摘③ G1（安価な変更検出器）**: 上記の watermark 直下 1 行
+        fingerprint 再照合は、watermark 末尾エントリ「より前」（＝この
+        インスタンスが最後に検証した prefix のうち末尾エントリを除いた
+        部分）の in-place 同一長改ざんは検出しない — ファイルサイズも
+        watermark 末尾行の内容も変わらないため。これを塞ぐため、
+        watermark 確立時（構築時読取直後、または直前の自分自身の write→
+        flush→`fsync` 直後）に `(st_ino, st_mtime_ns, st_size)` も併せて
+        記録する（`self._v_ino`/`_v_mtime_ns`/`_v_stat_size`）。今回の
+        `append()` は、まず現在の on-disk stat を `os.fstat()` で取得し、
+        これが記録済みの値と（inode・mtime・size のいずれか 1 つでも）
+        食い違っていれば——このインスタンス自身の直近の write で説明が
+        つかない変化とみなし——O(1) の高速経路（last-line fingerprint 再照合
+        + suffix のみの `_verify_chain_prefix`）をスキップし、seq 0 から
+        on-disk ledger 全体を `_verify_chain_prefix` でフル再検証してから
+        書き込む。フル再検証が失敗すれば `LedgerChainInvalidError` で
+        fail-closed（書き込みなし）。成功すれば（例: 単一 writer 境界の契約
+        が許す「flock で直列化された複数 `Ledger` インスタンスの正当な交互
+        append」）、watermark と `self._entries` をこのフル読取の内容へ
+        再同期してから続行する（ロールバック時（`#345 指摘③` 既存の
+        「watermark 未満へのサイズ減少」チェックが依然として先に fail-closed
+        するため、ここでの再同期は「同じかそれ以上のサイズで、かつ chain
+        全体が正当」な場合のみに限られる）。mtime 粒度の注意: Linux では
+        `st_mtime_ns` はナノ秒粒度で記録され、実務上は同一秒内の書き込み
+        でも異なる値になるが、`utimensat` 等による意図的な mtime 偽装や
+        inode 温存トリックまでは検出しない。
+
+        **`#345` 指摘③ G2（遷移 event 前のフル検証）**: `payload["kind"]` が
+        `_TRANSITION_EVENT_KINDS`（フェーズ到達を示す terminal event。
+        `campaign/state.py::LEDGER_KIND_FOR_PHASE` を権威とし、そこに現れ
+        ない `gate3_accepted`/`holdout_render_valid`/`split_secret_revealed`
+        と、`stage_summary`/`slice_summary` の 2 summary も加える）に含まれる
+        場合、stat が変化していなくても無条件に G1 と同じフル再検証経路へ
+        入る（この 1 か所の分岐だけで済むよう、呼び出し側の変更は不要）。
+        頻度は 1 campaign あたり高々数十〜数百件（フェーズ遷移 + summary）
+        であり、O(n) 再検証を要求しても campaign 全体としては許容可能な
+        コストにとどまる（D84 が問題視した「毎 append で O(n)」とは異なる）。
+
+        **残余露出（G1/G2 適用後も残る唯一の隙間）**: watermark 末尾より前の
+        in-place 同一長改ざんが、かつ (a) この操作自身の直近 write と
+        「区別できない」ほど stat（ino/mtime_ns/size）まで精巧に偽装され、
+        かつ (b) 次に追記される payload の `kind` が `_TRANSITION_EVENT_KINDS`
+        のいずれでもない（＝ただの `meter_call` 等）場合に限り、その 1 回の
+        `append()` では検出されない。この露出は次のいずれかで必ず検出される:
+        次の遷移/summary event の append（G2）、プロセス再起動後の
+        `Ledger(path)`/`load_with_verification(path)`（構築時は常にフル
+        検証）、または明示的な `verify_chain()` 呼び出し。モジュール
+        docstring が宣言する保護水準（事故的 leakage / 事後改竄の検出、
+        台帳の外側で動く敵対的な実行者は対象外）を弱めるものではない。
         """
         payload_j = _jsonable(payload)
+        transition_kind = payload_j.get("kind") if isinstance(payload_j, Mapping) else None
+        force_full_chain_verify = transition_kind in _TRANSITION_EVENT_KINDS
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        full_resync = False
+        full_entries_for_resync: list[LedgerEntry] = []
         with self.path.open("a+b") as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
@@ -1080,35 +1184,106 @@ class Ledger:
                             "before appending again.",
                             v_seq,
                         )
-                    # サイズは watermark 以上でも、watermark 末尾エントリ
-                    # そのものが同じ長さの別内容へ差し替えられていれば
-                    # （truncate を伴わない改竄）、suffix 検証だけでは
-                    # 素通りする（suffix はまさにこの 1 行の直後から読む
-                    # ため）。watermark 末尾 1 行分だけを O(1) で読み直し、
-                    # 記録済み sha256 と一致するか確認する（#345 指摘③）。
-                    # バイト範囲は `_set_watermark()` が構築時に直接記録した
-                    # 最終非空行の実オフセット（`_v_last_line_start`/`_end`）
-                    # をそのまま使う — `v_bytes`（ファイル全体長）からの逆算
-                    # ではない。逆算は watermark 末尾に空行が続く有効な
-                    # chain で実際の終端より後ろを指し、正当な台帳の append
-                    # を偽の tamper 検出として拒否していた（`#345` 指摘③
-                    # 追補: 末尾空行での偽 append 失敗）。
-                    last_len = self._v_last_line_len
-                    last_start = self._v_last_line_start
-                    f.seek(last_start)
-                    last_bytes = f.read(last_len)
-                    if (
-                        len(last_bytes) != last_len
-                        or hashlib.sha256(last_bytes).hexdigest() != self._v_last_line_sha256
-                    ):
-                        raise LedgerChainInvalidError(
-                            self.path,
-                            f"on-disk content at this instance's verified watermark "
-                            f"(seq={v_seq}) no longer matches what was last verified: "
-                            "content tamper at/behind the watermark; refusing to append "
-                            "without re-verifying the full chain.",
-                            v_seq,
+                    # `#345` 指摘③ G1: watermark 確立時（構築時 or 直前の
+                    # 自分自身の write 直後）に記録した stat と現在の on-disk
+                    # stat を比較する安価な変更検出器。一致していれば
+                    # （＝このインスタンス自身の直近の write 以外、誰も
+                    # ファイルへ触れていない）既存の O(1) last-line
+                    # fingerprint 再照合だけで十分。`#345` 指摘③ G2: 追記
+                    # しようとしている event 自体がフェーズ遷移/terminal
+                    # summary（`_TRANSITION_EVENT_KINDS`）なら、stat が
+                    # 一致していても無条件にフル再検証へ回す。
+                    current_stat = os.fstat(f.fileno())
+                    stat_unchanged = (
+                        self._v_ino is not None
+                        and current_stat.st_ino == self._v_ino
+                        and current_stat.st_mtime_ns == self._v_mtime_ns
+                        and current_stat.st_size == self._v_stat_size
+                    )
+                    if stat_unchanged and not force_full_chain_verify:
+                        # サイズは watermark 以上でも、watermark 末尾エントリ
+                        # そのものが同じ長さの別内容へ差し替えられていれば
+                        # （truncate を伴わない改竄）、suffix 検証だけでは
+                        # 素通りする（suffix はまさにこの 1 行の直後から読む
+                        # ため）。watermark 末尾 1 行分だけを O(1) で読み直し、
+                        # 記録済み sha256 と一致するか確認する（#345 指摘③）。
+                        # バイト範囲は `_set_watermark()` が構築時に直接記録
+                        # した最終非空行の実オフセット
+                        # （`_v_last_line_start`/`_end`）をそのまま使う —
+                        # `v_bytes`（ファイル全体長）からの逆算ではない。
+                        # 逆算は watermark 末尾に空行が続く有効な chain で
+                        # 実際の終端より後ろを指し、正当な台帳の append を
+                        # 偽の tamper 検出として拒否していた（`#345` 指摘③
+                        # 追補: 末尾空行での偽 append 失敗）。
+                        last_len = self._v_last_line_len
+                        last_start = self._v_last_line_start
+                        f.seek(last_start)
+                        last_bytes = f.read(last_len)
+                        if (
+                            len(last_bytes) != last_len
+                            or hashlib.sha256(last_bytes).hexdigest()
+                            != self._v_last_line_sha256
+                        ):
+                            raise LedgerChainInvalidError(
+                                self.path,
+                                f"on-disk content at this instance's verified watermark "
+                                f"(seq={v_seq}) no longer matches what was last verified: "
+                                "content tamper at/behind the watermark; refusing to "
+                                "append without re-verifying the full chain.",
+                                v_seq,
+                            )
+                    else:
+                        # G1（stat が想定外に変化）または G2（遷移 event）:
+                        # watermark より前の in-place 同一長改ざんは stat の
+                        # みでは疑わしいと分かっても位置を特定できないため、
+                        # on-disk ledger 全体を seq 0 からフル再検証する。
+                        f.seek(0)
+                        full_raw = f.read()
+                        try:
+                            full_content = full_raw.decode("utf-8")
+                        except UnicodeDecodeError as exc:
+                            raise LedgerTruncatedTailError(
+                                self.path,
+                                "existing ledger content is not valid utf-8; refusing "
+                                "to append",
+                            ) from exc
+                        full_lines, full_truncated_tail, full_missing_final_newline = (
+                            _split_complete_lines(full_content)
                         )
+                        if full_truncated_tail:
+                            raise LedgerTruncatedTailError(
+                                self.path,
+                                "existing ledger tail is truncated (incomplete final "
+                                "line); refusing to append onto partial bytes",
+                            )
+                        full_check = _verify_chain_prefix(
+                            full_lines,
+                            truncated_tail=False,
+                            missing_final_newline=full_missing_final_newline,
+                        )
+                        if not full_check.ok:
+                            raise LedgerChainInvalidError(
+                                self.path, full_check.detail, full_check.tamper_at_seq
+                            )
+                        # フル検証済み: watermark とこのインスタンスの
+                        # `self._entries` キャッシュを、このフル読取の内容へ
+                        # 再同期する（旧キャッシュへの単純 extend は行わない
+                        # — `#345` 指摘③ ロールバック fix と同じ理由で、
+                        # 一部だけを継ぎ足すと disk と乖離した重複キャッシュ
+                        # を生みうる）。
+                        full_entries_for_resync, _full_malformed = _parse_ledger_lines(
+                            full_lines
+                        )
+                        full_resync = True
+                        v_bytes = len(full_raw)
+                        v_missing_final_newline = full_missing_final_newline
+                        if full_lines:
+                            tail_raw_full = json.loads(full_lines[-1])
+                            v_seq = int(tail_raw_full["seq"])
+                            v_sha = str(tail_raw_full["entry_sha"])
+                        else:
+                            v_seq = -1
+                            v_sha = GENESIS_PREV_SHA
 
                 f.seek(v_bytes)
                 suffix_raw = f.read()
@@ -1177,14 +1352,24 @@ class Ledger:
                 f.write(new_bytes)
                 f.flush()
                 os.fsync(f.fileno())
+                # `#345` 指摘③ G1: 次回 append() の安価な変更検出器が使う
+                # baseline を、この write を fsync した直後の実 stat から
+                # 取り直す（f.tell() からの逆算ではなく、on-disk の実値）。
+                new_stat = os.fstat(f.fileno())
                 new_v_bytes = f.tell()
                 new_line_start = write_pos + len(heal_prefix)
                 new_line_end = new_line_start + len(new_line_bytes)
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
-        suffix_entries, _suffix_malformed = _parse_ledger_lines(raw_lines)
-        self._entries.extend(suffix_entries)
+        if full_resync:
+            # G1/G2 でフル再検証した回: 旧キャッシュへの部分 extend ではなく
+            # フル読取の内容で `self._entries` を丸ごと差し替える（disk との
+            # 乖離を残さない）。
+            self._entries = list(full_entries_for_resync)
+        else:
+            suffix_entries, _suffix_malformed = _parse_ledger_lines(raw_lines)
+            self._entries.extend(suffix_entries)
         self._entries.append(entry)
         self._v_bytes = new_v_bytes
         self._v_seq = entry.seq
@@ -1194,6 +1379,9 @@ class Ledger:
         self._v_last_line_sha256 = hashlib.sha256(new_line_bytes).hexdigest()
         self._v_last_line_start = new_line_start
         self._v_last_line_end = new_line_end
+        self._v_ino = new_stat.st_ino
+        self._v_mtime_ns = new_stat.st_mtime_ns
+        self._v_stat_size = new_stat.st_size
         return entry
 
     def verify_chain(self) -> ChainVerification:
