@@ -351,7 +351,12 @@ def _split_complete_lines(content: str) -> tuple[list[str], bool, bool]:
 
 
 def _verify_chain_prefix(
-    raw_lines: Sequence[str], truncated_tail: bool, missing_final_newline: bool
+    raw_lines: Sequence[str],
+    truncated_tail: bool,
+    missing_final_newline: bool,
+    *,
+    start_seq: int = 0,
+    start_prev_sha: str = GENESIS_PREV_SHA,
 ) -> ChainVerification:
     """`raw_lines`（`_split_complete_lines` が返す、改行区切りの完全な行の列）
     に対して entry_sha 連鎖検証を行う純関数（I/O なし）。`verify_chain()`
@@ -359,10 +364,20 @@ def _verify_chain_prefix(
     読んだ内容をそのまま渡す、Codex レビュー 2026-09-01 P1 finding #4）の
     両方が共有する判定ロジック本体。`truncated_tail`/`missing_final_newline`
     は呼び出し側が `_split_complete_lines` から得た値をそのまま渡す。
+
+    `start_seq`/`start_prev_sha`（UNDERSPEC-CAL-D84: `Ledger.append()` の
+    増分検証）: 既定 (`0`/`GENESIS_PREV_SHA`) はファイル先頭からの検証
+    （`verify_chain()`・旧来の `append()` フル検証と完全に同じ挙動）。
+    `Ledger.append()` の watermark 経由の呼び出しは、`raw_lines` に
+    watermark **以降**（suffix）の行だけを渡し、`start_seq`/`start_prev_sha`
+    に watermark の `seq`/`entry_sha` を渡すことで、chain の続きとして
+    検証する。`tamper_at_seq`/`detail` の `seq` は常にグローバルな
+    （台帳全体での）`seq` 番号（`start_seq + i`）で報告する。
     """
-    prev = GENESIS_PREV_SHA
+    prev = start_prev_sha
     verified = 0
     for i, line in enumerate(raw_lines):
+        expected_seq = start_seq + i
         try:
             raw = json.loads(line)
         except json.JSONDecodeError:
@@ -384,20 +399,23 @@ def _verify_chain_prefix(
                 ok=False,
                 entries_verified=verified,
                 truncated_tail=truncated_tail,
-                tamper_at_seq=i,
+                tamper_at_seq=expected_seq,
                 detail=(
-                    f"malformed entry at position {i} (seq slot {i}): "
+                    f"malformed entry at position {i} (seq slot {expected_seq}): "
                     f"missing required field(s) {missing_keys}"
                 ),
                 missing_final_newline=missing_final_newline,
             )
-        if raw.get("seq") != i:
+        if raw.get("seq") != expected_seq:
             return ChainVerification(
                 ok=False,
                 entries_verified=verified,
                 truncated_tail=truncated_tail,
-                tamper_at_seq=i,
-                detail=f"seq mismatch at position {i}: expected {i}, got {raw.get('seq')}",
+                tamper_at_seq=expected_seq,
+                detail=(
+                    f"seq mismatch at position {i}: expected {expected_seq}, "
+                    f"got {raw.get('seq')}"
+                ),
                 missing_final_newline=missing_final_newline,
             )
         if raw.get("prev_sha") != prev:
@@ -405,18 +423,18 @@ def _verify_chain_prefix(
                 ok=False,
                 entries_verified=verified,
                 truncated_tail=truncated_tail,
-                tamper_at_seq=i,
-                detail=f"prev_sha mismatch at seq {i} (sibling branch or tamper)",
+                tamper_at_seq=expected_seq,
+                detail=f"prev_sha mismatch at seq {expected_seq} (sibling branch or tamper)",
                 missing_final_newline=missing_final_newline,
             )
-        expected = _entry_sha(i, prev, raw.get("payload", {}))
+        expected = _entry_sha(expected_seq, prev, raw.get("payload", {}))
         if expected != raw.get("entry_sha"):
             return ChainVerification(
                 ok=False,
                 entries_verified=verified,
                 truncated_tail=truncated_tail,
-                tamper_at_seq=i,
-                detail=f"entry_sha mismatch at seq {i} (content tamper)",
+                tamper_at_seq=expected_seq,
+                detail=f"entry_sha mismatch at seq {expected_seq} (content tamper)",
                 missing_final_newline=missing_final_newline,
             )
         prev = raw["entry_sha"]
@@ -749,6 +767,27 @@ def _parse_ledger_lines(
     return entries, malformed
 
 
+def _read_and_verify(
+    path: Path,
+) -> tuple[list[LedgerEntry], list[MalformedLedgerLine], ChainVerification, int]:
+    """`path` を一度だけ読み、entries 構築 (`_parse_ledger_lines`)・chain 検証
+    (`_verify_chain_prefix`)・検証済みバイト長の取得を同一バッファから行う
+    純粋 I/O ヘルパー（UNDERSPEC-CAL-D84）。`Ledger.__init__` と
+    `Ledger.load_with_verification` の両方が使う — finding #12 が
+    `load_with_verification` 用に導入した「1 回読取」パターンを構築経路
+    全体へ拡張したもので、ここで得る `ChainVerification`/バイト長が
+    `Ledger.append()` の増分検証で使う「検証済み watermark」の元になる。
+    ファイルが存在しない場合は空とみなす。"""
+    if path.exists():
+        content = path.read_text(encoding="utf-8")
+    else:
+        content = ""
+    raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(content)
+    entries, malformed = _parse_ledger_lines(raw_lines)
+    chain = _verify_chain_prefix(raw_lines, truncated_tail, missing_final_newline)
+    return entries, malformed, chain, len(content.encode("utf-8"))
+
+
 class Ledger:
     """append-only JSONL 台帳。
 
@@ -772,62 +811,64 @@ class Ledger:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        self._entries: list[LedgerEntry] = []
-        self._malformed: list[MalformedLedgerLine] = []
-        if path.exists():
-            self._entries, self._malformed = self._read_all()
+        entries, malformed, chain, content_bytes = _read_and_verify(path)
+        self._entries = entries
+        self._malformed = malformed
+        self._set_watermark(chain, entries, content_bytes)
 
-    def _read_all(self) -> tuple[list[LedgerEntry], list[MalformedLedgerLine]]:
-        """既存ファイルから読み込む（キャッシュ用途）。`(entries, malformed)`
-        を返す。
+    def _set_watermark(
+        self,
+        chain: ChainVerification,
+        entries: Sequence[LedgerEntry],
+        content_bytes: int,
+    ) -> None:
+        """`append()` の増分検証（UNDERSPEC-CAL-D84）が使う「検証済み
+        watermark」を設定する。`__init__`/`load_with_verification`（構築時）
+        と `append()`（追記成功後）の両方から呼ばれる。
 
-        末尾の truncated/不完全な行は静かにスキップする（クラッシュさせない。
-        `_split_complete_lines` を再利用し、`verify_chain()`/`append()` と
-        同じ行分割・truncated 判定基準を共有する）。
-
-        JSON としてはパース可能だが `LedgerEntry` に必須のフィールド
-        （`_ENTRY_REQUIRED_KEYS`）を欠く「構造的 malformed」な行（例:
-        `{"seq": 0}`）に対しても、`raw["prev_sha"]` のような直接インデックス
-        で `KeyError` を送出してはならない（Codex レビュー 2026-09-01 P1
-        finding #3: 従来はここで `KeyError` が `Ledger.__init__` へそのまま
-        伝播し、`verify_chain()` を呼ぶ前に構築自体がクラッシュしていた ―
-        「破損を検出して報告する」という契約を満たせていなかった）。
-        malformed な行は `LedgerEntry` としては構築せず、`MalformedLedgerLine`
-        として別途記録して読み進める。
-
-        破損の有無・種別についての権威ある判定は本メソッドの責務ではなく、
-        `verify_chain()` がファイル全体を独立に読み直して行う
-        （`_verify_chain_prefix` が同じ `_ENTRY_REQUIRED_KEYS` 検査を chain
-        順序の文脈で再実行し、malformed な行の位置を `ok=False` +
-        `tamper_at_seq` として報告する）。
+        `chain.ok` が `True` の場合のみ `content_bytes`（検証済みバイト長）と
+        末尾エントリの `seq`/`entry_sha` を watermark として信用する。
+        `chain.ok` が `False`（改竄・truncated tail・malformed 行のいずれか）
+        の場合は「未検証」を意味する sentinel `(0, -1, GENESIS_PREV_SHA,
+        False)` を設定する — この場合、次回 `append()` は watermark 0 から
+        suffix（＝ファイル全体）を検証する旧来の full-verify に自動的に
+        フォールバックし、fail-closed 契約を一切弱めない
+        （`test_ledger_append_refuses_when_middle_entry_tampered` 等が
+        これを検証する）。
         """
-        content = self.path.read_text(encoding="utf-8")
-        raw_lines, _truncated_tail, _missing_final_newline = _split_complete_lines(content)
-        return _parse_ledger_lines(raw_lines)
+        if chain.ok:
+            self._v_bytes = content_bytes
+            if entries:
+                tail = entries[-1]
+                self._v_seq = tail.seq
+                self._v_sha = tail.entry_sha
+            else:
+                self._v_seq = -1
+                self._v_sha = GENESIS_PREV_SHA
+            self._v_missing_final_newline = chain.missing_final_newline
+        else:
+            self._v_bytes = 0
+            self._v_seq = -1
+            self._v_sha = GENESIS_PREV_SHA
+            self._v_missing_final_newline = False
 
     @classmethod
     def load_with_verification(cls, path: Path) -> tuple["Ledger", ChainVerification]:
-        """`path` を **1 回だけ** 読み、同一バッファから entries 構築
-        （`_read_all()` 相当）と chain 検証（`verify_chain()` 相当）の両方を
-        行う（finding #12: `campaign/state.py::load_frozen_campaign` は従来
-        `Ledger(path)`（1 回読取） → `ledger.verify_chain()`（もう 1 回読取）
-        の 2 回読みだった）。`Ledger(path)`/`verify_chain()` 単体の挙動・
-        シグネチャは変更しない — 本メソッドは追加の入口であり、
-        `_split_complete_lines`/`_parse_ledger_lines`/`_verify_chain_prefix`
-        という既存の純関数を同一バッファへ 2 度（構築用・検証用）適用する
-        だけの薄い合成。"""
-        if path.exists():
-            content = path.read_text(encoding="utf-8")
-        else:
-            content = ""
-        raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(content)
-        entries, malformed = _parse_ledger_lines(raw_lines)
-        chain = _verify_chain_prefix(raw_lines, truncated_tail, missing_final_newline)
+        """`path` を **1 回だけ** 読み、同一バッファから entries 構築と
+        chain 検証の両方を行う（finding #12: `campaign/state.py::
+        load_frozen_campaign` は従来 `Ledger(path)`（1 回読取） →
+        `ledger.verify_chain()`（もう 1 回読取）の 2 回読みだった）。
+        `Ledger(path)`/`verify_chain()` 単体の挙動・シグネチャは変更しない
+        — 本メソッドは追加の入口であり、`_read_and_verify` という既存の
+        純関数を薄く呼ぶだけ。返す `chain` はここで確立した watermark の
+        根拠でもある（UNDERSPEC-CAL-D84: `Ledger.append()` の増分検証）。"""
+        entries, malformed, chain, content_bytes = _read_and_verify(path)
 
         instance = cls.__new__(cls)
         instance.path = path
         instance._entries = entries
         instance._malformed = malformed
+        instance._set_watermark(chain, entries, content_bytes)
         return instance, chain
 
     @property
@@ -836,9 +877,9 @@ class Ledger:
 
     @property
     def malformed_lines(self) -> tuple[MalformedLedgerLine, ...]:
-        """`_read_all()` が検出した構造的 malformed 行（Codex レビュー
-        2026-09-01 P1 finding #3）。空タプルは「malformed 行なし」を意味する。
-        権威ある chain 検証結果は `verify_chain()` を使うこと（本 property は
+        """構築時に検出された構造的 malformed 行（Codex レビュー 2026-09-01
+        P1 finding #3）。空タプルは「malformed 行なし」を意味する。権威ある
+        chain 検証結果は `verify_chain()` を使うこと（本 property は
         `Ledger(path)` 構築時点でのスナップショットに過ぎず、on-disk 内容が
         構築後に変化していれば古くなる）。"""
         return tuple(self._malformed)
@@ -865,24 +906,74 @@ class Ledger:
         `verify_chain()` はこの状態を `missing_final_newline=True` として
         報告する（fail-closed の対象外）。
 
-        **全 chain 検証**（Codex レビュー 2026-09-01 P1 finding #4）: 排他
-        ロックを保持したまま、既読の全行 (`raw_lines`) に対して
-        `verify_chain()` と同じ判定 (`_verify_chain_prefix`) を再実行し、
-        途中の 1 行でも改竄・seq 欠番・破損があれば `LedgerChainInvalidError`
-        を送出して書込を一切行わない（fail-closed）。コストは append 1 回
-        あたり O(n)（n=既存エントリ数）だが、台帳全体の完全性を append の
-        都度保証する設計正本 §7 の優先事項として許容する（末尾 1 行のみの
-        検査では、改竄行より後ろを改竄後に再計算した "整合する" chain へ
-        差し替えられていた場合に検出できない）。
+        **増分 chain 検証**（UNDERSPEC-CAL-D84。旧: Codex レビュー
+        2026-09-01 P1 finding #4 の「全 chain 再検証」）: 旧実装は、排他
+        ロックを保持したまま既存ファイルの **全行** を毎回 `verify_chain()`
+        と同じ判定 (`_verify_chain_prefix`) で再検証し、さらに `_read_all()`
+        で全行を再パースしていた（append 1 回あたり O(n)、n=既存エントリ数。
+        実測: 本番 campaign RUN10-CAL-20260903-9bcbbf86 の c2-baseline で
+        n=11,220 のとき 1 回の append が 912 ms、group あたり 6 回で 5.47 s
+        ＝完走に約 112 h CPU / 約 2,700 slices を要する O(n²) が判明した）。
+
+        本実装は、この `Ledger` インスタンスが最後に検証した地点
+        （`self._v_bytes`/`_v_seq`/`_v_sha`/`_v_missing_final_newline` —
+        `__init__`/`load_with_verification`（構築時）または直前の
+        `append()` 成功時に設定される「検証済み watermark」）**以降**の
+        suffix だけを `_verify_chain_prefix` で検証する（O(1) — suffix は
+        通常 0〜数行）。`fcntl.flock(LOCK_EX)` を先に獲得し、そのロックを
+        保持したまま on-disk の現在のファイルを watermark から読み直すため、
+        以下は旧実装と同じ強度で検出される（fail-closed を弱めない）:
+
+        - watermark **以降**に他プロセス/他 `Ledger` インスタンスが書いた
+          内容の改竄・truncated tail・malformed 行（suffix を通常どおり
+          `_verify_chain_prefix` で検証するため）
+        - ファイルが watermark のバイト位置より短くなっている場合
+          （truncate/差し替え）— watermark を信用せず、フォールバックして
+          ファイル全体を検証する
+
+        弱まるのは 1 点のみ: watermark **より前**（＝このインスタンス自身が
+        構築時または直前の append 時に検証済みの prefix）に対する、それ以降
+        ファイルサイズを変えない形の改竄が、次の append までの間に検出
+        されるタイミング。この prefix は同じロックを保持した状態でこの
+        プロセス自身がつい先ほど検証したばかりであり、プロセス起動時
+        (`load_with_verification`) と `verify_chain()` の明示呼び出しでは
+        引き続き全 chain を検証する。モジュール docstring が宣言する保護
+        水準（事故的 leakage / 事後改竄の検出、台帳の外側で動く敵対的な
+        実行者は対象外）を弱めるものではない。
         """
         payload_j = _jsonable(payload)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a+", encoding="utf-8") as f:
+        with self.path.open("a+b") as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
-                f.seek(0)
-                content = f.read()
-                raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(content)
+                f.seek(0, os.SEEK_END)
+                current_size = f.tell()
+                v_bytes = self._v_bytes
+                v_seq = self._v_seq
+                v_sha = self._v_sha
+                v_missing_final_newline = self._v_missing_final_newline
+                if current_size < v_bytes:
+                    # watermark より短い＝外部からの truncate/差し替え。
+                    # watermark を信用せず、フォールバックしてファイル全体
+                    # を検証する（fail-closed を弱めない）。
+                    v_bytes = 0
+                    v_seq = -1
+                    v_sha = GENESIS_PREV_SHA
+                    v_missing_final_newline = False
+
+                f.seek(v_bytes)
+                suffix_raw = f.read()
+                try:
+                    suffix_content = suffix_raw.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise LedgerTruncatedTailError(
+                        self.path,
+                        "existing ledger suffix is not valid utf-8; refusing to append",
+                    ) from exc
+
+                raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(
+                    suffix_content
+                )
                 if truncated_tail:
                     raise LedgerTruncatedTailError(
                         self.path,
@@ -890,25 +981,24 @@ class Ledger:
                         "refusing to append onto partial bytes",
                     )
                 chain_check = _verify_chain_prefix(
-                    raw_lines, truncated_tail=False, missing_final_newline=missing_final_newline
+                    raw_lines,
+                    truncated_tail=False,
+                    missing_final_newline=missing_final_newline,
+                    start_seq=v_seq + 1,
+                    start_prev_sha=v_sha,
                 )
                 if not chain_check.ok:
                     raise LedgerChainInvalidError(
                         self.path, chain_check.detail, chain_check.tamper_at_seq
                     )
-                if missing_final_newline:
-                    f.seek(0, os.SEEK_END)
-                    f.write("\n")
+
                 if raw_lines:
-                    try:
-                        tail_raw = json.loads(raw_lines[-1])
-                        seq = int(tail_raw["seq"]) + 1
-                        prev_sha = str(tail_raw["entry_sha"])
-                    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-                        raise LedgerTruncatedTailError(
-                            self.path,
-                            "existing ledger tail line is unparseable/malformed; refusing to append",
-                        ) from exc
+                    tail_raw = json.loads(raw_lines[-1])
+                    seq = int(tail_raw["seq"]) + 1
+                    prev_sha = str(tail_raw["entry_sha"])
+                elif v_seq >= 0:
+                    seq = v_seq + 1
+                    prev_sha = v_sha
                 else:
                     seq = 0
                     prev_sha = GENESIS_PREV_SHA
@@ -925,14 +1015,28 @@ class Ledger:
                         "payload": entry.payload,
                     }
                 )
+                # `suffix_content` が空、かつ watermark 自身が末尾改行未終端
+                # だった場合のみ、欠けた "\n" をまず自己修復として書く
+                # （suffix が非空なら、それを書いた側の append() が既に
+                # 同じ自己修復を行っているため不要）。
+                heal_missing_newline = v_missing_final_newline and not suffix_content
+                heal_prefix = b"\n" if heal_missing_newline else b""
+                new_bytes = heal_prefix + line.encode("utf-8") + b"\n"
                 f.seek(0, os.SEEK_END)
-                f.write(line)
-                f.write("\n")
+                f.write(new_bytes)
                 f.flush()
                 os.fsync(f.fileno())
+                new_v_bytes = f.tell()
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        self._entries, self._malformed = self._read_all()
+
+        suffix_entries, _suffix_malformed = _parse_ledger_lines(raw_lines)
+        self._entries.extend(suffix_entries)
+        self._entries.append(entry)
+        self._v_bytes = new_v_bytes
+        self._v_seq = entry.seq
+        self._v_sha = entry.entry_sha
+        self._v_missing_final_newline = False
         return entry
 
     def verify_chain(self) -> ChainVerification:

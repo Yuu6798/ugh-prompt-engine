@@ -454,6 +454,52 @@ def test_ledger_two_instances_interleaved_append_no_sibling_seq(tmp_path) -> Non
     assert result.tamper_at_seq is None
 
 
+def test_ledger_append_cost_independent_of_ledger_size(tmp_path, monkeypatch) -> None:
+    """[UNDERSPEC-CAL-D84] regression: `Ledger.append()` must cost O(1) in the
+    number of existing entries, not O(n). Before this fix, `append()`
+    re-verified the **entire** on-disk chain (`_verify_chain_prefix` over
+    every existing line) and re-parsed the whole file on every call — O(n)
+    per append, O(n^2) per campaign (production incident: RUN10-CAL-
+    20260903-9bcbbf86 c2-baseline, n=11,220 -> 912 ms/append, projected
+    ~112 h CPU to finish; see `UNDERSPEC-CAL-D84` in README.md).
+
+    This builds ledgers of two very different sizes purely via
+    `Ledger.append()` (itself only tractable at n=2000 if append() is
+    already O(1) — a regression back to O(n) would make *this test*
+    prohibitively slow) and asserts that the number of raw lines
+    `_verify_chain_prefix` is asked to re-verify for the *next* append does
+    not grow with the ledger's existing size — it must stay `0` (nothing
+    written since this instance's own watermark), regardless of `n_prior`.
+    """
+    import voice_genesis.calibration.provenance as provenance_mod
+
+    def suffix_len_for_next_append(n_prior: int) -> int:
+        path = tmp_path / f"ledger_{n_prior}.jsonl"
+        ledger = Ledger(path)
+        for i in range(n_prior):
+            ledger.append({"kind": "meter_call", "row_id": f"r{i}"})
+
+        seen_lengths: list[int] = []
+        real_verify_chain_prefix = provenance_mod._verify_chain_prefix
+
+        def counting_verify_chain_prefix(raw_lines, *args, **kwargs):
+            seen_lengths.append(len(raw_lines))
+            return real_verify_chain_prefix(raw_lines, *args, **kwargs)
+
+        monkeypatch.setattr(provenance_mod, "_verify_chain_prefix", counting_verify_chain_prefix)
+        ledger.append({"kind": "meter_call", "row_id": "final"})
+        monkeypatch.undo()
+
+        assert len(seen_lengths) == 1, "append() must call _verify_chain_prefix exactly once"
+        return seen_lengths[0]
+
+    small_n_suffix_len = suffix_len_for_next_append(5)
+    large_n_suffix_len = suffix_len_for_next_append(300)
+
+    assert small_n_suffix_len == 0
+    assert large_n_suffix_len == 0
+
+
 def test_check_leakage_pre_unseal_access_is_blocked() -> None:
     entries = [
         LedgerEntry(
