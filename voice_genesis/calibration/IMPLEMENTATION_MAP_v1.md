@@ -512,7 +512,15 @@ stage を安全に止める手段が無い。(3) resume するたびに ledger �
   `{"kind": "meter_call_group_discarded", "row_id", "probe_index",
   "candidate_id", "discarded_repeat_keys": [[repeat_kind, repeat_index], ...]
   (sorted), "discarded_count", "reason":
-  "operator_discard_partial_group_after_interrupt", "stage"}` を 1 件記帳し、
+  "operator_discard_partial_group_after_interrupt", "stage",
+  "discarded_within_cpu_seconds"}`（`discarded_within_cpu_seconds` — round 6
+  finding #3 採用、`[UNDERSPEC-CAL-D79]` 追補、§6.5.4 参照: discard される
+  部分グループが残した検証済み per-record `within_cpu_seconds` の最大値で、
+  hard-kill されたプロセスが `stage_summary`/`slice_summary` を一度も記帳
+  できず失われるはずだった within-process CPU を discard event 自身に載せて
+  救済する。`caps.cap_counters_from_ledger()` がこの event でのみ compute へ
+  1 回だけ加算する——他のどの箇所（`meter_call` 自身の compute 集計含む）にも
+  対応する減算/加算はなく、exactly-once）を 1 件記帳し、
   フルグループ（within3+fresh3 全 6 call）を測定・記帳して継続する。
   **reconstruction rule**（`meter_call` を読むあらゆる箇所に適用 —
   `_completed_meter_call_records`/`MeterCallIndex`/selection・holdout・close・
@@ -895,3 +903,49 @@ loader 同値の 4 パターンを c1/c2/c3a/c3b/c4 の render/measure/F0 各ル
   是正後は「sidecar 不一致」検査で先に捕捉されるようになった（旧
   `"current file sha256=" != ...` 文言から `"does not match sidecar"`
   文言へ改訂——F5 導入時より一段厳格な検査で捕捉される、意味論的な改善）。
+
+#### 6.5.4 第 6 巡追補（Codex PR #345 レビュー採用、2026-09-03。discard event
+への within CPU 計上）
+
+- **（③、`campaign/measure_stage.py`/`campaign/caps.py`）— discard された
+  部分 meter_call group の within-process CPU が、hard-kill された
+  writer プロセスでは永久に回収不能だった**: round 16 finding #3 は
+  `meter_call` ごとの compute 課金から `within_cpu_seconds` を意図的に
+  除外している——その CPU は同じ dispatch の `stage_summary`/
+  `slice_summary` event（parent 側）が別途カバーする前提だった。しかし
+  R1 の discard 対象（PARTIAL group）はまさに「writer プロセスが
+  `cli.py` `main()` の `finally` に到達する前に SIGKILL/OOM で死んだ」
+  ケースであり、その dispatch は `stage_summary`/`slice_summary` を
+  一切記帳しない——round 16 の前提が成立せず、discard された部分
+  グループの within CPU は `compute_used` から静かに欠落し得た
+  （frozen compute cap を実質すり抜ける false-success 経路）。修正:
+  `StaleMeasurementError`（`kind == "partial"`）が新規フィールド
+  `discarded_within_cpu_seconds` を運ぶ——`_partial_group_within_cpu_
+  seconds()` が、PARTIAL 時点で present な各記録（key ごとに 1 件）の
+  検証済み `within_cpu_seconds` の **max**（同一 work unit の全記録は
+  本来同一値のはずだが、型不正/欠落レコードが混じっても過大側に振れる
+  fail-closed 選択——sum ではなく max。sum だと同じ共有値を present
+  レコード数だけ多重計上してしまう）を計算する。`run_measurement_for_
+  instance` はこの値をそのまま `meter_call_group_discarded` event の
+  `discarded_within_cpu_seconds`（§6.5 の payload 一覧に追記済み）へ
+  転記し、`caps.cap_counters_from_ledger()` がこの event でのみ
+  compute へ 1 回だけ加算する。**exactly-once の根拠**: `meter_call`
+  自身の compute 集計は discard の有無に関わらず常に `within_cpu_
+  seconds` を除外し続けるため対応する減算は無く、二重計上の余地が
+  ない。かつ通常の（hard-kill でない）Python 例外は `cli.py` `main()`
+  の `try`/`finally` を必ず通過し、その dispatch 自身の `stage_summary`/
+  `slice_summary` を記帳してから終了する——PARTIAL のまま ledger に
+  残り後続の別 invocation が discard できる状態になるのは、Python が
+  介入できない kill のときだけであり、discard event での課金はこの
+  条件によって構造的に exactly-once となる（偶然の一致ではない）。
+  テスト: `test_campaign_caps.py`/`test_campaign_measure.py` に
+  discard event の `discarded_within_cpu_seconds` 加算・複数 present
+  レコードでの max 選択・欠落/非数値/負値レコード混在時の fail-closed
+  な 0.0 寄与を固定する regression を追加（commit `1365806`）。**同時に
+  1 件境界宣言（`[UNDERSPEC-CAL-D80]`、docs only・コード変更なし）**:
+  `render_stage.py` の C4 render を最終 holdout 遷移時に再検証する案は
+  不採用——測定値は測定時に入力検証済み（`_verify_and_load_rendered_
+  pcm`）・ledger の sha が正本であり、測定後に消失/破損した PCM
+  成果物ストアの完全性は campaign 正当性契約の外（測定後の消失は
+  どの測定結果も改変しない）。再入条件 = 測定前の破損経路が新たに
+  示された場合のみ。詳細は README.md の `UNDERSPEC-CAL-D80` 行を参照。

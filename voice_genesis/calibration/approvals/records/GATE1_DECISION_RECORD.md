@@ -347,3 +347,22 @@ _verify_pcm_sidecar()` へ集約し検証項目を同値化）。memo §6.5.3 �
 memo_sha256 を
 `d23305cd3feea1fba7904c43524a97621d04177d8756132b93556b894efe4d45` へ更新した。
 承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。
+
+### 10.4 D79 追補 4（2026-09-03）
+
+Codex #345 第 6 巡の ③ 1 件（discard された部分 meter_call group の
+within-process CPU が、writer プロセスが hard-kill され `cli.py` `main()`
+の `finally` に一度も到達しなかった場合、対応する `stage_summary`/
+`slice_summary` が記帳されず永久に回収不能だった欠落——`meter_call_group_
+discarded` event に新規フィールド `discarded_within_cpu_seconds`（discard
+される部分グループの検証済み per-record `within_cpu_seconds` の最大値）を
+追加し、`caps.cap_counters_from_ledger()` がこの event でのみ compute へ
+1 回だけ加算する。他のどの箇所（`meter_call` 自身の compute 集計含む）にも
+対応する減算/加算はなく exactly-once）を採用した。同時に 1 件境界宣言
+（`[UNDERSPEC-CAL-D80]`、docs only・コード変更なし: C4 render の最終
+holdout 遷移時再検証は不採用——測定値は測定時に入力検証済み・ledger の sha
+が正本であり、測定後の render 成果物ストアの完全性は campaign 正当性契約の
+外）。memo §6.5（discard event の payload 一覧）/§6.5.4 を追補し、
+memo_sha256 を
+`cb5ee5bdbe712f6ea6a62de58881de0735d3c066f0c8307ef0ad4264a7cc4c15` へ更新した。
+承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。
