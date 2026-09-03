@@ -16,8 +16,10 @@ selection_rule_sha + selected_candidate_sha + selection_freeze_event_sha
    「C0 freeze **後**に成立する」承認として定義するため（`UNDERSPEC-CAL-D85`,
    #345 指摘②）、承認ファイルの `approved_at_utc` が campaign の `c0_freeze`
    ledger event（`FrozenCampaign.freeze_event["event_time_utc"]`）より厳密に
-   後であることも検証する — 早い/同時刻/パース不能はすべて fail-closed
-   で拒否する（`_parse_iso8601_utc`）。
+   後であり、かつチェック時点の現在時刻（`datetime.now(timezone.utc)`、60 秒
+   のクロックスキュー許容幅つき）以前であることも検証する
+   （`freeze_time < gate3_time <= now_utc`）— 早い/同時刻/未来日付/パース不能は
+   すべて fail-closed で拒否する（`_parse_iso8601_utc`）。
 3. `holdout_unseal` event を記帳する（`selection_freeze_event_sha` +
    `selection_frozen` と同一の 4 前提 sha を copy、加えて 2 の `gate3_accepted`
    event を参照する `gate3_accepted_sha`）。これは `provenance.Ledger.check_leakage`
@@ -34,7 +36,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from voice_genesis.calibration.approvals import Gate, load_approval
@@ -51,6 +53,19 @@ _PREREQUISITE_KIND_FOR_KEY: Mapping[str, str] = {
 
 class UnsealError(RuntimeError):
     """5-sha 相互参照検査または Gate 3 承認が失敗した際の fail-closed error。"""
+
+
+#: #345 指摘②（`UNDERSPEC-CAL-D85` 追補、Codex レビュー分類②で採用）: freeze-後
+#: 発行検証は下限（`freeze_time < gate3_time`）のみでは不十分——構文上有効な
+#: **未来日付**の `approved_at_utc`（freeze より後だが現在時刻より後）を素通り
+#: させてしまい、事前に用意した未来日付の承認ファイルで後の freeze を先取り
+#: 認可できてしまう。上限（`gate3_time <= now_utc`）も同じ検査で要求する。
+#: 実行環境間のわずかなクロックスキューで「承認直後の正当な approved_at_utc」を
+#: 誤って拒否しないための許容幅（秒）。0 ではなく 60 秒を選んだのは、本チェックの
+#: 目的（先読み登録された遠い未来日付の悪用防止）に対し秒オーダーの正当な誤差を
+#: fail-closed で弾かないための実務的な安全マージン——分オーダー以上のずれは
+#: 依然として拒否される。
+_CLOCK_SKEW_TOLERANCE_SECONDS = 60
 
 
 def _parse_iso8601_utc(value: object) -> datetime | None:
@@ -153,6 +168,18 @@ def unseal_campaign(
     if freeze_time is None or gate3_time is None or gate3_time <= freeze_time:
         raise UnsealError(
             "Gate 3 (seal acceptance) not approved: approval_file:gate3_predates_freeze"
+        )
+    # #345 指摘② 拡張（Codex レビュー分類②で採用）: 下限のみでは、freeze より
+    # 後だが現在時刻より後——構文上有効な**未来日付**の `approved_at_utc` を
+    # 事前に用意しておけば、その日付が来るまで後の freeze を先取り認可でき
+    # てしまう。ここで `gate3_time` が「チェック時点の現在時刻 + クロックスキュー
+    # 許容幅」を超えないことも要求する（早い/同時刻同様 fail-closed。
+    # ledger には一切書き込まない）。上限チェックは下限チェックとは異なる
+    # missing-factor 文字列で失敗理由を区別する。
+    now_utc = datetime.now(timezone.utc)
+    if gate3_time > now_utc + timedelta(seconds=_CLOCK_SKEW_TOLERANCE_SECONDS):
+        raise UnsealError(
+            "Gate 3 (seal acceptance) not approved: approval_file:gate3_future_dated"
         )
 
     gate3_entry = campaign.ledger.append(

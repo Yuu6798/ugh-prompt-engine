@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from voice_genesis.calibration.campaign import selection_stage, unseal as unseal_module
@@ -170,6 +171,52 @@ def test_unseal_succeeds_when_gate3_postdates_freeze(tmp_path: Path) -> None:
 
     approval_dir = tmp_path / "approvals-postdates-freeze"
     write_gate3_approval(approval_dir, approved_at_utc="2026-09-02T12:00:01Z")
+
+    result = unseal_module.unseal_campaign(campaign, approval_dir=approval_dir)
+    assert result.gate3_accepted_entry_sha
+    assert CampaignPhase.UNSEALED in campaign.phases_passed()
+
+
+# --- #345 指摘② 拡張（Codex レビュー分類②で採用）: 下限（freeze 後）だけでは
+# 構文上有効な未来日付の Gate 3 承認（現在時刻より後）を素通りさせてしまう。
+# `freeze_time < gate3_time <= now_utc`（60 秒クロックスキュー許容つき）を
+# unseal 側で検証する。`now_utc` は各テスト実行時の実時刻を使う
+# （ハードコードした未来/過去日付は経過時間でフレークするため）。 ---
+
+
+def test_unseal_refuses_when_gate3_future_dated(tmp_path: Path) -> None:
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    _freeze_baseline_and_selection(campaign)
+
+    approval_dir = tmp_path / "approvals-future-dated"
+    future = datetime.now(timezone.utc) + timedelta(days=1)
+    write_gate3_approval(
+        approval_dir, approved_at_utc=future.strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    try:
+        unseal_module.unseal_campaign(campaign, approval_dir=approval_dir)
+        raise AssertionError("expected UnsealError: gate3 future dated")
+    except unseal_module.UnsealError as exc:
+        assert "gate3_future_dated" in str(exc)
+
+    # fail-closed: no partial events written
+    assert not any(
+        e.payload.get("kind") in ("gate3_accepted", "holdout_unseal")
+        for e in campaign.ledger.entries
+    )
+
+
+def test_unseal_succeeds_when_gate3_just_before_now(tmp_path: Path) -> None:
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    _freeze_baseline_and_selection(campaign)
+
+    approval_dir = tmp_path / "approvals-just-before-now"
+    just_before_now = datetime.now(timezone.utc) - timedelta(seconds=1)
+    write_gate3_approval(
+        approval_dir, approved_at_utc=just_before_now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
 
     result = unseal_module.unseal_campaign(campaign, approval_dir=approval_dir)
     assert result.gate3_accepted_entry_sha
