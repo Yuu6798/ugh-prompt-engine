@@ -597,13 +597,28 @@ def render_and_measure_holdout(
     # (including families skipped here because they were already complete)
     # is reconstructed only in the completing pass below.
     precheck_index = measure_stage.MeterCallIndex.build(campaign.ledger.entries)
-    pending_families = [
-        (family, candidates)
-        for family, candidates in family_order
-        if measure_stage.family_has_pending_work(
-            instances_by_family[family], candidates, precheck_index, f0_unusable_instances
-        )
-    ]
+    # Codex PR #345 round 10 finding ② (adopted, category ②,
+    # `[UNDERSPEC-CAL-D79]`, mirrors `cli._run_c3b()`'s identical fix): a
+    # duplicate-key cell makes this precheck itself raise
+    # `StaleMeasurementError` — before any of `run_measure_stage()`'s own
+    # logging wrappers ever run — so without this `try`/`except` the ledger
+    # would lack the `STALE_MEASUREMENT_STATE` stop_event explaining the
+    # failed invocation. Explicit loop (not a list/generator comprehension)
+    # so the raise is caught per family, same shared helper
+    # `run_measure_stage()` itself uses.
+    pending_families = []
+    for family, candidates in family_order:
+        try:
+            has_pending = measure_stage.family_has_pending_work(
+                instances_by_family[family], candidates, precheck_index, f0_unusable_instances
+            )
+        except measure_stage.StaleMeasurementError as exc:
+            measure_stage._append_stale_measurement_stop_event(
+                campaign, exc, invocation_id=invocation_id
+            )
+            raise
+        if has_pending:
+            pending_families.append((family, candidates))
     for family, candidates in pending_families:
         family_records, family_slice_status = measure_stage.run_measure_stage(
             campaign,

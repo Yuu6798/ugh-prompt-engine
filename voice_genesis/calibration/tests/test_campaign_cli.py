@@ -1212,6 +1212,187 @@ def test_c4_holdout_skips_run_measure_stage_for_already_complete_family_when_ano
 
 
 # ---------------------------------------------------------------------------
+# Codex PR #345 round 10 finding ② (adopted, category ②, `[UNDERSPEC-CAL-
+# D79]`): round 9's `family_has_pending_work()` O(1) precheck (see the two
+# tests directly above) raises `StaleMeasurementError` itself for a
+# duplicate-key cell -- before any of `run_measure_stage()`'s own logging
+# wrappers ever run for that family. Both precheck call sites
+# (`cli._run_c3b()`, `holdout_stage.render_and_measure_holdout()`) must catch
+# it, append the same `STALE_MEASUREMENT_STATE` stop_event `run_measure_
+# stage()` itself would, then re-raise -- otherwise the failed invocation
+# leaves no ledger record explaining why it stopped.
+# ---------------------------------------------------------------------------
+
+
+def test_c3b_family_precheck_duplicate_key_emits_stale_stop_event_before_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A duplicate `meter_call` repeat key for FORMANT_GT's sole instance is
+    present in the ledger before `_run_c3b()` is ever called (sliced branch,
+    `time_budget_seconds` set, so `family_has_pending_work()`'s precheck
+    runs). The precheck itself must raise `StaleMeasurementError(kind=
+    "duplicate")` -- reached via `MeterCallIndex.is_complete()` -- and the
+    round 10 fix must append exactly one `STALE_MEASUREMENT_STATE` stop_event
+    before it propagates, mirroring `run_measure_stage()`'s own `is_complete()`
+    call sites (`_append_stale_measurement_stop_event()`)."""
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+
+    subset = small_matrix_subset(3, family="FORMANT_GT")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    baseline_entry = campaign.ledger.append(
+        {"kind": "baseline_audit", "artifact_sha": "b" * 64, "payload": {}}
+    )
+    campaign.ledger.append(
+        {"kind": "baseline_audited", "baseline_audit_sha": baseline_entry.entry_sha}
+    )
+    # SELECTION_FAILED_CLOSED: sidesteps `_build_f0_by_instance()`'s own F0
+    # measurement pass entirely -- this test isolates the per-family precheck,
+    # not the F0 sub-phase.
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": None,
+            "outcome": "SELECTION_FAILED_CLOSED",
+        }
+    )
+
+    formant_candidate = candidate_by_id("M3-B0-CURRENT-CENTROID")
+    assert formant_candidate.algorithm_family not in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.FORMANT_GT:
+            return (formant_candidate,)
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+
+    assignment = campaign.realized_split.assignment
+    formant_instances = workunits.c3b_family_selection_instances(
+        subset, assignment, _FixtureFamily.FORMANT_GT.value
+    )
+    assert formant_instances
+    row_id, probe_index = sorted(formant_instances)[0]
+
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(
+            _fake_meter_call(formant_candidate.candidate_id, row_id, probe_index, "within", i, 100.0 + i)
+        )
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(
+            _fake_meter_call(formant_candidate.candidate_id, row_id, probe_index, "fresh", i, 200.0 + i)
+        )
+    # duplicate write to the same (repeat_kind, repeat_index) key.
+    campaign.ledger.append(
+        _fake_meter_call(formant_candidate.candidate_id, row_id, probe_index, "within", 0, 999.0)
+    )
+
+    entries_before = len(campaign.ledger.entries)
+
+    with pytest.raises(measure_stage.StaleMeasurementError) as excinfo:
+        cli._run_c3b(campaign, subset, 1, time_budget_seconds=60.0)
+    assert excinfo.value.kind == "duplicate"
+
+    # SELECTION_FAILED_CLOSED unconditionally appends its own
+    # `f0_dependent_selection_blocked` event before the per-family precheck
+    # loop runs at all (pre-existing, unrelated to this fix) -- filter to
+    # `stop_event`-kind entries so this assertion isolates the round 10 fix's
+    # own append, exactly once.
+    new_stop_events = [
+        e.payload
+        for e in campaign.ledger.entries[entries_before:]
+        if e.payload.get("kind") == "stop_event"
+    ]
+    assert len(new_stop_events) == 1
+    stop_event = new_stop_events[0]
+    assert stop_event["reason"] == "STALE_MEASUREMENT_STATE"
+    assert stop_event["row_id"] == row_id
+    assert stop_event["probe_index"] == probe_index
+    assert stop_event["candidate_id"] == formant_candidate.candidate_id
+
+
+def test_c4_holdout_family_precheck_duplicate_key_emits_stale_stop_event_before_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C4 analogue of the C3b precheck test above: a duplicate `meter_call`
+    repeat key for FORMANT_GT's sole holdout instance makes `holdout_stage.
+    render_and_measure_holdout()`'s `family_has_pending_work()` precheck
+    itself raise `StaleMeasurementError(kind="duplicate")` -- the round 10
+    fix must append exactly one `STALE_MEASUREMENT_STATE` stop_event before
+    it propagates."""
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+
+    subset = small_matrix_subset(2, family="FORMANT_GT")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    # pre-unseal leakage guard hard-requires the full canonical matrix row-id
+    # set (orthogonal to what this test isolates -- see the round 9 C4
+    # sibling test's identical stub above).
+    monkeypatch.setattr(render_stage, "_refuse_if_pre_unseal_holdout", lambda *a, **kw: None)
+    render_stage.run_render_stage(campaign, subset, stage="c4")
+
+    formant_candidate = candidate_by_id("M3-B0-CURRENT-CENTROID")
+    assert formant_candidate.algorithm_family not in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+
+    assignment = campaign.realized_split.assignment
+    formant_instances = workunits.c4_holdout_instances(
+        subset, assignment, family=_FixtureFamily.FORMANT_GT.value
+    )
+    assert formant_instances
+    row_id, probe_index = sorted(formant_instances)[0]
+
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(
+            _fake_meter_call(formant_candidate.candidate_id, row_id, probe_index, "within", i, 100.0 + i)
+        )
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(
+            _fake_meter_call(formant_candidate.candidate_id, row_id, probe_index, "fresh", i, 200.0 + i)
+        )
+    # duplicate write to the same (repeat_kind, repeat_index) key.
+    campaign.ledger.append(
+        _fake_meter_call(formant_candidate.candidate_id, row_id, probe_index, "within", 0, 999.0)
+    )
+
+    entries_before = len(campaign.ledger.entries)
+    time_budget = TimeBudget.start_now(60.0)
+
+    with pytest.raises(measure_stage.StaleMeasurementError) as excinfo:
+        holdout_stage.render_and_measure_holdout(
+            campaign,
+            subset,
+            candidates_by_family={"FORMANT_GT": (formant_candidate,)},
+            max_workers=1,
+            f0_by_instance={},
+            f0_unusable_instances=frozenset(),
+            f0_missing_reason="F0_SELECTION_FAILED",
+            time_budget=time_budget,
+            invocation_id="resume",
+        )
+    assert excinfo.value.kind == "duplicate"
+
+    new_stop_events = [
+        e.payload
+        for e in campaign.ledger.entries[entries_before:]
+        if e.payload.get("kind") == "stop_event"
+    ]
+    assert len(new_stop_events) == 1
+    stop_event = new_stop_events[0]
+    assert stop_event["reason"] == "STALE_MEASUREMENT_STATE"
+    assert stop_event["row_id"] == row_id
+    assert stop_event["probe_index"] == probe_index
+    assert stop_event["candidate_id"] == formant_candidate.candidate_id
+
+
+# ---------------------------------------------------------------------------
 # rehearsal 5 finding ② (adopted, `[UNDERSPEC-CAL-D79]`): memo §6.5.5 requires
 # every event a process appends to carry `invocation_id` (the one `cli.py`
 # `main()` generates once per OS process and threads through every stage

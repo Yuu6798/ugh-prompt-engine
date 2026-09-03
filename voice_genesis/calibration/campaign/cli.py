@@ -1328,16 +1328,30 @@ def _run_c3b(
         # the completing pass below, reached only once every family has no
         # pending work left.
         precheck_index = measure_stage.MeterCallIndex.build(campaign.ledger.entries)
-        pending_families = [
-            family
-            for family in family_order
-            if measure_stage.family_has_pending_work(
-                instances_by_family[family.value],
-                _candidates_for_family(family),
-                precheck_index,
-                f0_unusable_instances,
-            )
-        ]
+        # Codex PR #345 round 10 finding ② (adopted, category ②,
+        # `[UNDERSPEC-CAL-D79]`): a duplicate-key cell makes this precheck
+        # itself raise `StaleMeasurementError` — before any of
+        # `run_measure_stage()`'s own logging wrappers ever run — so without
+        # this `try`/`except` the ledger would lack the `STALE_MEASUREMENT_
+        # STATE` stop_event explaining the failed invocation. Explicit loop
+        # (not a list/generator comprehension) so the raise is caught per
+        # family, same shared helper `run_measure_stage()` itself uses.
+        pending_families = []
+        for family in family_order:
+            try:
+                has_pending = measure_stage.family_has_pending_work(
+                    instances_by_family[family.value],
+                    _candidates_for_family(family),
+                    precheck_index,
+                    f0_unusable_instances,
+                )
+            except measure_stage.StaleMeasurementError as exc:
+                measure_stage._append_stale_measurement_stop_event(
+                    campaign, exc, invocation_id=invocation_id
+                )
+                raise
+            if has_pending:
+                pending_families.append(family)
         for family in pending_families:
             meter_candidates = _candidates_for_family(family)
             instances = instances_by_family[family.value]
