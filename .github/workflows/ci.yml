@@ -198,10 +198,11 @@ jobs:
 
   test-calibration:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
+        shard: [0, 1]
 
     steps:
       - uses: actions/checkout@v4
@@ -217,8 +218,28 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
-      - name: Test calibration
-        run: pytest -q --tb=short voice_genesis/calibration/tests
+      - name: Test calibration (shard ${{ matrix.shard }})
+        shell: bash
+        run: |
+          # PR #345 でスイートが増大し、単一 job・timeout 15 分では収まらなくなった。
+          # 2 shard に分割して並列化する。shard 0 = 重量級 4 ファイル固定、
+          # shard 1 = 残り全部（--ignore は file の start path を除外できるが、
+          # pyproject の testpaths エントリ自体は除外できない点に注意）。
+          shard0_files=(
+            voice_genesis/calibration/tests/test_campaign_cli.py
+            voice_genesis/calibration/tests/test_campaign_measure.py
+            voice_genesis/calibration/tests/test_campaign_render.py
+            voice_genesis/calibration/tests/test_c0_freeze.py
+          )
+          if [[ "${{ matrix.shard }}" == "0" ]]; then
+            pytest -q --tb=short -p no:cacheprovider "${shard0_files[@]}"
+          else
+            ignore_args=()
+            for f in "${shard0_files[@]}"; do
+              ignore_args+=(--ignore "$f")
+            done
+            pytest -q --tb=short -p no:cacheprovider "${ignore_args[@]}" voice_genesis/calibration/tests
+          fi
 
   test-rest:
     runs-on: ubuntu-latest
