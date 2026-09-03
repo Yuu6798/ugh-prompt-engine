@@ -2627,35 +2627,34 @@ def main(argv: Sequence[str] | None = None) -> int:
             residual_cpu_seconds = 0.0
         # R2 (design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`):
         # a `PARTIAL_SLICE` exit charges this dispatch's parent CPU to
-        # `cap_counters`/`counters.json` exactly like a normal transition
-        # (below, unconditionally) — caps stay honest across slices — but
-        # does NOT append the `stage_summary` ledger event, matching "NO
-        # phase transition, NO stage_summary event" (no phase transition
-        # happened, and the *next* invocation's own `stage_summary` will
-        # cover the CPU spent finishing the stage).
+        # `cap_counters` (in-memory; `counters.json` persisted below, AFTER
+        # the ledger append) exactly like a normal transition — caps stay
+        # honest across slices — but does NOT append the `stage_summary`
+        # ledger event, matching "NO phase transition, NO stage_summary
+        # event" (no phase transition happened, and the *next* invocation's
+        # own `stage_summary` will cover the CPU spent finishing the stage).
         out_is_partial_slice = isinstance(out, dict) and out.get("result") == "PARTIAL_SLICE"
         cap_counters.add(compute=residual_cpu_seconds)
-        save_cap_counters(campaign.campaign_dir, cap_counters)
         full_dispatch_parent_cpu_seconds = now_cpu - parent_cpu_t0
         if full_dispatch_parent_cpu_seconds < 0.0:  # pragma: no cover - defensive only
             full_dispatch_parent_cpu_seconds = 0.0
         if out_is_partial_slice:
             # Codex PR #345 finding #2 (adopted, category ③): a PARTIAL_SLICE
-            # exit already charges this dispatch's full parent CPU to
-            # `cap_counters`/`counters.json` unconditionally above, but
-            # previously appended NO ledger event for it at all — so
-            # `caps.cap_counters_from_ledger()`/`reconcile_cap_counters()`
-            # rebuilding counters purely from the (authoritative, append-
-            # only) ledger would silently omit every slice's parent CPU,
-            # permanently under-counting the compute cap relative to the
-            # persisted cache: a lost/deleted `counters.json` would
-            # reconstruct to *less* compute than was actually spent — a
-            # false-success path past the compute cap. Record a dedicated,
-            # non-transition `slice_summary` event carrying this dispatch's
-            # own parent CPU delta plus the same slice-progress fields the
-            # CLI report already carries (`out["slice"]`) — distinct from
-            # `stage_summary` precisely because no phase transition happened
-            # here (and none is appended for this dispatch).
+            # exit charges this dispatch's full parent CPU to `cap_counters`/
+            # `counters.json` unconditionally (above/below), but previously
+            # appended NO ledger event for it at all — so `caps.
+            # cap_counters_from_ledger()`/`reconcile_cap_counters()` rebuilding
+            # counters purely from the (authoritative, append-only) ledger
+            # would silently omit every slice's parent CPU, permanently
+            # under-counting the compute cap relative to the persisted cache:
+            # a lost/deleted `counters.json` would reconstruct to *less*
+            # compute than was actually spent — a false-success path past the
+            # compute cap. Record a dedicated, non-transition `slice_summary`
+            # event carrying this dispatch's own parent CPU delta plus the
+            # same slice-progress fields the CLI report already carries
+            # (`out["slice"]`) — distinct from `stage_summary` precisely
+            # because no phase transition happened here (and none is
+            # appended for this dispatch).
             #
             # No double counting: each CLI dispatch (one OS process) is
             # either a PARTIAL_SLICE (appends exactly one `slice_summary`,
@@ -2685,6 +2684,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "invocation_id": invocation_id,
                 }
             )
+        # Codex PR #345 finding ③ (adopted): persist the derived `counters.
+        # json` cache AFTER the authoritative `slice_summary`/`stage_summary`
+        # ledger append above, not before. `cap_counters` (in-memory) already
+        # carries this dispatch's residual CPU either way, so a hard kill
+        # between the ledger append and this save still leaves the ledger
+        # complete (a later `counters.json` reconciliation/rollback rebuilds
+        # from it correctly). Under the old before-the-ledger-append order, a
+        # hard kill in that window persisted the cache but left the ledger
+        # missing this dispatch's summary event entirely — a subsequent
+        # `reconcile_cap_counters()`/rollback that rebuilds from the ledger
+        # (or discards a corrupt cache) would then under-count the compute
+        # cap by exactly this dispatch's parent CPU, a false-success path
+        # past the frozen cap. This save is still idempotent w.r.t.
+        # reconstruction (`cap_counters_from_ledger()` takes the per-dimension
+        # max), so running it after the append changes nothing about its own
+        # correctness — only the crash-window safety improves.
+        save_cap_counters(campaign.campaign_dir, cap_counters)
         # round 16 finding #2 (`[UNDERSPEC-CAL-D34]`) — the base fix:
         # recheck the cap with this residual charge folded in, and refuse
         # to report success if it alone breaches. For `close` specifically,

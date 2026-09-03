@@ -3943,6 +3943,208 @@ def test_parent_cpu_charged_and_persisted_on_breach_exception_exit(
     assert stage_summaries[0]["parent_cpu_seconds"] > 0.0
 
 
+def test_stage_summary_ledger_append_precedes_counters_cache_save_on_completion(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex PR #345 finding ③ (adopted, category ③): on the completing
+    dispatch path, `main()`'s `finally` block must append the authoritative
+    `stage_summary` ledger event BEFORE persisting the derived `counters.
+    json` cache — not after, as before this fix — so a hard kill between the
+    two never leaves a summary recorded only in the (rebuildable) cache.
+    Records the actual call order (real `Ledger.append`/`save_cap_counters`
+    still run underneath, only the order is observed) and asserts the
+    finally-block's own `stage_summary` append is immediately followed by
+    its own `save_cap_counters` call, with nothing else in between."""
+    from voice_genesis.calibration.provenance import Ledger
+
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    def _fake_run_baseline_stage(*_args, **_kwargs):
+        return {"baseline_audit_sha": "0" * 64}
+
+    monkeypatch.setattr(cli.baseline_stage, "run_baseline_stage", _fake_run_baseline_stage)
+
+    call_order: list[str] = []
+    real_append = Ledger.append
+    real_save = cli.save_cap_counters
+
+    def _recording_append(self: Any, payload: Any) -> Any:
+        if isinstance(payload, dict) and payload.get("kind") in ("stage_summary", "slice_summary"):
+            call_order.append(f"ledger_append:{payload['kind']}")
+        return real_append(self, payload)
+
+    def _recording_save(campaign_dir_arg: Path, counters_arg: Any) -> None:
+        call_order.append("save_cap_counters")
+        return real_save(campaign_dir_arg, counters_arg)
+
+    monkeypatch.setattr(Ledger, "append", _recording_append)
+    monkeypatch.setattr(cli, "save_cap_counters", _recording_save)
+
+    exit_code = cli.main(_armed_c2_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+
+    # Two `save_cap_counters` calls happen for this dispatch: the round 15
+    # finding #3 pre-dispatch reconciliation save (before any stage runs,
+    # trivially before the stage_summary append) and the finally-block save
+    # this fix reorders. Only the LAST two recorded events matter here: the
+    # finally block's own `stage_summary` append must be immediately
+    # followed by its own `save_cap_counters` call.
+    assert call_order.count("save_cap_counters") == 2
+    assert call_order.count("ledger_append:stage_summary") == 1
+    assert call_order[-2:] == ["ledger_append:stage_summary", "save_cap_counters"]
+
+
+@pytest.mark.slow
+def test_slice_summary_ledger_append_precedes_counters_cache_save_on_partial_slice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex PR #345 finding ③ (adopted, category ③): same ordering
+    guarantee as the completion-path test above, but for the bounded-stage
+    (`PARTIAL_SLICE`) path — the `slice_summary` ledger append must precede
+    the `finally` block's `save_cap_counters` call."""
+    from voice_genesis.calibration.provenance import Ledger
+
+    subset = small_matrix_subset(2, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    call_order: list[str] = []
+    real_append = Ledger.append
+    real_save = cli.save_cap_counters
+
+    def _recording_append(self: Any, payload: Any) -> Any:
+        if isinstance(payload, dict) and payload.get("kind") in ("stage_summary", "slice_summary"):
+            call_order.append(f"ledger_append:{payload['kind']}")
+        return real_append(self, payload)
+
+    def _recording_save(campaign_dir_arg: Path, counters_arg: Any) -> None:
+        call_order.append("save_cap_counters")
+        return real_save(campaign_dir_arg, counters_arg)
+
+    monkeypatch.setattr(Ledger, "append", _recording_append)
+    monkeypatch.setattr(cli, "save_cap_counters", _recording_save)
+
+    exit_code = cli.main(
+        [
+            "c1-fixtures",
+            "--campaign-dir",
+            str(campaign_dir),
+            "--secret-dir",
+            str(secret_root),
+            "--approval-dir",
+            str(approval_dir),
+            "--armed",
+            "--time-budget-seconds",
+            "0.01",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert exit_code == 0, out
+    assert out["result"] == "PARTIAL_SLICE"
+
+    assert call_order.count("save_cap_counters") == 2
+    assert call_order.count("ledger_append:slice_summary") == 1
+    assert call_order[-2:] == ["ledger_append:slice_summary", "save_cap_counters"]
+
+
+def test_hard_kill_between_summary_ledger_append_and_counters_cache_save_reconstructs_from_ledger(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex PR #345 finding ③ (adopted, category ③): simulate a hard kill
+    exactly between the finally block's `stage_summary` ledger append and
+    its `save_cap_counters` call (the cache write raises, standing in for a
+    process kill before that write lands on disk) and confirm the ledger
+    alone — reloaded fresh, with `counters.json` left at its stale
+    pre-dispatch value — already carries this dispatch's parent CPU, so
+    `reconcile_cap_counters()` rebuilding from the ledger does not
+    under-count the compute cap. Before this fix (cache save ran BEFORE the
+    ledger append), the same simulated kill would have persisted the cache
+    write and then died before the ledger append ran at all, permanently
+    losing this dispatch's parent CPU from the append-only ledger."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    def _fake_run_baseline_stage(*_args, **_kwargs):
+        _burn_cpu()
+        return {"baseline_audit_sha": "0" * 64}
+
+    monkeypatch.setattr(cli.baseline_stage, "run_baseline_stage", _fake_run_baseline_stage)
+
+    class _SimulatedHardKill(RuntimeError):
+        pass
+
+    real_save = cli.save_cap_counters
+    call_count = {"n": 0}
+
+    def _kill_on_finally_block_save(campaign_dir_arg: Path, counters_arg: Any) -> None:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # round 15 finding #3 pre-dispatch reconciliation save — let it
+            # through untouched; it precedes any stage dispatch entirely.
+            real_save(campaign_dir_arg, counters_arg)
+            return
+        # The finally-block save (this fix's reordered call): the ledger
+        # append this fix moved earlier has already run by this point —
+        # simulate the process dying right here, before the cache write
+        # lands.
+        raise _SimulatedHardKill("simulated kill before counters cache save")
+
+    monkeypatch.setattr(cli, "save_cap_counters", _kill_on_finally_block_save)
+
+    with pytest.raises(_SimulatedHardKill):
+        cli.main(_armed_c2_args(campaign_dir, secret_root, approval_dir))
+    capsys.readouterr()  # drain stdout; no JSON report was printed
+
+    # The ledger already carries the completing dispatch's stage_summary —
+    # the append happened BEFORE the (killed) cache save.
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    stage_summaries = [
+        e.payload
+        for e in reloaded.ledger.entries
+        if isinstance(e.payload, dict) and e.payload.get("kind") == "stage_summary"
+    ]
+    assert len(stage_summaries) == 1
+    charged_cpu = stage_summaries[0]["parent_cpu_seconds"]
+    assert charged_cpu > 0.0
+
+    # counters.json was never touched by the killed second save, so it still
+    # holds only the pre-dispatch reconciled value — strictly less than the
+    # completing dispatch's own parent CPU, since that CPU was never
+    # persisted to the cache. `reconcile_cap_counters()` against the
+    # still-present (stale) cache already takes the per-dimension max, so it
+    # recovers the ledger value even without deleting the cache first...
+    stale_cache = load_cap_counters(campaign_dir)
+    assert stale_cache.compute_used < charged_cpu
+    reconciled_against_stale_cache, _ = reconcile_cap_counters(
+        campaign_dir, reloaded.ledger.entries, None
+    )
+    assert reconciled_against_stale_cache.compute_used == pytest.approx(charged_cpu)
+
+    # ...and the same holds — this time via the `(ledger-derived, True)`
+    # branch — for the harsher case of a full rollback that discards
+    # `counters.json` outright (e.g. a rollback to the last known-good
+    # cache snapshot, per the Codex finding): the ledger alone, with no
+    # cache at all, still reconstructs the full parent CPU.
+    counters_path(campaign_dir).unlink()
+    derived, reconstructed = reconcile_cap_counters(campaign_dir, reloaded.ledger.entries, None)
+    assert derived.compute_used == pytest.approx(charged_cpu)
+    assert reconstructed is True
+
+
 def test_counters_corrupt_error_is_subclass_of_cap_state_error() -> None:
     from voice_genesis.calibration.campaign.caps import CapStateError
 
