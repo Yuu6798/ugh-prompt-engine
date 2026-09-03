@@ -656,6 +656,19 @@ def cap_counters_from_ledger(
             meter_units += 1
         elif kind == "stage_summary":
             compute += _finite_nonneg_float(payload.get("parent_cpu_seconds"))
+        elif kind == "slice_summary":
+            # Codex PR #345 finding #2 (adopted, category ③,
+            # `[UNDERSPEC-CAL-D79]`): a `PARTIAL_SLICE` dispatch (`cli.py`
+            # `main()`'s `finally` block) charges its own parent CPU to
+            # `cap_counters`/`counters.json` exactly like a completing
+            # dispatch's `stage_summary`, but appends this distinct kind
+            # instead (no phase transition happened, so it is not a
+            # `stage_summary`). Summed 1:1 per event, same as
+            # `stage_summary` above — a `PARTIAL_SLICE` dispatch never also
+            # appends `stage_summary`, so summing both kinds across every
+            # dispatch of a stage reconstructs the same total the persisted
+            # cache accumulated, with no overlap between them.
+            compute += _finite_nonneg_float(payload.get("parent_cpu_seconds"))
         elif kind == "worker_failed":
             # round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): compute — no dedup,
             # every event is its own charged attempt.

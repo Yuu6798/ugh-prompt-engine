@@ -1065,6 +1065,15 @@ def _run_c3b(
     f0_unusable_instances: frozenset[tuple[str, int]] = frozenset()
     f0_missing_reason = "F0_UNUSABLE"
     if f0_selected_id is not None:
+        # Codex PR #345 finding #1 (adopted, category ③): this F0-reuse path
+        # (`_build_f0_by_instance` -> `_reusable_f0_values_by_process`) is
+        # called once per instance in `all_instances` below — without an
+        # index built here, each of those calls fell through to
+        # `measure_stage._completed_meter_call_records()`, rescanning the
+        # whole ledger from scratch per instance. Build a single
+        # `MeterCallIndex` on entry (same contract as `run_measure_stage()`'s
+        # own R3 index) and reuse it through the loop.
+        meter_call_index = measure_stage.MeterCallIndex.build(campaign.ledger.entries)
         if time_budget is not None:
             f0_by_instance, f0_unusable_instances, f0_slice_status = _build_f0_by_instance(
                 campaign,
@@ -1077,6 +1086,7 @@ def _run_c3b(
                 stage="c3b",
                 discard_partial_groups=discard_partial_groups,
                 time_budget=time_budget,
+                meter_call_index=meter_call_index,
             )
             slice_statuses.append(f0_slice_status)
         else:
@@ -1090,6 +1100,7 @@ def _run_c3b(
                 cost_caps=cost_caps,
                 stage="c3b",
                 discard_partial_groups=discard_partial_groups,
+                meter_call_index=meter_call_index,
             )
     else:
         # round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): C3a itself recorded
@@ -1326,6 +1337,12 @@ def _run_c4(
     f0_unusable_instances: frozenset[tuple[str, int]] = frozenset()
     f0_missing_reason = "F0_UNUSABLE"
     if f0_selected_id is not None:
+        # Codex PR #345 finding #1 (adopted, category ③): same fix as
+        # `_run_c3b` above — build the `MeterCallIndex` once on entry and
+        # reuse it across the `all_instances` loop instead of letting
+        # `_reusable_f0_values_by_process()` fall back to a full ledger
+        # rescan per instance.
+        meter_call_index = measure_stage.MeterCallIndex.build(campaign.ledger.entries)
         if time_budget is not None:
             f0_by_instance, f0_unusable_instances, f0_slice_status = _build_f0_by_instance(
                 campaign,
@@ -1338,6 +1355,7 @@ def _run_c4(
                 stage="c4",
                 discard_partial_groups=discard_partial_groups,
                 time_budget=time_budget,
+                meter_call_index=meter_call_index,
             )
             slice_statuses.append(f0_slice_status)
         else:
@@ -1351,6 +1369,7 @@ def _run_c4(
                 cost_caps=cost_caps,
                 stage="c4",
                 discard_partial_groups=discard_partial_groups,
+                meter_call_index=meter_call_index,
             )
     else:
         # round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): mirrors `_run_c3b`'s else
@@ -2373,7 +2392,43 @@ def main(argv: Sequence[str] | None = None) -> int:
         full_dispatch_parent_cpu_seconds = now_cpu - parent_cpu_t0
         if full_dispatch_parent_cpu_seconds < 0.0:  # pragma: no cover - defensive only
             full_dispatch_parent_cpu_seconds = 0.0
-        if not out_is_partial_slice:
+        if out_is_partial_slice:
+            # Codex PR #345 finding #2 (adopted, category ③): a PARTIAL_SLICE
+            # exit already charges this dispatch's full parent CPU to
+            # `cap_counters`/`counters.json` unconditionally above, but
+            # previously appended NO ledger event for it at all — so
+            # `caps.cap_counters_from_ledger()`/`reconcile_cap_counters()`
+            # rebuilding counters purely from the (authoritative, append-
+            # only) ledger would silently omit every slice's parent CPU,
+            # permanently under-counting the compute cap relative to the
+            # persisted cache: a lost/deleted `counters.json` would
+            # reconstruct to *less* compute than was actually spent — a
+            # false-success path past the compute cap. Record a dedicated,
+            # non-transition `slice_summary` event carrying this dispatch's
+            # own parent CPU delta plus the same slice-progress fields the
+            # CLI report already carries (`out["slice"]`) — distinct from
+            # `stage_summary` precisely because no phase transition happened
+            # here (and none is appended for this dispatch).
+            #
+            # No double counting: each CLI dispatch (one OS process) is
+            # either a PARTIAL_SLICE (appends exactly one `slice_summary`,
+            # never a `stage_summary`) or the eventual completing dispatch
+            # (appends exactly one `stage_summary`, covering only *that*
+            # process's own parent-CPU delta since its own start). Summing
+            # every `slice_summary.parent_cpu_seconds` plus the final
+            # `stage_summary.parent_cpu_seconds` therefore reconstructs the
+            # full stage total exactly once per dispatch, with no overlap.
+            slice_report = out.get("slice") if isinstance(out, dict) else None
+            slice_fields = dict(slice_report) if isinstance(slice_report, Mapping) else {}
+            campaign.ledger.append(
+                {
+                    "kind": "slice_summary",
+                    "stage": args.subcommand,
+                    "parent_cpu_seconds": full_dispatch_parent_cpu_seconds,
+                    **slice_fields,
+                }
+            )
+        else:
             campaign.ledger.append(
                 {
                     "kind": "stage_summary",

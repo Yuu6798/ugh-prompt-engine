@@ -279,6 +279,46 @@ def test_cap_counters_from_ledger_includes_stage_summary_parent_cpu(tmp_path: Pa
     assert derived.compute_used == 1.0
 
 
+def test_cap_counters_from_ledger_includes_slice_summary_parent_cpu(tmp_path: Path) -> None:
+    """Codex PR #345 finding #2 (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
+    a `PARTIAL_SLICE` dispatch charges `cap_counters`/`counters.json`
+    unconditionally but previously appended no ledger event at all — so
+    reconstructing purely from the ledger silently dropped that CPU.
+    `slice_summary` (the new non-transition event `cli.main()` now appends
+    on every `PARTIAL_SLICE` exit) must be summed 1:1, exactly like
+    `stage_summary`, and the two kinds must combine additively (one
+    `PARTIAL_SLICE` dispatch + the eventual completing dispatch of the same
+    stage) with no double counting."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        {
+            "kind": "slice_summary",
+            "stage": "c1-fixtures",
+            "parent_cpu_seconds": 0.4,
+            "time_budget_seconds": 0.01,
+            "elapsed_seconds": 0.02,
+            "instances_completed_this_run": 1,
+            "instances_remaining": 3,
+        }
+    )
+    ledger.append(
+        {
+            "kind": "slice_summary",
+            "stage": "c1-fixtures",
+            "parent_cpu_seconds": 0.35,
+            "time_budget_seconds": 0.01,
+            "elapsed_seconds": 0.02,
+            "instances_completed_this_run": 2,
+            "instances_remaining": 1,
+        }
+    )
+    # the eventual completing dispatch of the same stage: its own
+    # `stage_summary` covers only *its own* process's parent CPU.
+    ledger.append({"kind": "stage_summary", "stage": "c1-fixtures", "parent_cpu_seconds": 0.25})
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    assert derived.compute_used == pytest.approx(0.4 + 0.35 + 0.25)
+
+
 def test_cap_counters_from_ledger_budget_uses_frozen_accounting_mode(tmp_path: Path) -> None:
     ledger = Ledger(tmp_path / "ledger.jsonl")
     ledger.append(_fake_render_event("r1", 0, cpu_seconds=1.0, pcm_bytes=10))

@@ -265,7 +265,7 @@ python -m voice_genesis.calibration.approvals refresh --gate gate1 \
 はいずれも無変更）。機械的な再スタンプであり、委任元（User）本人による
 変更内容の再確認は代替しない（本ファイル §9 冒頭の注記どおり）。
 
-## 7. 再承認（2026-09-02 第 2 回）
+## 10. 再承認（2026-09-03 第 2 回）
 
 1. 契機: #344 第 9 巡（memo hash のみの restamp は再承認ではない）。分類②で採用。
 2. 01:46Z 承認以降の memo 変更: D75 撤回（matrix 456 セル復元）、D76（declared
@@ -287,3 +287,17 @@ python -m voice_genesis.calibration.approvals refresh --gate gate1 \
    発行する nonce へ live/record の両方を更新する（§6.2 の手順）。本ファイルは
    E_use table により digest 固定されるため、freeze 後には編集しない。最終 nonce は
    record copy JSON と `c0_manifest.json` が正。
+6. ファイル名日付と承認日時の関係（2026-09-03 追記）: 記録コピーのファイル名が
+   持つ日付（`gate1_campaign_execution.2026-09-02.json`、
+   `gate3_seal_acceptance.2026-09-03.json`）はそれぞれの承認記録の日付であり、
+   gate1 側は 01:46Z の元の委任、gate3 側は本節（第 2 回）の再承認を指す——
+   実際の承認日時は各 JSON の `approved_at_utc` が正。
+
+### 10.1 D79 追補（2026-09-03）
+
+Codex #345 第 1 巡の ③ 2 件（F0 再開 index 未使用 / PARTIAL_SLICE の parent CPU
+が ledger 非記録）を採用し memo §6.5 を追補、続けて第 2 巡の ③ 1 件（c1/c4 再開時に
+完了済み render を index で skip）も同じ memo 追補（§6.5.1）へ折り込んだ上で
+memo_sha256 を `2c805ae839d624a640ac8ea0d0d372d95d17d99a996fdcf219e50115108115e0` へ
+更新した。承認内容（cost caps /
+claim scope / E_use 境界）は §10 と同一。

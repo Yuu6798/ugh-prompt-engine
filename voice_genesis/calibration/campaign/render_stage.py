@@ -191,6 +191,38 @@ def _recorded_render_sha(
     return None
 
 
+def _render_index_from_ledger(
+    ledger_entries: Sequence[LedgerEntry],
+) -> dict[tuple[str, int], str]:
+    """Codex PR #345 finding #3 (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
+    one full ledger scan, building `{(row_id, probe_index): sha256}` for
+    every completed `render` event. `run_render_stage()` builds this once
+    per invocation and uses it to skip already-completed units before
+    dispatching them to `render_instance()` at all — mirroring
+    `measure_stage.MeterCallIndex`'s R3 fix for the measure loop. Without
+    this, a resumed slice re-entered `render_instance()` for every already-
+    completed unit (not just the unfinished ones), and each such call did
+    its own full-ledger `_recorded_render_sha()` rescan plus a PCM
+    read+sha256 — so a growing completed prefix made a fixed `--time-budget-
+    seconds` slice do less and less new work, in the worst case expiring
+    before any unfinished unit was even reached (no progress across
+    repeated PARTIAL_SLICE exits). First `render` event per key wins (a
+    completed unit's resume path never re-appends `render` for the same
+    key, so duplicates are not expected in practice)."""
+    index: dict[tuple[str, int], str] = {}
+    for entry in ledger_entries:
+        payload = entry.payload
+        if not isinstance(payload, Mapping) or payload.get("kind") != "render":
+            continue
+        row_id = payload.get("row_id")
+        probe_index = payload.get("probe_index")
+        sha = payload.get("sha256")
+        if not isinstance(row_id, str) or not isinstance(probe_index, int) or not isinstance(sha, str):
+            continue
+        index.setdefault((row_id, probe_index), sha)
+    return index
+
+
 def _pcm_path(campaign: FrozenCampaign, row_id: str, probe_index: int) -> Path:
     return campaign.renders_dir / row_id / f"{probe_index}.pcm"
 
@@ -531,12 +563,38 @@ def run_render_stage(
     rows_by_id = {mr.row_id: mr.row for mr in matrix_rows}
     outcomes: list[RenderOutcome] = []
     completed_all = True
+    # Codex PR #345 finding #3 (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
+    # one full ledger scan up front (`_render_index_from_ledger`) instead of
+    # letting every already-completed unit below re-enter `render_instance()`
+    # (its own full-ledger `_recorded_render_sha()` rescan + a PCM read+
+    # sha256) each time this stage resumes.
+    completed_units = _render_index_from_ledger(campaign.ledger.entries)
     for unit in units:
         # R2 instance boundary: checked before dispatching a NEW unit — a
         # unit already in flight always runs to completion.
         if time_budget is not None and time_budget.expired():
             completed_all = False
             break
+        recorded_sha = completed_units.get((unit.row_id, unit.probe_index))
+        if recorded_sha is not None:
+            # Already completed in a prior invocation — skip re-entering
+            # `render_instance()` entirely: no ledger rescan, no PCM
+            # read/hash. This is what makes a resumed slice's completed
+            # prefix cost O(1) per unit instead of O(ledger) per unit, so a
+            # small `--time-budget-seconds` slice reaches unfinished work
+            # instead of expiring on the completed prefix. PCM staleness is
+            # still fail-closed at measurement time
+            # (`measure_stage._verify_and_load_rendered_pcm`), which every
+            # rendered unit passes through before being measured.
+            outcomes.append(
+                RenderOutcome(
+                    row_id=unit.row_id,
+                    probe_index=unit.probe_index,
+                    status="skipped_resume",
+                    sha256=recorded_sha,
+                )
+            )
+            continue
         row = rows_by_id[unit.row_id]
         try:
             outcome = render_instance(

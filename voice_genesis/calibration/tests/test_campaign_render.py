@@ -130,7 +130,97 @@ def test_c1_render_time_budget_partial_slice_then_resume(tmp_path: Path) -> None
 
 
 @pytest.mark.slow
+def test_c1_render_resume_skips_completed_prefix_and_still_makes_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex PR #345 finding #3 (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
+    a resumed slice's already-completed units must never re-enter
+    `render_instance()` — pre-fix, `run_render_stage()`'s loop called
+    `render_instance()` for every unit including already-completed ones,
+    and each such call did its own full-ledger `_recorded_render_sha()`
+    rescan plus a PCM read+sha256, so a growing completed prefix made a
+    fixed `--time-budget-seconds` slice do less and less new work (in the
+    worst case, expiring before any unfinished unit was even reached).
+
+    This test renders a smaller row subset first (the "already completed"
+    prefix from a prior invocation), then resumes with a wider subset — the
+    extra rows are genuinely new work the same campaign has not touched
+    yet — under a modest time budget, and asserts: (1) `render_instance()`
+    is called exactly once per newly-rendered unit, never once for any of
+    the already-completed prefix units (proving the fast index-based skip,
+    not `render_instance()`'s own resume check, is what handles them), and
+    (2) real progress happens (at least 1 new unit actually renders) within
+    the budget despite the completed prefix."""
+    resumed_subset = small_matrix_subset(4, family="F0_CONTROL")
+    completed_subset = resumed_subset[:2]
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=resumed_subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    completed_outcomes = render_stage.run_render_stage(campaign, completed_subset, stage="c1")
+    assert completed_outcomes
+    assert all(o.status == "rendered" for o in completed_outcomes)
+
+    render_call_count = 0
+    orig_render_instance = render_stage.render_instance
+
+    def _counting_render_instance(*args, **kwargs):
+        nonlocal render_call_count
+        render_call_count += 1
+        return orig_render_instance(*args, **kwargs)
+
+    monkeypatch.setattr(render_stage, "render_instance", _counting_render_instance)
+
+    outcomes, slice_status = render_stage.run_render_stage(
+        campaign, resumed_subset, stage="c1", time_budget=TimeBudget.start_now(15.0)
+    )
+
+    already_completed_keys = {(o.row_id, o.probe_index) for o in completed_outcomes}
+    newly_rendered = [
+        o
+        for o in outcomes
+        if o.status == "rendered" and (o.row_id, o.probe_index) not in already_completed_keys
+    ]
+    # progress: new work was actually reached and rendered within budget,
+    # despite the completed prefix ahead of it in `resumed_subset`.
+    assert newly_rendered
+
+    # every unit belonging to the completed prefix comes back
+    # `skipped_resume` (the fast index-based path), never re-rendered.
+    for o in outcomes:
+        if (o.row_id, o.probe_index) in already_completed_keys:
+            assert o.status == "skipped_resume"
+
+    # `render_instance()` was called exactly once per newly-rendered unit —
+    # zero times for any of the (many more) already-completed prefix units.
+    assert render_call_count == len(newly_rendered)
+
+
+def _render_instance_directly(campaign, subset, outcome):
+    mr = next(mr for mr in subset if mr.row_id == outcome.row_id)
+    split = campaign.realized_split.assignment[outcome.row_id]
+    return render_stage.render_instance(
+        campaign,
+        mr.row,
+        family=mr.row.family,
+        split=split,
+        row_id=outcome.row_id,
+        probe_index=outcome.probe_index,
+    )
+
+
+@pytest.mark.slow
 def test_c1_render_resume_stale_fails_closed_on_corrupted_file(tmp_path: Path) -> None:
+    """Codex PR #345 finding #3 (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
+    `run_render_stage()`'s own resume loop now skips an already-completed
+    unit without touching its PCM at all (see `_render_index_from_ledger`) —
+    it no longer detects this file being corrupted underneath it, by
+    design (that per-unit read+hash on every resumed slice is exactly what
+    made a growing completed prefix starve a small `--time-budget-seconds`
+    slice of progress). `render_instance()` itself is unchanged: its own
+    resume/stale check still fails closed when called directly (matching
+    the module docstring's resume contract), and measurement-time integrity
+    (`measure_stage._verify_and_load_rendered_pcm`) remains the fail-closed
+    net every rendered unit passes through before being measured."""
     subset = small_matrix_subset(1, family="F0_CONTROL")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
@@ -140,12 +230,19 @@ def test_c1_render_resume_stale_fails_closed_on_corrupted_file(tmp_path: Path) -
     pcm_path = campaign.renders_dir / target.row_id / f"{target.probe_index}.pcm"
     pcm_path.write_bytes(b"\x00\x01corrupted-bytes")
 
+    resumed = render_stage.run_render_stage(campaign, subset, stage="c1")
+    assert all(o.status == "skipped_resume" for o in resumed)
+
     with pytest.raises(render_stage.RenderStaleError):
-        render_stage.run_render_stage(campaign, subset, stage="c1")
+        _render_instance_directly(campaign, subset, target)
 
 
 @pytest.mark.slow
 def test_c1_render_resume_stale_fails_closed_on_missing_file(tmp_path: Path) -> None:
+    """Same finding #3 distinction as the corrupted-file test above: the
+    fast resume path in `run_render_stage()` no longer notices a missing
+    PCM file for an already-completed unit, but `render_instance()` called
+    directly still fails closed."""
     subset = small_matrix_subset(1, family="F0_CONTROL")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
@@ -155,8 +252,11 @@ def test_c1_render_resume_stale_fails_closed_on_missing_file(tmp_path: Path) -> 
     pcm_path = campaign.renders_dir / target.row_id / f"{target.probe_index}.pcm"
     pcm_path.unlink()
 
+    resumed = render_stage.run_render_stage(campaign, subset, stage="c1")
+    assert all(o.status == "skipped_resume" for o in resumed)
+
     with pytest.raises(render_stage.RenderStaleError):
-        render_stage.run_render_stage(campaign, subset, stage="c1")
+        _render_instance_directly(campaign, subset, target)
 
 
 # ---------------------------------------------------------------------------

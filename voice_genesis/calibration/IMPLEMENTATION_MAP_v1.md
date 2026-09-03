@@ -560,3 +560,71 @@ stage を安全に止める手段が無い。(3) resume するたびに ledger �
   （`_resolve_meter_group`）を共有するため構造的に等価——`test_campaign_measure.py`
   の equivalence test が増分更新と 1 回スキャンの結果一致を complete/partial/
   duplicate/discarded の全パターンで検証する。
+
+#### 6.5.1 追補（Codex PR #345 レビュー採用、2026-09-03）
+
+- **第 1 巡 finding #1（③、`cli.py` ~627）— R3 が実際には C3b/C4 の F0 再開 path
+  に効いていなかった**: R3 の docstring は「`_build_f0_by_instance` の呼び出し
+  ごとに `MeterCallIndex` を 1 回だけ構築する」と書いていたが、実装は index の
+  **構築**をこの関数の責務にしておらず、`meter_call_index` 引数を素通しする
+  だけだった。`_run_c3b`/`_run_c4`（`c3b-selection`/`c4-holdout` の CLI
+  dispatch）はこの引数を渡さないまま `_build_f0_by_instance` を呼んでいたため
+  既定 `None` のままとなり、`_reusable_f0_values_by_process` は instance ごとに
+  `measure_stage._completed_meter_call_records`（素朴な 1 回スキャン版）へ
+  フォールバックしていた——R3 が解消したはずの superlinear rescan が、resume の
+  主経路である C3b/C4 の F0 再利用 path でだけ温存されていたことになる。
+  修正: `_run_c3b`/`_run_c4` が F0 再利用ループへ入る直前に
+  `measure_stage.MeterCallIndex.build(campaign.ledger.entries)` を 1 回だけ構築し、
+  以降の `_build_f0_by_instance` 呼び出し（time-budget あり/なし双方の分岐）へ
+  素通しする。`c1-fixtures`/`c2-baseline`/`c3a-f0-selection` はこの F0 再利用
+  path を経由しない（c3a はまだ F0 選出前、c2 は `run_measure_stage` を直接
+  呼ぶ——`run_measure_stage` 自身は既に呼び出しごとに 1 回だけ index を構築
+  しており対象外）ため、監査の結果このパターンは c3b/c4 の 4 箇所（time-budget
+  あり/なしの各 2 呼び出し）のみだった。
+- **第 1 巡 finding #2（③、`cli.py` ~2376）— `PARTIAL_SLICE` の parent CPU が
+  ledger に記帳されず `cap_counters_from_ledger()` が undercount する**:
+  `PARTIAL_SLICE` exit は R2 の設計どおり `cap_counters`/`counters.json` へ
+  この dispatch の parent CPU を無条件で課金する一方、`stage_summary` ledger
+  event は（意図どおり）記帳しない——ゆえに、この CPU 分は ledger のどこにも
+  現れなかった。`caps.cap_counters_from_ledger()`/`reconcile_cap_counters()`
+  は ledger のみを正本として compute を再構成するため、`counters.json` が
+  失われた（あるいは意図的に削除された）状態でのreconciliationは、スライスで
+  課金済みだった compute を一切拾えず永続的に undercount する——compute cap を
+  実際より低く見せる false-success 経路になり得る。修正: 新規の
+  **non-transition** ledger event kind **`slice_summary`**
+  （`{"kind": "slice_summary", "stage": <subcommand>, "parent_cpu_seconds":
+  <このdispatchのparent CPU全量>, "time_budget_seconds", "elapsed_seconds",
+  "instances_completed_this_run", "instances_remaining"}`——後者 4 フィールドは
+  CLI report の `slice` dict とフィールド名が一致する）を `PARTIAL_SLICE` exit
+  ごとに 1 件記帳する（`stage_summary` とは意図的に別 kind——phase transition が
+  一切起きていないことを ledger 自身が表明する）。`caps.
+  cap_counters_from_ledger()`/`reconcile_cap_counters()` は `slice_summary.
+  parent_cpu_seconds` を `stage_summary.parent_cpu_seconds` と全く同じ規則
+  （1 event = 1 dispatch = 1:1 で加算、dedup なし）で合算する。**二重計上なし**の
+  根拠: 1 回の CLI dispatch（1 OS process）は必ずどちらか一方のみを記帳する——
+  `PARTIAL_SLICE` で終わる dispatch は `slice_summary` を 1 件だけ記帳し
+  `stage_summary` は記帳しない、stage を完走させる dispatch は
+  `stage_summary` を 1 件だけ記帳し（自分自身の parent CPU 全量のみ——他の
+  dispatch の分は含まない）`slice_summary` は記帳しない。ゆえに同一 stage の
+  全 dispatch にわたる `slice_summary` の総和 + 最終 `stage_summary` の値は、
+  互いに重複なく合算されて `counters.json` が累積してきた総量と一致する。
+- **第 2 巡 finding #3（③、`render_stage.py` ~542）— 再開 slice で完了済み
+  render unit が毎回フル ledger 再走査 + PCM 再ハッシュされる**: `c1-fixtures`/
+  `c4-holdout` の再開 slice では `run_render_stage()` のループが常に先頭の
+  unit から再開し、既に完了した unit も 1 件ずつ `render_instance()` へ入る——
+  そこで `_recorded_render_sha()` が ledger 全体を再走査し、さらに resume 判定の
+  ために PCM ファイルを読んで sha256 を再計算する。完了済み prefix が育つほど、
+  固定長の `--time-budget-seconds` slice はその再走査・再ハッシュだけで budget を
+  使い果たし、未完了の unit に到達する前に `PARTIAL_SLICE` で終わってしまう
+  （繰り返し再開しても実質的な進捗がない）。修正: `run_render_stage()` の
+  呼び出しの先頭で ledger を 1 回だけ走査し `{(row_id, probe_index): sha256}`
+  の render index（`_render_index_from_ledger`——`MeterCallIndex` と同じ「stage
+  呼び出しあたり ledger 走査 1 回」の考え方を render loop 側にも適用したもの）を
+  構築する。ループはこの index に載っている unit を `render_instance()` に一切
+  渡さず（ledger 再走査も PCM 読み込み/再ハッシュも発生しない）
+  `status="skipped_resume"` の `RenderOutcome` を直接組み立てて進む——測定時の
+  PCM 整合性検査（`measure_stage._verify_and_load_rendered_pcm`、render された
+  unit は必ずこの後段の検査を通る）はそのまま残るため、stale な PCM を fail-open
+  で見逃す経路は増えない。`render_instance()` 自身の resume 判定
+  （`_recorded_render_sha` + PCM sha 照合）は変更していない——直接呼ぶ他の呼び
+  出し元・既存テストの契約は不変。

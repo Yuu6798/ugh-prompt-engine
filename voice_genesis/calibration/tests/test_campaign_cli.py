@@ -22,6 +22,7 @@ from voice_genesis.calibration.campaign.caps import (
     cost_caps_from_manifest,
     counters_path,
     load_cap_counters,
+    reconcile_cap_counters,
     save_cap_counters,
 )
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
@@ -2266,6 +2267,176 @@ def test_f0_reuse_accepts_exactly_complete_non_duplicated_coverage(tmp_path: Pat
 
 
 # ---------------------------------------------------------------------------
+# Codex PR #345 finding #1 (adopted, category ③, `[UNDERSPEC-CAL-D79]`): R3's
+# `MeterCallIndex` docstring claims "1 ledger scan per stage-call", but
+# `_run_c3b`/`_run_c4` never actually built one before calling
+# `_build_f0_by_instance` — the F0-reuse path
+# (`_reusable_f0_values_by_process`) fell back to
+# `measure_stage._completed_meter_call_records()` (a full ledger rescan) once
+# per instance instead, exactly on the production resume paths R3 was meant
+# to fix. The fix builds a single `MeterCallIndex` on `_run_c3b`/`_run_c4`
+# entry and passes it through every `_build_f0_by_instance` call.
+# ---------------------------------------------------------------------------
+
+
+def test_c3b_f0_reuse_builds_and_reuses_single_meter_call_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_run_c3b`'s F0-reuse path must never fall back to
+    `measure_stage._completed_meter_call_records()`'s full-ledger rescan —
+    every `_reusable_f0_values_by_process()` call it makes must receive the
+    *same* non-`None` `MeterCallIndex` object (built once on entry, not
+    rebuilt per instance)."""
+    subset = small_matrix_subset(2, family="APERIODICITY_GT")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    baseline_entry = campaign.ledger.append(
+        {"kind": "baseline_audit", "artifact_sha": "3" * 64, "payload": {}}
+    )
+    campaign.ledger.append(
+        {"kind": "baseline_audited", "baseline_audit_sha": baseline_entry.entry_sha}
+    )
+    candidate_id = "F0-B0-CURRENT"
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": candidate_id,
+            "outcome": "SELECTED",
+        }
+    )
+
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+
+    harmonic_residual_ids = {
+        c.candidate_id
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    }
+    assert harmonic_residual_ids
+    trimmed_pool = tuple(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if c.candidate_id in harmonic_residual_ids
+    )[:1]
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.APERIODICITY_GT:
+            return trimmed_pool
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+
+    naive_rescan_calls = 0
+    orig_naive_rescan = measure_stage._completed_meter_call_records
+
+    def _counting_naive_rescan(*args, **kwargs):
+        nonlocal naive_rescan_calls
+        naive_rescan_calls += 1
+        return orig_naive_rescan(*args, **kwargs)
+
+    monkeypatch.setattr(measure_stage, "_completed_meter_call_records", _counting_naive_rescan)
+
+    seen_indexes: list[object] = []
+    orig_reusable = cli._reusable_f0_values_by_process
+
+    def _capturing_reusable(*args, **kwargs):
+        seen_indexes.append(kwargs.get("meter_call_index"))
+        return orig_reusable(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "_reusable_f0_values_by_process", _capturing_reusable)
+
+    result = cli._run_c3b(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    # >=1 instance actually went through the F0-reuse lookup, and every one
+    # of them received the *same* non-`None` index object — built once,
+    # reused, not rebuilt per instance.
+    assert seen_indexes
+    assert all(idx is not None for idx in seen_indexes)
+    assert len({id(idx) for idx in seen_indexes}) == 1
+
+    # The naive per-instance full-ledger-rescan fallback (the
+    # `meter_call_index is None` branch) must never fire.
+    assert naive_rescan_calls == 0
+
+
+def test_c4_f0_reuse_builds_and_reuses_single_meter_call_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same regression as above, for `_run_c4`'s F0-reuse path. The downstream
+    `holdout_stage.render_and_measure_holdout()` call is stubbed out (its own
+    real render/measure path needs the campaign through unseal — orthogonal
+    to this test, which isolates C4's F0-by-instance construction, mirroring
+    how `test_c4_never_calls_f0_dependent_candidate_when_selection_failed_
+    closed` above isolates C4's other F0 guard)."""
+    subset = small_matrix_subset(4, family="APERIODICITY_GT")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    candidate_id = "F0-B0-CURRENT"
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": candidate_id,
+            "outcome": "SELECTED",
+        }
+    )
+
+    from voice_genesis.calibration.campaign import workunits
+
+    expected_instances = frozenset(
+        workunits.c4_holdout_instances(
+            subset, campaign.realized_split.assignment, family="APERIODICITY_GT"
+        )
+    )
+    assert expected_instances, "test setup must realize a HOLDOUT-split APERIODICITY_GT instance"
+
+    # C4's F0-by-instance construction (`_run_c4` -> `_build_f0_by_instance`)
+    # measures the selected F0 candidate on the HOLDOUT-split instances
+    # themselves — render those (not C1's CAL/SEL-only render) before
+    # `_run_c4` reaches it. The pre-unseal leakage guard is stubbed (same
+    # justification as `test_c4_f0_unusable_selected_candidate_through_real_
+    # holdout_path_closes_not_evaluable` above: it hard-requires the full
+    # canonical matrix row-id set, orthogonal to what this test isolates).
+    monkeypatch.setattr(render_stage, "_refuse_if_pre_unseal_holdout", lambda *a, **kw: None)
+    render_stage.run_render_stage(campaign, subset, stage="c4")
+
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda campaign_arg, matrix_rows_arg, **kwargs: {},
+    )
+
+    naive_rescan_calls = 0
+    orig_naive_rescan = measure_stage._completed_meter_call_records
+
+    def _counting_naive_rescan(*args, **kwargs):
+        nonlocal naive_rescan_calls
+        naive_rescan_calls += 1
+        return orig_naive_rescan(*args, **kwargs)
+
+    monkeypatch.setattr(measure_stage, "_completed_meter_call_records", _counting_naive_rescan)
+
+    seen_indexes: list[object] = []
+    orig_reusable = cli._reusable_f0_values_by_process
+
+    def _capturing_reusable(*args, **kwargs):
+        seen_indexes.append(kwargs.get("meter_call_index"))
+        return orig_reusable(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "_reusable_f0_values_by_process", _capturing_reusable)
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    assert seen_indexes
+    assert all(idx is not None for idx in seen_indexes)
+    assert len({id(idx) for idx in seen_indexes}) == 1
+    assert naive_rescan_calls == 0
+
+
+# ---------------------------------------------------------------------------
 # round 27 ADOPT (1) (`[UNDERSPEC-CAL-D61]`) "Reject unusable F0 values
 # before downstream injection": a non-finite/non-positive f0_hz repeat
 # (durably round-tripped through the ledger since round 26,
@@ -2688,6 +2859,63 @@ def test_c1_fixtures_time_budget_partial_slice_then_resume_via_cli(
 
     counters_after_completion = load_cap_counters(campaign_dir)
     assert counters_after_completion.compute_used >= counters_after_slice.compute_used
+
+
+def test_c1_fixtures_partial_slice_counters_reconstructable_from_ledger_after_counters_json_loss(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex PR #345 finding #2 (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
+    a `PARTIAL_SLICE` dispatch's parent CPU must be recoverable purely from
+    the ledger, not only from `counters.json` — via the new `slice_summary`
+    ledger event. Delete `counters.json` after a `PARTIAL_SLICE` dispatch and
+    confirm `reconcile_cap_counters()` reconstructs the exact same
+    `compute_used` from the ledger alone."""
+    subset = small_matrix_subset(2, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    base_args = [
+        "c1-fixtures",
+        "--campaign-dir",
+        str(campaign_dir),
+        "--secret-dir",
+        str(secret_root),
+        "--approval-dir",
+        str(approval_dir),
+        "--armed",
+    ]
+
+    exit_code = cli.main([*base_args, "--time-budget-seconds", "0.01"])
+    out = json.loads(capsys.readouterr().out)
+    assert exit_code == 0, out
+    assert out["result"] == "PARTIAL_SLICE"
+
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    slice_summary_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "slice_summary"
+    ]
+    assert len(slice_summary_events) == 1
+    assert slice_summary_events[0]["stage"] == "c1-fixtures"
+    assert slice_summary_events[0]["parent_cpu_seconds"] >= 0.0
+    assert slice_summary_events[0]["time_budget_seconds"] == pytest.approx(0.01)
+    assert "elapsed_seconds" in slice_summary_events[0]
+    assert "instances_completed_this_run" in slice_summary_events[0]
+    assert "instances_remaining" in slice_summary_events[0]
+    # no phase transition happened — no stage_summary/fixture_valid either.
+    assert not any(e.payload.get("kind") == "stage_summary" for e in campaign.ledger.entries)
+    assert not any(e.payload.get("kind") == "fixture_valid" for e in campaign.ledger.entries)
+
+    counters_before_deletion = load_cap_counters(campaign_dir)
+    counters_path(campaign_dir).unlink()
+
+    derived, reconstructed = reconcile_cap_counters(campaign_dir, campaign.ledger.entries, None)
+    # `counters.json` is gone, so this can only reconstruct from the ledger.
+    assert derived.compute_used == pytest.approx(counters_before_deletion.compute_used)
+    assert derived.storage_used == counters_before_deletion.storage_used
+    if counters_before_deletion.compute_used > 0.0 or counters_before_deletion.storage_used > 0:
+        assert reconstructed is True
 
 
 # ---------------------------------------------------------------------------
