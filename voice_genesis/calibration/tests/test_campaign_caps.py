@@ -737,6 +737,102 @@ def test_reconcile_reproduces_live_total_for_unsummarized_complete_group(
 
 
 # ---------------------------------------------------------------------------
+# Codex PR #345 round 13 finding (adopted, category ③, `[UNDERSPEC-CAL-D79]`,
+# ③ "false cap breach on the recovery path"): the round 12 deferred post-scan
+# pass charged ANY key still active at scan end whose writer was never
+# summarized — including a still-PARTIAL group (fewer than the expected 6
+# `meter_call` records), not only a COMPLETE one. On `--discard-partial-
+# groups` recovery, `cli.py main()` reconciles `cap_counters` from the
+# ledger BEFORE `_discard_partial_group()` ever runs (the discard event
+# doesn't exist yet), so the deferred pass already charged the partial
+# group's within CPU once; the discard then charges the SAME live counter
+# again via `discarded_within_cpu_seconds` — a double charge that could trip
+# a false `COST_CAP_EXCEEDED`. Fix: the deferred pass is now gated on group
+# completeness (`meter_group_repeat_keys`). These tests exercise the
+# ledger-reconstruction level of the design-ruling's lettered scenarios; the
+# full recovery-sequence integration (scenario (a), chained with (d)) lives
+# in `test_campaign_measure.py`.
+# ---------------------------------------------------------------------------
+
+
+def test_cap_counters_from_ledger_partial_unsummarized_group_not_charged_by_deferred_pass(
+    tmp_path: Path,
+) -> None:
+    """Root-cause regression: a still-PARTIAL group (2 of 6 records), writer
+    never summarized, NOT YET discarded — the pre-fix deferred pass would
+    have wrongly charged this key's within CPU here (it is unpopped and
+    unsummarized); post-fix, an incomplete group contributes nothing until
+    its eventual discard event is the one and only path that charges it."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    for i in range(2):
+        payload = _fake_meter_call_event(
+            "r1", 0, "F0-B0-CURRENT", "within", i, cpu_seconds=6.0, storage_bytes=100
+        )
+        payload["within_cpu_seconds"] = 5.0
+        payload["invocation_id"] = "invA"
+        ledger.append(payload)
+    # no discard event, no stage_summary/slice_summary anywhere — this is
+    # the ledger shape immediately after a hard kill, before recovery.
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # fresh remainder from the first surviving record (6.0 - 5.0 = 1.0)
+    # only — NOT + 5.0 (the within CPU), since the group is incomplete.
+    assert derived.compute_used == pytest.approx(1.0)
+
+
+def test_cap_counters_from_ledger_complete_group_killed_after_full_write_still_charged_once(
+    tmp_path: Path,
+) -> None:
+    """Round 13 scenario (b): the round 12 case — a COMPLETE group (all 6
+    records present), writer killed right after the 6th record, never
+    summarized — must still be charged exactly once by the deferred pass;
+    the new completeness gate must not regress this."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    for repeat_kind in ("within", "fresh"):
+        for i in range(3):
+            payload = _fake_meter_call_event(
+                "r1", 0, "F0-B0-CURRENT", repeat_kind, i, cpu_seconds=6.0, storage_bytes=100
+            )
+            payload["within_cpu_seconds"] = 4.0
+            payload["invocation_id"] = "invA"
+            ledger.append(payload)
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    assert derived.compute_used == pytest.approx(2.0 + 4.0)
+
+
+def test_cap_counters_from_ledger_partial_summarized_group_discard_and_deferred_both_zero(
+    tmp_path: Path,
+) -> None:
+    """Round 13 scenario (c): a PARTIAL group whose writer IS summarized
+    (caught interruption reaching `finally`) — both charge paths must
+    contribute 0 for its within CPU (already covered by the summary's own
+    `parent_cpu_seconds`): the discard event's own pairing-rule branch
+    (pre-existing, round 8) AND the deferred pass (round 12/13), regardless
+    of completeness."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    for i in range(2):
+        payload = _fake_meter_call_event(
+            "r1", 0, "F0-B0-CURRENT", "within", i, cpu_seconds=6.0, storage_bytes=100
+        )
+        payload["within_cpu_seconds"] = 5.0
+        payload["invocation_id"] = "invA"
+        ledger.append(payload)
+    ledger.append(
+        {"kind": "stage_summary", "stage": "c2", "parent_cpu_seconds": 3.0, "invocation_id": "invA"}
+    )
+    # discard adds 0 (pairing rule: "invA" is summarized).
+    ledger.append(
+        _fake_meter_call_group_discarded_event(
+            "r1", 0, "F0-B0-CURRENT", discarded_within_cpu_seconds=5.0
+        )
+    )
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # fresh remainder (1.0) + summary's own parent CPU (3.0) — NOT + 5.0
+    # from the discard event, and the deferred pass never revisits a popped
+    # key regardless of completeness.
+    assert derived.compute_used == pytest.approx(1.0 + 3.0)
+
+
+# ---------------------------------------------------------------------------
 # round 8 finding #1 (R8-1, category ③, `[UNDERSPEC-CAL-D79]`):
 # `is_invocation_id_summarized()` — the standalone pairing predicate
 # `measure_stage.run_measurement_for_instance()`/`run_measure_stage()`/

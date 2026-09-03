@@ -428,3 +428,32 @@ check の入力）はこの関数を素通しするため、live counters への
 追加コード無しで含意される。memo §6.5.6 を追補し、memo_sha256 を
 `bccab5978b12f4f6f36b2c9de25fd2b4d2abf87104a2a3f2861ce860a3473a70` へ
 更新した。承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。
+
+### 10.7 D79 追補 7（2026-09-03）
+
+Codex #345 第 13 巡の ③ 1 件（第 12 巡の deferred pass が回復経路で偽の
+cost cap 超過を引き起こし得た欠落——新規の具体的な偽成功経路として採用）
+を採用した。第 12 巡の deferred pass は COMPLETE/PARTIAL を区別せず、
+未 summary な writer を持つ group を無条件に計上していた。
+`--discard-partial-groups` による復旧では `cli.py main()` がまず ledger
+から `cap_counters` を reconcile する（discard event はまだ存在しない）
+ため、PARTIAL な group（hard kill 直後、6 record 未満）であっても未
+summary であれば deferred pass がこの時点で within CPU を計上してしまい、
+続く `_discard_partial_group()` が `discarded_within_cpu_seconds` を同じ
+key 分もう一度課金する——同一 within CPU の二重計上により、
+`max(persisted, derived)` の reconcile 規則がその水増しをそのまま実効値
+として残し、凍結 compute cap を偽に超過し得た（false
+`COST_CAP_EXCEEDED`）。修正: deferred pass を **COMPLETE な group のみ**
+（当該 key の期待される全 repeat key が ledger 上に揃っている group）に
+限定した。PARTIAL な group は discard されるまでいずれの経路からも
+計上されない——discard 前は fail-closed のまま campaign を止め続けることが
+安全装置そのものであり、discard event が PARTIAL group を唯一計上できる
+経路であり続ける。exactly-once 不変条件（改訂）: 未 summary な writer を
+持つ group の within CPU は厳密に 1 回だけ計上される——COMPLETE な group
+は deferred pass 経由、PARTIAL な group は discard event 経由。summary
+済みの writer は自身の summary でカバーされる（変更なし）。
+`caps.cap_counters_from_ledger()`/`measure_stage._discard_partial_group()`
+両方の docstring にこの不変条件を明記した。memo §6.5.7 を追補し、
+memo_sha256 を
+`1dcbb6a5c762f2d6c884d59ff1cc67a722e3b0b5e65d04d59d951472af16da6f` へ
+更新した。承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。

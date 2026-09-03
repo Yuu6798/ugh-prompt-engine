@@ -1122,3 +1122,64 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
   スタブを追加し、実運用で `main()` の `finally` が必ず 1 個の summary
   を残す前提を模した（意味的な後退ではなく、単体テストが実運用の
   ラッパー保証を暗黙に借りていた箇所を明示化）。
+
+#### 6.5.7 第 13 巡追補（Codex PR #345 レビュー採用、2026-09-03。回復
+経路上の偽 cap 超過——`--discard-partial-groups` recovery が deferred pass
+と discard event の双方から同一 group の within CPU を二重計上し得た欠落）
+
+- **（③、`campaign/caps.py` `cap_counters_from_ledger()`）— §6.5.6 の
+  deferred pass が COMPLETE/PARTIAL を区別せず、未 summary の writer を
+  持つ group を無条件に計上していた**: `--discard-partial-groups` による
+  復旧で `cli.py main()` はまず ledger から `cap_counters` を reconcile
+  する（この時点では discard event はまだ ledger に存在しない）。写っている
+  group が PARTIAL（hard kill 直後、6 record 未満）であっても、写者
+  invocation が未 summary であれば §6.5.6 の deferred pass はこの reconcile
+  の時点で既に within CPU を 1 回計上してしまう。続いて
+  `_discard_partial_group()` が `discarded_within_cpu_seconds` を live な
+  `cap_counters` へ同一 key 分もう一度課金・persist する——同じ within CPU
+  が 2 回計上され、`max(persisted, derived)` の reconcile 規則
+  （persisted 側が二重計上済みで derived 側より大きい）がその水増しを
+  そのまま実効値として残し、凍結 compute cap を偽に超過し得る
+  （false `COST_CAP_EXCEEDED`）。
+
+  **設計判定（pairing rule 追補）**: deferred pass は
+  **COMPLETE な group のみ**（当該 key の期待される全 repeat key——
+  `WITHIN_PROCESS_REPEATS + FRESH_PROCESS_REPEATS` = 6 件——が ledger 上に
+  揃っている group のみ）を計上対象とする。PARTIAL な group（揃っていない）
+  は、discard されるまで deferred pass からも discard event からも一切
+  計上されない——discard 前は「未使用のまま fail-closed で campaign を
+  止め続ける」状態そのものが安全装置であり、discard event こそが
+  PARTIAL group を唯一計上できる経路であり続ける。**exactly-once
+  不変条件（改訂）**: 未 summary な writer を持つ group の within CPU は
+  厳密に 1 回だけ計上される——COMPLETE な group は deferred pass 経由、
+  PARTIAL な group は discard event 経由。summary 済みの writer は
+  自身の summary（`parent_cpu_seconds`）でカバーされる（変更なし）。
+
+  実装: `caps.cap_counters_from_ledger()` に `meter_group_repeat_keys`
+  （key ごとに forward scan 中観測した distinct `(repeat_kind,
+  repeat_index)` の集合。discard event でのリセットも
+  `last_meter_invocation`/`meter_group_within_cpu` と同じタイミングで行う）
+  を追加し、deferred pass はこの集合が `_METER_REPEAT_KEY_COUNT`（= 6）
+  に達している key のみを計上する。`_discard_partial_group()`
+  （`campaign/measure_stage.py`）と `cap_counters_from_ledger()`
+  双方の docstring に「未 summary な writer の group の within CPU は
+  厳密に 1 回だけ計上される——COMPLETE group は deferred pass 経由、
+  PARTIAL group は discard event 経由；summary 済み writer は自身の
+  summary でカバーされる」という不変条件を明記。
+
+  テスト: `test_campaign_caps.py`
+  `test_cap_counters_from_ledger_partial_unsummarized_group_not_charged_by_deferred_pass`
+  （root cause: PARTIAL・未 discard・未 summary → deferred pass は 0 を
+  計上）/
+  `test_cap_counters_from_ledger_complete_group_killed_after_full_write_still_charged_once`
+  （§6.5.6 の round 12 シナリオが本改訂で回帰しないことの確認: COMPLETE・
+  未 summary → 従来どおり 1 回計上）/
+  `test_cap_counters_from_ledger_partial_summarized_group_discard_and_deferred_both_zero`
+  （PARTIAL・summary 済み writer → discard・deferred 双方とも 0）。
+  `test_campaign_measure.py`
+  `test_recovery_reconcile_then_discard_charges_within_cpu_exactly_once`
+  （Codex の指摘どおりの復旧シーケンス end-to-end: reconcile → discard の
+  後、live counters とその時点の ledger-derived counters が一致し、かつ
+  期待値どおり 1 回分のみ計上されていることを確認。続けて
+  `max(persisted, derived)` reconcile を再度呼び、水増しされないことも
+  確認）。

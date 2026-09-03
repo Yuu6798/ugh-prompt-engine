@@ -16,7 +16,11 @@ from pathlib import Path
 import pytest
 
 from voice_genesis.calibration.campaign import measure_stage, render_stage
-from voice_genesis.calibration.campaign.caps import cap_counters_from_ledger, load_cap_counters
+from voice_genesis.calibration.campaign.caps import (
+    cap_counters_from_ledger,
+    load_cap_counters,
+    reconcile_cap_counters,
+)
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.campaign.time_budget import TimeBudget
 from voice_genesis.calibration.candidates import adapter
@@ -1625,6 +1629,83 @@ def test_run_measure_stage_discards_partial_group_before_budget_check(tmp_path: 
         e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"
     ]
     assert len(meter_call_events) == 2
+
+
+# ---------------------------------------------------------------------------
+# Codex PR #345 round 13 finding (adopted, category ③, `[UNDERSPEC-CAL-D79]`,
+# ③ "false cap breach on the recovery path"): the round 12 deferred post-scan
+# pass (`caps.cap_counters_from_ledger()`) charged a still-PARTIAL group's
+# within CPU too, not only a COMPLETE one — so a `--discard-partial-groups`
+# recovery's own from-ledger reconcile (run BEFORE `_discard_partial_group()`)
+# already charged it once, and the discard then charged it again via
+# `discarded_within_cpu_seconds` — a double charge (false `COST_CAP_
+# EXCEEDED` risk). Fixed by gating the deferred pass on group completeness.
+# ---------------------------------------------------------------------------
+
+
+def test_recovery_reconcile_then_discard_charges_within_cpu_exactly_once(tmp_path: Path) -> None:
+    """Round 13 scenario (a), chained with (d): the exact recovery sequence
+    the finding describes. `cli.py main()` first reconciles `cap_counters`
+    from the ledger (the discard event does not exist yet at that point),
+    THEN `_discard_partial_group()` charges the live counter via
+    `discarded_within_cpu_seconds`. Both the live in-memory counters and a
+    fresh ledger-derived reconstruction (post-discard) must equal the
+    pre-kill total + within CPU charged EXACTLY ONCE — and a subsequent
+    `max(persisted, derived)` reconciliation (scenario (d)) must not inflate
+    that value further."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    for i in range(2):
+        payload = _fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", i, 100.0)
+        payload["within_cpu_seconds"] = 5.0
+        campaign.ledger.append(payload)
+    candidate = candidate_by_id("F0-B0-CURRENT")
+
+    # step 1: `cli.py main()`'s recovery-path reconcile, run BEFORE the
+    # discard exists in the ledger — pre-fix, this partial group's within
+    # CPU (5.0) would already have been counted here (the bug); post-fix,
+    # a still-partial, undiscarded group contributes 0.
+    caps_for_reconcile = CostCaps(
+        compute=1000.0, storage=1_000_000, budget=1000.0, budget_accounting_mode="local_zero_cost"
+    )
+    live_counters, _ = reconcile_cap_counters(
+        campaign.campaign_dir, campaign.ledger.entries, caps_for_reconcile
+    )
+    assert live_counters.compute_used == pytest.approx(0.0)
+
+    # step 2: a cap tight enough that ONLY the discard's own charge (5.0)
+    # trips it — isolates the discard's live-counter effect from any
+    # subsequent remeasurement's own compute.
+    breach_caps = CostCaps(
+        compute=4.0, storage=1_000_000, budget=1000.0, budget_accounting_mode="local_zero_cost"
+    )
+    with pytest.raises(measure_stage.CostCapExceededError):
+        measure_stage.run_measurement_for_instance(
+            campaign,
+            candidate,
+            row_id="r1",
+            probe_index=0,
+            sr_hz=16000,
+            cap_counters=live_counters,
+            cost_caps=breach_caps,
+            discard_partial_groups=True,
+            stage="c2",
+        )
+    expected = 5.0
+    # step 3: the discard charged the live counters exactly once...
+    assert live_counters.compute_used == pytest.approx(expected)
+    # ...and a fresh reconstruction from the (now post-discard) ledger
+    # agrees exactly — not double (10.0).
+    derived = cap_counters_from_ledger(campaign.ledger.entries, breach_caps)
+    assert derived.compute_used == pytest.approx(expected)
+    assert derived.compute_used == pytest.approx(live_counters.compute_used)
+
+    # step 4 (scenario (d)): `_discard_partial_group()` already persisted
+    # `live_counters` to `counters.json`; a further `max(persisted,
+    # derived)` reconciliation must reproduce the same value, not inflate
+    # it further.
+    reconciled, _ = reconcile_cap_counters(campaign.campaign_dir, campaign.ledger.entries, breach_caps)
+    assert reconciled.compute_used == pytest.approx(expected)
 
 
 @pytest.mark.slow

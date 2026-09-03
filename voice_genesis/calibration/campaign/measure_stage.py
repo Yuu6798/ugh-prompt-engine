@@ -895,7 +895,22 @@ def _discard_partial_group(
     transition` と同じ「課金 → persist → 検査」の既存 pattern を流用する。
     超過していれば他の全 breach 経路と同じ `COST_CAP_EXCEEDED` stop event を
     記帳し `CostCapExceededError` を送出する（呼び出し元はこの場合、再測定を
-    一切試みない — 呼び出し元の残りのロジックに戻らない）。"""
+    一切試みない — 呼び出し元の残りのロジックに戻らない）。
+
+    round 13 finding (adopted, category ③, `[UNDERSPEC-CAL-D79]`,
+    Codex PR #345 第 13 巡): this discard event's `discarded_within_cpu_
+    seconds` charge (above, both here and in `caps.cap_counters_from_
+    ledger()`'s ledger reconstruction) is this partial group's ONLY charge
+    path — `cap_counters_from_ledger()`'s deferred post-scan pass now
+    charges COMPLETE groups exclusively (all expected repeat keys present),
+    never a still-partial one, precisely so this function's live-counter
+    charge just above can never be double-counted by a `--discard-partial-
+    groups` recovery's earlier from-ledger reconcile (which runs BEFORE
+    this function, while the group is still partial and this discard event
+    does not exist yet). **Invariant**: within CPU of a group from an
+    unsummarized writer is charged exactly once — complete groups via the
+    deferred pass, partial groups via their discard event (this function);
+    summarized writers are covered by their summary."""
     discarded_repeat_keys = [list(k) for k in sorted(exc.present_keys)]
     discard_entry = campaign.ledger.append(
         {

@@ -57,6 +57,17 @@ from voice_genesis.calibration.provenance import Ledger, LedgerEntry
 
 COUNTERS_FILENAME = "counters.json"
 
+#: round 13 finding (adopted, category ③, `[UNDERSPEC-CAL-D79]`): number of
+#: distinct `(repeat_kind, repeat_index)` `meter_call` records one
+#: `(row_id, probe_index, candidate_id)` work unit's group is COMPLETE at —
+#: mirrors `measure_stage.WITHIN_PROCESS_REPEATS + measure_stage.
+#: FRESH_PROCESS_REPEATS` (3 + 3). Duplicated here as a literal, matching
+#: `measure_stage.py`'s own local `WITHIN_PROCESS_REPEATS`/
+#: `FRESH_PROCESS_REPEATS` literals, rather than imported, because
+#: `measure_stage.py` imports FROM `caps.py` (see that module's import
+#: block) — importing back would be circular.
+_METER_REPEAT_KEY_COUNT = 6
+
 
 class CapStateError(RuntimeError):
     """`counters.json` の読み込みが壊れている場合の fail-closed error。"""
@@ -645,6 +656,42 @@ def cap_counters_from_ledger(
       charge for a *discarded partial* group specifically; it is not
       re-derived from source (2) for that same key, since the discard
       event's pop already removes it from the deferred pass entirely.
+
+      **Round 13 finding (adopted, category ③, `[UNDERSPEC-CAL-D79]`) —
+      deferred pass restricted to COMPLETE groups**: source (2) above, as
+      originally written, charged ANY key still present in the writer-
+      invocation map at scan end whose writer was never summarized —
+      including a still-PARTIAL group (fewer than the expected 6
+      `meter_call` records for its key) whose writer was hard-killed
+      mid-write and has not yet been discarded. On `--discard-partial-
+      groups` recovery, `cli.py main()` reconciles `cap_counters` from the
+      ledger (this function) BEFORE `_discard_partial_group()` ever runs
+      (the `meter_call_group_discarded` event does not exist in the ledger
+      yet at that point), so this deferred pass already charged the
+      partial group's within CPU once via source (2); `_discard_partial_
+      group()` then charges the SAME within CPU to the SAME live counter
+      again via `discarded_within_cpu_seconds` — a double charge that
+      could trip a false `COST_CAP_EXCEEDED` on the recovery path.
+
+      Source (2) is now gated on group completeness:
+      `meter_group_repeat_keys[key]` — every distinct `(repeat_kind,
+      repeat_index)` pair observed for that key anywhere in the ledger,
+      reset alongside the same discard-time pop as `last_meter_invocation`/
+      `meter_group_within_cpu` — must reach all `_METER_REPEAT_KEY_COUNT`
+      (`WITHIN_PROCESS_REPEATS + FRESH_PROCESS_REPEATS` = 6) pairs before
+      source (2) charges it. A still-partial, undiscarded group now
+      contributes nothing to either source until it is discarded — it
+      remains charged exclusively through its eventual discard event,
+      which is the only path that can ever account for it (an undiscarded
+      partial group is unusable and keeps the campaign fail-closed until
+      discarded).
+
+      **Invariant**: within CPU of a group from an unsummarized writer is
+      charged exactly once — complete groups via the deferred pass
+      (source (2)), partial groups via their discard event
+      (`discarded_within_cpu_seconds`, via `_discard_partial_group`);
+      summarized writers are covered by their own summary's
+      `parent_cpu_seconds` in either case.
     - `stage_summary` events (round 15 finding #5, `[UNDERSPEC-CAL-D31]`):
       the CLI dispatch path's own parent-side CPU for the whole stage,
       not captured by either of the above (matrix build, ledger/JSON I/O,
@@ -747,8 +794,19 @@ def cap_counters_from_ledger(
     # seconds` captures for the discard path — see `measure_stage._
     # partial_group_within_cpu_seconds`), so it can be charged after the
     # scan for any key still active (i.e. not popped by a
-    # `meter_call_group_discarded` reset) whose writer never got summarized.
+    # `meter_call_group_discarded` reset) whose writer never got summarized
+    # — round 13 finding (below): gated to COMPLETE groups only, via
+    # `meter_group_repeat_keys`.
     meter_group_within_cpu: dict[tuple[object, object, object], float] = {}
+    # round 13 finding (adopted, category ③, `[UNDERSPEC-CAL-D79]`): every
+    # distinct `(repeat_kind, repeat_index)` pair observed for a key,
+    # anywhere in the ledger — used by the deferred pass below to tell a
+    # COMPLETE group (all `_METER_REPEAT_KEY_COUNT` pairs present) from a
+    # still-PARTIAL one (see the docstring's round 13 paragraph for why this
+    # gate exists). Reset alongside the same discard-time pop as
+    # `last_meter_invocation`/`meter_group_within_cpu` so a remeasurement
+    # after a discard starts its own fresh count.
+    meter_group_repeat_keys: dict[tuple[object, object, object], set[tuple[object, object]]] = {}
     for entry in ledger_entries:
         payload = entry.payload
         if not isinstance(payload, Mapping):
@@ -785,6 +843,11 @@ def cap_counters_from_ledger(
             # the ledger and are still charged".
             key = (payload.get("row_id"), payload.get("probe_index"), payload.get("candidate_id"))
             seen_meter_keys.discard(key)
+            # round 13 finding: reset this key's completeness tracking too —
+            # mirrors the `last_meter_invocation`/`meter_group_within_cpu`
+            # reset below, so a remeasurement after this discard starts its
+            # own fresh count of distinct repeat keys.
+            meter_group_repeat_keys.pop(key, None)
             # round 8 finding #2 (R8-2, `[UNDERSPEC-CAL-D79]`, supersedes
             # round 7 finding #1): `discarded_within_cpu_seconds` is charged
             # iff no `stage_summary`/`slice_summary` carrying the SAME
@@ -811,6 +874,16 @@ def cap_counters_from_ledger(
             # `run_measurement_for_instance` call writes all of them), so the
             # last-seen value is stable.
             last_meter_invocation[key] = payload.get("invocation_id")
+            # round 13 finding: track this key's completeness regardless of
+            # dedup state — every one of a group's up-to-6 records carries
+            # its own distinct `(repeat_kind, repeat_index)`, so this must
+            # run for every record seen, not just the first (the dedup
+            # `continue` below is only about the shared per-work-unit
+            # `cpu_seconds`/`within_cpu_seconds` aggregate, which the first
+            # record already carries in full).
+            meter_group_repeat_keys.setdefault(key, set()).add(
+                (payload.get("repeat_kind"), payload.get("repeat_index"))
+            )
             if key in seen_meter_keys:
                 continue
             seen_meter_keys.add(key)
@@ -896,8 +969,28 @@ def cap_counters_from_ledger(
     # here, so its within CPU (already charged via that event's own
     # `discarded_within_cpu_seconds`) is never revisited; a key charged
     # here was never discarded, so it was never charged there either.
+    #
+    # round 13 finding (adopted, category ③, `[UNDERSPEC-CAL-D79]`): gated
+    # to COMPLETE groups only (`len(meter_group_repeat_keys[key]) >=
+    # _METER_REPEAT_KEY_COUNT`, i.e. all `WITHIN_PROCESS_REPEATS +
+    # FRESH_PROCESS_REPEATS` distinct `(repeat_kind, repeat_index)` pairs
+    # present) — a still-PARTIAL group (fewer records; writer hard-killed
+    # mid-write, not yet discarded) must NOT be charged here even though it
+    # is unpopped and unsummarized, because `--discard-partial-groups`
+    # recovery reconciles `cap_counters` from the ledger (this function)
+    # BEFORE `_discard_partial_group()` ever runs — charging it here would
+    # double-count once that discard event separately charges
+    # `discarded_within_cpu_seconds` for the same key (a false
+    # `COST_CAP_EXCEEDED` risk). **Invariant**: within CPU of a group from
+    # an unsummarized writer is charged exactly once — complete groups via
+    # this deferred pass, partial groups via their discard event
+    # (`_discard_partial_group`); summarized writers are covered by their
+    # summary. See the docstring's round 13 paragraph above for the full
+    # account of the bug this closes.
     for key, invocation_id in last_meter_invocation.items():
         if invocation_id is None or invocation_id not in invocation_ids_with_summary:
+            if len(meter_group_repeat_keys.get(key, ())) < _METER_REPEAT_KEY_COUNT:
+                continue
             compute += meter_group_within_cpu.get(key, 0.0)
     budget = 0.0
     if cost_caps is not None:
