@@ -10,6 +10,7 @@ import json
 import math
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -1426,6 +1427,192 @@ def test_run_measure_stage_time_budget_partial_slice_then_resume(tmp_path: Path)
         e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"
     ]
     assert len(meter_call_events) == len(instances) * per_instance_calls  # no duplicates
+
+
+# ---------------------------------------------------------------------------
+# rehearsal 4 findings D/G (adopted, `[UNDERSPEC-CAL-D79]`): a resumed
+# `run_measure_stage()` slice must treat an already-complete instance as
+# O(1) work (an index presence check only — no PCM read, no
+# `MeasurementRecord` reconstruction) instead of paying the growing
+# reconstruction cost rehearsal 4 measured (c3b parent CPU
+# 71.7s->78.9s->84.3s->88.3s across 4 slices doing the same constant
+# 2-instance new work), and `instances_remaining` must be computed from the
+# ledger-built index (the TRUE post-run completion count) rather than
+# `total_instances - instances_completed_this_run`, which silently
+# regressed to `total_instances` whenever the budget expired before this
+# call's own loop walked even its first instance (rehearsal 4 observed
+# `instances_remaining` jump backward 77->85 at a 0.001s budget).
+# ---------------------------------------------------------------------------
+
+
+class _CountingBudget:
+    """Deterministic `TimeBudget` double: `expired()` returns `True` only
+    once it has been called more than `expire_after_calls` times — lets a
+    test control exactly how many R2 instance-boundary checks pass before
+    a resumed slice stops, without depending on real wall-clock timing
+    (`run_measure_stage()` only ever accesses `.expired()`/`.seconds`/
+    `.elapsed()` on its `time_budget` argument, so this satisfies that
+    duck-typed contract)."""
+
+    def __init__(self, expire_after_calls: int) -> None:
+        self.seconds = 999.0
+        self._calls = 0
+        self._expire_after_calls = expire_after_calls
+
+    def elapsed(self) -> float:
+        return 0.0
+
+    def expired(self) -> bool:
+        self._calls += 1
+        return self._calls > self._expire_after_calls
+
+
+@pytest.mark.slow
+def test_run_measure_stage_partial_slice_skips_completed_prefix_without_reconstruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rehearsal 4 finding D: walking an already-complete instance during a
+    (still-partial) resumed slice must never reconstruct that cell's
+    `MeasurementRecord`s (`MeterCallIndex.completed_records()` — the exact
+    function whose growing per-slice cost rehearsal 4 measured). Asserts
+    the reconstruction function is called exactly 0 times while this slice
+    walks a 10-instance already-complete prefix and never reaches
+    unfinished work."""
+    subset = small_matrix_subset(3, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_outcomes = render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    monkeypatch.setattr(
+        measure_stage.subprocess, "run", _fake_subprocess_run_with_cpu_seconds(2.0)
+    )
+
+    # c1 only renders CALIBRATION/SELECTION-split (+ control) instances, so
+    # derive the measurable instance set from what was actually rendered
+    # rather than a naive `row x range(PROBE_REPEATS)` reconstruction.
+    all_instances = sorted({(o.row_id, o.probe_index) for o in render_outcomes})
+    sr_by_row = {mr.row_id: mr.row.sr_hz for mr in subset}
+    # c1 only renders CALIBRATION/SELECTION-split (+ control) instances, so
+    # the exact count is split-dependent -- leave 2 genuinely unmeasured so
+    # this call's `completed_all` stays `False`.
+    completed_prefix = all_instances[:-2]
+    assert len(completed_prefix) >= 4  # a meaningfully-sized already-complete prefix
+    measure_stage.run_measure_stage(campaign, completed_prefix, [candidate], sr_by_row=sr_by_row)
+
+    call_count = {"n": 0}
+    orig_completed_records = measure_stage.MeterCallIndex.completed_records
+
+    def _counting_completed_records(self, *args, **kwargs):
+        call_count["n"] += 1
+        return orig_completed_records(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        measure_stage.MeterCallIndex, "completed_records", _counting_completed_records
+    )
+
+    budget = _CountingBudget(expire_after_calls=len(completed_prefix) // 2)
+    records, slice_status = measure_stage.run_measure_stage(
+        campaign, all_instances, [candidate], sr_by_row=sr_by_row, time_budget=budget
+    )
+
+    assert slice_status.completed_all is False
+    assert slice_status.instances_completed_this_run == len(completed_prefix) // 2
+    # zero reconstructions for the walked already-complete prefix (0, not
+    # merely "constant" -- this call never reaches unfinished work at all).
+    assert call_count["n"] == 0
+    assert records == []
+
+
+@pytest.mark.slow
+def test_run_measure_stage_large_completed_prefix_partial_slice_stays_fast(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rehearsal 4 finding D: a resumed slice with a LARGE already-complete
+    prefix ahead of it must still finish within roughly budget + one new
+    instance's dispatch time -- not grow with the size of the completed
+    prefix (rehearsal 4: c3b parent CPU rose 71.7s->78.9s->84.3s->88.3s
+    across 4 slices doing the same constant 2-instance new work, purely
+    from re-reconstructing a growing already-complete prefix's
+    `MeasurementRecord`s on every call)."""
+    subset = small_matrix_subset(4, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_outcomes = render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    monkeypatch.setattr(
+        measure_stage.subprocess, "run", _fake_subprocess_run_with_cpu_seconds(2.0)
+    )
+
+    all_instances = sorted({(o.row_id, o.probe_index) for o in render_outcomes})
+    sr_by_row = {mr.row_id: mr.row.sr_hz for mr in subset}
+    completed_prefix = all_instances[:-1]  # every instance but the last
+    assert len(completed_prefix) >= 10
+    measure_stage.run_measure_stage(campaign, completed_prefix, [candidate], sr_by_row=sr_by_row)
+
+    budget_seconds = 0.5
+    t0 = time.perf_counter()
+    records, slice_status = measure_stage.run_measure_stage(
+        campaign,
+        all_instances,
+        [candidate],
+        sr_by_row=sr_by_row,
+        time_budget=TimeBudget.start_now(budget_seconds),
+    )
+    elapsed = time.perf_counter() - t0
+
+    # Bounded by budget + a generous single-instance dispatch margin --
+    # NOT proportional to `len(completed_prefix)` (25+ instances here; the
+    # pre-fix reconstruction cost scaled with that number on every call).
+    assert elapsed < budget_seconds + 10.0
+    assert slice_status.completed_all is True
+    assert slice_status.instances_remaining == 0
+    assert len(records) > 0  # the one genuinely-new instance was measured
+
+
+@pytest.mark.slow
+def test_run_measure_stage_time_budget_remaining_matches_true_completed_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rehearsal 4 finding G: with a campaign half-measured and a budget
+    guaranteed already-expired before this call's loop starts,
+    `instances_remaining` must equal the TRUE remaining count (`total -
+    already_complete`, read from the ledger-built index) and
+    `instances_completed_this_run` must be 0 -- not `total_instances - 0
+    == total_instances`, which silently ignored every instance a PRIOR
+    invocation had already finished (rehearsal 4 observed
+    `instances_remaining` jump backward 77->85 at a 0.001s budget)."""
+    subset = small_matrix_subset(2, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_outcomes = render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    monkeypatch.setattr(
+        measure_stage.subprocess, "run", _fake_subprocess_run_with_cpu_seconds(2.0)
+    )
+
+    all_instances = sorted({(o.row_id, o.probe_index) for o in render_outcomes})
+    sr_by_row = {mr.row_id: mr.row.sr_hz for mr in subset}
+    half = all_instances[: len(all_instances) // 2]
+    assert 0 < len(half) < len(all_instances)
+    measure_stage.run_measure_stage(campaign, half, [candidate], sr_by_row=sr_by_row)
+
+    budget = TimeBudget.start_now(0.001)
+    time.sleep(0.05)  # guarantee expiry regardless of machine speed/scheduling
+    records, slice_status = measure_stage.run_measure_stage(
+        campaign, all_instances, [candidate], sr_by_row=sr_by_row, time_budget=budget
+    )
+
+    assert records == []
+    assert slice_status.completed_all is False
+    assert slice_status.instances_completed_this_run == 0
+    true_remaining = len(all_instances) - len(half)
+    assert slice_status.instances_remaining == true_remaining
+    # not the pre-fix bug: remaining must NOT regress to the full instance
+    # count just because this call's own loop never walked an instance.
+    assert slice_status.instances_remaining < len(all_instances)
 
 
 # ---------------------------------------------------------------------------

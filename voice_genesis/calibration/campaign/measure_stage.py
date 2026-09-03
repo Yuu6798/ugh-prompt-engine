@@ -668,6 +668,32 @@ class MeterCallIndex:
         by_key = self._by_key.get((row_id, probe_index, candidate_id), {})
         return _resolve_meter_group(by_key, row_id, probe_index, candidate_id)
 
+    def is_complete(self, row_id: str, probe_index: int, candidate_id: str) -> bool:
+        """rehearsal 4 finding D (adopted, `[UNDERSPEC-CAL-D79]`): O(1)
+        presence check — True iff `(row_id, probe_index, candidate_id)`
+        already has a complete, non-duplicate within3+fresh3 `meter_call`
+        group recorded (the same key-set criterion `completed_records()`
+        uses), WITHOUT reconstructing a single `MeasurementRecord`
+        (no `meter_output_from_dict()` call, no PCM read — this function
+        touches only the small in-memory `dict[(repeat_kind, repeat_index),
+        list[payload]]` this key already maps to).
+
+        A duplicate-key group (the `_resolve_meter_group` `"duplicate"`
+        fail-closed case) returns `False` here rather than raising — this
+        method is a cheap pre-filter for resumed-slice loops deciding
+        whether to skip re-dispatching a cell, not a validator. A caller
+        that actually dispatches a `False` cell goes through
+        `completed_records()`/`run_measurement_for_instance()` as before,
+        which still raises `StaleMeasurementError` on that same duplicate
+        state — no fail-closed coverage is lost, only deferred to the point
+        real work would otherwise have been skipped or repeated."""
+        by_key = self._by_key.get((row_id, probe_index, candidate_id))
+        if not by_key:
+            return False
+        if any(len(entries) > 1 for entries in by_key.values()):
+            return False
+        return frozenset(by_key.keys()) == _EXPECTED_REPEAT_KEYS
+
 
 def _completed_meter_call_records(
     ledger_entries: Sequence[LedgerEntry],
@@ -1211,6 +1237,32 @@ def run_measurement_for_instance(
     return records
 
 
+def _instance_has_pending_candidate(
+    row_id: str,
+    probe_index: int,
+    candidates: Sequence[Candidate],
+    meter_call_index: MeterCallIndex,
+    f0_unusable_instances: frozenset[tuple[str, int]],
+) -> bool:
+    """rehearsal 4 finding G helper: True iff at least one of `candidates`
+    still needs measurement for this instance — i.e. is neither
+    permanently resolved (the `f0_unusable_instances` /
+    `F0_DEPENDENT_ALGORITHM_FAMILIES` skip `run_measure_stage()`'s own loop
+    applies) nor already `MeterCallIndex.is_complete()` in the ledger.
+    O(1) per candidate — index lookups only, no PCM read, no record
+    reconstruction — so callers may cheaply evaluate this for every
+    instance in a stage's full instance set, including ones a
+    budget-bounded dispatch loop never reached this invocation."""
+    for candidate in candidates:
+        if (row_id, probe_index) in f0_unusable_instances and (
+            candidate.algorithm_family in F0_DEPENDENT_ALGORITHM_FAMILIES
+        ):
+            continue
+        if not meter_call_index.is_complete(row_id, probe_index, candidate.candidate_id):
+            return True
+    return False
+
+
 def run_measure_stage(
     campaign: FrozenCampaign,
     instances: Sequence[tuple[str, int]],
@@ -1245,6 +1297,21 @@ def run_measure_stage(
     戻り値は `(records, SliceStatus)` の 2-tuple になる（`time_budget`
     が `None`（既定）のときは従来どおり `records` 単体を返す — 呼び出し元
     の挙動・シグネチャは不変）。
+
+    rehearsal 4 finding D/G（adopted, `[UNDERSPEC-CAL-D79]`。c3b parent CPU
+    71.7s→78.9s→84.3s→88.3s の growth 実測）: 既に `MeterCallIndex.
+    is_complete()` で完了済みと分かるセルは `run_measurement_for_instance()`
+    を一切呼ばず（PCM 読込なし・`MeasurementRecord` 再構成なし）O(1) で
+    skip する — 再構成が要る呼び出し（`time_budget=None` の単発実行、または
+    slice が完走した completing invocation）だけ、skip したセル全体を
+    ループ後の 1 パスでまとめて再構成する（`_rebuild_skipped_records`）。
+    `instances_remaining` も `total_instances - instances_completed_this_run`
+    ではなく、`is_complete()` を使った index ベースの 1 パス
+    （`_instance_has_pending_candidate`）で「この呼び出し後の真の未完了数」
+    を数え直す — budget が最初の instance の dispatch 前に尽きた場合でも
+    （`instances_completed_this_run == 0`）、過去の呼び出しで完了済みの
+    instance を無視した過大な `instances_remaining` を報告しない
+    （非増加が保証される）。
 
     round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): `missing_reason` names the
     `measurement_missing` event's `reason` field for every cell this call
@@ -1306,9 +1373,21 @@ def run_measure_stage(
     meter_call_index = MeterCallIndex.build(campaign.ledger.entries)
 
     sorted_instances = sorted(instances)
-    total_instances = len(sorted_instances)
     all_records: list[MeasurementRecord] = []
     newly_missing: list[tuple[str, int, str]] = []
+    # rehearsal 4 finding D (adopted, `[UNDERSPEC-CAL-D79]`): cells this
+    # invocation's O(1) `is_complete()` fast path skipped without
+    # reconstructing a `MeasurementRecord` — reconstructed, once, in a
+    # single pass after the loop below, ONLY when this call's return value
+    # will actually be used (see the `time_budget is None`/`completed_all`
+    # branches at the bottom). A `PARTIAL_SLICE` return never rebuilds
+    # these: every caller of a sliced `run_measure_stage()` discards
+    # `records` on a non-terminal slice (`cli._partial_slice_report()`/
+    # `baseline_stage`'s `{"slice_status": ...}` early return), so paying
+    # to reconstruct a growing already-complete prefix on every resumed
+    # slice — the exact cost rehearsal 4 measured growing 71.7s->88.3s
+    # across 4 constant-new-work c3b slices — bought nothing.
+    skipped_complete_cells: list[tuple[str, int, str]] = []
     instances_completed_this_run = 0
     completed_all = True
     for row_id, probe_index in sorted_instances:
@@ -1325,6 +1404,16 @@ def run_measure_stage(
                 cell = (row_id, probe_index, candidate.candidate_id)
                 if cell not in already_missing:
                     newly_missing.append(cell)
+                continue
+            candidate_id = candidate.candidate_id
+            if meter_call_index.is_complete(row_id, probe_index, candidate_id):
+                # Finding D: O(1) skip — no PCM read, no `MeasurementRecord`
+                # reconstruction here (contrast the pre-fix behavior, which
+                # called `run_measurement_for_instance()` unconditionally
+                # and paid its full `meter_output_from_dict()` reconstruction
+                # cost for every already-complete cell on every resumed
+                # slice).
+                skipped_complete_cells.append((row_id, probe_index, candidate_id))
                 continue
             f0_hz = f0_map.get((row_id, probe_index))
             all_records.extend(
@@ -1352,15 +1441,51 @@ def run_measure_stage(
                 "cells": [[r, p, c] for r, p, c in sorted(newly_missing)],
             }
         )
+
+    def _rebuild_skipped_records() -> None:
+        """Finding D: the ONE place `skipped_complete_cells` is ever turned
+        back into `MeasurementRecord`s — a single pass over exactly the
+        cells this call's fast path bypassed, not a per-slice repeat."""
+        for row_id, probe_index, candidate_id in skipped_complete_cells:
+            all_records.extend(
+                meter_call_index.completed_records(row_id, probe_index, candidate_id) or []
+            )
+
     if time_budget is None:
+        # No slicing: this is the call's only invocation, so the caller
+        # always needs the complete record set.
+        _rebuild_skipped_records()
         return all_records
+
+    # rehearsal 4 finding G (adopted, `[UNDERSPEC-CAL-D79]`): `remaining`
+    # must reflect the TRUE post-run completion state read from the index
+    # — not `total_instances - instances_completed_this_run`, which was 0
+    # (and so `remaining == total_instances`, ignoring every already-
+    # complete instance from prior invocations) whenever the budget expired
+    # before this call's loop walked even its first instance. This full
+    # index-only pass is O(1) per (instance, candidate) — presence/key-set
+    # checks via `is_complete()`, never a PCM read or record reconstruction
+    # — so it stays cheap even though it (deliberately) covers every
+    # instance in `sorted_instances`, including any this call never reached.
+    instances_remaining = sum(
+        1
+        for row_id, probe_index in sorted_instances
+        if _instance_has_pending_candidate(
+            row_id, probe_index, candidates, meter_call_index, f0_unusable_instances
+        )
+    )
     slice_status = SliceStatus(
         time_budget_seconds=time_budget.seconds,
         elapsed_seconds=time_budget.elapsed(),
         instances_completed_this_run=instances_completed_this_run,
-        instances_remaining=total_instances - instances_completed_this_run,
+        instances_remaining=instances_remaining,
         completed_all=completed_all,
     )
+    if completed_all:
+        # Completing invocation: the caller (e.g. `cli._criteria_with_fail_
+        # filters()`) needs every record, not just what this call newly
+        # dispatched — rebuild the skipped prefix once, here.
+        _rebuild_skipped_records()
     return all_records, slice_status
 
 

@@ -10,6 +10,8 @@ import itertools
 import json
 import math
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -130,6 +132,59 @@ def test_c1_render_time_budget_partial_slice_then_resume(tmp_path: Path) -> None
 
 
 @pytest.mark.slow
+def test_c1_render_time_budget_remaining_matches_true_completed_state(tmp_path: Path) -> None:
+    """rehearsal 4 finding G (adopted, `[UNDERSPEC-CAL-D79]`): `instances_
+    remaining` must equal `total_units - true_complete_count` (the index
+    built from the ledger at the top of this invocation, plus any units
+    newly rendered by it) — not `len(units) - len(outcomes)`, which
+    silently degenerated to `len(units)` whenever `outcomes` stayed empty
+    (the budget already expired before the loop's first boundary check).
+    Rehearsal 4 observed `instances_remaining` jump BACKWARD 77->85 at a
+    0.001s budget on a half-complete campaign — this pins the fix: with
+    half of `subset` already rendered by a prior invocation, a call whose
+    budget is guaranteed already-expired must report the TRUE remaining
+    count (`total - already_complete`), zero newly-completed, and zero
+    outcomes — never treat the untouched half-complete prefix as if it
+    were still fully unrendered."""
+    subset = small_matrix_subset(4, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    # c1 only renders CALIBRATION/SELECTION-split (+ control) rows, so
+    # derive the "half" split from the rows actually reachable by c1 --
+    # not `subset[:half]`, which may include a HOLDOUT-only row that never
+    # renders at all.
+    all_units = render_stage.workunits.enumerate_c1_render_units(
+        subset, campaign.realized_split.assignment
+    )
+    total_units = len({(u.row_id, u.probe_index) for u in all_units})
+    assert total_units > 0
+    renderable_row_ids = sorted({u.row_id for u in all_units})
+    assert len(renderable_row_ids) >= 2  # need a genuine "half" split
+    half_row_ids = set(renderable_row_ids[: len(renderable_row_ids) // 2])
+    half_subset = [mr for mr in subset if mr.row_id in half_row_ids]
+
+    half_outcomes = render_stage.run_render_stage(campaign, half_subset, stage="c1")
+    assert half_outcomes
+    assert all(o.status == "rendered" for o in half_outcomes)
+    true_completed = len(half_outcomes)
+    assert total_units > true_completed  # genuinely only part done
+
+    budget = TimeBudget.start_now(0.001)
+    time.sleep(0.05)  # guarantee expiry regardless of machine speed/scheduling
+    outcomes, slice_status = render_stage.run_render_stage(
+        campaign, subset, stage="c1", time_budget=budget
+    )
+    assert outcomes == ()
+    assert slice_status.completed_all is False
+    assert slice_status.instances_completed_this_run == 0
+    assert slice_status.instances_remaining == total_units - true_completed
+    # not the pre-fix bug: remaining must NOT regress to the full unit count
+    # just because this call's own loop never walked a single unit.
+    assert slice_status.instances_remaining < total_units
+
+
+@pytest.mark.slow
 def test_c1_render_resume_skips_completed_prefix_and_still_makes_progress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -195,6 +250,47 @@ def test_c1_render_resume_skips_completed_prefix_and_still_makes_progress(
     assert render_call_count == len(newly_rendered)
 
 
+@pytest.mark.slow
+def test_c1_render_slice_status_counts_only_newly_rendered_units(tmp_path: Path) -> None:
+    """Codex PR #345 round 3 finding F6 (adopted, category ②): pre-fix,
+    `SliceStatus.instances_completed_this_run` was `len(outcomes)`, which
+    includes every `skipped_resume` entry from the O(1) index skip — so a
+    resumed slice overcounted its own progress (and a slice that touched
+    only the already-completed prefix still reported nonzero progress).
+    It must count only units newly rendered by THIS invocation;
+    `instances_remaining` is unaffected."""
+    completed_subset = small_matrix_subset(2, family="F0_CONTROL")
+    wider_subset = small_matrix_subset(4, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=wider_subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    completed_outcomes = render_stage.run_render_stage(campaign, completed_subset, stage="c1")
+    assert all(o.status == "rendered" for o in completed_outcomes)
+
+    outcomes, slice_status = render_stage.run_render_stage(
+        campaign, wider_subset, stage="c1", time_budget=TimeBudget.start_now(30.0)
+    )
+    newly_rendered = [o for o in outcomes if o.status == "rendered"]
+    skipped = [o for o in outcomes if o.status == "skipped_resume"]
+    assert len(skipped) == len(completed_outcomes)  # the already-completed prefix
+    assert newly_rendered  # genuinely new work in the wider subset
+    assert slice_status.completed_all is True
+    assert slice_status.instances_completed_this_run == len(newly_rendered)
+    assert slice_status.instances_completed_this_run != len(outcomes)  # would over-count pre-fix
+    assert slice_status.instances_remaining == 0
+
+    # zero-new-unit slice: every unit in `wider_subset` is now already
+    # rendered — a further resumed call must report exactly 0 progress, not
+    # `len(outcomes)` (all `skipped_resume`).
+    zero_new_outcomes, zero_new_status = render_stage.run_render_stage(
+        campaign, wider_subset, stage="c1", time_budget=TimeBudget.start_now(30.0)
+    )
+    assert all(o.status == "skipped_resume" for o in zero_new_outcomes)
+    assert zero_new_status.instances_completed_this_run == 0
+    assert zero_new_status.instances_remaining == 0
+    assert zero_new_status.completed_all is True
+
+
 def _render_instance_directly(campaign, subset, outcome):
     mr = next(mr for mr in subset if mr.row_id == outcome.row_id)
     split = campaign.realized_split.assignment[outcome.row_id]
@@ -210,17 +306,20 @@ def _render_instance_directly(campaign, subset, outcome):
 
 @pytest.mark.slow
 def test_c1_render_resume_stale_fails_closed_on_corrupted_file(tmp_path: Path) -> None:
-    """Codex PR #345 finding #3 (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
-    `run_render_stage()`'s own resume loop now skips an already-completed
-    unit without touching its PCM at all (see `_render_index_from_ledger`) —
-    it no longer detects this file being corrupted underneath it, by
-    design (that per-unit read+hash on every resumed slice is exactly what
-    made a growing completed prefix starve a small `--time-budget-seconds`
-    slice of progress). `render_instance()` itself is unchanged: its own
-    resume/stale check still fails closed when called directly (matching
-    the module docstring's resume contract), and measurement-time integrity
-    (`measure_stage._verify_and_load_rendered_pcm`) remains the fail-closed
-    net every rendered unit passes through before being measured."""
+    """Codex PR #345 round 3 finding F5 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): with a single-unit subset, the resumed
+    `run_render_stage()` call IS the completing invocation (`completed_all`
+    — not a `PARTIAL_SLICE` exit), so its post-loop validation pass
+    (`_validate_skipped_resume_outcomes`) now catches this corrupted PCM
+    before the transition and raises `RenderResumeIndexIntegrityError`
+    instead of silently returning a `skipped_resume` outcome for it (the
+    pre-fix behavior this test used to assert — see round 3 finding F5).
+    `render_instance()` called directly is unchanged: its own resume/stale
+    check still fails closed (matching the module docstring's resume
+    contract), and measurement-time integrity
+    (`measure_stage._verify_and_load_rendered_pcm`) remains a second,
+    independent fail-closed net every rendered unit passes through before
+    being measured."""
     subset = small_matrix_subset(1, family="F0_CONTROL")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
@@ -230,19 +329,59 @@ def test_c1_render_resume_stale_fails_closed_on_corrupted_file(tmp_path: Path) -
     pcm_path = campaign.renders_dir / target.row_id / f"{target.probe_index}.pcm"
     pcm_path.write_bytes(b"\x00\x01corrupted-bytes")
 
-    resumed = render_stage.run_render_stage(campaign, subset, stage="c1")
-    assert all(o.status == "skipped_resume" for o in resumed)
+    with pytest.raises(render_stage.RenderResumeIndexIntegrityError) as exc_info:
+        render_stage.run_render_stage(campaign, subset, stage="c1")
+    assert len(exc_info.value.failing_units) == 1
+    failing_row_id, failing_probe_index, failing_detail = exc_info.value.failing_units[0]
+    assert (failing_row_id, failing_probe_index) == (target.row_id, target.probe_index)
+    assert "current file sha256=" in failing_detail
+
+    # transition blocked: still exactly the 1 `fixture_valid` from the first
+    # (clean) run — no second one from the failed resume — and a
+    # `stop_event` recording the mismatch was appended instead.
+    fixture_valid_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "fixture_valid"
+    ]
+    assert len(fixture_valid_events) == 1
+    stop_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "stop_event"
+        and e.payload.get("reason") == "RENDER_RESUME_INDEX_INTEGRITY_MISMATCH"
+    ]
+    assert len(stop_events) == 1
+    assert stop_events[0]["units"] == [
+        {
+            "row_id": target.row_id,
+            "probe_index": target.probe_index,
+            "detail": failing_detail,
+        }
+    ]
 
     with pytest.raises(render_stage.RenderStaleError):
         _render_instance_directly(campaign, subset, target)
 
+    # recovery: render is deterministic (module docstring), so writing the
+    # byte-identical PCM back (what a manual re-render of this exact
+    # instance would reproduce) — WITHOUT touching the ledger — is the
+    # documented recovery path. Once bytes match the pinned sha again, the
+    # next invocation validates clean and transitions normally.
+    pcm_path.write_bytes(bytes.fromhex(_render_pcm_hex(campaign, subset, target)))
+    recovered = render_stage.run_render_stage(campaign, subset, stage="c1")
+    assert all(o.status == "skipped_resume" for o in recovered)
+    fixture_valid_events_after = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "fixture_valid"
+    ]
+    assert len(fixture_valid_events_after) == 2
+
 
 @pytest.mark.slow
 def test_c1_render_resume_stale_fails_closed_on_missing_file(tmp_path: Path) -> None:
-    """Same finding #3 distinction as the corrupted-file test above: the
-    fast resume path in `run_render_stage()` no longer notices a missing
-    PCM file for an already-completed unit, but `render_instance()` called
-    directly still fails closed."""
+    """Same round 3 finding F5 distinction as the corrupted-file test above:
+    a single-unit resumed call is the completing invocation, so the missing
+    PCM is now caught by the post-loop validation pass and blocks the
+    transition — `render_instance()` called directly still fails closed
+    independently."""
     subset = small_matrix_subset(1, family="F0_CONTROL")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
@@ -252,11 +391,107 @@ def test_c1_render_resume_stale_fails_closed_on_missing_file(tmp_path: Path) -> 
     pcm_path = campaign.renders_dir / target.row_id / f"{target.probe_index}.pcm"
     pcm_path.unlink()
 
-    resumed = render_stage.run_render_stage(campaign, subset, stage="c1")
-    assert all(o.status == "skipped_resume" for o in resumed)
+    with pytest.raises(render_stage.RenderResumeIndexIntegrityError) as exc_info:
+        render_stage.run_render_stage(campaign, subset, stage="c1")
+    assert exc_info.value.failing_units[0][:2] == (target.row_id, target.probe_index)
+
+    fixture_valid_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "fixture_valid"
+    ]
+    assert len(fixture_valid_events) == 1
 
     with pytest.raises(render_stage.RenderStaleError):
         _render_instance_directly(campaign, subset, target)
+
+
+def _render_pcm_hex(campaign, subset, outcome) -> str:
+    """Deterministically reproduces the exact PCM bytes for `outcome` by
+    invoking the same fresh-process worker `render_instance()` uses,
+    bypassing the ledger-based resume check entirely (mirrors the manual
+    recovery path documented on `RenderResumeIndexIntegrityError`: regen
+    off-ledger, then restore the file). Returns hex so callers can round
+    -trip via `bytes.fromhex()`."""
+    mr = next(mr for mr in subset if mr.row_id == outcome.row_id)
+    split = campaign.realized_split.assignment[outcome.row_id]
+    payload = {
+        "row_json": json.dumps(mr.row.to_canonical_dict()),
+        "secret_hex": campaign.render_root_secret.hex(),
+        "campaign_id": campaign.campaign_id,
+        "family": mr.row.family,
+        "split": split.value,
+        "row_id": outcome.row_id,
+        "probe_index": outcome.probe_index,
+    }
+    argv = [
+        sys.executable,
+        "-m",
+        "voice_genesis.calibration.campaign._render_worker",
+        json.dumps(payload),
+    ]
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=60.0, check=True)
+    raw = json.loads(proc.stdout)
+    return raw["pcm_hex"]
+
+
+@pytest.mark.slow
+def test_c1_render_resume_stale_lists_all_failing_units_then_recovers(tmp_path: Path) -> None:
+    """Codex PR #345 round 3 finding F5 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`), full scenario from the task brief: one recorded
+    PCM deleted, one corrupted, one left intact. The completing invocation
+    must stop (no `fixture_valid`) with a single `stop_event` listing BOTH
+    failing units (not just the first one hit) — then, after the documented
+    manual recovery (byte-identical PCM restored off-ledger), a subsequent
+    run transitions normally."""
+    subset = small_matrix_subset(3, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    outcomes = render_stage.run_render_stage(campaign, subset, stage="c1")
+    assert len(outcomes) >= 3  # `PROBE_REPEATS` fans a 3-row subset out further
+    deleted_target, corrupted_target, intact_target = outcomes[0], outcomes[1], outcomes[2]
+
+    deleted_path = campaign.renders_dir / deleted_target.row_id / f"{deleted_target.probe_index}.pcm"
+    corrupted_path = (
+        campaign.renders_dir / corrupted_target.row_id / f"{corrupted_target.probe_index}.pcm"
+    )
+    deleted_path.unlink()
+    corrupted_path.write_bytes(b"\x00\x01corrupted-bytes")
+
+    with pytest.raises(render_stage.RenderResumeIndexIntegrityError) as exc_info:
+        render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    failing_keys = {(rid, pidx) for rid, pidx, _detail in exc_info.value.failing_units}
+    assert failing_keys == {
+        (deleted_target.row_id, deleted_target.probe_index),
+        (corrupted_target.row_id, corrupted_target.probe_index),
+    }
+    assert (intact_target.row_id, intact_target.probe_index) not in failing_keys
+
+    fixture_valid_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "fixture_valid"
+    ]
+    assert len(fixture_valid_events) == 1  # unchanged: no second transition
+    stop_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "stop_event"
+        and e.payload.get("reason") == "RENDER_RESUME_INDEX_INTEGRITY_MISMATCH"
+    ]
+    assert len(stop_events) == 1
+    reported_keys = {(u["row_id"], u["probe_index"]) for u in stop_events[0]["units"]}
+    assert reported_keys == failing_keys
+
+    # recovery: restore byte-identical PCM off-ledger for both broken units
+    # (what a manual re-render of each exact instance reproduces).
+    deleted_path.write_bytes(bytes.fromhex(_render_pcm_hex(campaign, subset, deleted_target)))
+    corrupted_path.write_bytes(bytes.fromhex(_render_pcm_hex(campaign, subset, corrupted_target)))
+
+    recovered = render_stage.run_render_stage(campaign, subset, stage="c1")
+    assert all(o.status == "skipped_resume" for o in recovered)
+    fixture_valid_events_after = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "fixture_valid"
+    ]
+    assert len(fixture_valid_events_after) == 2
 
 
 # ---------------------------------------------------------------------------

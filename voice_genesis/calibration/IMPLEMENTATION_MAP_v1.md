@@ -628,3 +628,140 @@ stage を安全に止める手段が無い。(3) resume するたびに ledger �
   で見逃す経路は増えない。`render_instance()` 自身の resume 判定
   （`_recorded_render_sha` + PCM sha 照合）は変更していない——直接呼ぶ他の呼び
   出し元・既存テストの契約は不変。
+- **第 3 巡 finding F5（③、`render_stage.py` ~579）— 上記 index skip は
+  completing invocation でも一切検証を行わず、削除・破損した PCM の上に
+  falsely advance した状態を許してしまう**: 第 2 巡の index skip は「measure
+  時に必ず fail-closed する」と述べたが、その fail-closed には前提が要る——
+  `c1-fixtures` が一度 FIXTURE_VALID（`fixture_valid` event）へ到達すると、
+  `cli._stage_already_complete()` により以降の `c1-fixtures` 再実行は
+  `run_render_stage()` を一切呼ばない真の no-op（`NOOP_ALREADY_COMPLETE`）に
+  なる（§6.3 系の round 19 finding #3 仕様）。よって、index に載っている unit の
+  PCM が render 完了後に削除・破損しても、それを検出するのは後段の C2/measure
+  だけになり、しかもその時点では render へ戻る resumable path が既に失われて
+  いる——falsely advanced campaign。修正: `run_render_stage()` はループ完走後
+  （`completed_all` — `PARTIAL_SLICE` 終了時は対象外、index skip は O(1) のまま）
+  かつ stage 遷移（c1 の `fixture_valid` 記帳、または c4-holdout の render
+  サブフェーズから measure サブフェーズへの引き渡し）の**直前**に一度だけ、
+  この呼び出しが `skipped_resume` にした unit を全数検証する
+  （`_validate_skipped_resume_outcomes` — ファイル存在 + sha256 が index の
+  記録値と一致するかのみ。`_recorded_render_sha` の再呼び出しなし、ledger
+  再走査なし、O(1) 特性は保つ）。不一致があれば遷移させず `stop_event`
+  （`reason="RENDER_RESUME_INDEX_INTEGRITY_MISMATCH"`、失敗 unit 全件を
+  `units` に列挙）を記帳し `RenderResumeIndexIntegrityError` で fail-closed
+  する（`raise` 前に append 済みなので non-zero exit でも記録は残る）。**回復
+  経路**: render は `render_root_secret` + row + campaign_id + family +
+  split + row_id + probe_index の純粋関数（決定論。モジュール docstring）
+  なので、同一 instance を外部から再 render すれば byte-identical な PCM を
+  再現できる——これを ledger に触れず `renders/<row_id>/<probe_index>.pcm`
+  （+ `.sha256` sidecar）へ書き戻すだけで、次回呼び出しの検証と
+  `measure_stage._verify_and_load_rendered_pcm` の両方が再び通り、stage は
+  通常どおり遷移する。ledger へ 2 件目の `render` event を追記する経路は
+  **不採用**——`_recorded_render_sha()`/`_render_index_from_ledger()` は共に
+  同一キーの**最初**の `render` event を採用する実装（ledger 順走査で最初の
+  一致を返す）ため、2 件目を足しても既存の全 reader（measure 時の pin 照合含む）
+  から無視される。ファイル書き戻しのみが契約を壊さない回復経路。
+- **第 3 巡 finding F6（②、`render_stage.py` ~674）— `SliceStatus.
+  instances_completed_this_run` が index skip 分まで含めて過大計上する**:
+  `len(outcomes)` は新規 render された unit と `skipped_resume` unit の両方を
+  含むため、再開 slice は毎回自分の実際の進捗より多く報告し、極端な場合
+  「完了済み prefix しか辿らず新規 render が 0 件」の slice でも 0 でない
+  progress を報告してしまう。修正: `sum(1 for o in outcomes if o.status ==
+  "rendered")` に変更——`instances_remaining` は `len(units) - len(outcomes)`
+  のまま不変（未処理 unit の総数という定義自体は正しかったため）。
+
+#### 6.5.2 リハーサル 4 追補（2026-09-03、`freeze_execution_15.txt` +
+`rehearsal4/slice_table.out`。D/G 採用、C は運用ルールの明文化のみ）
+
+- **finding D（③、`measure_stage.py` `run_measure_stage`/`_instance_has_
+  pending_candidate` 新設）— 測定 stage（c2-baseline/c3a-f0-selection/
+  c3b-selection/c4-holdout の measure サブフェーズ、いずれも
+  `measure_stage.run_measure_stage()` を共有）は R3 の index 化後も、完了済み
+  instance を毎回フル `MeasurementRecord` へ再構成していた**: c3b 実測
+  （`rehearsal4/slice_table.out`）で parent CPU が 71.7s→78.9s→84.3s→88.3s と
+  スライスごとに増加した一方、pre-loop（`MeterCallIndex.build()` 単体）の
+  コストは 0.38s（budget=0.001 probe）で頭打ち——各スライスの新規 render は
+  一定 2 instance のみ。原因は R3 の `MeterCallIndex` 導入後も
+  `run_measure_stage()` の内側ループが完了済み instance × candidate ごとに
+  `run_measurement_for_instance()` を無条件に呼び続けていたこと:
+  `meter_call_index.completed_records()`（`_resolve_meter_group` 経由で
+  `meter_output_from_dict()` を repeat 数分呼ぶ）が O(1) の index lookup では
+  なく、完了済みセルであっても毎回 `MeasurementRecord` を再構成していた——
+  `cli._run_c3b`/`_run_c4` は `slice_status.completed_all is False` の
+  `records` を丸ごと破棄する（`_partial_slice_report()`）ため、この再構成は
+  PARTIAL_SLICE では純粋な浪費だった。同型の `cli._build_f0_by_instance()`
+  （F0 再利用ループ）は 1 candidate のみの再構成でありコスト寄与は小さい
+  ため対象外——本 finding は `run_measure_stage()` 一本化で c2/c3a/c3b/c4 の
+  measure サブフェーズ全てを同時に是正する。修正: 新設
+  `MeterCallIndex.is_complete()`（`meter_output_from_dict()` を一切呼ばない
+  O(1) presence 判定——PCM 読み込みなし・record 再構成なし）で完了済み
+  セルを `run_measurement_for_instance()` を呼ばずに skip する
+  （`skipped_complete_cells` へ記録するのみ）。完全な `records` が要る呼び
+  出し（`time_budget=None` の単発実行、または slice が完走した completing
+  invocation）だけ、ループ後の 1 パス（`_rebuild_skipped_records`）で
+  skip したセルをまとめて再構成する——**PARTIAL_SLICE では一切再構成しない**
+  （`records` は本来から呼び出し元が破棄するため、空でも契約は変わらない）。
+  テスト: 完了済み prefix を歩く PARTIAL_SLICE で `MeterCallIndex.
+  completed_records()` の呼び出し回数が 0 であることを直接カウントする
+  regression（`test_run_measure_stage_partial_slice_skips_completed_prefix_
+  without_reconstruction`）と、大きな完了済み prefix + 極小 budget でも
+  budget+1 instance 分の時間で完走する regression
+  （`test_run_measure_stage_large_completed_prefix_partial_slice_stays_fast`）
+  を追加。
+- **finding G（②、`render_stage.py`/`measure_stage.py` の `SliceStatus.
+  instances_remaining` 算出）— budget が最初の instance の dispatch 前に
+  尽きた invocation は `instances_remaining` を過大報告し、非増加が
+  保証されない**: `rehearsal4/slice_table.out` の c3b、budget=0.001 行:
+  `instances_remaining` が直前の 77 から 85 へ後退（8 件の完了済み instance
+  を無視した過大報告）。原因は両モジュールとも「この呼び出しが実際に歩いた
+  instance 数」ベースの引き算だったこと——`render_stage.run_render_stage()`
+  は `len(units) - len(outcomes)`（`outcomes` は budget 切れ前に歩いた分のみ）、
+  `measure_stage.run_measure_stage()` は `total_instances -
+  instances_completed_this_run`。どちらも budget 切れが 1 instance 目の
+  境界検査より前に来ると `outcomes`/`instances_completed_this_run` が空/0の
+  まま確定し、`instances_remaining` が「このスライスで新たに歩いた分」を
+  真の残数と取り違えて全 instance 数まで跳ね上がる。修正: 両モジュールとも
+  「この呼び出し後に完了しているか」を index から直接数え直す——
+  `render_stage`: 呼び出し先頭で構築した `completed_units`（ledger 由来、
+  この呼び出しの新規分は含まない）+ このスライスの新規 render 数
+  （`newly_rendered_count`）を `len(units)` から引く。`measure_stage`: 新設
+  `_instance_has_pending_candidate()` で `sorted_instances` 全件を
+  `MeterCallIndex.is_complete()`（PCM 読み込みなし、O(1)）だけで 1 パス
+  再判定する——この呼び出しがループ中に**歩かなかった** instance も含めて
+  真の未完了数を数える（budget が最初の境界検査で尽きても、この pass 自体は
+  必ず実行される。O(1) presence 判定のみのため、既に完了しているとの判定に
+  必要な reconstruction コストは発生しない = finding D の是正と両立）。
+  `instances_completed_this_run` は変更なし（finding G は `remaining` のみが
+  対象——`completed_this_run` の意味論は既に「このスライスが歩いた instance
+  数」で一貫しており、rehearsal4 でもこの値自体の誤りは観測されていない）。
+  テスト: 0.001s budget を折り返し済みの半完了キャンペーンへ与え、
+  `instances_remaining == true_remaining` かつ `instances_completed_this_run
+  == 0`（非増加）であることを固定する regression を render_stage/
+  measure_stage 双方に追加
+  （`test_c1_render_time_budget_remaining_matches_true_completed_state`/
+  `test_run_measure_stage_time_budget_remaining_matches_true_completed_state`）。
+- **finding C（境界宣言、docs のみ。コード変更なし）— `--time-budget-
+  seconds` は dispatch 開始境界のみを縛るため、wall time は「残り budget +
+  in-flight instance の最長所要時間」に達し得る**: `rehearsal4/
+  slice_table.out` の c3b、budget=150 の 4 スライスで wall time 208.8〜225.1s
+  （budget に対し 39〜50% 超過）。`--workers 3` 時 c3b の 1 instance は
+  約 70s（`--workers 1` では約 105s）——R2 の契約どおり in-flight instance は
+  budget 切れ後も完走するため（本 memo 上記 R2「instance の途中では止めない」）
+  これは design 上の正しい振る舞いであり finding D/G のような bug ではない。
+  **operator rule**（このリポジトリの実行環境が課す外部プロセス寿命制限
+  ── 例: 本セッションの Bash ツール 240s ── の下で `--time-budget-seconds`
+  を選ぶ運用者向け）: `--time-budget-seconds` は
+  `外部プロセス寿命制限 - その stage の最長 in-flight instance 所要時間`
+  以下に設定する。c3b の実測値（`--workers 3` で約 70s/instance、
+  `--workers 1` で約 105s/instance）を用いる場合、240s 制限下では
+  `--workers 3 --time-budget-seconds <=170` または
+  `--workers 1 --time-budget-seconds <=135` が安全側の上限（rehearsal4 は
+  budget=150 かつ `--workers 1` 相当の設定で実際に 240s 制限を超過し
+  SIGTERM された——`slice_table.out` c3b_s5 行）。
+- **completing invocation の ledger event（本 memo 上記 R2/finding G 補足
+  ── コード変更なし、意味論の確認のみ）**: stage が完走する（budget 切れず
+  完走、または budget 自体を渡さない）invocation は phase transition と
+  同時に **`stage_summary`**（その invocation 自身の parent CPU 全量）を
+  記帳し **`slice_summary`** は一切記帳しない——`slice_summary` は
+  §6.5.1 finding #2 のとおり `PARTIAL_SLICE` exit（phase transition なし）
+  専用の non-transition event であり、両者は 1 dispatch につきどちらか
+  一方のみが記帳される（本 memo 上記「二重計上なしの根拠」参照）。

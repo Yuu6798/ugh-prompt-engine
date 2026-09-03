@@ -11,7 +11,7 @@
     "maximum_claim": "ABSOLUTE",
     "review_status": "APPROVED_BY_DELEGATION",
     "source_checked_at": "2026-09-02T01:46:11Z",
-    "source_hash_or_version": "e3025dcd114cfb061c13659f58b2d6cf77f5043efe42c4ac9713f45d6c0898fd",
+    "source_hash_or_version": "2538ea1dc0783bc26f363b3d2da16162314b7de63038653f74553c182a929b49",
     "source_id_or_url": "GATE1-DELEGATION-2026-09-02 (user -> design lead, recommended values; PR #343)",
     "unit": "hz"
   },
@@ -27,7 +27,7 @@
     "maximum_claim": "ABSOLUTE",
     "review_status": "APPROVED_BY_DELEGATION",
     "source_checked_at": "2026-09-02T01:46:11Z",
-    "source_hash_or_version": "e3025dcd114cfb061c13659f58b2d6cf77f5043efe42c4ac9713f45d6c0898fd",
+    "source_hash_or_version": "2538ea1dc0783bc26f363b3d2da16162314b7de63038653f74553c182a929b49",
     "source_id_or_url": "GATE1-DELEGATION-2026-09-02 (user -> design lead, recommended values; PR #343)",
     "unit": "hz"
   },
@@ -59,7 +59,7 @@
     "maximum_claim": "ABSOLUTE",
     "review_status": "APPROVED_BY_DELEGATION",
     "source_checked_at": "2026-09-02T01:46:11Z",
-    "source_hash_or_version": "e3025dcd114cfb061c13659f58b2d6cf77f5043efe42c4ac9713f45d6c0898fd",
+    "source_hash_or_version": "2538ea1dc0783bc26f363b3d2da16162314b7de63038653f74553c182a929b49",
     "source_id_or_url": "GATE1-DELEGATION-2026-09-02 (user -> design lead, recommended values; PR #343)",
     "unit": "hz"
   },
@@ -75,7 +75,7 @@
     "maximum_claim": "ABSOLUTE",
     "review_status": "APPROVED_BY_DELEGATION",
     "source_checked_at": "2026-09-02T01:46:11Z",
-    "source_hash_or_version": "e3025dcd114cfb061c13659f58b2d6cf77f5043efe42c4ac9713f45d6c0898fd",
+    "source_hash_or_version": "2538ea1dc0783bc26f363b3d2da16162314b7de63038653f74553c182a929b49",
     "source_id_or_url": "GATE1-DELEGATION-2026-09-02 (user -> design lead, recommended values; PR #343)",
     "unit": "hz"
   },
@@ -91,7 +91,7 @@
     "maximum_claim": "ABSOLUTE",
     "review_status": "APPROVED_BY_DELEGATION",
     "source_checked_at": "2026-09-02T01:46:11Z",
-    "source_hash_or_version": "e3025dcd114cfb061c13659f58b2d6cf77f5043efe42c4ac9713f45d6c0898fd",
+    "source_hash_or_version": "2538ea1dc0783bc26f363b3d2da16162314b7de63038653f74553c182a929b49",
     "source_id_or_url": "GATE1-DELEGATION-2026-09-02 (user -> design lead, recommended values; PR #343)",
     "unit": "hz"
   },
@@ -123,7 +123,7 @@
     "maximum_claim": "ABSOLUTE",
     "review_status": "APPROVED_BY_DELEGATION",
     "source_checked_at": "2026-09-02T01:46:11Z",
-    "source_hash_or_version": "e3025dcd114cfb061c13659f58b2d6cf77f5043efe42c4ac9713f45d6c0898fd",
+    "source_hash_or_version": "2538ea1dc0783bc26f363b3d2da16162314b7de63038653f74553c182a929b49",
     "source_id_or_url": "GATE1-DELEGATION-2026-09-02 (user -> design lead, recommended values; PR #343)",
     "unit": "db_per_oct"
   },
@@ -139,7 +139,7 @@
     "maximum_claim": "ABSOLUTE",
     "review_status": "APPROVED_BY_DELEGATION",
     "source_checked_at": "2026-09-02T01:46:11Z",
-    "source_hash_or_version": "e3025dcd114cfb061c13659f58b2d6cf77f5043efe42c4ac9713f45d6c0898fd",
+    "source_hash_or_version": "2538ea1dc0783bc26f363b3d2da16162314b7de63038653f74553c182a929b49",
     "source_id_or_url": "GATE1-DELEGATION-2026-09-02 (user -> design lead, recommended values; PR #343)",
     "unit": "db_per_oct"
   },
@@ -187,7 +187,7 @@
     "maximum_claim": "ABSOLUTE",
     "review_status": "APPROVED_BY_DELEGATION",
     "source_checked_at": "2026-09-02T01:46:11Z",
-    "source_hash_or_version": "e3025dcd114cfb061c13659f58b2d6cf77f5043efe42c4ac9713f45d6c0898fd",
+    "source_hash_or_version": "2538ea1dc0783bc26f363b3d2da16162314b7de63038653f74553c182a929b49",
     "source_id_or_url": "GATE1-DELEGATION-2026-09-02 (user -> design lead, recommended values; PR #343)",
     "unit": "fraction"
   },
@@ -203,7 +203,7 @@
     "maximum_claim": "DIAGNOSTIC_ONLY",
     "review_status": "APPROVED_BY_DELEGATION",
     "source_checked_at": "2026-09-02T01:46:11Z",
-    "source_hash_or_version": "e3025dcd114cfb061c13659f58b2d6cf77f5043efe42c4ac9713f45d6c0898fd",
+    "source_hash_or_version": "2538ea1dc0783bc26f363b3d2da16162314b7de63038653f74553c182a929b49",
     "source_id_or_url": "GATE1-DELEGATION-2026-09-02 (user -> design lead, recommended values; PR #343)",
     "unit": "fraction"
   },

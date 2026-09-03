@@ -301,3 +301,23 @@ Codex #345 第 1 巡の ③ 2 件（F0 再開 index 未使用 / PARTIAL_SLICE �
 memo_sha256 を `2c805ae839d624a640ac8ea0d0d372d95d17d99a996fdcf219e50115108115e0` へ
 更新した。承認内容（cost caps /
 claim scope / E_use 境界）は §10 と同一。
+
+### 10.2 D79 追補 2（2026-09-03）
+
+Codex #345 第 3 巡の ③ 1 件（F5: `render_stage.run_render_stage()` の resume
+index skip が completing invocation でも一切検証を行わず、削除・破損した PCM の
+上に `fixture_valid`/c4-holdout render→measure 遷移が falsely advance し得た
+欠落——遷移直前 1 回のみの skip unit 全数検証 + `stop_event`/
+`RenderResumeIndexIntegrityError` fail-closed を追加）と ② 1 件（F6:
+`SliceStatus.instances_completed_this_run` が index skip 分まで含めて過大計上して
+いた欠落を新規 render 分のみの計上へ修正）を採用し、続けてリハーサル 4
+（`freeze_execution_15.txt`/`rehearsal4/slice_table.out`）の ③ 1 件（D:
+`measure_stage.run_measure_stage()` が c2/c3a/c3b/c4 の measure サブフェーズで
+完了済み instance を毎回フル `MeasurementRecord` へ再構成し続けていた欠落——
+新設 `MeterCallIndex.is_complete()` による O(1) skip + completing invocation
+時のみの 1 パス再構成へ修正）と ② 1 件（G: `instances_remaining` が「このスライスが
+実際に歩いた instance 数」ベースの引き算で、budget が最初の instance 前に尽きると
+完了済み分を無視し過大報告していた欠落——render_stage/measure_stage 双方を index
+からの直接算出へ修正）を採用した。memo §6.5/§6.5.1/§6.5.2 を追補し、memo_sha256 を
+`6f693a213881dfd8c6c5a213c969fc913ee5c6f6063d638eb5ae74c5d5232a0d` へ更新した。
+承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。
