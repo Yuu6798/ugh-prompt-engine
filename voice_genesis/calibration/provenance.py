@@ -350,6 +350,34 @@ def _split_complete_lines(content: str) -> tuple[list[str], bool, bool]:
     return raw_lines, truncated_tail, missing_final_newline
 
 
+def _last_nonblank_line_byte_range(content: str) -> tuple[int, int] | None:
+    """`content` 内で `_split_complete_lines()` が返す `raw_lines` の最後の
+    要素（最後の非空・完全行、改行文字を含まない本文）が占める UTF-8 バイト
+    範囲 `(start, end)` を返す。該当行が無ければ `None`。
+
+    `#345` 指摘③ 追補（末尾空行での偽 append 失敗）: `_set_watermark()` は
+    従来、watermark 末尾エントリのバイト範囲を `_v_bytes`（ファイル全体の
+    検証済みバイト長）から逆算していた（`last_end = v_bytes - 1` 等）。この
+    逆算は「最終非空行がファイル末尾（改行未終端なら EOF、そうでなければ
+    末尾の `\\n` の直前）で終わる」ことを前提にしており、有効な chain の末尾
+    に空行が 1 行以上続く場合に成立しない（空行の分だけ実際の終端よりも
+    後ろを指す）。本関数は `content.splitlines(keepends=True)` を 1 パスで
+    走査し、`_split_complete_lines()` と同じ「空白のみの行は無視する」判定
+    (`stripped.strip()`) で最後の非空行そのものの実バイト範囲を直接返す。
+    ファイル全体の長さ (`_v_bytes`) や末尾改行の有無に一切依存しないため、
+    末尾空行が何行続いても（`missing_final_newline` の場合を含め）常に
+    正しい範囲を指す。"""
+    offset = 0
+    result: tuple[int, int] | None = None
+    for raw_line in content.splitlines(keepends=True):
+        line_byte_len = len(raw_line.encode("utf-8"))
+        stripped = raw_line.splitlines()[0]
+        if stripped.strip():
+            result = (offset, offset + len(stripped.encode("utf-8")))
+        offset += line_byte_len
+    return result
+
+
 def _verify_chain_prefix(
     raw_lines: Sequence[str],
     truncated_tail: bool,
@@ -769,7 +797,14 @@ def _parse_ledger_lines(
 
 def _read_and_verify(
     path: Path,
-) -> tuple[list[LedgerEntry], list[MalformedLedgerLine], ChainVerification, int, list[str]]:
+) -> tuple[
+    list[LedgerEntry],
+    list[MalformedLedgerLine],
+    ChainVerification,
+    int,
+    list[str],
+    tuple[int, int] | None,
+]:
     """`path` を一度だけ読み、entries 構築 (`_parse_ledger_lines`)・chain 検証
     (`_verify_chain_prefix`)・検証済みバイト長の取得を同一バッファから行う
     純粋 I/O ヘルパー（UNDERSPEC-CAL-D84）。`Ledger.__init__` と
@@ -779,7 +814,10 @@ def _read_and_verify(
     `Ledger.append()` の増分検証で使う「検証済み watermark」の元になる。
     ファイルが存在しない場合は空とみなす。戻り値の `raw_lines` は
     `_set_watermark()` が watermark 末尾エントリの生バイト列 fingerprint
-    （`#345 指摘③`: rollback/tamper 検出用）を導出するために使う。"""
+    （`#345 指摘③`: rollback/tamper 検出用）を導出するために使う。同じく
+    戻り値の `last_line_byte_range`（`#345 指摘③` 追補）は、その fingerprint
+    バイト列を次回 `append()` が O(1) で再読取する際の実際のファイル内
+    バイト範囲（末尾空行の有無に依存しない）を渡すために使う。"""
     if path.exists():
         content = path.read_text(encoding="utf-8")
     else:
@@ -787,7 +825,15 @@ def _read_and_verify(
     raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(content)
     entries, malformed = _parse_ledger_lines(raw_lines)
     chain = _verify_chain_prefix(raw_lines, truncated_tail, missing_final_newline)
-    return entries, malformed, chain, len(content.encode("utf-8")), raw_lines
+    last_line_byte_range = _last_nonblank_line_byte_range(content)
+    return (
+        entries,
+        malformed,
+        chain,
+        len(content.encode("utf-8")),
+        raw_lines,
+        last_line_byte_range,
+    )
 
 
 class Ledger:
@@ -813,10 +859,12 @@ class Ledger:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        entries, malformed, chain, content_bytes, raw_lines = _read_and_verify(path)
+        entries, malformed, chain, content_bytes, raw_lines, last_line_byte_range = (
+            _read_and_verify(path)
+        )
         self._entries = entries
         self._malformed = malformed
-        self._set_watermark(chain, entries, content_bytes, raw_lines)
+        self._set_watermark(chain, entries, content_bytes, raw_lines, last_line_byte_range)
 
     def _set_watermark(
         self,
@@ -824,6 +872,7 @@ class Ledger:
         entries: Sequence[LedgerEntry],
         content_bytes: int,
         raw_lines: Sequence[str],
+        last_line_byte_range: tuple[int, int] | None = None,
     ) -> None:
         """`append()` の増分検証（UNDERSPEC-CAL-D84）が使う「検証済み
         watermark」を設定する。`__init__`/`load_with_verification`（構築時）
@@ -845,7 +894,21 @@ class Ledger:
         再読取・再検証する（`raw_lines` 全体の再検証ではない）。これにより
         「ファイルサイズは watermark と同じだが末尾エントリの内容だけが
         同じ長さの別内容に差し替えられている」改竄（O(1) suffix 検証では
-        素通りする）も fail-closed で検出する。"""
+        素通りする）も fail-closed で検出する。
+
+        `_v_last_line_start`/`_v_last_line_end`（`#345 指摘③` 追補、末尾空行
+        での偽 append 失敗の修正）: 上記 fingerprint バイト列の、ファイル内
+        での実際の開始/終了バイトオフセット。`last_line_byte_range`
+        （`_last_nonblank_line_byte_range()` が `content_bytes` とは独立に
+        1 パスで求めた、最後の**非空**完全行そのものの範囲）をそのまま格納
+        する。旧実装は `last_end` を `content_bytes`（watermark のファイル
+        全体バイト長）から `- 1` 等で逆算していたため、有効な chain の末尾に
+        空行が 1 行以上続く場合（`content_bytes` が空行の分だけ実際の終端
+        より後ろにずれる）、`append()` の O(1) fingerprint 再照合が誤った
+        バイト範囲を読み、正当な台帳を `LedgerChainInvalidError` で拒否して
+        いた（`#345` 指摘: append の偽失敗でリカバリを阻害する欠陥）。本
+        オフセットは末尾空行の有無や `missing_final_newline` に関わらず常に
+        最終非空行そのものを指すため、この逆算が不要になる。"""
         if chain.ok:
             self._v_bytes = content_bytes
             if entries:
@@ -855,11 +918,16 @@ class Ledger:
                 last_line_bytes = raw_lines[-1].encode("utf-8") if raw_lines else b""
                 self._v_last_line_len = len(last_line_bytes)
                 self._v_last_line_sha256 = hashlib.sha256(last_line_bytes).hexdigest()
+                if last_line_byte_range is not None:
+                    self._v_last_line_start, self._v_last_line_end = last_line_byte_range
+                else:
+                    self._v_last_line_start = self._v_last_line_end = 0
             else:
                 self._v_seq = -1
                 self._v_sha = GENESIS_PREV_SHA
                 self._v_last_line_len = 0
                 self._v_last_line_sha256 = None
+                self._v_last_line_start = self._v_last_line_end = 0
             self._v_missing_final_newline = chain.missing_final_newline
         else:
             self._v_bytes = 0
@@ -868,6 +936,7 @@ class Ledger:
             self._v_missing_final_newline = False
             self._v_last_line_len = 0
             self._v_last_line_sha256 = None
+            self._v_last_line_start = self._v_last_line_end = 0
 
     @classmethod
     def load_with_verification(cls, path: Path) -> tuple["Ledger", ChainVerification]:
@@ -879,13 +948,15 @@ class Ledger:
         — 本メソッドは追加の入口であり、`_read_and_verify` という既存の
         純関数を薄く呼ぶだけ。返す `chain` はここで確立した watermark の
         根拠でもある（UNDERSPEC-CAL-D84: `Ledger.append()` の増分検証）。"""
-        entries, malformed, chain, content_bytes, raw_lines = _read_and_verify(path)
+        entries, malformed, chain, content_bytes, raw_lines, last_line_byte_range = (
+            _read_and_verify(path)
+        )
 
         instance = cls.__new__(cls)
         instance.path = path
         instance._entries = entries
         instance._malformed = malformed
-        instance._set_watermark(chain, entries, content_bytes, raw_lines)
+        instance._set_watermark(chain, entries, content_bytes, raw_lines, last_line_byte_range)
         return instance, chain
 
     @property
@@ -1015,9 +1086,15 @@ class Ledger:
                     # 素通りする（suffix はまさにこの 1 行の直後から読む
                     # ため）。watermark 末尾 1 行分だけを O(1) で読み直し、
                     # 記録済み sha256 と一致するか確認する（#345 指摘③）。
+                    # バイト範囲は `_set_watermark()` が構築時に直接記録した
+                    # 最終非空行の実オフセット（`_v_last_line_start`/`_end`）
+                    # をそのまま使う — `v_bytes`（ファイル全体長）からの逆算
+                    # ではない。逆算は watermark 末尾に空行が続く有効な
+                    # chain で実際の終端より後ろを指し、正当な台帳の append
+                    # を偽の tamper 検出として拒否していた（`#345` 指摘③
+                    # 追補: 末尾空行での偽 append 失敗）。
                     last_len = self._v_last_line_len
-                    last_end = v_bytes if v_missing_final_newline else v_bytes - 1
-                    last_start = last_end - last_len
+                    last_start = self._v_last_line_start
                     f.seek(last_start)
                     last_bytes = f.read(last_len)
                     if (
@@ -1093,12 +1170,16 @@ class Ledger:
                 # 同じ自己修復を行っているため不要）。
                 heal_missing_newline = v_missing_final_newline and not suffix_content
                 heal_prefix = b"\n" if heal_missing_newline else b""
-                new_bytes = heal_prefix + line.encode("utf-8") + b"\n"
+                new_line_bytes = line.encode("utf-8")
+                new_bytes = heal_prefix + new_line_bytes + b"\n"
                 f.seek(0, os.SEEK_END)
+                write_pos = f.tell()
                 f.write(new_bytes)
                 f.flush()
                 os.fsync(f.fileno())
                 new_v_bytes = f.tell()
+                new_line_start = write_pos + len(heal_prefix)
+                new_line_end = new_line_start + len(new_line_bytes)
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
@@ -1109,9 +1190,10 @@ class Ledger:
         self._v_seq = entry.seq
         self._v_sha = entry.entry_sha
         self._v_missing_final_newline = False
-        line_bytes = line.encode("utf-8")
-        self._v_last_line_len = len(line_bytes)
-        self._v_last_line_sha256 = hashlib.sha256(line_bytes).hexdigest()
+        self._v_last_line_len = len(new_line_bytes)
+        self._v_last_line_sha256 = hashlib.sha256(new_line_bytes).hexdigest()
+        self._v_last_line_start = new_line_start
+        self._v_last_line_end = new_line_end
         return entry
 
     def verify_chain(self) -> ChainVerification:

@@ -569,6 +569,64 @@ def test_ledger_append_refuses_when_watermark_entry_same_length_substituted(
     assert [e.seq for e in ledger.entries] == [0, 1]
 
 
+def test_ledger_append_succeeds_after_one_trailing_blank_line(tmp_path) -> None:
+    """[#345 指摘③ 追補] chain-valid な台帳の末尾に空行が 1 行追加されても、
+    `append()` は偽の `LedgerChainInvalidError` を送出せず成功し、
+    `verify_chain()` も `ok=True` のままである。旧実装は watermark の
+    バイト範囲を `_v_bytes`（ファイル全体長。末尾空行の分だけ実際の最終
+    エントリの終端より後ろにずれる）から逆算していたため、O(1) fingerprint
+    再照合が誤ったバイト範囲を読んで正当な台帳を tamper 扱いしていた。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+
+    full_content = path.read_text(encoding="utf-8")
+    assert full_content.endswith("\n")
+    path.write_text(full_content + "\n", encoding="utf-8")
+
+    pre_append_check = Ledger(path).verify_chain()
+    assert pre_append_check.ok is True
+    assert pre_append_check.entries_verified == 2
+
+    fresh = Ledger(path)
+    e2 = fresh.append({"kind": "meter_call", "row_id": "r2"})
+    assert e2.seq == 2
+    assert e2.prev_sha == json.loads(full_content.splitlines()[-1])["entry_sha"]
+
+    result = Ledger(path).verify_chain()
+    assert result.ok is True
+    assert result.entries_verified == 3
+    assert result.tamper_at_seq is None
+
+
+def test_ledger_append_succeeds_after_two_trailing_blank_lines(tmp_path) -> None:
+    """[#345 指摘③ 追補] 末尾空行が 2 行連続していても同様に `append()` が
+    成功し `verify_chain()` も `ok=True` のままであることを確認する
+    （1 行分の空行だけを特別扱いしていないことの回帰確認）。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+
+    full_content = path.read_text(encoding="utf-8")
+    assert full_content.endswith("\n")
+    path.write_text(full_content + "\n\n", encoding="utf-8")
+
+    pre_append_check = Ledger(path).verify_chain()
+    assert pre_append_check.ok is True
+    assert pre_append_check.entries_verified == 2
+
+    fresh = Ledger(path)
+    e2 = fresh.append({"kind": "meter_call", "row_id": "r2"})
+    assert e2.seq == 2
+
+    result = Ledger(path).verify_chain()
+    assert result.ok is True
+    assert result.entries_verified == 3
+    assert result.tamper_at_seq is None
+
+
 def test_check_leakage_pre_unseal_access_is_blocked() -> None:
     entries = [
         LedgerEntry(
