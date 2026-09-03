@@ -116,3 +116,82 @@ def test_unseal_succeeds_with_valid_chain_and_gate3(tmp_path: Path) -> None:
     # same selection_frozen chain (campaign-level dedup is a cli/state concern).
     second = unseal_module.unseal_campaign(campaign, approval_dir=approval_dir)
     assert second.holdout_unseal_entry_sha != result.holdout_unseal_entry_sha
+
+
+# --- #345 指摘②（`UNDERSPEC-CAL-D85`）: Gate 3 は C0 freeze 後発行でなければ
+# ならない（IMPLEMENTATION_MAP_v1.md §6.4）。`approved_at_utc` と
+# `freeze_event["event_time_utc"]` の順序を unseal 側で検証する。 ---
+
+
+def test_unseal_refuses_when_gate3_predates_freeze(tmp_path: Path) -> None:
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, freeze_event_time_utc="2026-09-02T12:00:00+00:00"
+    )
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    _freeze_baseline_and_selection(campaign)
+
+    approval_dir = tmp_path / "approvals-predates-freeze"
+    write_gate3_approval(approval_dir, approved_at_utc="2026-09-02T11:59:59Z")
+    try:
+        unseal_module.unseal_campaign(campaign, approval_dir=approval_dir)
+        raise AssertionError("expected UnsealError: gate3 predates freeze")
+    except unseal_module.UnsealError as exc:
+        assert "gate3_predates_freeze" in str(exc)
+
+    # fail-closed: no partial events written
+    assert not any(
+        e.payload.get("kind") in ("gate3_accepted", "holdout_unseal")
+        for e in campaign.ledger.entries
+    )
+
+
+def test_unseal_refuses_when_gate3_equals_freeze(tmp_path: Path) -> None:
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, freeze_event_time_utc="2026-09-02T12:00:00+00:00"
+    )
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    _freeze_baseline_and_selection(campaign)
+
+    approval_dir = tmp_path / "approvals-equal-freeze"
+    write_gate3_approval(approval_dir, approved_at_utc="2026-09-02T12:00:00Z")
+    try:
+        unseal_module.unseal_campaign(campaign, approval_dir=approval_dir)
+        raise AssertionError("expected UnsealError: gate3 equals freeze")
+    except unseal_module.UnsealError as exc:
+        assert "gate3_predates_freeze" in str(exc)
+
+
+def test_unseal_succeeds_when_gate3_postdates_freeze(tmp_path: Path) -> None:
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, freeze_event_time_utc="2026-09-02T12:00:00+00:00"
+    )
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    _freeze_baseline_and_selection(campaign)
+
+    approval_dir = tmp_path / "approvals-postdates-freeze"
+    write_gate3_approval(approval_dir, approved_at_utc="2026-09-02T12:00:01Z")
+
+    result = unseal_module.unseal_campaign(campaign, approval_dir=approval_dir)
+    assert result.gate3_accepted_entry_sha
+    assert CampaignPhase.UNSEALED in campaign.phases_passed()
+
+
+def test_unseal_refuses_when_freeze_event_time_unparsable(tmp_path: Path) -> None:
+    # `freeze_event_time_utc=None` omits `event_time_utc` from the synthetic
+    # `c0_freeze` event entirely, simulating a legacy/malformed ledger.
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, freeze_event_time_utc=None)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    _freeze_baseline_and_selection(campaign)
+
+    approval_dir = tmp_path / "approvals-unparsable-freeze"
+    write_gate3_approval(approval_dir)
+    try:
+        unseal_module.unseal_campaign(campaign, approval_dir=approval_dir)
+        raise AssertionError("expected UnsealError: freeze event_time_utc unparsable")
+    except unseal_module.UnsealError as exc:
+        assert "gate3_predates_freeze" in str(exc)
+
+    assert not any(
+        e.payload.get("kind") in ("gate3_accepted", "holdout_unseal")
+        for e in campaign.ledger.entries
+    )

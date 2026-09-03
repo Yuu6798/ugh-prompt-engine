@@ -39,7 +39,7 @@
 |---|---|---|
 | Gate 1（campaign 実行承認 + 費用上限 + 最大 claim / E_use 境界） | `gate1_campaign_execution.json` | campaign 実行（D2 runner の armed 実行）+ cost caps 3 値の確定 + E_use 境界の受容 |
 | Gate 2（C0 freeze の実行承認） | `gate2_c0_freeze.json` | `c0_freeze.py` の armed 実行（secret 生成・`campaigns/<id>/` への公開） |
-| Gate 3（seal 保護水準の受容） | `gate3_seal_acceptance.json` | D2 runner の続行（C0 freeze の**後**に成立する概念のため、C0 manifest / freeze event のいずれにも埋め込まれない） |
+| Gate 3（seal 保護水準の受容） | `gate3_seal_acceptance.json` | D2 runner の続行（C0 freeze の**後**に成立する概念のため、C0 manifest / freeze event のいずれにも埋め込まれない）。**freeze 後に発行すること（unseal が順序を検証する）**（`UNDERSPEC-CAL-D85`） |
 
 ## スキーマ
 
