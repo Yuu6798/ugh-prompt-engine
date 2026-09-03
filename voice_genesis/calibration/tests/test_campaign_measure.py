@@ -1267,6 +1267,68 @@ def test_discard_partial_groups_true_duplicate_still_raises(tmp_path: Path) -> N
     )
 
 
+def test_partial_group_within_cpu_seconds_takes_shared_value(tmp_path: Path) -> None:
+    """Codex PR #345 round 6 finding #3 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): every record of one work unit carries the SAME
+    `within_cpu_seconds` aggregate (computed once before any of the 6
+    records are appended) — `_partial_group_within_cpu_seconds` must
+    recover that single shared value, not `len(records) * value` (which a
+    naive sum over records would produce)."""
+    by_key = {
+        ("within", 0): [{"within_cpu_seconds": 4.0}],
+        ("within", 1): [{"within_cpu_seconds": 4.0}],
+        ("within", 2): [{"within_cpu_seconds": 4.0}],
+    }
+    assert measure_stage._partial_group_within_cpu_seconds(by_key) == 4.0
+
+
+def test_partial_group_within_cpu_seconds_is_fail_closed_overcount_safe(tmp_path: Path) -> None:
+    """A malformed/missing `within_cpu_seconds` on some records must not
+    abort discard-recovery (the whole point of the operator escape hatch)
+    — each invalid record contributes 0.0 rather than raising, and the
+    (overcount-safe) `max()` across the group recovers the one genuinely
+    valid reading instead of silently taking a lower/zero value."""
+    by_key = {
+        ("within", 0): [{"within_cpu_seconds": None}],
+        ("within", 1): [{}],  # missing entirely
+        ("within", 2): [{"within_cpu_seconds": True}],  # bool must not coerce to 1.0
+        ("within", 3): [{"within_cpu_seconds": -1.0}],  # negative
+        ("within", 4): [{"within_cpu_seconds": math.nan}],  # non-finite
+        ("within", 5): [{"within_cpu_seconds": 4.0}],  # the one valid reading
+    }
+    assert measure_stage._partial_group_within_cpu_seconds(by_key) == 4.0
+
+
+def test_stale_measurement_error_partial_carries_discarded_within_cpu_seconds(
+    tmp_path: Path,
+) -> None:
+    """Codex PR #345 round 6 finding #3 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): the `partial`-kind `StaleMeasurementError` that
+    `_completed_meter_call_records`/`MeterCallIndex.completed_records`
+    raise must carry the discarded group's shared `within_cpu_seconds` so
+    `run_measurement_for_instance` can record it on the eventual
+    `meter_call_group_discarded` event."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    for i in range(2):
+        payload = _fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", i, 100.0)
+        payload["within_cpu_seconds"] = 4.0
+        campaign.ledger.append(payload)
+
+    with pytest.raises(measure_stage.StaleMeasurementError) as excinfo:
+        measure_stage._completed_meter_call_records(
+            campaign.ledger.entries, "r1", 0, "F0-B0-CURRENT"
+        )
+    assert excinfo.value.kind == "partial"
+    assert excinfo.value.discarded_within_cpu_seconds == 4.0
+
+    # the O(1)-index path (`MeterCallIndex`) must agree (R3 equivalence).
+    index = measure_stage.MeterCallIndex.build(campaign.ledger.entries)
+    with pytest.raises(measure_stage.StaleMeasurementError) as excinfo_index:
+        index.completed_records("r1", 0, "F0-B0-CURRENT")
+    assert excinfo_index.value.discarded_within_cpu_seconds == 4.0
+
+
 @pytest.mark.slow
 def test_discard_partial_groups_true_discards_partial_and_remeasures(tmp_path: Path) -> None:
     """R1 end-to-end (real measurement): a partial group + the flag appends
@@ -1314,6 +1376,11 @@ def test_discard_partial_groups_true_discards_partial_and_remeasures(tmp_path: P
     assert discarded["discarded_count"] == 2
     assert discarded["reason"] == "operator_discard_partial_group_after_interrupt"
     assert discarded["stage"] == "c2"
+    # round 6 finding #3: `_fake_meter_call` doesn't set `within_cpu_seconds`
+    # (legacy/pre-round-16 shape) — matches the fail-closed default of 0.0
+    # (`_partial_group_within_cpu_seconds` skips a missing field, same as
+    # `caps._finite_nonneg_float` elsewhere in this package).
+    assert discarded["discarded_within_cpu_seconds"] == 0.0
 
     # the pre-discard stale records stay in the ledger (append-only)...
     all_meter_call_events = [

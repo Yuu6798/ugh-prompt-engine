@@ -205,9 +205,13 @@ def test_cap_counters_from_ledger_dedups_meter_call_cpu_seconds_per_work_unit(
 
 
 def _fake_meter_call_group_discarded_event(
-    row_id: str, probe_index: int, candidate_id: str
+    row_id: str,
+    probe_index: int,
+    candidate_id: str,
+    *,
+    discarded_within_cpu_seconds: float | None = None,
 ) -> dict:
-    return {
+    payload: dict = {
         "kind": "meter_call_group_discarded",
         "row_id": row_id,
         "probe_index": probe_index,
@@ -217,6 +221,12 @@ def _fake_meter_call_group_discarded_event(
         "reason": "operator_discard_partial_group_after_interrupt",
         "stage": "c2",
     }
+    # round 6 finding #3 (`[UNDERSPEC-CAL-D79]`): field is optional — omitted
+    # by default so pre-round-6 callers of this helper (and the legacy-event
+    # assertion below) keep exercising the "no field at all" path.
+    if discarded_within_cpu_seconds is not None:
+        payload["discarded_within_cpu_seconds"] = discarded_within_cpu_seconds
+    return payload
 
 
 def test_cap_counters_from_ledger_charges_discarded_group_and_remeasure_separately(
@@ -269,6 +279,80 @@ def test_cap_counters_from_ledger_charges_discarded_group_and_remeasure_separate
     assert cap_counters_from_ledger(ledger_only_discard.entries, None) == CapCounters(
         compute_used=0.0, storage_used=0, budget_used=0.0
     )
+
+
+def test_cap_counters_from_ledger_charges_discarded_within_cpu_seconds_exactly_once(
+    tmp_path: Path,
+) -> None:
+    """Codex PR #345 round 6 finding #3 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): scenario (a) — a process hard-killed mid-append
+    (some `meter_call` records, no `stage_summary`/`slice_summary` for that
+    dispatch at all — the process never reached `cli.py` `main()`'s
+    `finally`) leaves its within-process CPU unrecoverable by the existing
+    round-16 subtraction (which assumes a summary event always exists). The
+    `meter_call_group_discarded` event's `discarded_within_cpu_seconds`
+    field must be the ONLY source that recovers it, and exactly once — not
+    zero (silently lost, the bug this fixes) and not doubled."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    # the killed attempt: 2 of 6 records survived, each carrying the shared
+    # within_cpu_seconds aggregate (identical across all of one work unit's
+    # records — see `measure_stage._partial_group_within_cpu_seconds`).
+    for i in range(2):
+        payload = _fake_meter_call_event(
+            "r1", 0, "F0-B0-CURRENT", "within", i, cpu_seconds=6.0, storage_bytes=100
+        )
+        payload["within_cpu_seconds"] = 4.0
+        ledger.append(payload)
+    # NOTE: no `stage_summary`/`slice_summary` anywhere in this ledger —
+    # the hard-killed process never reached `finally`.
+    ledger.append(
+        _fake_meter_call_group_discarded_event(
+            "r1", 0, "F0-B0-CURRENT", discarded_within_cpu_seconds=4.0
+        )
+    )
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # fresh CPU from the killed attempt's own first surviving record
+    # (cpu_seconds=6.0 - within_cpu_seconds=4.0 = 2.0, existing round-16
+    # dedup-by-first-record behaviour, unchanged) + the recovered within CPU
+    # (4.0, charged exactly once via the discard event) = 6.0 total — i.e.
+    # the killed attempt's full cpu_seconds is fully recovered, matching
+    # what a `stage_summary` would have captured had the process not been
+    # hard-killed.
+    assert derived.compute_used == pytest.approx(2.0 + 4.0)
+
+
+def test_cap_counters_from_ledger_discard_charge_does_not_double_count_with_stage_summary(
+    tmp_path: Path,
+) -> None:
+    """Codex PR #345 round 6 finding #3 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): scenario (b) — an EARLIER, unrelated dispatch
+    completed normally (its own `stage_summary` already covers all of ITS
+    own parent CPU, including any within-process CPU it spent). A LATER,
+    separate partial group (different key) gets hard-killed and discarded.
+    The two charges are for disjoint CPU and must simply add — the
+    `stage_summary` total is untouched by the unrelated discard event, and
+    the discard event's own `discarded_within_cpu_seconds` is not
+    re-charged anywhere else."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    # an earlier, fully-completed, unrelated dispatch.
+    ledger.append({"kind": "stage_summary", "stage": "c2-baseline", "parent_cpu_seconds": 5.0})
+    # a later, distinct (row_id, probe_index, candidate_id) group that gets
+    # hard-killed mid-append and discarded.
+    for i in range(2):
+        payload = _fake_meter_call_event(
+            "r2", 0, "F0-B1-CURRENT", "within", i, cpu_seconds=3.0, storage_bytes=50
+        )
+        payload["within_cpu_seconds"] = 1.5
+        ledger.append(payload)
+    ledger.append(
+        _fake_meter_call_group_discarded_event(
+            "r2", 0, "F0-B1-CURRENT", discarded_within_cpu_seconds=1.5
+        )
+    )
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # stage_summary (5.0) + killed group's fresh remainder (3.0 - 1.5 = 1.5)
+    # + the recovered within CPU (1.5) = 8.0 — no term lost, none doubled.
+    assert derived.compute_used == pytest.approx(5.0 + 1.5 + 1.5)
 
 
 def test_cap_counters_from_ledger_includes_stage_summary_parent_cpu(tmp_path: Path) -> None:

@@ -527,6 +527,43 @@ def cap_counters_from_ledger(
       finding #3, newly recorded) is each record's own individual
       serialized size — genuinely additive per record, so it is summed
       without dedup.
+    - `meter_call_group_discarded` events, `discarded_within_cpu_seconds`
+      field (round 6 finding #3, adopted, category ③, `[UNDERSPEC-CAL-D79]`):
+      the round-16 `within_cpu_seconds` subtraction above (on `meter_call`)
+      assumes the within-process CPU it excludes is always recovered via a
+      `stage_summary`/`slice_summary` event instead — but that assumption
+      is false for a *discarded* partial group whose writing process was
+      hard-killed (SIGKILL/OOM) mid-append: such a process never reaches
+      `cli.py` `main()`'s `finally` block, so it never emits *any*
+      `stage_summary`/`slice_summary` for that dispatch, and the group's
+      within-process CPU would otherwise be permanently unrecoverable
+      (silently understating `compute_used` — a false-success path past
+      the frozen compute cap). `measure_stage.run_measurement_for_instance`
+      records that CPU on the `meter_call_group_discarded` event itself
+      (`discarded_within_cpu_seconds` — the shared within-process CPU
+      aggregate of the discarded group's surviving records; see
+      `measure_stage._partial_group_within_cpu_seconds` docstring for why
+      this is one shared value, not a per-record sum), and it is summed
+      here 1:1 per discard event, unconditionally.
+
+      **Exactly-once invariant**: this addition is the *only* place
+      `within_cpu_seconds` is ever charged for records that end up
+      discarded — the `meter_call` bullet's subtraction above still always
+      excludes `within_cpu_seconds` from every record's `compute`
+      contribution regardless of eventual discard, so there is no
+      complementary subtraction to double against. This is provably safe
+      against the *completing* case (finally ran, `stage_summary`/
+      `slice_summary` already covers this CPU): a group can only remain
+      partial in the ledger for `--discard-partial-groups` to later find at
+      all if the writing process's own `finally` never ran — any ordinary
+      (non-hard-kill) Python exception mid-append still propagates through
+      `cli.py` `main()`'s `try`/`finally` and appends that dispatch's own
+      `stage_summary`/`slice_summary` before the process exits, which would
+      already fully complete or otherwise resolve the group (not leave it
+      resumably partial for a *later*, distinct invocation to discard).
+      Only a kill that Python itself cannot intercept leaves the ledger in
+      the specific state this code path handles, so charging on the
+      discard event is exactly-once by construction, not by coincidence.
     - `stage_summary` events (round 15 finding #5, `[UNDERSPEC-CAL-D31]`):
       the CLI dispatch path's own parent-side CPU for the whole stage,
       not captured by either of the above (matrix build, ledger/JSON I/O,
@@ -635,10 +672,13 @@ def cap_counters_from_ledger(
             # its own surviving first record exactly once, and the
             # subsequent full remeasurement is charged again from its own
             # first record — matching "records before [a discard] stay in
-            # the ledger and are still charged" without needing this event's
-            # own payload to carry any charge fields itself.
+            # the ledger and are still charged".
             key = (payload.get("row_id"), payload.get("probe_index"), payload.get("candidate_id"))
             seen_meter_keys.discard(key)
+            # round 6 finding #3 (adopted, category 3, `[UNDERSPEC-CAL-D79]`):
+            # `discarded_within_cpu_seconds` — see the dedicated docstring
+            # paragraph below for the exactly-once invariant this recovers.
+            compute += _finite_nonneg_float(payload.get("discarded_within_cpu_seconds"))
         elif kind == "meter_call":
             storage += _finite_nonneg_int(payload.get("storage_bytes"))
             key = (payload.get("row_id"), payload.get("probe_index"), payload.get("candidate_id"))

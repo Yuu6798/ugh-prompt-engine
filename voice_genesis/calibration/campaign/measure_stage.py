@@ -494,7 +494,18 @@ class StaleMeasurementError(RuntimeError):
     再測定。フラグの有無に関わらず常に fail-closed）を区別する。`kind ==
     "partial"` のとき `present_keys` はその時点で記帳済みだった
     `(repeat_kind, repeat_index)` キー集合（呼び出し元が discard event の
-    `discarded_repeat_keys` を組み立てるのに使う）。"""
+    `discarded_repeat_keys` を組み立てるのに使う）。
+
+    Codex PR #345 round 6 finding #3 (adopted, category 3,
+    `[UNDERSPEC-CAL-D79]`): `kind == "partial"` のとき
+    `discarded_within_cpu_seconds` は present な記録（`by_key` の各キーに
+    ちょうど 1 件ずつ）が共有する `within_cpu_seconds` 値（`_resolve_meter_
+    group` が算出。同一 work unit の全記録は `run_measurement_for_instance`
+    の単一計算から書かれるため本来同一値のはずだが、`max()` を取ることで
+    型不正/欠落な個別レコードが混じっていても過大側に振れる — このモジュール
+    既存の fail-closed 方向と同じ）。呼び出し元が `meter_call_group_
+    discarded` event へそのまま転記し、`caps.cap_counters_from_ledger()` が
+    それを exactly-once で課金する（詳細は同関数 docstring）。"""
 
     def __init__(
         self,
@@ -505,12 +516,14 @@ class StaleMeasurementError(RuntimeError):
         *,
         kind: str,
         present_keys: frozenset[tuple[str, int]] = frozenset(),
+        discarded_within_cpu_seconds: float = 0.0,
     ) -> None:
         self.row_id = row_id
         self.probe_index = probe_index
         self.candidate_id = candidate_id
         self.kind = kind
         self.present_keys = present_keys
+        self.discarded_within_cpu_seconds = discarded_within_cpu_seconds
         super().__init__(
             f"measure_stage: stale meter_call state for row_id={row_id!r} "
             f"probe_index={probe_index} candidate_id={candidate_id!r}: {detail}"
@@ -527,6 +540,40 @@ _EXPECTED_REPEAT_KEYS: frozenset[tuple[str, int]] = frozenset(
 #: R1 の discard event（design memo `design_runner_robustness.md`,
 #: `[UNDERSPEC-CAL-D79]`）が使う ledger `kind`。
 METER_CALL_GROUP_DISCARDED_KIND = "meter_call_group_discarded"
+
+
+def _partial_group_within_cpu_seconds(
+    by_key: Mapping[tuple[str, int], Sequence[Mapping[str, object]]],
+) -> float:
+    """Codex PR #345 round 6 finding #3 (adopted, category 3,
+    `[UNDERSPEC-CAL-D79]`): the shared `within_cpu_seconds` aggregate of a
+    partial (not-yet-6-record) meter_call group, to be recorded on the
+    `meter_call_group_discarded` event so a hard-killed process's within-
+    process CPU is not lost (see `caps.cap_counters_from_ledger()`
+    docstring for the exactly-once invariant). Every record of one work
+    unit carries the *same* `within_cpu_seconds` value (computed once by
+    `run_measurement_for_instance` before any of its 6 records are
+    appended) — so this is a single shared aggregate, not a per-record
+    quantity to sum (summing would multiply the same aggregate by however
+    many of the 6 records happened to persist before the kill). `by_key`
+    at the call site (post duplicate-check, pre-partial-raise) has exactly
+    1 payload per present key, so `max()` over the validated per-record
+    readings recovers that shared value while staying fail-closed
+    (overcount-safe) against any individual record whose field is
+    missing/non-finite/negative (0.0 contributed instead of aborting
+    discard-recovery — the whole point of the operator-recovery escape
+    hatch is robustness to whatever the interrupted process left behind)."""
+    best = 0.0
+    for entries in by_key.values():
+        for payload in entries:
+            value = payload.get("within_cpu_seconds")
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            if not math.isfinite(value) or value < 0:
+                continue
+            if float(value) > best:
+                best = float(value)
+    return best
 
 
 def _resolve_meter_group(
@@ -565,6 +612,7 @@ def _resolve_meter_group(
             f"incomplete meter_call state: missing={missing!r} unexpected={unexpected!r}",
             kind="partial",
             present_keys=present_keys,
+            discarded_within_cpu_seconds=_partial_group_within_cpu_seconds(by_key),
         )
 
     records: list[MeasurementRecord] = []
@@ -1076,6 +1124,22 @@ def run_measurement_for_instance(
     "operator が中断後に discard してよい" 対象ではない — 単一 writer
     契約違反や矛盾する再測定の兆候であり、手動調査に委ねる）。
 
+    Codex PR #345 round 6 finding #3 (adopted, category 3,
+    `[UNDERSPEC-CAL-D79]`): the discard event above also carries an
+    additional field `discarded_within_cpu_seconds` (memo §6.5 lists the
+    payload keys exhaustively as of round 5 — this is a new optional field
+    added here, not yet reflected there) — `exc.discarded_within_cpu_
+    seconds` (see `StaleMeasurementError`/`_partial_group_within_cpu_
+    seconds`). Rationale: a process hard-killed (SIGKILL/OOM) mid-append
+    never reaches `cli.py` `main()`'s `finally` block, so it never emits
+    the `stage_summary`/`slice_summary` event that `within_cpu_seconds`
+    normally rides on (round 16 finding #3 — within-process CPU is
+    deliberately excluded from the per-`meter_call` compute charge on the
+    assumption a parent-CPU summary event covers it). For a discarded
+    partial group that assumption can be false, silently losing that CPU
+    from the compute cap forever. See `caps.cap_counters_from_ledger()`
+    docstring for the exactly-once charging invariant.
+
     **R3 — 1 stage 呼び出し 1 スキャン**: `meter_call_index` が渡されれば
     resume 判定・discard reset をそれ経由で行い（`campaign.ledger.entries`
     を再取得しない）、新規に記帳した `meter_call`/`meter_call_group_
@@ -1105,6 +1169,12 @@ def run_measurement_for_instance(
                     "discarded_count": len(discarded_repeat_keys),
                     "reason": "operator_discard_partial_group_after_interrupt",
                     "stage": stage,
+                    # round 6 finding #3: shared within-process CPU aggregate
+                    # of the discarded group's present records (see
+                    # `StaleMeasurementError`/`_partial_group_within_cpu_
+                    # seconds` docstrings) — charged exactly once by
+                    # `caps.cap_counters_from_ledger()`.
+                    "discarded_within_cpu_seconds": exc.discarded_within_cpu_seconds,
                 }
             )
             if meter_call_index is not None:
