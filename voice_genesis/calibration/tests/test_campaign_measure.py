@@ -1454,6 +1454,210 @@ def test_discard_partial_groups_true_discards_partial_and_remeasures(tmp_path: P
     assert all(v != 999.0 for r in resumed for v in r.output.values.values())
 
 
+# ---------------------------------------------------------------------------
+# Codex PR #345 round 8 finding #1 (R8-1, category ③, `[UNDERSPEC-CAL-D79]`):
+# a discard's `discarded_within_cpu_seconds` must be charged to the LIVE
+# in-memory `cap_counters` (not only recoverable later via `counters.json`/
+# ledger reconstruction) and the cap enforced BEFORE any remeasurement is
+# attempted.
+# ---------------------------------------------------------------------------
+
+
+def test_discard_partial_group_over_cap_stops_before_remeasuring(tmp_path: Path) -> None:
+    """The recovered `discarded_within_cpu_seconds` alone pushes the LIVE
+    `cap_counters` over the frozen compute cap — `run_measurement_for_
+    instance` must raise `CostCapExceededError` right at discard time,
+    before ever reaching `_verify_and_load_rendered_pcm`/remeasurement (no
+    render fixture is set up for this test, so a remeasurement attempt would
+    itself raise `FileNotFoundError` first if it were ever reached)."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    for i in range(2):
+        payload = _fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", i, 100.0)
+        payload["within_cpu_seconds"] = 5.0
+        campaign.ledger.append(payload)
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    caps = CostCaps(
+        compute=4.0, storage=1_000_000, budget=1000.0, budget_accounting_mode="local_zero_cost"
+    )
+    counters = CapCounters()
+
+    with pytest.raises(measure_stage.CostCapExceededError):
+        measure_stage.run_measurement_for_instance(
+            campaign,
+            candidate,
+            row_id="r1",
+            probe_index=0,
+            sr_hz=16000,
+            cap_counters=counters,
+            cost_caps=caps,
+            discard_partial_groups=True,
+            stage="c2",
+        )
+    # the discard itself happened...
+    discard_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == measure_stage.METER_CALL_GROUP_DISCARDED_KIND
+    ]
+    assert len(discard_events) == 1
+    # ...the LIVE counters were charged with the recovered CPU (not merely
+    # something recoverable later from the ledger)...
+    assert counters.compute_used == pytest.approx(5.0)
+    # ...but no remeasurement was ever dispatched: only the 2 stale
+    # pre-discard `meter_call` records exist for this key.
+    meter_call_events_r1 = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "meter_call" and e.payload.get("row_id") == "r1"
+    ]
+    assert len(meter_call_events_r1) == 2
+    stop_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "stop_event"
+    ]
+    assert len(stop_events) == 1
+    assert stop_events[0]["reason"] == "COST_CAP_EXCEEDED"
+
+
+@pytest.mark.slow
+def test_discard_partial_group_below_cap_charges_live_counters_and_continues(
+    tmp_path: Path,
+) -> None:
+    """R8-1 companion (real measurement): when the recovered `discarded_
+    within_cpu_seconds` keeps the live counters below the frozen cap, the
+    discard still charges the live `cap_counters` immediately (visible
+    before remeasurement even starts, not only after ledger reconstruction)
+    and remeasurement proceeds normally to completion."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+    row = subset[0]
+    candidate = candidate_by_id("F0-B0-CURRENT")
+
+    payload = _fake_meter_call(candidate.candidate_id, row.row_id, 0, "within", 0, 999.0)
+    payload["within_cpu_seconds"] = 3.0
+    campaign.ledger.append(payload)
+
+    caps = CostCaps(
+        compute=1000.0, storage=1_000_000, budget=1000.0, budget_accounting_mode="local_zero_cost"
+    )
+    counters = CapCounters()
+    records = measure_stage.run_measurement_for_instance(
+        campaign,
+        candidate,
+        row_id=row.row_id,
+        probe_index=0,
+        sr_hz=row.row.sr_hz,
+        cap_counters=counters,
+        cost_caps=caps,
+        discard_partial_groups=True,
+        stage="c2",
+    )
+    assert len(records) == measure_stage.WITHIN_PROCESS_REPEATS + measure_stage.FRESH_PROCESS_REPEATS
+    # the recovered within CPU (3.0) was charged to the LIVE counters before
+    # remeasurement even began, on top of remeasurement's own fresh charge.
+    assert counters.compute_used >= 3.0
+
+
+# ---------------------------------------------------------------------------
+# Codex PR #345 round 8 finding #3 (R8-3, category ③, `[UNDERSPEC-CAL-D79]`):
+# a partial group must be discarded BEFORE the per-instance budget-expiry
+# check — discard is not a dispatch, so an already-exhausted `time_budget`
+# must not block it.
+# ---------------------------------------------------------------------------
+
+
+def test_run_measure_stage_discards_partial_group_before_budget_check(tmp_path: Path) -> None:
+    """A partial group + `--discard-partial-groups` + an already-exhausted
+    `time_budget` must still append the discard event on THIS call (no
+    remeasurement, since remeasurement dispatch stays budget-gated) —
+    before this fix, the budget check ran first and the discard was never
+    reached, repeating `PARTIAL_SLICE` forever without recovering."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", 0, 100.0))
+    campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", 1, 100.0))
+    candidate = candidate_by_id("F0-B0-CURRENT")
+
+    budget = TimeBudget.start_now(0.0001)
+    time.sleep(0.05)  # guarantee expiry regardless of machine speed/scheduling
+
+    records, slice_status = measure_stage.run_measure_stage(
+        campaign,
+        [("r1", 0)],
+        [candidate],
+        sr_by_row={"r1": 16000},
+        discard_partial_groups=True,
+        stage="c2",
+        time_budget=budget,
+    )
+    assert records == []
+    assert slice_status.completed_all is False
+    discard_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == measure_stage.METER_CALL_GROUP_DISCARDED_KIND
+    ]
+    assert len(discard_events) == 1
+    # no remeasurement happened: only the 2 stale pre-discard records exist.
+    meter_call_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"
+    ]
+    assert len(meter_call_events) == 2
+
+
+@pytest.mark.slow
+def test_run_measure_stage_recovers_after_discard_under_exhausted_budget(tmp_path: Path) -> None:
+    """R8-3 companion (real measurement): resuming with the SAME exhausted
+    `time_budget` only ever discards (never remeasures, since remeasurement
+    dispatch is still budget-gated) — a later, unbounded resume then
+    completes the measurement normally."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+    row = subset[0]
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    campaign.ledger.append(
+        _fake_meter_call(candidate.candidate_id, row.row_id, 0, "within", 0, 999.0)
+    )
+    campaign.ledger.append(
+        _fake_meter_call(candidate.candidate_id, row.row_id, 0, "within", 1, 999.0)
+    )
+
+    budget = TimeBudget.start_now(0.0001)
+    time.sleep(0.05)
+    records, slice_status = measure_stage.run_measure_stage(
+        campaign,
+        [(row.row_id, 0)],
+        [candidate],
+        sr_by_row={row.row_id: row.row.sr_hz},
+        discard_partial_groups=True,
+        stage="c2",
+        time_budget=budget,
+    )
+    assert records == []
+    assert slice_status.completed_all is False
+    discard_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == measure_stage.METER_CALL_GROUP_DISCARDED_KIND
+    ]
+    assert len(discard_events) == 1
+
+    # a later, unbounded resume with the SAME flag completes the group.
+    records2 = measure_stage.run_measure_stage(
+        campaign,
+        [(row.row_id, 0)],
+        [candidate],
+        sr_by_row={row.row_id: row.row.sr_hz},
+        discard_partial_groups=True,
+        stage="c2",
+    )
+    assert len(records2) == measure_stage.WITHIN_PROCESS_REPEATS + measure_stage.FRESH_PROCESS_REPEATS
+
+
 @pytest.mark.slow
 def test_resume_skips_already_completed_instance_and_only_appends_missing(tmp_path: Path) -> None:
     """finding #9 regression: resuming an interrupted campaign at the

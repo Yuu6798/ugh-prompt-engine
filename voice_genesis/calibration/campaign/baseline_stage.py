@@ -63,6 +63,7 @@ def run_baseline_stage(
     cost_caps: CostCaps | None = None,
     discard_partial_groups: bool = False,
     time_budget: TimeBudget | None = None,
+    invocation_id: str | None = None,
 ) -> dict[str, object]:
     """C2: B0 candidates × CALIBRATION split の実測 → pooled tolerance 導出
     → `baseline_audit` + `baseline_audited` ledger event。戻り値は
@@ -97,6 +98,7 @@ def run_baseline_stage(
             discard_partial_groups=discard_partial_groups,
             stage="c2",
             time_budget=time_budget,
+            invocation_id=invocation_id,
         )
         if not slice_status.completed_all:
             return {"slice_status": slice_status}
@@ -111,6 +113,7 @@ def run_baseline_stage(
             cost_caps=cost_caps,
             discard_partial_groups=discard_partial_groups,
             stage="c2",
+            invocation_id=invocation_id,
         )
 
     values_by_cell: dict[tuple[str, str], list[float]] = {}

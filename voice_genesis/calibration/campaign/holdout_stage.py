@@ -493,6 +493,7 @@ def render_and_measure_holdout(
     cost_caps: CostCaps | None = None,
     discard_partial_groups: bool = False,
     time_budget: TimeBudget | None = None,
+    invocation_id: str | None = None,
 ) -> (
     dict[str, list[measure_stage.MeasurementRecord]]
     | tuple[dict[str, list[measure_stage.MeasurementRecord]], SliceStatus]
@@ -536,10 +537,18 @@ def render_and_measure_holdout(
             cap_counters=cap_counters,
             cost_caps=cost_caps,
             time_budget=time_budget,
+            invocation_id=invocation_id,
         )
         slice_statuses = [render_slice_status]
     else:
-        run_render_stage(campaign, matrix_rows, stage="c4", cap_counters=cap_counters, cost_caps=cost_caps)
+        run_render_stage(
+            campaign,
+            matrix_rows,
+            stage="c4",
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            invocation_id=invocation_id,
+        )
         slice_statuses = []
 
     assignment = campaign.realized_split.assignment
@@ -562,6 +571,7 @@ def render_and_measure_holdout(
                 discard_partial_groups=discard_partial_groups,
                 stage="c4",
                 time_budget=time_budget,
+                invocation_id=invocation_id,
             )
             results[family] = family_records
             slice_statuses.append(family_slice_status)
@@ -579,6 +589,7 @@ def render_and_measure_holdout(
                 missing_reason=f0_missing_reason,
                 discard_partial_groups=discard_partial_groups,
                 stage="c4",
+                invocation_id=invocation_id,
             )
     if time_budget is None:
         return results

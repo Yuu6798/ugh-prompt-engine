@@ -63,6 +63,7 @@ from voice_genesis.calibration.campaign.caps import (
     CostCapExceededError,
     WorkerCpuSecondsInvalidError,
     charge_worker_attempts_before_raising,
+    is_invocation_id_summarized,
     reported_cpu_seconds_or_none,
     save_cap_counters,
     validate_worker_cpu_seconds,
@@ -505,7 +506,19 @@ class StaleMeasurementError(RuntimeError):
     型不正/欠落な個別レコードが混じっていても過大側に振れる — このモジュール
     既存の fail-closed 方向と同じ）。呼び出し元が `meter_call_group_
     discarded` event へそのまま転記し、`caps.cap_counters_from_ledger()` が
-    それを exactly-once で課金する（詳細は同関数 docstring）。"""
+    それを exactly-once で課金する（詳細は同関数 docstring）。
+
+    round 8 finding #2 (R8-2, category ③, `[UNDERSPEC-CAL-D79]`):
+    `kind == "partial"` のとき `invocation_id` は present な記録が共有する
+    `invocation_id` フィールド（`_partial_group_invocation_id` が算出 —
+    その group を書いた単一の invocation の識別子。1 group の全 present
+    records は常に単一の `run_measurement_for_instance` 呼び出しから書かれる
+    ため本来同一値のはず）。discard 実行時（`run_measurement_for_instance`
+    の except ハンドラ、または `run_measure_stage`/`cli._build_f0_by_
+    instance` の budget 検査前 discard 経路）が `caps.
+    is_invocation_id_summarized()` へそのまま渡し、`discarded_within_cpu_
+    seconds` を live `cap_counters` へ課金すべきか（= その writer 自身の
+    summary がまだ無い）を判定する。"""
 
     def __init__(
         self,
@@ -517,6 +530,7 @@ class StaleMeasurementError(RuntimeError):
         kind: str,
         present_keys: frozenset[tuple[str, int]] = frozenset(),
         discarded_within_cpu_seconds: float = 0.0,
+        invocation_id: object = None,
     ) -> None:
         self.row_id = row_id
         self.probe_index = probe_index
@@ -524,6 +538,7 @@ class StaleMeasurementError(RuntimeError):
         self.kind = kind
         self.present_keys = present_keys
         self.discarded_within_cpu_seconds = discarded_within_cpu_seconds
+        self.invocation_id = invocation_id
         super().__init__(
             f"measure_stage: stale meter_call state for row_id={row_id!r} "
             f"probe_index={probe_index} candidate_id={candidate_id!r}: {detail}"
@@ -576,6 +591,27 @@ def _partial_group_within_cpu_seconds(
     return best
 
 
+def _partial_group_invocation_id(
+    by_key: Mapping[tuple[str, int], Sequence[Mapping[str, object]]],
+) -> object:
+    """round 8 finding #2 (R8-2, category ③, `[UNDERSPEC-CAL-D79]`): the
+    shared `invocation_id` of a partial (not-yet-6-record) meter_call
+    group — the single writing invocation's identifier, present identically
+    on every one of that group's records (they are all written by one
+    `run_measurement_for_instance` call before any of the 6 are appended,
+    same invariant `_partial_group_within_cpu_seconds` relies on for
+    `within_cpu_seconds`). Returns the first non-`None` value found (there
+    is at most one distinct value by construction); `None` if every record
+    lacks the field (pre-round-8 legacy shape — not a concern in
+    production, see `caps.py` module docstring) or `by_key` is empty."""
+    for entries in by_key.values():
+        for payload in entries:
+            value = payload.get("invocation_id")
+            if value is not None:
+                return value
+    return None
+
+
 def _resolve_meter_group(
     by_key: Mapping[tuple[str, int], Sequence[Mapping[str, object]]],
     row_id: str,
@@ -613,6 +649,7 @@ def _resolve_meter_group(
             kind="partial",
             present_keys=present_keys,
             discarded_within_cpu_seconds=_partial_group_within_cpu_seconds(by_key),
+            invocation_id=_partial_group_invocation_id(by_key),
         )
 
     records: list[MeasurementRecord] = []
@@ -753,6 +790,33 @@ class MeterCallIndex:
             )
         return frozenset(by_key.keys()) == _EXPECTED_REPEAT_KEYS
 
+    def partial_group(
+        self, row_id: str, probe_index: int, candidate_id: str
+    ) -> StaleMeasurementError | None:
+        """round 8 finding #3 (R8-3, category ③, `[UNDERSPEC-CAL-D79]`):
+        non-mutating probe — returns the `StaleMeasurementError(kind=
+        "partial")` `is_complete()`/`completed_records()` would raise for
+        this key IF it currently holds a non-empty, incomplete,
+        non-duplicate `meter_call` group (a `--discard-partial-groups`
+        candidate), `None` if there is nothing to discard (no records at
+        all, or an already-complete group — `is_complete()` is the
+        caller's own concern for that case). Raises `StaleMeasurementError
+        (kind="duplicate")` exactly like `is_complete()` for a
+        duplicate-key group — never returned, always propagated, so a
+        caller that pre-checks this before a budget boundary surfaces a
+        genuine single-writer contract violation the same way every other
+        `is_complete()` call site in this module does."""
+        by_key = self._by_key.get((row_id, probe_index, candidate_id), {})
+        if not by_key:
+            return None
+        try:
+            _resolve_meter_group(by_key, row_id, probe_index, candidate_id)
+        except StaleMeasurementError as exc:
+            if exc.kind == "partial":
+                return exc
+            raise
+        return None  # already a complete, non-duplicate group.
+
 
 def _completed_meter_call_records(
     ledger_entries: Sequence[LedgerEntry],
@@ -784,6 +848,92 @@ def _completed_meter_call_records(
     される — reconstruction rule）。
     """
     return MeterCallIndex.build(ledger_entries).completed_records(row_id, probe_index, candidate_id)
+
+
+def _discard_partial_group(
+    campaign: FrozenCampaign,
+    meter_call_index: MeterCallIndex | None,
+    exc: StaleMeasurementError,
+    *,
+    row_id: str,
+    probe_index: int,
+    candidate_id: str,
+    stage: str,
+    invocation_id: str | None,
+    cap_counters: CapCounters | None,
+    cost_caps: CostCaps | None,
+) -> None:
+    """R1（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）
+    の discard 実行本体 — `exc`（`kind == "partial"` の
+    `StaleMeasurementError`。`_resolve_meter_group`/`MeterCallIndex.
+    partial_group()` のいずれから来ても同じ shape）1 件から
+    `meter_call_group_discarded` event を記帳し、index を更新する。
+
+    round 8 finding #1/#3（R8-1/R8-3, category ③, `[UNDERSPEC-CAL-D79]`）で
+    2 つの呼び出し元に共有される単一実装へ統合: (1)
+    `run_measurement_for_instance` 自身の except ハンドラ（partial 検出時に
+    その場で discard）と (2) `run_measure_stage`/`cli._build_f0_by_
+    instance` が budget 境界検査の**前**に行う先行 discard（R8-3 — discard
+    は dispatch ではないため budget 非依存で実行してよい/すべき。呼び出し元
+    側のループがこの前処理を担う）。どちらの経路でも discard の記帳・課金・
+    cap 検査の意味論が一切分岐しないことを、この関数への一本化で保証する。
+
+    R8-1: `exc.discarded_within_cpu_seconds` を live な `cap_counters` へ
+    即座に課金し（`caps.is_invocation_id_summarized()` が `exc.
+    invocation_id`（discard される group を書いた WRITER 自身の
+    invocation_id — discard を実行している「この」プロセスの
+    invocation_id ではない）に対して `stage_summary`/`slice_summary` が
+    ledger 上に既に存在するかを判定し、存在しなければ課金対象と判定した
+    場合のみ）、persist し、**再測定を試みる前に** cap を再検査する —
+    `charge_worker_attempts_before_raising`/`_checkpoint_parent_cpu_before_
+    transition` と同じ「課金 → persist → 検査」の既存 pattern を流用する。
+    超過していれば他の全 breach 経路と同じ `COST_CAP_EXCEEDED` stop event を
+    記帳し `CostCapExceededError` を送出する（呼び出し元はこの場合、再測定を
+    一切試みない — 呼び出し元の残りのロジックに戻らない）。"""
+    discarded_repeat_keys = [list(k) for k in sorted(exc.present_keys)]
+    discard_entry = campaign.ledger.append(
+        {
+            "kind": METER_CALL_GROUP_DISCARDED_KIND,
+            "row_id": row_id,
+            "probe_index": probe_index,
+            "candidate_id": candidate_id,
+            "discarded_repeat_keys": discarded_repeat_keys,
+            "discarded_count": len(discarded_repeat_keys),
+            "reason": "operator_discard_partial_group_after_interrupt",
+            "stage": stage,
+            # round 6 finding #3: shared within-process CPU aggregate of the
+            # discarded group's present records (see `StaleMeasurementError`/
+            # `_partial_group_within_cpu_seconds` docstrings) — charged
+            # exactly once by `caps.cap_counters_from_ledger()` and (round 8
+            # finding #1, R8-1) the live-counter charge just below, both
+            # sharing the SAME `caps.is_invocation_id_summarized()` pairing
+            # predicate so the two can never diverge.
+            "discarded_within_cpu_seconds": exc.discarded_within_cpu_seconds,
+            # round 8 finding #2 (R8-2): this discarding process's own
+            # invocation_id (provenance of "who ran the discard" — distinct
+            # from `exc.invocation_id`, the discarded group's WRITER).
+            "invocation_id": invocation_id,
+        }
+    )
+    if meter_call_index is not None:
+        meter_call_index.observe_entry(discard_entry)
+    # round 8 finding #1 (R8-1): charge the live in-memory cap_counters (not
+    # only the ledger `counters.json` gets to see this later, on reconcile)
+    # and enforce the cap BEFORE any remeasurement is attempted — mirrors the
+    # charge-then-persist-then-check pattern every other cap-accounting call
+    # site in this package uses.
+    if (
+        cap_counters is not None
+        and exc.discarded_within_cpu_seconds > 0.0
+        and not is_invocation_id_summarized(campaign.ledger.entries, exc.invocation_id)
+    ):
+        cap_counters.add(compute=exc.discarded_within_cpu_seconds)
+        save_cap_counters(campaign.campaign_dir, cap_counters)
+        if cost_caps is not None:
+            decision = cost_caps_check(cap_counters, cost_caps)
+            if decision is not None:
+                campaign.ledger.append({**decision.event_payload, "invocation_id": invocation_id})
+                raise CostCapExceededError(decision.detail)
 
 
 def _params_with_f0(candidate: Candidate, f0_hz: float | None) -> dict[str, object]:
@@ -951,6 +1101,7 @@ def run_fresh_process_calls(
     max_workers: int = 1,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
+    invocation_id: str | None = None,
 ) -> tuple[list[MeasurementRecord], float]:
     """`repeats` 回、subprocess worker (`_measure_worker.py`) を起動して測定
     する。`max_workers>1` なら `ThreadPoolExecutor` で並行起動する（結果は
@@ -1031,6 +1182,7 @@ def run_fresh_process_calls(
             candidate_id=candidate.candidate_id,
             successes=successes,
             failures=[(exc.failure_kind, exc.compute, exc.cause) for exc in failures],
+            invocation_id=invocation_id,
         )
 
     # No failures reached this point (the branch above always raises) -- every
@@ -1065,6 +1217,7 @@ def run_measurement_for_instance(
     discard_partial_groups: bool = False,
     stage: str = "unknown",
     meter_call_index: MeterCallIndex | None = None,
+    invocation_id: str | None = None,
 ) -> list[MeasurementRecord]:
     """1 instance × 1 candidate = within 3 + fresh 3 の 6 call を実行し、
     ledger `meter_call` event を直列に記帳する。cap 超過を検出したら
@@ -1175,27 +1328,25 @@ def run_measurement_for_instance(
         )
     except StaleMeasurementError as exc:
         if discard_partial_groups and exc.kind == "partial":
-            discarded_repeat_keys = [list(k) for k in sorted(exc.present_keys)]
-            discard_entry = campaign.ledger.append(
-                {
-                    "kind": METER_CALL_GROUP_DISCARDED_KIND,
-                    "row_id": row_id,
-                    "probe_index": probe_index,
-                    "candidate_id": candidate.candidate_id,
-                    "discarded_repeat_keys": discarded_repeat_keys,
-                    "discarded_count": len(discarded_repeat_keys),
-                    "reason": "operator_discard_partial_group_after_interrupt",
-                    "stage": stage,
-                    # round 6 finding #3: shared within-process CPU aggregate
-                    # of the discarded group's present records (see
-                    # `StaleMeasurementError`/`_partial_group_within_cpu_
-                    # seconds` docstrings) — charged exactly once by
-                    # `caps.cap_counters_from_ledger()`.
-                    "discarded_within_cpu_seconds": exc.discarded_within_cpu_seconds,
-                }
+            # round 8 finding #1/#3 (R8-1/R8-3, `[UNDERSPEC-CAL-D79]`): the
+            # discard event append + live-counter charge + cap enforcement
+            # is now shared with `run_measure_stage()`/`cli._build_f0_by_
+            # instance()`'s own pre-budget-check discard path (see
+            # `_discard_partial_group()` docstring) — a breach detected here
+            # raises `CostCapExceededError` and no remeasurement is
+            # attempted below.
+            _discard_partial_group(
+                campaign,
+                meter_call_index,
+                exc,
+                row_id=row_id,
+                probe_index=probe_index,
+                candidate_id=candidate.candidate_id,
+                stage=stage,
+                invocation_id=invocation_id,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
             )
-            if meter_call_index is not None:
-                meter_call_index.observe_entry(discard_entry)
             resumed = None
         else:
             campaign.ledger.append(
@@ -1206,6 +1357,7 @@ def run_measurement_for_instance(
                     "probe_index": probe_index,
                     "candidate_id": candidate.candidate_id,
                     "detail": str(exc),
+                    "invocation_id": invocation_id,
                 }
             )
             raise
@@ -1233,6 +1385,7 @@ def run_measurement_for_instance(
             max_workers=max_workers,
             cap_counters=cap_counters,
             cost_caps=cost_caps,
+            invocation_id=invocation_id,
         )
     except WorkerCpuSecondsInvalidError as exc:
         campaign.ledger.append(
@@ -1243,6 +1396,7 @@ def run_measurement_for_instance(
                 "probe_index": probe_index,
                 "candidate_id": candidate.candidate_id,
                 "detail": str(exc),
+                "invocation_id": invocation_id,
             }
         )
         raise
@@ -1279,6 +1433,11 @@ def run_measurement_for_instance(
             # charging docstring paragraph above and the `cap_counters.add()`
             # call below, which uses `fresh_cpu_seconds` only).
             "within_cpu_seconds": within_cpu_seconds,
+            # round 8 finding #2 (R8-2, `[UNDERSPEC-CAL-D79]`): this
+            # process's own invocation_id — all 6 records of one work unit
+            # share the same value (see `caps.cap_counters_from_ledger()`'s
+            # pairing-rule docstring).
+            "invocation_id": invocation_id,
             **meter_output_to_dict(record.output),
         }
         # round 15 finding #3 (`[UNDERSPEC-CAL-D31]`): unlike `cpu_seconds`
@@ -1313,7 +1472,7 @@ def run_measurement_for_instance(
         if cost_caps is not None:
             decision = cost_caps_check(cap_counters, cost_caps)
             if decision is not None:
-                campaign.ledger.append(decision.event_payload)
+                campaign.ledger.append({**decision.event_payload, "invocation_id": invocation_id})
                 raise CostCapExceededError(decision.detail)
     return records
 
@@ -1353,7 +1512,7 @@ def _instance_has_pending_candidate(
 
 
 def _append_stale_measurement_stop_event(
-    campaign: FrozenCampaign, exc: StaleMeasurementError
+    campaign: FrozenCampaign, exc: StaleMeasurementError, *, invocation_id: str | None = None
 ) -> None:
     """Codex PR #345 round 7 finding #2 (adopted, category ③,
     `[UNDERSPEC-CAL-D79]`): shared `stop_event` shape for a
@@ -1376,6 +1535,7 @@ def _append_stale_measurement_stop_event(
             "probe_index": exc.probe_index,
             "candidate_id": exc.candidate_id,
             "detail": str(exc),
+            "invocation_id": invocation_id,
         }
     )
 
@@ -1391,6 +1551,7 @@ def run_measure_stage(
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
     max_workers: int = 1,
+    invocation_id: str | None = None,
     missing_reason: str = "F0_UNUSABLE",
     discard_partial_groups: bool = False,
     stage: str = "unknown",
@@ -1485,7 +1646,18 @@ def run_measure_stage(
     which reads the absence of a `MeasurementRecord` against the frozen
     expected-instance set directly — this ledger event does not feed it.
     Idempotent across resume: a cell already recorded as missing by a prior
-    invocation is not re-appended."""
+    invocation is not re-appended.
+
+    round 8 finding #3 (R8-3, category ③, `[UNDERSPEC-CAL-D79]`): with
+    `discard_partial_groups=True`, every candidate's partial-group discard
+    for the instance about to be visited is processed BEFORE the R2/finding
+    #3 budget-boundary check above — discard is a non-dispatch recovery
+    operation and must not be blocked by an already-exhausted `time_budget`
+    (see the inline comment at the top of the loop below). `invocation_id`
+    (round 8 finding #2, R8-2) is threaded to every ledger event this call
+    appends that participates in cap accounting (`meter_call`,
+    `meter_call_group_discarded`, the `stop_event`s this function itself
+    logs) — see `caps.cap_counters_from_ledger()`'s pairing-rule docstring."""
     f0_map = f0_by_instance or {}
     already_missing: set[tuple[str, int, str]] = set()
     for entry in campaign.ledger.entries:
@@ -1520,6 +1692,45 @@ def run_measure_stage(
     instances_completed_this_run = 0
     completed_all = True
     for row_id, probe_index in sorted_instances:
+        # round 8 finding #3 (R8-3, category ③, `[UNDERSPEC-CAL-D79]`): a
+        # partial group's `is_complete()` returns `False` (never raises,
+        # unlike a duplicate) — making the cell look merely "pending" and,
+        # with `--discard-partial-groups`, the budget check below would
+        # otherwise `break` on an already-exhausted `time_budget` BEFORE the
+        # discard (only performed inside `run_measurement_for_instance()`,
+        # reached via the `for candidate` loop further down) ever ran. A
+        # small/exhausted budget then repeats `PARTIAL_SLICE` forever
+        # without ever recovering. Fix: process every candidate's partial-
+        # group discard for THIS instance here, unconditionally — discard is
+        # NOT a dispatch (no PCM read, no subprocess spawn), so it must not
+        # be budget-gated; only the remeasurement dispatch inside the `for
+        # candidate` loop below stays budget-gated via `has_pending`.
+        if discard_partial_groups:
+            for candidate in sorted(candidates, key=lambda c: c.candidate_id):
+                if (row_id, probe_index) in f0_unusable_instances and (
+                    candidate.algorithm_family in F0_DEPENDENT_ALGORITHM_FAMILIES
+                ):
+                    continue
+                try:
+                    partial_exc = meter_call_index.partial_group(
+                        row_id, probe_index, candidate.candidate_id
+                    )
+                except StaleMeasurementError as exc:
+                    _append_stale_measurement_stop_event(campaign, exc, invocation_id=invocation_id)
+                    raise
+                if partial_exc is not None:
+                    _discard_partial_group(
+                        campaign,
+                        meter_call_index,
+                        partial_exc,
+                        row_id=row_id,
+                        probe_index=probe_index,
+                        candidate_id=candidate.candidate_id,
+                        stage=stage,
+                        invocation_id=invocation_id,
+                        cap_counters=cap_counters,
+                        cost_caps=cost_caps,
+                    )
         # Codex PR #345 round 4 finding #3 (adopted, category ③,
         # `[UNDERSPEC-CAL-D79]`, mirrors `render_stage.run_render_stage()`'s
         # identical fix): the budget check below must only block dispatch
@@ -1550,7 +1761,7 @@ def run_measure_stage(
                 row_id, probe_index, candidates, meter_call_index, f0_unusable_instances
             )
         except StaleMeasurementError as exc:
-            _append_stale_measurement_stop_event(campaign, exc)
+            _append_stale_measurement_stop_event(campaign, exc, invocation_id=invocation_id)
             raise
         # R2 instance boundary: checked before starting a NEW (row_id,
         # probe_index) group that actually has pending work — an instance
@@ -1574,7 +1785,7 @@ def run_measure_stage(
             try:
                 cell_is_complete = meter_call_index.is_complete(row_id, probe_index, candidate_id)
             except StaleMeasurementError as exc:
-                _append_stale_measurement_stop_event(campaign, exc)
+                _append_stale_measurement_stop_event(campaign, exc, invocation_id=invocation_id)
                 raise
             if cell_is_complete:
                 # Finding D: O(1) skip — no PCM read, no `MeasurementRecord`
@@ -1600,6 +1811,7 @@ def run_measure_stage(
                     discard_partial_groups=discard_partial_groups,
                     stage=stage,
                     meter_call_index=meter_call_index,
+                    invocation_id=invocation_id,
                 )
             )
         if has_pending:
@@ -1665,7 +1877,7 @@ def run_measure_stage(
                 row_id, probe_index, candidates, meter_call_index, f0_unusable_instances
             )
         except StaleMeasurementError as exc:
-            _append_stale_measurement_stop_event(campaign, exc)
+            _append_stale_measurement_stop_event(campaign, exc, invocation_id=invocation_id)
             raise
         if pending:
             instances_remaining += 1

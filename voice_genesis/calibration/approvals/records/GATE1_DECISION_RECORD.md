@@ -366,3 +366,38 @@ holdout 遷移時再検証は不採用——測定値は測定時に入力検証
 memo_sha256 を
 `cb5ee5bdbe712f6ea6a62de58881de0735d3c066f0c8307ef0ad4264a7cc4c15` へ更新した。
 承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。
+
+
+### 10.5 D79 追補 5（2026-09-03）
+
+Codex #345 第 8 巡の ③ 3 件（invocation_id による明示的 invocation 識別への
+置換、discard 時の live counter 課金 + remeasure 前 cap 検査、discard の
+budget 検査への先行処理）を採用した——(1) round 7 finding #1 の
+`dispatch_epoch`/`last_meter_epoch` ledger 順序ヒューリスティックは、SIGKILL
+された writer と、discard フラグ無しで再試行した別 invocation の
+`stage_summary` を取り違え得た（false-success）。`cli.py` `main()` が
+process ごとに 1 個の `invocation_id`（`uuid.uuid4().hex`）を生成し、cap 会計
+対象の全 event（`meter_call`/`render`/`slice_summary`/`stage_summary`/
+`meter_call_group_discarded`/`worker_attempts_discarded`・`worker_failed`/
+`stop_event`）へ一貫して付与する明示的識別へ置換し、
+`caps.cap_counters_from_ledger()` の pairing rule を「discard される
+group の WRITER 自身の `invocation_id` と同じ `invocation_id` を持つ
+`stage_summary`/`slice_summary` が ledger に存在するか」の同一性判定へ
+改めた。(2) `run_measurement_for_instance` が discard 時に live な
+`cap_counters` へ課金・cap 検査せずに remeasure してしまい、既に凍結
+compute cap を超過した状態のまま処理が進み得た欠落——discard の記帳直後、
+`caps.is_invocation_id_summarized()` が非カバーと判定した場合のみ
+`discarded_within_cpu_seconds` を live counter へ課金・persist・cap 再検査
+し、remeasure 開始前に breach なら `COST_CAP_EXCEEDED` で fail-closed する
+よう修正した。(3) `--discard-partial-groups` 指定時、budget を使い切った
+状態で partial group が pending 扱いのまま budget 境界検査に先に捕まり
+discard へ到達できず、短い budget での再実行が永久に回復しない欠落——
+discard（非 dispatch 操作）を budget 検査より先に処理するよう
+`run_measure_stage`/`_build_f0_by_instance` を修正した。**ファミリー終端
+宣言**: 割込み invocation を跨ぐ cap 会計ファミリー（round 6 finding #3・
+round 7 finding #1・round 8 finding #1/#2/#3）は第 8 巡で終端——以降は
+新規の具体的な偽成功/偽失敗経路を示す指摘のみ採用する。memo §6.5（discard
+event の payload 一覧に `invocation_id` を追記）/§6.5.5 を追補し、
+memo_sha256 を
+`144aa62beb8e72a3cb2d50fa5fcd28717a7864a5e23ac528500103ca960f7fab` へ更新した。
+承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。

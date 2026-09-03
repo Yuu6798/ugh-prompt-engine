@@ -513,7 +513,12 @@ stage を安全に止める手段が無い。(3) resume するたびに ledger �
   "candidate_id", "discarded_repeat_keys": [[repeat_kind, repeat_index], ...]
   (sorted), "discarded_count", "reason":
   "operator_discard_partial_group_after_interrupt", "stage",
-  "discarded_within_cpu_seconds"}`（`discarded_within_cpu_seconds` — round 6
+  "discarded_within_cpu_seconds", "invocation_id"}`（`invocation_id` — round 8
+  finding #2 採用、`[UNDERSPEC-CAL-D79]` 追補、§6.5.5 参照: この discard
+  event を記帳した**この**プロセス自身の invocation_id。discard される部分
+  グループの WRITER 自身の invocation_id ではない——writer 側の識別子は
+  discard される各 `meter_call` record 自身が運ぶ同名フィールドから読む。
+  `discarded_within_cpu_seconds` — round 6
   finding #3 採用、`[UNDERSPEC-CAL-D79]` 追補、§6.5.4 参照: discard される
   部分グループが残した検証済み per-record `within_cpu_seconds` の最大値で、
   hard-kill されたプロセスが `stage_summary`/`slice_summary` を一度も記帳
@@ -949,3 +954,99 @@ loader 同値の 4 パターンを c1/c2/c3a/c3b/c4 の render/measure/F0 各ル
   成果物ストアの完全性は campaign 正当性契約の外（測定後の消失は
   どの測定結果も改変しない）。再入条件 = 測定前の破損経路が新たに
   示された場合のみ。詳細は README.md の `UNDERSPEC-CAL-D80` 行を参照。
+
+
+#### 6.5.5 第 8 巡追補（Codex PR #345 レビュー採用、2026-09-03。invocation_id
+による明示的 invocation 識別への置換、discard 時の live counter 課金、discard
+の budget 検査への先行処理）
+
+- **（③、`campaign/cli.py`/`campaign/caps.py`/`campaign/measure_stage.py`/
+  `campaign/render_stage.py`/`campaign/baseline_stage.py`/
+  `campaign/holdout_stage.py`）— round 7 finding #1 の `dispatch_epoch`/
+  `last_meter_epoch` ledger 順序ヒューリスティックは、SIGKILL された writer
+  と、discard フラグ無しで再試行した別 invocation の `stage_summary` を取り違え
+  得た**: 設計判定（R8-2）— `dispatch_epoch` は「ledger 上で discard より前に
+  何個の `stage_summary`/`slice_summary` が現れたか」を数えるだけで、その
+  summary が discard される group の**同じ writer**のものかは見ていない。
+  シナリオ: SIGKILL された invocation A が部分 group を残す（`stage_summary`
+  なし）→ `--discard-partial-groups` 無しの operator retry（invocation B）が
+  `StaleMeasurementError` を送出しつつも `cli.py` `main()` の `finally` で
+  **自分自身の** `stage_summary` を記帳する（A とは無関係）→ 後続の
+  `--discard-partial-groups` retry（invocation C）が discard するとき、round 7
+  ルールは「B の summary がこの epoch を閉じた」と誤認し、A の within CPU を
+  0 として扱ってしまう（false-success — frozen compute cap をすり抜ける）。
+  修正: `cli.py` `main()` が process ごとに 1 個の `invocation_id`
+  （`uuid.uuid4().hex`）を生成し、この process が記帳する cap 会計対象の
+  event 全て（`meter_call`、`render`、`slice_summary`、`stage_summary`、
+  `meter_call_group_discarded`、`worker_attempts_discarded`/`worker_failed`、
+  `stop_event`）へ一貫して付与する（`_run_c1`〜`_run_close`/
+  `render_stage.run_render_stage`/`render_stage.render_instance`/
+  `measure_stage.run_measure_stage`/`measure_stage.run_measurement_for_
+  instance`/`baseline_stage.run_baseline_stage`/`holdout_stage.render_and_
+  measure_holdout`/`cli._build_f0_by_instance`/`caps.charge_worker_attempts_
+  before_raising` の各シグネチャへ素通し）。**pairing rule 改訂**:
+  `caps.cap_counters_from_ledger()` は discard される group の
+  `meter_call` record が運ぶ `invocation_id`（= WRITER 自身の識別子）を
+  `last_meter_invocation[key]` として追跡し、`stage_summary`/`slice_summary`
+  が現れるたびその `invocation_id` を `invocation_ids_with_summary` へ集める
+  ——discard 時、その WRITER の `invocation_id` が `invocation_ids_with_
+  summary` に**存在しなければ**課金し、存在すれば（＝その writer 自身の
+  summary が既にその within CPU をカバー済み）課金しない。この判定は
+  ledger 上の位置（順序）ではなく識別子の**同一性**で行うため、上記シナリオ
+  の B（無関係な invocation）の summary は A の within CPU を誤ってカバー
+  しない。テスト: `test_campaign_caps.py`
+  `test_cap_counters_from_ledger_retry_without_discard_then_discard_charges_
+  writers_cpu_once`（新シナリオ固定）+
+  `test_cap_counters_from_ledger_catchable_interruption_same_invocation_
+  discard_charges_zero`/`test_cap_counters_from_ledger_hard_kill_no_
+  invocation_id_discard_charges_once`/`test_cap_counters_from_ledger_mixed_
+  covered_and_uncovered_invocations`（round 7 の 3 test を invocation_id
+  ベースへ改訂、シナリオの意図は保持）。round 6 finding #3 の pre-round-7
+  event（`invocation_id` 欠落）は「本番 ledger が未だ存在しないため懸念なし」
+  （既存 fail-closed 方向どおり、writer 側 `invocation_id` が無ければ常に
+  課金——過大側に振れる）。
+- **（③、`campaign/measure_stage.py` `run_measurement_for_instance`）—
+  discard 時に live な `cap_counters` へ課金しないまま cap 検査もせず
+  remeasure してしまい、既に凍結 compute cap を超過した状態のまま phase
+  transition まで進み得た**: 修正（R8-1）— discard の記帳・（新設）
+  `caps.is_invocation_id_summarized()` によるチャージ対象判定の直後、
+  `discarded_within_cpu_seconds > 0` かつ非カバーなら
+  `cap_counters.add(compute=...)` → `save_cap_counters()` →
+  `cost_caps_check()` の順で **remeasure 開始前に** 課金・persist・cap 再検査
+  する（他の全 charge-then-check 呼び出し箇所と同じ既存 pattern —
+  `charge_worker_attempts_before_raising`/`_checkpoint_parent_cpu_before_
+  transition` を流用）。超過していれば他の breach 経路と同一の
+  `COST_CAP_EXCEEDED` stop event を記帳し `CostCapExceededError` を送出、
+  remeasure は一切試みない。discard 実行本体は
+  `measure_stage._discard_partial_group()` へ一本化し、
+  `run_measurement_for_instance` 自身の except ハンドラと、次項 R8-3 の
+  budget 検査前 discard 経路の両方がこの単一実装を共有する（意味論の分岐
+  リスクを構造的に排除）。テスト: `test_campaign_measure.py`
+  `test_discard_partial_group_over_cap_stops_before_remeasuring`（cap 超過
+  → stop event・remeasure 無し・transition 無し）/
+  `test_discard_partial_group_below_cap_charges_live_counters_and_continues`
+  （cap 未超過 → live counter へ即座に課金の上で継続、`@pytest.mark.slow`）。
+- **（③、`campaign/measure_stage.py` `run_measure_stage`/`campaign/cli.py`
+  `_build_f0_by_instance`）— `--discard-partial-groups` 指定時、index 構築
+  自体が budget を使い切ると partial group が `is_complete() == False`
+  （＝ pending 扱い）のまま budget 境界検査で `PARTIAL_SLICE` 終了し、
+  discard に到達できず同じ短い budget での再実行が永久に回復しない**:
+  修正（R8-3）— discard は dispatch ではない（PCM 読込・subprocess 起動を
+  伴わない）ため、budget に関わらず先に処理してよい/すべき。`run_measure_
+  stage`/`_build_f0_by_instance` の instance ループ先頭で、
+  `MeterCallIndex.partial_group()`（新設・非破壊 probe — `is_complete()`/
+  `completed_records()` と同じ判定 `_resolve_meter_group` を共有しつつ
+  partial 時は `StaleMeasurementError` を raise せず返す）を全 candidate に
+  対し呼び、非 `None` なら `_discard_partial_group()` を実行してから、従来
+  どおり budget 境界検査へ進む——**remeasure の dispatch のみ**が引き続き
+  budget-gated（discard 後もそのキーは pending のまま残り、budget が
+  尽きていれば通常どおり `PARTIAL_SLICE` で戻る）。テスト:
+  `test_campaign_measure.py`
+  `test_run_measure_stage_discards_partial_group_before_budget_check`
+  （budget 0.0001（exhausted）+ flag → discard event 記帳・remeasure 無し）/
+  `test_run_measure_stage_recovers_after_discard_under_exhausted_budget`
+  （同一 exhausted budget での再試行は discard のみ・無制限 budget の
+  後続呼び出しで remeasure 完了、`@pytest.mark.slow`）。
+- **ファミリー終端宣言**: 割込み invocation を跨ぐ cap 会計ファミリー
+  （round 6 finding #3・round 7 finding #1・round 8 finding #1/#2/#3）は
+  第 8 巡で終端。以降は新規の具体的な偽成功/偽失敗経路を示す指摘のみ採用。

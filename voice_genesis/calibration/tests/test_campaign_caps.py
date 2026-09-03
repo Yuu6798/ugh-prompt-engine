@@ -24,6 +24,7 @@ from voice_genesis.calibration.campaign.caps import (
     cap_counters_from_ledger,
     charge_worker_attempts_before_raising,
     counters_path,
+    is_invocation_id_summarized,
     load_cap_counters,
     reconcile_cap_counters,
     save_cap_counters,
@@ -356,43 +357,56 @@ def test_cap_counters_from_ledger_discard_charge_does_not_double_count_with_stag
 
 
 # ---------------------------------------------------------------------------
-# Codex PR #345 round 7 finding #1 (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
-# the round-6 "exactly-once" invariant above assumed "a partial group
-# survives only after a hard kill, so no summary exists for its epoch" — but
-# a CATCHABLE interruption (KeyboardInterrupt, or any exception `cli.py`
-# `main()`'s own `try`/`finally` does not swallow) after some `meter_call`
-# records were appended still runs `main()`'s `finally`, which appends a
-# `stage_summary`/`slice_summary` for that SAME invocation, charging its full
-# parent CPU (RUSAGE_SELF on the same process — includes the within-process
-# CPU those surviving records already spent). Charging
-# `discarded_within_cpu_seconds` unconditionally on every discard (the
-# pre-round-7 behaviour) double-counts that CPU whenever this happens. The
-# fix pairs each discard against the specific epoch its group's records were
-# written in (`dispatch_epoch`/`last_meter_epoch` in `cap_counters_from_
-# ledger()`) and charges only when that epoch has no closing summary yet.
+# Codex PR #345 round 7 finding #1 → **superseded by round 8 finding #2
+# (R8-2, category ③, `[UNDERSPEC-CAL-D79]`)**: the round-6 "exactly-once"
+# invariant above assumed "a partial group survives only after a hard kill,
+# so no summary exists for its epoch" — but a CATCHABLE interruption
+# (KeyboardInterrupt, or any exception `cli.py` `main()`'s own `try`/
+# `finally` does not swallow) after some `meter_call` records were appended
+# still runs `main()`'s `finally`, which appends a `stage_summary`/`slice_
+# summary` for that SAME invocation, charging its full parent CPU
+# (RUSAGE_SELF on the same process — includes the within-process CPU those
+# surviving records already spent). Charging `discarded_within_cpu_seconds`
+# unconditionally on every discard (the pre-round-7 behaviour) double-counts
+# that CPU whenever this happens. Round 7's fix paired each discard against
+# ledger-position "epoch" (`dispatch_epoch`/`last_meter_epoch`); round 8
+# finding #2 replaces that heuristic with explicit `invocation_id` identity
+# (`cap_counters_from_ledger()`'s pairing-rule docstring) — the tests below
+# now stamp matching `invocation_id` fields to express "same writer" instead
+# of relying on ledger order.
 # ---------------------------------------------------------------------------
 
 
-def test_cap_counters_from_ledger_catchable_interruption_epoch_discard_charges_zero(
+def test_cap_counters_from_ledger_catchable_interruption_same_invocation_discard_charges_zero(
     tmp_path: Path,
 ) -> None:
-    """Round 7 scenario (a): the SAME invocation that wrote the partial
-    group's surviving records also appends its own `stage_summary` before
-    exiting (a caught `KeyboardInterrupt`, not a hard kill) — that summary's
+    """Scenario (a): the SAME invocation that wrote the partial group's
+    surviving records also appends its own `stage_summary` before exiting (a
+    caught `KeyboardInterrupt`, not a hard kill) — that summary's
     `parent_cpu_seconds` already covers the within-process CPU. A later
     `--discard-partial-groups` invocation's discard event must add 0, not
-    `discarded_within_cpu_seconds` again."""
+    `discarded_within_cpu_seconds` again, because the discard's `invocation_
+    id` pairing looks up the WRITER's own id ("invA"), not the discarding
+    process's."""
     ledger = Ledger(tmp_path / "ledger.jsonl")
     for i in range(2):
         payload = _fake_meter_call_event(
             "r1", 0, "F0-B0-CURRENT", "within", i, cpu_seconds=6.0, storage_bytes=100
         )
         payload["within_cpu_seconds"] = 4.0
+        payload["invocation_id"] = "invA"
         ledger.append(payload)
     # the SAME (interrupted-but-caught) invocation's own closing summary —
     # its full parent CPU delta already includes the 4.0 within-process CPU
     # spent on the two records above.
-    ledger.append({"kind": "stage_summary", "stage": "c2", "parent_cpu_seconds": 10.0})
+    ledger.append(
+        {
+            "kind": "stage_summary",
+            "stage": "c2",
+            "parent_cpu_seconds": 10.0,
+            "invocation_id": "invA",
+        }
+    )
     # a LATER, separate `--discard-partial-groups` invocation discards it.
     ledger.append(
         _fake_meter_call_group_discarded_event(
@@ -402,17 +416,17 @@ def test_cap_counters_from_ledger_catchable_interruption_epoch_discard_charges_z
     derived = cap_counters_from_ledger(ledger.entries, None)
     # fresh CPU from the first surviving record (6.0 - 4.0 = 2.0) +
     # stage_summary's full parent CPU (10.0) + discard's OWN contribution
-    # (0.0, NOT 4.0 again — already covered by stage_summary above).
+    # (0.0, NOT 4.0 again — already covered by invA's own stage_summary).
     assert derived.compute_used == pytest.approx(2.0 + 10.0 + 0.0)
 
 
-def test_cap_counters_from_ledger_hard_kill_epoch_discard_charges_once(
+def test_cap_counters_from_ledger_hard_kill_no_invocation_id_discard_charges_once(
     tmp_path: Path,
 ) -> None:
-    """Round 7 scenario (b): no `stage_summary`/`slice_summary` anywhere for
-    the group's own epoch (the writing invocation was truly hard-killed, no
-    `finally` ever ran) — the discard event is the ONLY place that CPU is
-    ever recovered, charged exactly once."""
+    """Scenario (b): no `stage_summary`/`slice_summary` anywhere for the
+    group's writer (hard-killed, no `finally` ever ran, so no `invocation_
+    id` was ever recorded for it either) — the discard event is the ONLY
+    place that CPU is ever recovered, charged exactly once."""
     ledger = Ledger(tmp_path / "ledger.jsonl")
     for i in range(2):
         payload = _fake_meter_call_event(
@@ -421,7 +435,7 @@ def test_cap_counters_from_ledger_hard_kill_epoch_discard_charges_once(
         payload["within_cpu_seconds"] = 4.0
         ledger.append(payload)
     # NOTE: no `stage_summary`/`slice_summary` at all — hard-killed, no
-    # `finally` ever ran for this epoch.
+    # `finally` ever ran to record this writer's own invocation_id.
     ledger.append(
         _fake_meter_call_group_discarded_event(
             "r1", 0, "F0-B0-CURRENT", discarded_within_cpu_seconds=4.0
@@ -431,48 +445,65 @@ def test_cap_counters_from_ledger_hard_kill_epoch_discard_charges_once(
     assert derived.compute_used == pytest.approx(2.0 + 4.0)
 
 
-def test_cap_counters_from_ledger_mixed_caught_and_hard_kill_epochs(tmp_path: Path) -> None:
-    """Round 7 scenario (c): one ledger with both an already-covered
-    (caught-interruption) discard epoch and a still-open (hard-kill) discard
-    epoch — each key's discard is paired against its OWN epoch independently,
-    the covered one charging 0 and the open one charging its recovered CPU,
+def test_cap_counters_from_ledger_mixed_covered_and_uncovered_invocations(tmp_path: Path) -> None:
+    """Scenario (c): one ledger with both an already-covered (its writer's
+    own `stage_summary` present) discard and a still-uncovered (hard-kill,
+    no `invocation_id` ever got a summary) discard — each key's discard is
+    paired against its OWN writer's `invocation_id` independently, the
+    covered one charging 0 and the uncovered one charging its recovered CPU,
     regardless of scan order or of an intervening, unrelated `stage_summary`
-    from a third dispatch."""
+    from a third, different invocation."""
     ledger = Ledger(tmp_path / "ledger.jsonl")
-    # key A: caught interruption, own stage_summary closes its epoch.
+    # key A: caught interruption, its OWN invocation's stage_summary covers it.
     for i in range(2):
         payload = _fake_meter_call_event(
             "rA", 0, "F0-B0-CURRENT", "within", i, cpu_seconds=6.0, storage_bytes=100
         )
         payload["within_cpu_seconds"] = 4.0
+        payload["invocation_id"] = "invA"
         ledger.append(payload)
-    ledger.append({"kind": "stage_summary", "stage": "c2", "parent_cpu_seconds": 10.0})
+    ledger.append(
+        {
+            "kind": "stage_summary",
+            "stage": "c2",
+            "parent_cpu_seconds": 10.0,
+            "invocation_id": "invA",
+        }
+    )
     ledger.append(
         _fake_meter_call_group_discarded_event(
             "rA", 0, "F0-B0-CURRENT", discarded_within_cpu_seconds=4.0
         )
     )
-    # an unrelated, later dispatch's own completed work — must not affect
-    # key B's still-open epoch below (it is a DIFFERENT epoch, opened after
-    # key A's stage_summary already fired).
+    # an unrelated, later dispatch's own completed work (a DIFFERENT
+    # invocation_id) — must not affect key B's still-uncovered writer below.
     for i in range(3):
-        ledger.append(
-            _fake_meter_call_event(
-                "rZ", 0, "F0-B0-CURRENT", "within", i, cpu_seconds=1.0, storage_bytes=10
-            )
+        payload = _fake_meter_call_event(
+            "rZ", 0, "F0-B0-CURRENT", "within", i, cpu_seconds=1.0, storage_bytes=10
         )
+        payload["invocation_id"] = "invZ"
+        ledger.append(payload)
     for i in range(3):
-        ledger.append(
-            _fake_meter_call_event(
-                "rZ", 0, "F0-B0-CURRENT", "fresh", i, cpu_seconds=1.0, storage_bytes=10
-            )
+        payload = _fake_meter_call_event(
+            "rZ", 0, "F0-B0-CURRENT", "fresh", i, cpu_seconds=1.0, storage_bytes=10
         )
-    # key B: hard-killed, no summary anywhere for its epoch before discard.
+        payload["invocation_id"] = "invZ"
+        ledger.append(payload)
+    ledger.append(
+        {
+            "kind": "stage_summary",
+            "stage": "c2",
+            "parent_cpu_seconds": 0.0,
+            "invocation_id": "invZ",
+        }
+    )
+    # key B: hard-killed, no `invocation_id` of its writer ever got a summary.
     for i in range(2):
         payload = _fake_meter_call_event(
             "rB", 0, "F0-B1-CURRENT", "within", i, cpu_seconds=3.0, storage_bytes=50
         )
         payload["within_cpu_seconds"] = 1.5
+        payload["invocation_id"] = "invB"
         ledger.append(payload)
     ledger.append(
         _fake_meter_call_group_discarded_event(
@@ -480,12 +511,108 @@ def test_cap_counters_from_ledger_mixed_caught_and_hard_kill_epochs(tmp_path: Pa
         )
     )
     derived = cap_counters_from_ledger(ledger.entries, None)
-    # key A: 2.0 (fresh remainder) + 10.0 (stage_summary) + 0.0 (discard,
-    # already covered).
-    # key Z: fully-completed work unit, 1.0 (dedup'd per-work-unit compute).
-    # key B: 1.5 (fresh remainder) + 1.5 (discard, its epoch was never
-    # closed).
-    assert derived.compute_used == pytest.approx((2.0 + 10.0 + 0.0) + 1.0 + (1.5 + 1.5))
+    # key A: 2.0 (fresh remainder) + 10.0 (invA's stage_summary) + 0.0
+    # (discard, already covered).
+    # key Z: fully-completed work unit, 1.0 (dedup'd per-work-unit compute)
+    # + 0.0 (invZ's own stage_summary).
+    # key B: 1.5 (fresh remainder) + 1.5 (discard, invB never got a summary).
+    assert derived.compute_used == pytest.approx((2.0 + 10.0 + 0.0) + (1.0 + 0.0) + (1.5 + 1.5))
+
+
+def test_cap_counters_from_ledger_retry_without_discard_then_discard_charges_writers_cpu_once(
+    tmp_path: Path,
+) -> None:
+    """Codex PR #345 round 8 finding #2 (R8-2, category ③,
+    `[UNDERSPEC-CAL-D79]`): the design-ruling scenario invocation identity
+    must get right that the round 7 `dispatch_epoch` ordering heuristic
+    could not — a SIGKILL leaves a partial group (invocation "invA", no
+    summary ever). An operator retry WITHOUT `--discard-partial-groups`
+    (invocation "invB") raises `StaleMeasurementError` but `cli.py` `main()`'s
+    `finally` still appends ITS OWN `stage_summary` before the exception
+    propagates — a DIFFERENT `invocation_id` from "invA"'s, so it must NOT be
+    mistaken for covering "invA"'s within-process CPU. A later `--discard-
+    partial-groups` retry (invocation "invC") must still charge "invA"'s
+    recovered CPU — exactly once."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    # invocation "invA": hard-killed mid-append, 2 of 6 records survive.
+    for i in range(2):
+        payload = _fake_meter_call_event(
+            "r1", 0, "F0-B0-CURRENT", "within", i, cpu_seconds=6.0, storage_bytes=100
+        )
+        payload["within_cpu_seconds"] = 4.0
+        payload["invocation_id"] = "invA"
+        ledger.append(payload)
+    # invocation "invB": retry WITHOUT --discard-partial-groups raises
+    # StaleMeasurementError(kind="partial") and re-raises, but its own
+    # `main()` `finally` still appends its own stage_summary (unrelated).
+    ledger.append(
+        {
+            "kind": "stop_event",
+            "reason": "STALE_MEASUREMENT_STATE",
+            "row_id": "r1",
+            "probe_index": 0,
+            "candidate_id": "F0-B0-CURRENT",
+            "invocation_id": "invB",
+        }
+    )
+    ledger.append(
+        {"kind": "stage_summary", "stage": "c2", "parent_cpu_seconds": 0.3, "invocation_id": "invB"}
+    )
+    # invocation "invC": --discard-partial-groups retry discards the SAME
+    # still-partial group "invA" left behind.
+    ledger.append(
+        _fake_meter_call_group_discarded_event(
+            "r1", 0, "F0-B0-CURRENT", discarded_within_cpu_seconds=4.0
+        )
+    )
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # invA's fresh remainder (6.0 - 4.0 = 2.0) + invB's own summary (0.3,
+    # disjoint, unrelated) + the discard's recovery of invA's within CPU
+    # (4.0 — invA's own invocation_id never got a summary anywhere) = 6.3.
+    assert derived.compute_used == pytest.approx(2.0 + 0.3 + 4.0)
+
+
+# ---------------------------------------------------------------------------
+# round 8 finding #1 (R8-1, category ③, `[UNDERSPEC-CAL-D79]`):
+# `is_invocation_id_summarized()` — the standalone pairing predicate
+# `measure_stage.run_measurement_for_instance()`/`run_measure_stage()`/
+# `cli._build_f0_by_instance()` consult AT DISCARD TIME (before the ledger
+# is ever reconstructed) to decide whether to charge the live in-memory
+# `cap_counters` for `discarded_within_cpu_seconds`.
+# ---------------------------------------------------------------------------
+
+
+def test_is_invocation_id_summarized_none_is_never_summarized(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append({"kind": "stage_summary", "stage": "c2", "parent_cpu_seconds": 1.0})
+    assert is_invocation_id_summarized(ledger.entries, None) is False
+
+
+def test_is_invocation_id_summarized_true_for_stage_summary(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        {
+            "kind": "stage_summary",
+            "stage": "c2",
+            "parent_cpu_seconds": 1.0,
+            "invocation_id": "invA",
+        }
+    )
+    assert is_invocation_id_summarized(ledger.entries, "invA") is True
+    assert is_invocation_id_summarized(ledger.entries, "invB") is False
+
+
+def test_is_invocation_id_summarized_true_for_slice_summary(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        {
+            "kind": "slice_summary",
+            "stage": "c2",
+            "parent_cpu_seconds": 1.0,
+            "invocation_id": "invA",
+        }
+    )
+    assert is_invocation_id_summarized(ledger.entries, "invA") is True
 
 
 def test_cap_counters_from_ledger_includes_stage_summary_parent_cpu(tmp_path: Path) -> None:

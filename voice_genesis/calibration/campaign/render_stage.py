@@ -505,6 +505,7 @@ def render_instance(
     timeout_s: float = 60.0,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
+    invocation_id: str | None = None,
 ) -> RenderOutcome:
     """1 instance を resume 判定 → (必要なら) 2 回 fresh-process render →
     byte 比較 → 書込の順で処理する。
@@ -618,6 +619,7 @@ def render_instance(
             candidate_id=None,
             successes=successes,
             failures=[(exc.failure_kind, exc.compute, exc.cause) for exc in failures],
+            invocation_id=invocation_id,
         )
 
     # No failures reached this point (the branch above always raises) -- both
@@ -649,6 +651,7 @@ def render_instance(
                 "probe_index": probe_index,
                 "cpu_seconds": cpu_seconds_total,
                 "storage_bytes": 0,
+                "invocation_id": invocation_id,
             }
         )
         if cap_counters is not None:
@@ -657,7 +660,7 @@ def render_instance(
             if cost_caps is not None:
                 decision = cost_caps_check(cap_counters, cost_caps)
                 if decision is not None:
-                    campaign.ledger.append(decision.event_payload)
+                    campaign.ledger.append({**decision.event_payload, "invocation_id": invocation_id})
                     raise CostCapExceededError(decision.detail)
         raise RenderNondeterministicError(row_id, probe_index)
 
@@ -681,7 +684,7 @@ def render_instance(
         if cost_caps is not None:
             decision = cost_caps_check(cap_counters, cost_caps)
             if decision is not None:
-                campaign.ledger.append(decision.event_payload)
+                campaign.ledger.append({**decision.event_payload, "invocation_id": invocation_id})
                 raise CostCapExceededError(decision.detail)
 
     return RenderOutcome(
@@ -729,6 +732,7 @@ def run_render_stage(
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
     time_budget: TimeBudget | None = None,
+    invocation_id: str | None = None,
 ) -> tuple[RenderOutcome, ...] | tuple[tuple[RenderOutcome, ...], SliceStatus]:
     """`stage='c1'` または `stage='c4'`。C4 は render を試みる前に leakage
     検査を行う。determinism 違反時は既に render 済みの outcome を保ったまま
@@ -829,6 +833,7 @@ def run_render_stage(
                 probe_index=unit.probe_index,
                 cap_counters=cap_counters,
                 cost_caps=cost_caps,
+                invocation_id=invocation_id,
             )
         except RenderNondeterministicError as exc:
             campaign.ledger.append(
@@ -838,6 +843,7 @@ def run_render_stage(
                     "row_id": unit.row_id,
                     "probe_index": unit.probe_index,
                     "stage": stage,
+                    "invocation_id": invocation_id,
                 }
             )
             raise exc
@@ -853,6 +859,7 @@ def run_render_stage(
                     "probe_index": unit.probe_index,
                     "stage": stage,
                     "detail": str(exc),
+                    "invocation_id": invocation_id,
                 }
             )
             raise exc
@@ -878,6 +885,11 @@ def run_render_stage(
                     # `sha256` cannot recover the byte count of the file it
                     # hashes).
                     "pcm_bytes": outcome.pcm_bytes,
+                    # round 8 finding #2 (R8-2, `[UNDERSPEC-CAL-D79]`): this
+                    # process's own invocation_id (see
+                    # `caps.cap_counters_from_ledger()`'s pairing-rule
+                    # docstring).
+                    "invocation_id": invocation_id,
                 }
             )
 
@@ -923,6 +935,7 @@ def run_render_stage(
                             {"row_id": rid, "probe_index": pidx, "detail": detail}
                             for rid, pidx, detail in failing_units
                         ],
+                        "invocation_id": invocation_id,
                     }
                 )
                 raise RenderResumeIndexIntegrityError(stage, failing_units)
