@@ -17,6 +17,7 @@ import pytest
 from voice_genesis.calibration.campaign import render_stage
 from voice_genesis.calibration.campaign.caps import cap_counters_from_ledger
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
+from voice_genesis.calibration.campaign.time_budget import TimeBudget
 from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
 
 from ._campaign_fixture import build_tiny_campaign, small_matrix_subset
@@ -83,6 +84,49 @@ def test_c1_render_determinism_and_resume(tmp_path: Path) -> None:
         e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "render"
     ]
     assert len(render_events_after) == len(outcomes)
+
+
+@pytest.mark.slow
+def test_c1_render_time_budget_partial_slice_then_resume(tmp_path: Path) -> None:
+    """R2（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）:
+    an essentially-zero `time_budget` still lets the first (already
+    in-flight) unit finish, then stops dispatching before the second —
+    `completed_all=False`, `instances_completed_this_run>=1`,
+    `instances_remaining>0`, and (unlike an uninterrupted run) no
+    `fixture_valid` event. Re-running without a budget finishes every
+    remaining unit (existing resume path) and appends exactly one
+    `fixture_valid` event — the same phase-transition shape as an
+    uninterrupted run."""
+    subset = small_matrix_subset(2, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    outcomes, slice_status = render_stage.run_render_stage(
+        campaign, subset, stage="c1", time_budget=TimeBudget.start_now(0.01)
+    )
+    assert slice_status.completed_all is False
+    assert slice_status.instances_completed_this_run >= 1
+    assert slice_status.instances_remaining > 0
+    assert slice_status.time_budget_seconds == pytest.approx(0.01)
+    assert len(outcomes) == slice_status.instances_completed_this_run
+    assert not any(
+        e.payload.get("kind") == "fixture_valid" for e in campaign.ledger.entries
+    )
+    # the units that DID complete are real, verified renders — not stubs.
+    for o in outcomes:
+        assert o.status == "rendered"
+        pcm_path = campaign.renders_dir / o.row_id / f"{o.probe_index}.pcm"
+        assert pcm_path.is_file()
+
+    # resume without a budget: finishes every remaining unit and performs
+    # the phase transition exactly once.
+    resumed_outcomes = render_stage.run_render_stage(campaign, subset, stage="c1")
+    total_units = slice_status.instances_completed_this_run + slice_status.instances_remaining
+    assert len(resumed_outcomes) == total_units
+    fixture_valid_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "fixture_valid"
+    ]
+    assert len(fixture_valid_events) == 1
 
 
 @pytest.mark.slow

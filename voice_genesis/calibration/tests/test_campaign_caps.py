@@ -204,6 +204,73 @@ def test_cap_counters_from_ledger_dedups_meter_call_cpu_seconds_per_work_unit(
     assert derived.storage_used == 3 * 100 + 3 * 120
 
 
+def _fake_meter_call_group_discarded_event(
+    row_id: str, probe_index: int, candidate_id: str
+) -> dict:
+    return {
+        "kind": "meter_call_group_discarded",
+        "row_id": row_id,
+        "probe_index": probe_index,
+        "candidate_id": candidate_id,
+        "discarded_repeat_keys": [["within", 0], ["within", 1]],
+        "discarded_count": 2,
+        "reason": "operator_discard_partial_group_after_interrupt",
+        "stage": "c2",
+    }
+
+
+def test_cap_counters_from_ledger_charges_discarded_group_and_remeasure_separately(
+    tmp_path: Path,
+) -> None:
+    """R1 reconstruction rule (design memo `design_runner_robustness.md`,
+    `[UNDERSPEC-CAL-D79]`), applied to `cap_counters_from_ledger()` too: a
+    `meter_call_group_discarded` event resets the per-key dedup epoch, so
+    the killed-mid-append attempt's own `cpu_seconds` (charged from its
+    surviving first record) and the subsequent full remeasurement's
+    `cpu_seconds` are BOTH charged — "records before [a discard] stay in the
+    ledger and are still charged" (memo R1), not silently absorbed into a
+    single dedup key the way a same-epoch duplicate would be."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    # the killed attempt: only 2 of 6 records survived the kill, but each
+    # already carries the FULL work-unit cpu_seconds aggregate (computed
+    # before any of the 6 records were appended — see
+    # `measure_stage.run_measurement_for_instance`).
+    for i in range(2):
+        ledger.append(
+            _fake_meter_call_event(
+                "r1", 0, "F0-B0-CURRENT", "within", i, cpu_seconds=6.0, storage_bytes=100
+            )
+        )
+    ledger.append(_fake_meter_call_group_discarded_event("r1", 0, "F0-B0-CURRENT"))
+    # the full remeasurement.
+    for i in range(3):
+        ledger.append(
+            _fake_meter_call_event(
+                "r1", 0, "F0-B0-CURRENT", "within", i, cpu_seconds=9.0, storage_bytes=110
+            )
+        )
+    for i in range(3):
+        ledger.append(
+            _fake_meter_call_event(
+                "r1", 0, "F0-B0-CURRENT", "fresh", i, cpu_seconds=9.0, storage_bytes=130
+            )
+        )
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # compute: the discarded attempt's 6.0 (from its first surviving record)
+    # + the remeasurement's 9.0 (from ITS first record) — not just 9.0 alone
+    # (which a naive un-reset dedup-by-key would produce).
+    assert derived.compute_used == 6.0 + 9.0
+    # storage: every record is additive regardless of epoch (unaffected by
+    # the discard-reset rule — matches the pre-existing per-record summing).
+    assert derived.storage_used == 2 * 100 + 3 * 110 + 3 * 130
+    # the discard event itself carries no charge of its own.
+    ledger_only_discard = Ledger(tmp_path / "discard_only.jsonl")
+    ledger_only_discard.append(_fake_meter_call_group_discarded_event("r1", 0, "F0-B0-CURRENT"))
+    assert cap_counters_from_ledger(ledger_only_discard.entries, None) == CapCounters(
+        compute_used=0.0, storage_used=0, budget_used=0.0
+    )
+
+
 def test_cap_counters_from_ledger_includes_stage_summary_parent_cpu(tmp_path: Path) -> None:
     ledger = Ledger(tmp_path / "ledger.jsonl")
     ledger.append({"kind": "stage_summary", "stage": "c1-fixtures", "parent_cpu_seconds": 0.75})

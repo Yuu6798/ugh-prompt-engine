@@ -17,6 +17,7 @@ import pytest
 from voice_genesis.calibration.campaign import measure_stage, render_stage
 from voice_genesis.calibration.campaign.caps import cap_counters_from_ledger, load_cap_counters
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
+from voice_genesis.calibration.campaign.time_budget import TimeBudget
 from voice_genesis.calibration.candidates import adapter
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import candidate_by_id, candidates_for_meter
@@ -1017,6 +1018,320 @@ def test_completed_meter_call_records_duplicate_key_is_stale(tmp_path: Path) -> 
         measure_stage._completed_meter_call_records(campaign.ledger.entries, "r1", 0, "F0-B0-CURRENT")
 
 
+# ---------------------------------------------------------------------------
+# R1/R3 (design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`):
+# `StaleMeasurementError.kind`/`.present_keys`, the `meter_call_group_
+# discarded` reconstruction rule, and `MeterCallIndex` equivalence with the
+# 1-shot rescan. All fast (pure ledger manipulation, no real render/measure).
+# ---------------------------------------------------------------------------
+
+
+def test_stale_measurement_error_kind_distinguishes_partial_from_duplicate(
+    tmp_path: Path,
+) -> None:
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", 0, 100.0))
+    campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", 1, 100.0))
+    with pytest.raises(measure_stage.StaleMeasurementError) as excinfo:
+        measure_stage._completed_meter_call_records(campaign.ledger.entries, "r1", 0, "F0-B0-CURRENT")
+    assert excinfo.value.kind == "partial"
+    assert excinfo.value.present_keys == frozenset({("within", 0), ("within", 1)})
+
+    campaign2_dir, secret_root2 = build_tiny_campaign(tmp_path / "c2")
+    campaign2 = load_frozen_campaign(campaign2_dir, secret_root2)
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign2.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", i, 100.0))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign2.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "fresh", i, 200.0))
+    campaign2.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", 0, 999.0))
+    with pytest.raises(measure_stage.StaleMeasurementError) as excinfo2:
+        measure_stage._completed_meter_call_records(campaign2.ledger.entries, "r1", 0, "F0-B0-CURRENT")
+    assert excinfo2.value.kind == "duplicate"
+
+
+def test_meter_call_group_discarded_resets_completeness(tmp_path: Path) -> None:
+    """R1 reconstruction rule: a `meter_call_group_discarded` event for a
+    key resets accumulation — only `meter_call` records appended AFTER it
+    count toward completeness/scoring for that key. The pre-discard partial
+    records stay in the ledger (append-only) but are invisible to
+    `_completed_meter_call_records()` once the discard event is present."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    # a partial group (2 of 6) that would raise StaleMeasurementError alone.
+    campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", 0, 100.0))
+    campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", 1, 100.0))
+    campaign.ledger.append(
+        {
+            "kind": measure_stage.METER_CALL_GROUP_DISCARDED_KIND,
+            "row_id": "r1",
+            "probe_index": 0,
+            "candidate_id": "F0-B0-CURRENT",
+            "discarded_repeat_keys": [["within", 0], ["within", 1]],
+            "discarded_count": 2,
+            "reason": "operator_discard_partial_group_after_interrupt",
+            "stage": "c2",
+        }
+    )
+    # the full group, re-recorded after the discard.
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", i, 300.0 + i))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "fresh", i, 400.0 + i))
+
+    records = measure_stage._completed_meter_call_records(
+        campaign.ledger.entries, "r1", 0, "F0-B0-CURRENT"
+    )
+    assert records is not None
+    assert len(records) == measure_stage.WITHIN_PROCESS_REPEATS + measure_stage.FRESH_PROCESS_REPEATS
+    within_values = sorted(r.output.values["f0_hz"] for r in records if r.repeat_kind == "within")
+    assert within_values == [300.0, 301.0, 302.0]  # only the post-discard values, not 100.0
+
+
+def test_meter_call_group_discarded_for_unrelated_key_is_ignored(tmp_path: Path) -> None:
+    """A discard event for a *different* (row_id, probe_index, candidate_id)
+    key must not reset an unrelated key's accumulation."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", i, 100.0 + i))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "fresh", i, 200.0 + i))
+    campaign.ledger.append(
+        {
+            "kind": measure_stage.METER_CALL_GROUP_DISCARDED_KIND,
+            "row_id": "OTHER_ROW",
+            "probe_index": 0,
+            "candidate_id": "F0-B0-CURRENT",
+            "discarded_repeat_keys": [],
+            "discarded_count": 0,
+            "reason": "operator_discard_partial_group_after_interrupt",
+            "stage": "c2",
+        }
+    )
+
+    records = measure_stage._completed_meter_call_records(
+        campaign.ledger.entries, "r1", 0, "F0-B0-CURRENT"
+    )
+    assert records is not None
+    assert len(records) == measure_stage.WITHIN_PROCESS_REPEATS + measure_stage.FRESH_PROCESS_REPEATS
+
+
+def test_meter_call_index_equivalence_with_one_shot_rescan(tmp_path: Path) -> None:
+    """R3 equivalence test: an incrementally-updated `MeterCallIndex`
+    (`observe_entry()` called once per newly-appended ledger entry, the same
+    increment `run_measurement_for_instance()` performs) must answer
+    `completed_records()` identically to a 1-shot rescan
+    (`_completed_meter_call_records()`) at every point along the way, across
+    complete, partial, duplicate, and discarded-then-remeasured groups."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    # key A: complete (within3+fresh3).
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "rA", 0, "within", i, 10.0 + i))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "rA", 0, "fresh", i, 20.0 + i))
+    # key B: partial (2 of 6).
+    campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "rB", 0, "within", 0, 30.0))
+    campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "rB", 0, "within", 1, 30.0))
+    # key C: duplicate.
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "rC", 0, "within", i, 40.0 + i))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "rC", 0, "fresh", i, 50.0 + i))
+    campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "rC", 0, "within", 0, 999.0))
+    # key D: discarded partial, then remeasured to completeness.
+    campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "rD", 0, "within", 0, 60.0))
+    campaign.ledger.append(
+        {
+            "kind": measure_stage.METER_CALL_GROUP_DISCARDED_KIND,
+            "row_id": "rD",
+            "probe_index": 0,
+            "candidate_id": "F0-B0-CURRENT",
+            "discarded_repeat_keys": [["within", 0]],
+            "discarded_count": 1,
+            "reason": "operator_discard_partial_group_after_interrupt",
+            "stage": "c2",
+        }
+    )
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "rD", 0, "within", i, 70.0 + i))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "rD", 0, "fresh", i, 80.0 + i))
+
+    index = measure_stage.MeterCallIndex()
+    keys = [("rA", 0, "F0-B0-CURRENT"), ("rB", 0, "F0-B0-CURRENT"), ("rC", 0, "F0-B0-CURRENT"), ("rD", 0, "F0-B0-CURRENT")]
+
+    def _outcome(fn, row_id, probe_index, candidate_id):
+        try:
+            return ("ok", fn(row_id, probe_index, candidate_id))
+        except measure_stage.StaleMeasurementError as exc:
+            return ("error", exc.kind)
+
+    # observe entries one at a time (simulating run_measurement_for_instance's
+    # incremental append() -> observe_entry() flow) and compare against a
+    # fresh full rescan after each single entry.
+    for i, entry in enumerate(campaign.ledger.entries):
+        index.observe_entry(entry)
+        prefix = campaign.ledger.entries[: i + 1]
+        for row_id, probe_index, candidate_id in keys:
+            index_outcome = _outcome(index.completed_records, row_id, probe_index, candidate_id)
+            rescan_outcome = _outcome(
+                lambda r, p, c: measure_stage._completed_meter_call_records(prefix, r, p, c),
+                row_id,
+                probe_index,
+                candidate_id,
+            )
+            if index_outcome[0] == "ok" and rescan_outcome[0] == "ok":
+                index_records, rescan_records = index_outcome[1], rescan_outcome[1]
+                if index_records is None or rescan_records is None:
+                    assert index_records is None and rescan_records is None
+                else:
+                    assert [
+                        (r.repeat_kind, r.repeat_index, r.output.values) for r in index_records
+                    ] == [
+                        (r.repeat_kind, r.repeat_index, r.output.values) for r in rescan_records
+                    ]
+            else:
+                assert index_outcome == rescan_outcome
+
+    # final state sanity check: A and D are complete-post-discard, B stays
+    # partial (never resolved), C stays duplicate.
+    assert index.completed_records("rA", 0, "F0-B0-CURRENT") is not None
+    assert index.completed_records("rD", 0, "F0-B0-CURRENT") is not None
+    with pytest.raises(measure_stage.StaleMeasurementError) as excinfo_b:
+        index.completed_records("rB", 0, "F0-B0-CURRENT")
+    assert excinfo_b.value.kind == "partial"
+    with pytest.raises(measure_stage.StaleMeasurementError) as excinfo_c:
+        index.completed_records("rC", 0, "F0-B0-CURRENT")
+    assert excinfo_c.value.kind == "duplicate"
+
+
+def test_discard_partial_groups_false_still_raises_on_partial(tmp_path: Path) -> None:
+    """Default behaviour (flag absent) is unchanged: a partial group still
+    fails closed with `StaleMeasurementError`, records a `stop_event` (not a
+    discard event), and performs no measurement."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", 0, 100.0))
+    campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", 1, 100.0))
+    candidate = candidate_by_id("F0-B0-CURRENT")
+
+    with pytest.raises(measure_stage.StaleMeasurementError):
+        measure_stage.run_measurement_for_instance(
+            campaign, candidate, row_id="r1", probe_index=0, sr_hz=16000
+        )
+    stop_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "stop_event"
+    ]
+    assert len(stop_events) == 1
+    assert stop_events[0]["reason"] == "STALE_MEASUREMENT_STATE"
+    assert not any(
+        e.payload.get("kind") == measure_stage.METER_CALL_GROUP_DISCARDED_KIND
+        for e in campaign.ledger.entries
+    )
+
+
+def test_discard_partial_groups_true_duplicate_still_raises(tmp_path: Path) -> None:
+    """R1: `--discard-partial-groups` only covers `kind == "partial"` — a
+    duplicate group still fails closed regardless of the flag."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", i, 100.0))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "fresh", i, 200.0))
+    campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", 0, 999.0))
+    candidate = candidate_by_id("F0-B0-CURRENT")
+
+    with pytest.raises(measure_stage.StaleMeasurementError) as excinfo:
+        measure_stage.run_measurement_for_instance(
+            campaign,
+            candidate,
+            row_id="r1",
+            probe_index=0,
+            sr_hz=16000,
+            discard_partial_groups=True,
+            stage="c2",
+        )
+    assert excinfo.value.kind == "duplicate"
+    stop_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "stop_event"
+    ]
+    assert len(stop_events) == 1
+    assert not any(
+        e.payload.get("kind") == measure_stage.METER_CALL_GROUP_DISCARDED_KIND
+        for e in campaign.ledger.entries
+    )
+
+
+@pytest.mark.slow
+def test_discard_partial_groups_true_discards_partial_and_remeasures(tmp_path: Path) -> None:
+    """R1 end-to-end (real measurement): a partial group + the flag appends
+    exactly one `meter_call_group_discarded` event carrying the exact
+    partial repeat keys, then measures and records the FULL group again —
+    the stale records stay in the ledger (append-only) but the returned
+    records and the post-discard resume view only see the fresh group."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+    row = subset[0]
+    candidate = candidate_by_id("F0-B0-CURRENT")
+
+    # simulate a mid-kill: only 2 of 6 within-process repeats got appended.
+    campaign.ledger.append(
+        _fake_meter_call(candidate.candidate_id, row.row_id, 0, "within", 0, 999.0)
+    )
+    campaign.ledger.append(
+        _fake_meter_call(candidate.candidate_id, row.row_id, 0, "within", 1, 999.0)
+    )
+
+    records = measure_stage.run_measurement_for_instance(
+        campaign,
+        candidate,
+        row_id=row.row_id,
+        probe_index=0,
+        sr_hz=row.row.sr_hz,
+        discard_partial_groups=True,
+        stage="c2",
+    )
+    assert len(records) == measure_stage.WITHIN_PROCESS_REPEATS + measure_stage.FRESH_PROCESS_REPEATS
+
+    discard_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == measure_stage.METER_CALL_GROUP_DISCARDED_KIND
+    ]
+    assert len(discard_events) == 1
+    discarded = discard_events[0]
+    assert discarded["row_id"] == row.row_id
+    assert discarded["probe_index"] == 0
+    assert discarded["candidate_id"] == candidate.candidate_id
+    assert discarded["discarded_repeat_keys"] == [["within", 0], ["within", 1]]
+    assert discarded["discarded_count"] == 2
+    assert discarded["reason"] == "operator_discard_partial_group_after_interrupt"
+    assert discarded["stage"] == "c2"
+
+    # the pre-discard stale records stay in the ledger (append-only)...
+    all_meter_call_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "meter_call"
+        and e.payload.get("row_id") == row.row_id
+        and e.payload.get("candidate_id") == candidate.candidate_id
+    ]
+    assert len(all_meter_call_events) == 2 + 6  # 2 stale + 6 fresh
+    # ...but the resume/scoring view only sees the post-discard group.
+    resumed = measure_stage._completed_meter_call_records(
+        campaign.ledger.entries, row.row_id, 0, candidate.candidate_id
+    )
+    assert resumed is not None
+    assert len(resumed) == 6
+    assert all(v != 999.0 for r in resumed for v in r.output.values.values())
+
+
 @pytest.mark.slow
 def test_resume_skips_already_completed_instance_and_only_appends_missing(tmp_path: Path) -> None:
     """finding #9 regression: resuming an interrupted campaign at the
@@ -1064,6 +1379,53 @@ def test_resume_skips_already_completed_instance_and_only_appends_missing(tmp_pa
         ]
         assert len(calls) == per_instance_calls
         assert len({(c["repeat_kind"], c["repeat_index"]) for c in calls}) == per_instance_calls
+
+
+@pytest.mark.slow
+def test_run_measure_stage_time_budget_partial_slice_then_resume(tmp_path: Path) -> None:
+    """R2（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）:
+    instance boundary = 1 `(row_id, probe_index)` (every candidate measured
+    for it). An essentially-zero budget still lets the first in-flight
+    instance finish, then stops before the second — `completed_all=False`,
+    `instances_remaining>0` — with no `measurement_missing`-style silent
+    gap (nothing was skipped, just not yet dispatched). Re-running without a
+    budget (the existing resume path) finishes every remaining instance."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    row = subset[0]
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    instances = [(row.row_id, p) for p in range(3)]
+
+    records, slice_status = measure_stage.run_measure_stage(
+        campaign,
+        instances,
+        [candidate],
+        sr_by_row={row.row_id: row.row.sr_hz},
+        time_budget=TimeBudget.start_now(0.01),
+    )
+    per_instance_calls = measure_stage.WITHIN_PROCESS_REPEATS + measure_stage.FRESH_PROCESS_REPEATS
+    assert slice_status.completed_all is False
+    assert slice_status.instances_completed_this_run >= 1
+    assert slice_status.instances_remaining > 0
+    assert len(records) == slice_status.instances_completed_this_run * per_instance_calls
+
+    # re-run without a budget: resumes and finishes every remaining instance.
+    all_records, final_slice_status = measure_stage.run_measure_stage(
+        campaign,
+        instances,
+        [candidate],
+        sr_by_row={row.row_id: row.row.sr_hz},
+        time_budget=TimeBudget.start_now(3600.0),
+    )
+    assert final_slice_status.completed_all is True
+    assert len(all_records) == len(instances) * per_instance_calls
+    meter_call_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"
+    ]
+    assert len(meter_call_events) == len(instances) * per_instance_calls  # no duplicates
 
 
 # ---------------------------------------------------------------------------

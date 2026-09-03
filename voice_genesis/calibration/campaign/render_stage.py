@@ -43,6 +43,7 @@ from voice_genesis.calibration.campaign.caps import (
     validate_worker_cpu_seconds,
 )
 from voice_genesis.calibration.campaign.state import FrozenCampaign
+from voice_genesis.calibration.campaign.time_budget import SliceStatus, TimeBudget
 from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
 from voice_genesis.calibration.cost_caps import check as cost_caps_check
 from voice_genesis.calibration.fixtures.controls import control_row_ids
@@ -499,14 +500,25 @@ def run_render_stage(
     stage: str,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
-) -> tuple[RenderOutcome, ...]:
+    time_budget: TimeBudget | None = None,
+) -> tuple[RenderOutcome, ...] | tuple[tuple[RenderOutcome, ...], SliceStatus]:
     """`stage='c1'` または `stage='c4'`。C4 は render を試みる前に leakage
     検査を行う。determinism 違反時は既に render 済みの outcome を保ったまま
     `BLOCKED_C1_GENERATOR_NONDETERMINISTIC` stop event を ledger へ記帳し、
     `RenderNondeterministicError` を再送出する（fail-closed。以降の instance
     は render しない）。`cap_counters`/`cost_caps`（finding #1）は
     `render_instance` へ素通しし、cap 超過時は同様に以降の instance へ進まず
-    `CostCapExceededError` を伝播する。"""
+    `CostCapExceededError` を伝播する。
+
+    R2（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）:
+    `time_budget` が渡されれば instance 境界（1 unit = 1 `(row_id,
+    probe_index)` render）で予算超過を検査し、超過していれば以降の unit を
+    dispatch せず戻る（既に dispatch 済みの unit は完走する）。この場合、
+    `stage="c1"` でも完走しなかったときは `fixture_valid` event を記帳
+    しない（phase transition は次回の resume 呼び出しに委ねる）。戻り値は
+    `(outcomes, SliceStatus)` の 2-tuple になる。`time_budget` が `None`
+    （既定）のときは従来どおり `outcomes` 単体を返す（呼び出し元の挙動・
+    シグネチャは不変）。"""
     assignment = campaign.realized_split.assignment
     if stage == "c1":
         units = workunits.enumerate_c1_render_units(matrix_rows, assignment)
@@ -518,7 +530,13 @@ def run_render_stage(
 
     rows_by_id = {mr.row_id: mr.row for mr in matrix_rows}
     outcomes: list[RenderOutcome] = []
+    completed_all = True
     for unit in units:
+        # R2 instance boundary: checked before dispatching a NEW unit — a
+        # unit already in flight always runs to completion.
+        if time_budget is not None and time_budget.expired():
+            completed_all = False
+            break
         row = rows_by_id[unit.row_id]
         try:
             outcome = render_instance(
@@ -582,14 +600,23 @@ def run_render_stage(
                 }
             )
 
-    if stage == "c1":
+    if stage == "c1" and completed_all:
         campaign.ledger.append(
             {
                 "kind": "fixture_valid",
                 "instance_count": len({(u.row_id, u.probe_index) for u in units}),
             }
         )
-    return tuple(outcomes)
+    if time_budget is None:
+        return tuple(outcomes)
+    slice_status = SliceStatus(
+        time_budget_seconds=time_budget.seconds,
+        elapsed_seconds=time_budget.elapsed(),
+        instances_completed_this_run=len(outcomes),
+        instances_remaining=len(units) - len(outcomes),
+        completed_all=completed_all,
+    )
+    return tuple(outcomes), slice_status
 
 
 __all__ = [

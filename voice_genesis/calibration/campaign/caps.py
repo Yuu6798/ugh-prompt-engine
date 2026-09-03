@@ -621,6 +621,24 @@ def cap_counters_from_ledger(
             compute += _finite_nonneg_float(payload.get("cpu_seconds"))
             storage += _finite_nonneg_int(payload.get("storage_bytes"))
             render_units += 1
+        elif kind == "meter_call_group_discarded":
+            # R1 (design memo `design_runner_robustness.md`,
+            # `[UNDERSPEC-CAL-D79]`) reconstruction rule, applied here too
+            # ("... incl. ... caps counters"): a discard event resets the
+            # dedup epoch for its (row_id, probe_index, candidate_id) key,
+            # so the *next* `meter_call` record for that key after this
+            # event is treated as the first-of-a-new-epoch again — the
+            # discarded (killed-mid-append) attempt's own `cpu_seconds`
+            # (already computed as the full per-work-unit aggregate before
+            # any of its records were appended — see
+            # `measure_stage.run_measurement_for_instance`) is charged from
+            # its own surviving first record exactly once, and the
+            # subsequent full remeasurement is charged again from its own
+            # first record — matching "records before [a discard] stay in
+            # the ledger and are still charged" without needing this event's
+            # own payload to carry any charge fields itself.
+            key = (payload.get("row_id"), payload.get("probe_index"), payload.get("candidate_id"))
+            seen_meter_keys.discard(key)
         elif kind == "meter_call":
             storage += _finite_nonneg_int(payload.get("storage_bytes"))
             key = (payload.get("row_id"), payload.get("probe_index"), payload.get("candidate_id"))

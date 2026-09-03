@@ -21,6 +21,7 @@ from voice_genesis.calibration.campaign.caps import (
     cap_counters_from_ledger,
     cost_caps_from_manifest,
     counters_path,
+    load_cap_counters,
     save_cap_counters,
 )
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
@@ -2614,6 +2615,79 @@ def test_canonical_path_match_is_not_blocked(
     out = capsys.readouterr().out
     assert "BLOCKED_CANONICAL_MUTATION_REQUIRED" not in out
     assert exit_code == 0, out
+
+
+@pytest.mark.slow
+def test_c1_fixtures_time_budget_partial_slice_then_resume_via_cli(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R2（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）
+    end-to-end via the CLI: `--time-budget-seconds` (an essentially-zero
+    budget) together with `--workers 3` (harmless for c1 — render has no
+    worker-pool wiring — the memo's acceptance test just confirms the two
+    flags coexist without error) exits 0 with a `PARTIAL_SLICE` report and
+    NO `stage_summary`/`fixture_valid` ledger events; re-running the exact
+    same command (no budget change needed — the flag can simply be dropped,
+    but this test keeps it to also exercise "0 remaining still transitions")
+    resumes and completes."""
+    subset = small_matrix_subset(2, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    base_args = [
+        "c1-fixtures",
+        "--campaign-dir",
+        str(campaign_dir),
+        "--secret-dir",
+        str(secret_root),
+        "--approval-dir",
+        str(approval_dir),
+        "--armed",
+        "--workers",
+        "3",
+    ]
+
+    exit_code = cli.main([*base_args, "--time-budget-seconds", "0.01"])
+    out = json.loads(capsys.readouterr().out)
+    assert exit_code == 0, out
+    assert out["result"] == "PARTIAL_SLICE"
+    assert out["stage"] == "c1-fixtures"
+    assert out["slice"]["instances_completed_this_run"] >= 1
+    assert out["slice"]["instances_remaining"] > 0
+    assert out["slice"]["time_budget_seconds"] == pytest.approx(0.01)
+
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    assert not any(e.payload.get("kind") == "stage_summary" for e in campaign.ledger.entries)
+    assert not any(e.payload.get("kind") == "fixture_valid" for e in campaign.ledger.entries)
+    # R2: parent CPU is still charged to counters.json even on a
+    # PARTIAL_SLICE exit, so caps stay honest across slices.
+    counters_after_slice = load_cap_counters(campaign_dir)
+    assert counters_after_slice.compute_used >= 0.0
+
+    # re-run: resumes and completes (the generous budget here is irrelevant
+    # once every remaining unit finishes inside it — "0 remaining still
+    # transitions" per the memo).
+    exit_code2 = cli.main([*base_args, "--time-budget-seconds", "3600"])
+    out2 = json.loads(capsys.readouterr().out)
+    assert exit_code2 == 0, out2
+    assert out2["result"] == "OK"
+
+    campaign2 = load_frozen_campaign(campaign_dir, secret_root)
+    stage_summary_events = [
+        e.payload for e in campaign2.ledger.entries if e.payload.get("kind") == "stage_summary"
+    ]
+    fixture_valid_events = [
+        e.payload for e in campaign2.ledger.entries if e.payload.get("kind") == "fixture_valid"
+    ]
+    # exactly 1 stage_summary (the completing run — PARTIAL_SLICE skipped
+    # its own) and exactly 1 fixture_valid (the phase transition, once).
+    assert len(stage_summary_events) == 1
+    assert len(fixture_valid_events) == 1
+
+    counters_after_completion = load_cap_counters(campaign_dir)
+    assert counters_after_completion.compute_used >= counters_after_slice.compute_used
 
 
 # ---------------------------------------------------------------------------

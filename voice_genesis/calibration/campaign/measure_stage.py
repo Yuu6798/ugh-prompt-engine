@@ -69,6 +69,7 @@ from voice_genesis.calibration.campaign.caps import (
     validate_worker_cpu_seconds,
 )
 from voice_genesis.calibration.campaign.state import FrozenCampaign
+from voice_genesis.calibration.campaign.time_budget import SliceStatus, TimeBudget
 from voice_genesis.calibration.candidates import adapter
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import Candidate
@@ -489,12 +490,33 @@ class StaleMeasurementError(RuntimeError):
     記帳されている場合の fail-closed error。測定・記帳のいずれも一切行わ
     ない — 中断状態からの自動再開（欠けている分だけ測定して埋める）は、
     なぜ中断したかが分からない以上安全に決定できないため、明示的な運用
-    判断（ledger 調査の上での手動復旧）に委ねる。"""
+    判断（ledger 調査の上での手動復旧、または R1 の
+    `--discard-partial-groups` による明示的な operator recovery）に委ねる。
 
-    def __init__(self, row_id: str, probe_index: int, candidate_id: str, detail: str) -> None:
+    R1（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）:
+    `kind` は `"partial"`（一部の repeat key しか記帳されていない — 中断
+    直後にありうる、`--discard-partial-groups` の対象）と `"duplicate"`
+    （同一 repeat key に複数件 — 単一 writer 契約違反または矛盾する
+    再測定。フラグの有無に関わらず常に fail-closed）を区別する。`kind ==
+    "partial"` のとき `present_keys` はその時点で記帳済みだった
+    `(repeat_kind, repeat_index)` キー集合（呼び出し元が discard event の
+    `discarded_repeat_keys` を組み立てるのに使う）。"""
+
+    def __init__(
+        self,
+        row_id: str,
+        probe_index: int,
+        candidate_id: str,
+        detail: str,
+        *,
+        kind: str,
+        present_keys: frozenset[tuple[str, int]] = frozenset(),
+    ) -> None:
         self.row_id = row_id
         self.probe_index = probe_index
         self.candidate_id = candidate_id
+        self.kind = kind
+        self.present_keys = present_keys
         super().__init__(
             f"measure_stage: stale meter_call state for row_id={row_id!r} "
             f"probe_index={probe_index} candidate_id={candidate_id!r}: {detail}"
@@ -508,42 +530,22 @@ _EXPECTED_REPEAT_KEYS: frozenset[tuple[str, int]] = frozenset(
     | {("fresh", i) for i in range(FRESH_PROCESS_REPEATS)}
 )
 
+#: R1 の discard event（design memo `design_runner_robustness.md`,
+#: `[UNDERSPEC-CAL-D79]`）が使う ledger `kind`。
+METER_CALL_GROUP_DISCARDED_KIND = "meter_call_group_discarded"
 
-def _completed_meter_call_records(
-    ledger_entries: Sequence[LedgerEntry],
+
+def _resolve_meter_group(
+    by_key: Mapping[tuple[str, int], Sequence[Mapping[str, object]]],
     row_id: str,
     probe_index: int,
     candidate_id: str,
 ) -> list[MeasurementRecord] | None:
-    """finding #9: ledger から (row_id, probe_index, candidate_id) の
-    `meter_call` を `(repeat_kind, repeat_index)` キーで再構成する。
-
-    - 1 件も無ければ `None`（未着手 — 呼び出し元は通常どおり測定する）。
-    - within `WITHIN_PROCESS_REPEATS` 件 + fresh `FRESH_PROCESS_REPEATS`
-      件がちょうど 1 件ずつ揃っていれば、その内容から再構成した
-      `MeasurementRecord` 列を返す（呼び出し元は再測定・再記帳しない —
-      二重追記の禁止）。
-    - それ以外（部分的にしか揃っていない、または同一キーに複数件記帳）は
-      `StaleMeasurementError` を送出する（呼び出し元は ledger `stop_event`
-      を記帳してから re-raise する）。
-    """
-    by_key: dict[tuple[str, int], list[Mapping[str, object]]] = {}
-    for entry in ledger_entries:
-        payload = entry.payload
-        if not isinstance(payload, Mapping) or payload.get("kind") != "meter_call":
-            continue
-        if (
-            payload.get("row_id") != row_id
-            or payload.get("probe_index") != probe_index
-            or payload.get("candidate_id") != candidate_id
-        ):
-            continue
-        repeat_kind = payload.get("repeat_kind")
-        repeat_index = payload.get("repeat_index")
-        if repeat_kind not in ("within", "fresh") or not isinstance(repeat_index, int):
-            continue
-        by_key.setdefault((repeat_kind, repeat_index), []).append(payload)
-
+    """`by_key`（1 つの discard-epoch 内で観測された `(repeat_kind,
+    repeat_index) -> [payload, ...]`）から `_completed_meter_call_records`/
+    `MeterCallIndex.completed_records` 共通の判定ロジックを適用する。
+    `MeterCallIndex`（R3）と素朴な 1 回スキャン（`_completed_meter_call_records`）
+    の両方がこの同じ関数を経由することで両者の等価性を構造的に保証する。"""
     if not by_key:
         return None
 
@@ -555,6 +557,7 @@ def _completed_meter_call_records(
             candidate_id,
             f"duplicate ledger meter_call entries for repeat keys {duplicate_keys!r} "
             "(single-writer contract violated, or conflicting re-measurement)",
+            kind="duplicate",
         )
 
     present_keys = frozenset(by_key.keys())
@@ -566,6 +569,8 @@ def _completed_meter_call_records(
             probe_index,
             candidate_id,
             f"incomplete meter_call state: missing={missing!r} unexpected={unexpected!r}",
+            kind="partial",
+            present_keys=present_keys,
         )
 
     records: list[MeasurementRecord] = []
@@ -586,6 +591,114 @@ def _completed_meter_call_records(
             )
         )
     return records
+
+
+class MeterCallIndex:
+    """R3（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）:
+    ledger を 1 回だけ走査して `(row_id, probe_index, candidate_id)` ごとの
+    `meter_call`/`meter_call_group_discarded` 状態をメモリ上に索引化する。
+
+    `run_measure_stage()` は stage 呼び出しごとに `build()` で 1 回だけ全体を
+    構築し、以降は `run_measurement_for_instance()` が `meter_call`/
+    `meter_call_group_discarded` を記帳するたびに `observe_entry()` で
+    その 1 件だけを反映する（`Ledger.entries` を再取得しない — このプロパティ
+    は呼ぶたびに `self._entries` から新しい tuple を作り直すため、instance
+    ごとに呼び直すと事実上 O(N) の rescan を繰り返すことになる。`append()`
+    が返す `LedgerEntry` をそのまま渡すことで、1 stage 呼び出しあたり
+    「初回の全走査 1 回 + 追記 1 件あたり O(1)」に抑える）。
+
+    `completed_records()` は `_completed_meter_call_records()`（素朴な
+    1 回スキャン版）と同じ判定ロジック（`_resolve_meter_group`）を共有し、
+    かつ discard-reset ルール（R1: あるキーへの discard event 以降の
+    `meter_call` のみを完全性・重複判定・scoring の対象とする — discard 前の
+    記録は ledger 上に残るが、以降の完全性判定からは除外される）も同一に
+    適用する。"""
+
+    def __init__(self) -> None:
+        self._by_key: dict[tuple[str, int, str], dict[tuple[str, int], list[Mapping[str, object]]]] = {}
+        self._scanned = 0
+
+    @classmethod
+    def build(cls, ledger_entries: Sequence[LedgerEntry]) -> "MeterCallIndex":
+        index = cls()
+        index.update(ledger_entries)
+        return index
+
+    def observe_entry(self, entry: LedgerEntry) -> None:
+        """`entry` 1 件だけを索引へ反映する（`Ledger.entries` を再取得しない
+        増分更新経路 — `run_measurement_for_instance` が `campaign.ledger.
+        append()` の戻り値をそのまま渡す）。"""
+        payload = entry.payload
+        if not isinstance(payload, Mapping):
+            return
+        kind = payload.get("kind")
+        if kind == METER_CALL_GROUP_DISCARDED_KIND:
+            outer_key = (
+                payload.get("row_id"),
+                payload.get("probe_index"),
+                payload.get("candidate_id"),
+            )
+            # R1 reconstruction rule: discard event はそのキーの蓄積を
+            # リセットする — discard 前の meter_call は ledger には残るが
+            # （append-only）、以降の完全性・重複・scoring 判定からは除外
+            # される。
+            self._by_key.pop(outer_key, None)  # type: ignore[arg-type]
+            return
+        if kind != "meter_call":
+            return
+        outer_key = (payload.get("row_id"), payload.get("probe_index"), payload.get("candidate_id"))
+        repeat_kind = payload.get("repeat_kind")
+        repeat_index = payload.get("repeat_index")
+        if repeat_kind not in ("within", "fresh") or not isinstance(repeat_index, int):
+            return
+        self._by_key.setdefault(outer_key, {}).setdefault(  # type: ignore[arg-type]
+            (repeat_kind, repeat_index), []
+        ).append(payload)
+
+    def update(self, ledger_entries: Sequence[LedgerEntry]) -> None:
+        """`ledger_entries` の末尾のうち、まだ索引化していない分だけを取り込む
+        （初回 `build()` は `self._scanned == 0` のため全体を走査する）。"""
+        for entry in ledger_entries[self._scanned :]:
+            self.observe_entry(entry)
+        self._scanned = len(ledger_entries)
+
+    def completed_records(
+        self, row_id: str, probe_index: int, candidate_id: str
+    ) -> list[MeasurementRecord] | None:
+        by_key = self._by_key.get((row_id, probe_index, candidate_id), {})
+        return _resolve_meter_group(by_key, row_id, probe_index, candidate_id)
+
+
+def _completed_meter_call_records(
+    ledger_entries: Sequence[LedgerEntry],
+    row_id: str,
+    probe_index: int,
+    candidate_id: str,
+) -> list[MeasurementRecord] | None:
+    """finding #9: ledger から (row_id, probe_index, candidate_id) の
+    `meter_call` を `(repeat_kind, repeat_index)` キーで再構成する（1 回の
+    素朴な全走査 — `MeterCallIndex.build(ledger_entries).completed_records(...)`
+    の薄いラッパー。両者が同じ `_resolve_meter_group` を経由するため常に
+    等価な結果を返す — R3 equivalence test 参照）。
+
+    - 1 件も無ければ `None`（未着手 — 呼び出し元は通常どおり測定する）。
+    - within `WITHIN_PROCESS_REPEATS` 件 + fresh `FRESH_PROCESS_REPEATS`
+      件がちょうど 1 件ずつ揃っていれば、その内容から再構成した
+      `MeasurementRecord` 列を返す（呼び出し元は再測定・再記帳しない —
+      二重追記の禁止）。
+    - それ以外（部分的にしか揃っていない、または同一キーに複数件記帳）は
+      `StaleMeasurementError` を送出する（呼び出し元は ledger `stop_event`
+      を記帳してから re-raise する。R1: `kind == "partial"` かつ
+      `--discard-partial-groups` 指定時は discard event を記帳して
+      フルグループを再測定する — `run_measurement_for_instance` 参照）。
+
+    R1（design memo, `[UNDERSPEC-CAL-D79]`）: `kind ==
+    METER_CALL_GROUP_DISCARDED_KIND` の event がある場合、そのキーについて
+    その event **以降**に記帳された `meter_call` のみを対象とする
+    （discard 前の記録は ledger には残るが、この関数の判定からは除外
+    される — reconstruction rule）。
+    """
+    return MeterCallIndex.build(ledger_entries).completed_records(row_id, probe_index, candidate_id)
 
 
 def _params_with_f0(candidate: Candidate, f0_hz: float | None) -> dict[str, object]:
@@ -864,6 +977,9 @@ def run_measurement_for_instance(
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
     max_workers: int = 1,
+    discard_partial_groups: bool = False,
+    stage: str = "unknown",
+    meter_call_index: MeterCallIndex | None = None,
 ) -> list[MeasurementRecord]:
     """1 instance × 1 candidate = within 3 + fresh 3 の 6 call を実行し、
     ledger `meter_call` event を直列に記帳する。cap 超過を検出したら
@@ -924,23 +1040,68 @@ def run_measurement_for_instance(
     batch 内で最初に失敗した attempt の元の例外を再送出する — 旧実装
     （round 24 時点）は失敗した 1 attempt のみを課金し、既に完了していた
     兄弟 attempt（sequential では先行する成功、concurrent では他の future）
-    を無課金で破棄していた。"""
+    を無課金で破棄していた。
+
+    **R1 — 明示的な operator recovery**（design memo
+    `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）: `discard_
+    partial_groups=True` かつ resume 判定が `kind == "partial"`（一部の
+    repeat key しか記帳されていない — duplicate ではない）の
+    `StaleMeasurementError` のとき、`stop_event`/re-raise の代わりに
+    `meter_call_group_discarded` event を 1 件（`{row_id, probe_index,
+    candidate_id, discarded_repeat_keys, discarded_count, reason:
+    "operator_discard_partial_group_after_interrupt", stage}`）記帳してから
+    フルグループ（within3+fresh3 全 6 call）を測定・記帳する（通常の
+    未着手経路と同じ下り）。`kind == "duplicate"` は `discard_partial_groups`
+    の有無に関わらず常に `stop_event`+re-raise する（duplicate は
+    "operator が中断後に discard してよい" 対象ではない — 単一 writer
+    契約違反や矛盾する再測定の兆候であり、手動調査に委ねる）。
+
+    **R3 — 1 stage 呼び出し 1 スキャン**: `meter_call_index` が渡されれば
+    resume 判定・discard reset をそれ経由で行い（`campaign.ledger.entries`
+    を再取得しない）、新規に記帳した `meter_call`/`meter_call_group_
+    discarded` event も同じ index へ即座に反映する（`Ledger.append()` の
+    戻り値をそのまま渡す — O(1) の増分更新）。`None`（既定）なら従来どおり
+    `_completed_meter_call_records()` が `campaign.ledger.entries` を
+    1 回スキャンする（`run_measurement_for_instance` を単体で呼ぶ既存の
+    呼び出し元・テストの挙動は変わらない）。"""
     try:
-        resumed = _completed_meter_call_records(
-            campaign.ledger.entries, row_id, probe_index, candidate.candidate_id
+        resumed = (
+            meter_call_index.completed_records(row_id, probe_index, candidate.candidate_id)
+            if meter_call_index is not None
+            else _completed_meter_call_records(
+                campaign.ledger.entries, row_id, probe_index, candidate.candidate_id
+            )
         )
     except StaleMeasurementError as exc:
-        campaign.ledger.append(
-            {
-                "kind": "stop_event",
-                "reason": "STALE_MEASUREMENT_STATE",
-                "row_id": row_id,
-                "probe_index": probe_index,
-                "candidate_id": candidate.candidate_id,
-                "detail": str(exc),
-            }
-        )
-        raise
+        if discard_partial_groups and exc.kind == "partial":
+            discarded_repeat_keys = [list(k) for k in sorted(exc.present_keys)]
+            discard_entry = campaign.ledger.append(
+                {
+                    "kind": METER_CALL_GROUP_DISCARDED_KIND,
+                    "row_id": row_id,
+                    "probe_index": probe_index,
+                    "candidate_id": candidate.candidate_id,
+                    "discarded_repeat_keys": discarded_repeat_keys,
+                    "discarded_count": len(discarded_repeat_keys),
+                    "reason": "operator_discard_partial_group_after_interrupt",
+                    "stage": stage,
+                }
+            )
+            if meter_call_index is not None:
+                meter_call_index.observe_entry(discard_entry)
+            resumed = None
+        else:
+            campaign.ledger.append(
+                {
+                    "kind": "stop_event",
+                    "reason": "STALE_MEASUREMENT_STATE",
+                    "row_id": row_id,
+                    "probe_index": probe_index,
+                    "candidate_id": candidate.candidate_id,
+                    "detail": str(exc),
+                }
+            )
+            raise
     if resumed is not None:
         return resumed
 
@@ -1023,7 +1184,9 @@ def run_measurement_for_instance(
         # below.
         record_bytes = len(json.dumps(payload).encode("utf-8"))
         payload["storage_bytes"] = record_bytes
-        campaign.ledger.append(payload)
+        appended_entry = campaign.ledger.append(payload)
+        if meter_call_index is not None:
+            meter_call_index.observe_entry(appended_entry)
         storage_bytes += record_bytes
 
     if cap_counters is not None:
@@ -1060,9 +1223,28 @@ def run_measure_stage(
     cost_caps: CostCaps | None = None,
     max_workers: int = 1,
     missing_reason: str = "F0_UNUSABLE",
-) -> list[MeasurementRecord]:
+    discard_partial_groups: bool = False,
+    stage: str = "unknown",
+    time_budget: TimeBudget | None = None,
+) -> list[MeasurementRecord] | tuple[list[MeasurementRecord], SliceStatus]:
     """`instances × candidates` の全 work unit を決定論的順序（instance →
     candidate_id 昇順）で処理する。
+
+    R3（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）:
+    呼び出しの先頭で `MeterCallIndex` を 1 回だけ構築し（`campaign.ledger.
+    entries` への唯一のアクセス）、以降は全 `run_measurement_for_instance()`
+    呼び出しへ同じ index を渡す（各呼び出しは新規記帳 1 件ごとに index を
+    O(1) で更新するのみで ledger を再スキャンしない）。`discard_partial_
+    groups`/`stage`（R1）も素通しする。
+
+    R2（`[UNDERSPEC-CAL-D79]`）: `time_budget` が渡されれば instance 境界
+    （`(row_id, probe_index)` 1 件 = 全 candidate の測定が揃って初めて
+    「完了」）で予算超過を検査し、超過していれば以降の instance を一切
+    dispatch せず戻る（既に dispatch 済みの instance は最後まで完走する
+    — `for candidate in candidates` の内側では検査しない）。この場合、
+    戻り値は `(records, SliceStatus)` の 2-tuple になる（`time_budget`
+    が `None`（既定）のときは従来どおり `records` 単体を返す — 呼び出し元
+    の挙動・シグネチャは不変）。
 
     round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): `missing_reason` names the
     `measurement_missing` event's `reason` field for every cell this call
@@ -1118,9 +1300,24 @@ def run_measure_stage(
             if isinstance(cell, (list, tuple)) and len(cell) == 3:
                 already_missing.add((cell[0], cell[1], cell[2]))
 
+    # R3: single ledger scan for this whole invocation — every
+    # `run_measurement_for_instance()` call below shares this one index
+    # instead of each re-scanning `campaign.ledger.entries` itself.
+    meter_call_index = MeterCallIndex.build(campaign.ledger.entries)
+
+    sorted_instances = sorted(instances)
+    total_instances = len(sorted_instances)
     all_records: list[MeasurementRecord] = []
     newly_missing: list[tuple[str, int, str]] = []
-    for row_id, probe_index in sorted(instances):
+    instances_completed_this_run = 0
+    completed_all = True
+    for row_id, probe_index in sorted_instances:
+        # R2 instance boundary: checked before starting a NEW (row_id,
+        # probe_index) group — an instance already in flight (its own
+        # `for candidate` loop below) always runs to completion.
+        if time_budget is not None and time_budget.expired():
+            completed_all = False
+            break
         for candidate in sorted(candidates, key=lambda c: c.candidate_id):
             if (row_id, probe_index) in f0_unusable_instances and (
                 candidate.algorithm_family in F0_DEPENDENT_ALGORITHM_FAMILIES
@@ -1141,8 +1338,12 @@ def run_measure_stage(
                     cap_counters=cap_counters,
                     cost_caps=cost_caps,
                     max_workers=max_workers,
+                    discard_partial_groups=discard_partial_groups,
+                    stage=stage,
+                    meter_call_index=meter_call_index,
                 )
             )
+        instances_completed_this_run += 1
     if newly_missing:
         campaign.ledger.append(
             {
@@ -1151,7 +1352,16 @@ def run_measure_stage(
                 "cells": [[r, p, c] for r, p, c in sorted(newly_missing)],
             }
         )
-    return all_records
+    if time_budget is None:
+        return all_records
+    slice_status = SliceStatus(
+        time_budget_seconds=time_budget.seconds,
+        elapsed_seconds=time_budget.elapsed(),
+        instances_completed_this_run=instances_completed_this_run,
+        instances_remaining=total_instances - instances_completed_this_run,
+        completed_all=completed_all,
+    )
+    return all_records, slice_status
 
 
 __all__ = [
@@ -1161,6 +1371,8 @@ __all__ = [
     "WorkerCpuSecondsInvalidError",
     "StaleRenderError",
     "StaleMeasurementError",
+    "METER_CALL_GROUP_DISCARDED_KIND",
+    "MeterCallIndex",
     "resolve_measure_callable",
     "pcm_bytes_to_signal",
     "load_pcm_signal",

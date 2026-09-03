@@ -108,6 +108,7 @@ from voice_genesis.calibration.campaign.state import (
     FrozenCampaign,
     load_frozen_campaign,
 )
+from voice_genesis.calibration.campaign.time_budget import SliceStatus, TimeBudget
 from voice_genesis.calibration.candidates.registry import candidate_by_id, candidates_for_meter
 from voice_genesis.calibration.cost_caps import (
     BudgetAccountingUndeclaredError,
@@ -204,6 +205,29 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="close サブコマンド専用（[UNDERSPEC-CAL-D09]）: CAMPAIGN_CLOSED 後に "
         "split_secret の commit-reveal event を追加で記帳する。",
+    )
+    parser.add_argument(
+        "--time-budget-seconds",
+        type=float,
+        default=None,
+        help="R2（design memo `design_runner_robustness.md`,"
+        " [UNDERSPEC-CAL-D79]）: c1-fixtures/c2-baseline/c3a-f0-selection/"
+        "c3b-selection/c4-holdout 専用。dispatch 開始からこの秒数（float、"
+        "> 0）が経過したら新規 instance を dispatch せず stage を "
+        "PARTIAL_SLICE として終了する（既に dispatch 済みの instance は "
+        "完走する）。既定 None は無制限（従来どおり）。",
+    )
+    parser.add_argument(
+        "--discard-partial-groups",
+        action="store_true",
+        help="R1（design memo `design_runner_robustness.md`,"
+        " [UNDERSPEC-CAL-D79]）: c2-baseline/c3a-f0-selection/"
+        "c3b-selection/c4-holdout 専用。resume 判定で末尾の meter_call "
+        "group が部分的にしか記帳されていない場合（中断直後）、"
+        "StaleMeasurementError で fail-closed する代わりに "
+        "meter_call_group_discarded event を記帳しフルグループを "
+        "再測定する。同一キーへの重複記帳（duplicate）はこのフラグの "
+        "有無に関わらず常に fail-closed のまま。既定 False は従来どおり。",
     )
     return parser
 
@@ -434,7 +458,12 @@ def _latest_f0_selection(campaign: FrozenCampaign) -> tuple[bool, str | None]:
 
 
 def _reusable_f0_values_by_process(
-    campaign: FrozenCampaign, candidate_id: str, row_id: str, probe_index: int
+    campaign: FrozenCampaign,
+    candidate_id: str,
+    row_id: str,
+    probe_index: int,
+    *,
+    meter_call_index: measure_stage.MeterCallIndex | None = None,
 ) -> dict[str, list[float]] | None:
     """finding #2「(row_id, probe_index) が既に測定済みならその出力を再利用し、
     二重測定しない」: ledger 上に当該 (candidate_id, row_id, probe_index) の
@@ -457,9 +486,19 @@ def _reusable_f0_values_by_process(
     と partial coverage の両方が、この関数を通じて素通り/平均されることなく
     `StaleMeasurementError`（呼び出し元 CLI 経由で未捕捉のまま fail-closed
     伝播 — 他の `measure_stage`/`render_stage` の Stale*Error と同じ契約）
-    として扱われる。"""
-    records = measure_stage._completed_meter_call_records(
-        campaign.ledger.entries, row_id, probe_index, candidate_id
+    として扱われる。
+
+    R3（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）:
+    `meter_call_index` が渡されれば `campaign.ledger.entries` を再取得せず
+    それ経由で判定する（`_build_f0_by_instance` が stage 呼び出しごとに
+    1 回だけ構築した index を渡す）。`None`（既定）なら従来どおり
+    `campaign.ledger.entries` を 1 回スキャンする。"""
+    records = (
+        meter_call_index.completed_records(row_id, probe_index, candidate_id)
+        if meter_call_index is not None
+        else measure_stage._completed_meter_call_records(
+            campaign.ledger.entries, row_id, probe_index, candidate_id
+        )
     )
     if records is None:
         return None
@@ -488,7 +527,13 @@ def _build_f0_by_instance(
     cap_counters: CapCounters | None,
     cost_caps: CostCaps | None,
     stage: str,
-) -> tuple[dict[tuple[str, int], float], frozenset[tuple[str, int]]]:
+    discard_partial_groups: bool = False,
+    meter_call_index: measure_stage.MeterCallIndex | None = None,
+    time_budget: TimeBudget | None = None,
+) -> (
+    tuple[dict[tuple[str, int], float], frozenset[tuple[str, int]]]
+    | tuple[dict[tuple[str, int], float], frozenset[tuple[str, int]], SliceStatus]
+):
     """finding #2: 選択済み F0 candidate を `instances` の各 instance 上で
     測定し（ledger に within3+fresh3 が既に揃っていれば再測定しない）、
     `observables.two_stage_median` で instance ごとに 1 スカラーへ集約する。
@@ -551,13 +596,34 @@ def _build_f0_by_instance(
     back empty, so it reaches the same `f0_injection_rejected` ledger event
     and the same `F0_DEPENDENT_ALGORITHM_FAMILIES` skip in
     `measure_stage.run_measure_stage()`/`holdout_stage.
-    render_and_measure_holdout()` as every other unusable case."""
+    render_and_measure_holdout()` as every other unusable case.
+
+    R1 の `discard_partial_groups`/R3 の `meter_call_index`（design memo
+    `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）は素通しで
+    `_reusable_f0_values_by_process`/`measure_stage.run_measurement_for_
+    instance` へ渡す。
+
+    R2: `time_budget` が渡されれば instance 境界（1 instance = この F0
+    candidate の 1 回の測定）で予算超過を検査し、超過していれば以降の
+    instance を dispatch しない（既に dispatch 済みの instance は完走する）。
+    この場合、戻り値は `(result, unusable, SliceStatus)` の 3-tuple になる。
+    `time_budget` が `None`（既定）のときは従来どおり `(result, unusable)`
+    の 2-tuple を返す（呼び出し元の挙動・シグネチャは不変）。"""
     f0_candidate = candidate_by_id(f0_candidate_id)
     result: dict[tuple[str, int], float] = {}
     unusable: set[tuple[str, int]] = set()
-    for row_id, probe_index in sorted(set(instances)):
+    sorted_instances = sorted(set(instances))
+    instances_completed_this_run = 0
+    completed_all = True
+    for row_id, probe_index in sorted_instances:
+        # R2 instance boundary: checked before dispatching a NEW instance —
+        # an instance already in flight always runs to completion.
+        if time_budget is not None and time_budget.expired():
+            completed_all = False
+            break
+        instances_completed_this_run += 1
         by_process = _reusable_f0_values_by_process(
-            campaign, f0_candidate_id, row_id, probe_index
+            campaign, f0_candidate_id, row_id, probe_index, meter_call_index=meter_call_index
         )
         # round 28 ADOPT (1) (`[UNDERSPEC-CAL-D63]`): tracks whether any
         # repeat came back OUTPUT_MISSING (f0_hz is None) during the manual
@@ -579,6 +645,9 @@ def _build_f0_by_instance(
                 cap_counters=cap_counters,
                 cost_caps=cost_caps,
                 max_workers=max_workers,
+                discard_partial_groups=discard_partial_groups,
+                stage=stage,
+                meter_call_index=meter_call_index,
             )
             by_process = {}
             for r in records:
@@ -618,7 +687,16 @@ def _build_f0_by_instance(
                 "instances": [[rid, pidx] for rid, pidx in sorted(unusable)],
             }
         )
-    return result, frozenset(unusable)
+    if time_budget is None:
+        return result, frozenset(unusable)
+    slice_status = SliceStatus(
+        time_budget_seconds=time_budget.seconds,
+        elapsed_seconds=time_budget.elapsed(),
+        instances_completed_this_run=instances_completed_this_run,
+        instances_remaining=len(sorted_instances) - instances_completed_this_run,
+        completed_all=completed_all,
+    )
+    return result, frozenset(unusable), slice_status
 
 
 def _positive_instances_for_selection(
@@ -745,16 +823,44 @@ def _checkpoint_parent_cpu_before_transition(
     return _refuse_if_caps_already_breached(campaign, cost_caps, cap_counters)
 
 
+def _partial_slice_report(stage: str, slice_status: SliceStatus) -> dict[str, Any]:
+    """R2（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）:
+    the `PARTIAL_SLICE` CLI report shape shared by every `--time-budget-
+    seconds` stage runner — no phase transition happened (the caller must
+    not have appended it before calling this), so `main()`'s `finally`
+    block skips the `stage_summary` ledger event for this dispatch too
+    (parent CPU is still charged to `cap_counters`/`counters.json` — see
+    `main()`)."""
+    return {
+        "result": "PARTIAL_SLICE",
+        "stage": stage,
+        "slice": slice_status.as_report_dict(),
+    }
+
+
 def _run_c1(
     campaign: FrozenCampaign,
     matrix_rows: Sequence[Any],
     *,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
+    time_budget_seconds: float | None = None,
 ) -> dict[str, Any]:
-    outcomes = render_stage.run_render_stage(
-        campaign, matrix_rows, stage="c1", cap_counters=cap_counters, cost_caps=cost_caps
-    )
+    if time_budget_seconds is not None:
+        outcomes, slice_status = render_stage.run_render_stage(
+            campaign,
+            matrix_rows,
+            stage="c1",
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            time_budget=TimeBudget.start_now(time_budget_seconds),
+        )
+        if not slice_status.completed_all:
+            return _partial_slice_report("c1-fixtures", slice_status)
+    else:
+        outcomes = render_stage.run_render_stage(
+            campaign, matrix_rows, stage="c1", cap_counters=cap_counters, cost_caps=cost_caps
+        )
     return {
         "result": "OK",
         "instances": len({(o.row_id, o.probe_index) for o in outcomes}),
@@ -770,6 +876,8 @@ def _run_c2(
     *,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
+    discard_partial_groups: bool = False,
+    time_budget_seconds: float | None = None,
 ) -> dict[str, Any]:
     result = baseline_stage.run_baseline_stage(
         campaign,
@@ -777,7 +885,11 @@ def _run_c2(
         max_workers=workers,
         cap_counters=cap_counters,
         cost_caps=cost_caps,
+        discard_partial_groups=discard_partial_groups,
+        time_budget=TimeBudget.start_now(time_budget_seconds) if time_budget_seconds else None,
     )
+    if "slice_status" in result:
+        return _partial_slice_report("c2-baseline", result["slice_status"])
     return {"result": "OK", "baseline_audit_sha": result["baseline_audit_sha"]}
 
 
@@ -789,6 +901,8 @@ def _run_c3a(
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
     parent_cpu_checkpoint: list[float] | None = None,
+    discard_partial_groups: bool = False,
+    time_budget_seconds: float | None = None,
 ) -> dict[str, Any]:
     # finding #11: claim scope must be frozen before any selection runs.
     try:
@@ -807,15 +921,33 @@ def _run_c3a(
     }
     candidates = candidates_for_meter(MeterId.F0_CONTROL)
 
-    records = measure_stage.run_measure_stage(
-        campaign,
-        instances,
-        candidates,
-        sr_by_row=sr_by_row,
-        max_workers=workers,
-        cap_counters=cap_counters,
-        cost_caps=cost_caps,
-    )
+    if time_budget_seconds is not None:
+        records, slice_status = measure_stage.run_measure_stage(
+            campaign,
+            instances,
+            candidates,
+            sr_by_row=sr_by_row,
+            max_workers=workers,
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            discard_partial_groups=discard_partial_groups,
+            stage="c3a",
+            time_budget=TimeBudget.start_now(time_budget_seconds),
+        )
+        if not slice_status.completed_all:
+            return _partial_slice_report("c3a-f0-selection", slice_status)
+    else:
+        records = measure_stage.run_measure_stage(
+            campaign,
+            instances,
+            candidates,
+            sr_by_row=sr_by_row,
+            max_workers=workers,
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            discard_partial_groups=discard_partial_groups,
+            stage="c3a",
+        )
     # round 17 finding #1: scope the declared negative-control population to
     # F0_CONTROL's own rows, matching c3b's per-family scoping below — the
     # unscoped full-matrix set previously "declared" every family's negative
@@ -886,7 +1018,11 @@ def _run_c3b(
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
     parent_cpu_checkpoint: list[float] | None = None,
+    discard_partial_groups: bool = False,
+    time_budget_seconds: float | None = None,
 ) -> dict[str, Any]:
+    time_budget = TimeBudget.start_now(time_budget_seconds) if time_budget_seconds is not None else None
+    slice_statuses: list[SliceStatus] = []
     # finding #11: claim scope must be frozen before any selection runs.
     try:
         max_claim_scope = selection_stage.max_claim_scope_from_manifest(campaign.manifest)
@@ -929,16 +1065,32 @@ def _run_c3b(
     f0_unusable_instances: frozenset[tuple[str, int]] = frozenset()
     f0_missing_reason = "F0_UNUSABLE"
     if f0_selected_id is not None:
-        f0_by_instance, f0_unusable_instances = _build_f0_by_instance(
-            campaign,
-            all_instances,
-            f0_selected_id,
-            sr_by_row,
-            max_workers=workers,
-            cap_counters=cap_counters,
-            cost_caps=cost_caps,
-            stage="c3b",
-        )
+        if time_budget is not None:
+            f0_by_instance, f0_unusable_instances, f0_slice_status = _build_f0_by_instance(
+                campaign,
+                all_instances,
+                f0_selected_id,
+                sr_by_row,
+                max_workers=workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+                stage="c3b",
+                discard_partial_groups=discard_partial_groups,
+                time_budget=time_budget,
+            )
+            slice_statuses.append(f0_slice_status)
+        else:
+            f0_by_instance, f0_unusable_instances = _build_f0_by_instance(
+                campaign,
+                all_instances,
+                f0_selected_id,
+                sr_by_row,
+                max_workers=workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+                stage="c3b",
+                discard_partial_groups=discard_partial_groups,
+            )
     else:
         # round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): C3a itself recorded
         # SELECTION_FAILED_CLOSED (f0_found is True, f0_selected_id is
@@ -977,18 +1129,38 @@ def _run_c3b(
             for p in range(_PROBE_REPEATS)
         }
         truth_by_instance = {k: v for k, v in truth_by_instance.items() if v is not None}
-        records = measure_stage.run_measure_stage(
-            campaign,
-            instances,
-            meter_candidates,
-            sr_by_row=sr_by_row,
-            f0_by_instance=f0_by_instance,
-            f0_unusable_instances=f0_unusable_instances,
-            max_workers=workers,
-            cap_counters=cap_counters,
-            cost_caps=cost_caps,
-            missing_reason=f0_missing_reason,
-        )
+        if time_budget is not None:
+            records, family_slice_status = measure_stage.run_measure_stage(
+                campaign,
+                instances,
+                meter_candidates,
+                sr_by_row=sr_by_row,
+                f0_by_instance=f0_by_instance,
+                f0_unusable_instances=f0_unusable_instances,
+                max_workers=workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+                missing_reason=f0_missing_reason,
+                discard_partial_groups=discard_partial_groups,
+                stage="c3b",
+                time_budget=time_budget,
+            )
+            slice_statuses.append(family_slice_status)
+        else:
+            records = measure_stage.run_measure_stage(
+                campaign,
+                instances,
+                meter_candidates,
+                sr_by_row=sr_by_row,
+                f0_by_instance=f0_by_instance,
+                f0_unusable_instances=f0_unusable_instances,
+                max_workers=workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+                missing_reason=f0_missing_reason,
+                discard_partial_groups=discard_partial_groups,
+                stage="c3b",
+            )
         family_rows = [mr for mr in matrix_rows if mr.row.family == family.value]
         neg_ids = negative_control_row_ids(family_rows)
         pos_instances = _positive_instances_for_selection(family_rows, assignment, family.value)
@@ -1019,6 +1191,14 @@ def _run_c3b(
         criteria_by_family[family.value] = family_criteria
         fail_filter_reports_by_family[family.value] = family_fail_filter_reports
         claim_scope_reports_by_family[family.value] = family_claim_scope_reports
+
+    # R2: if any sub-phase (F0 measurement, or any family's measure loop —
+    # all sharing the same `time_budget`) did not complete, the whole stage
+    # is a PARTIAL_SLICE — no phase transition below.
+    if slice_statuses:
+        overall_slice_status = SliceStatus.aggregate(slice_statuses)
+        if not overall_slice_status.completed_all:
+            return _partial_slice_report("c3b-selection", overall_slice_status)
 
     # round 16 finding #2 ordering ruling: see `_run_c3a`'s identical
     # comment — recheck the compute cap immediately before
@@ -1081,7 +1261,11 @@ def _run_c4(
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
     parent_cpu_checkpoint: list[float] | None = None,
+    discard_partial_groups: bool = False,
+    time_budget_seconds: float | None = None,
 ) -> dict[str, Any]:
+    time_budget = TimeBudget.start_now(time_budget_seconds) if time_budget_seconds is not None else None
+    slice_statuses: list[SliceStatus] = []
     # finding #11: claim scope must be frozen before holdout runs too (the
     # capping fact is recorded per candidate below; see the note at the
     # per-family loop for why the CLI's DIAGNOSTIC_ONLY placeholder ceiling
@@ -1142,16 +1326,32 @@ def _run_c4(
     f0_unusable_instances: frozenset[tuple[str, int]] = frozenset()
     f0_missing_reason = "F0_UNUSABLE"
     if f0_selected_id is not None:
-        f0_by_instance, f0_unusable_instances = _build_f0_by_instance(
-            campaign,
-            all_instances,
-            f0_selected_id,
-            sr_by_row,
-            max_workers=workers,
-            cap_counters=cap_counters,
-            cost_caps=cost_caps,
-            stage="c4",
-        )
+        if time_budget is not None:
+            f0_by_instance, f0_unusable_instances, f0_slice_status = _build_f0_by_instance(
+                campaign,
+                all_instances,
+                f0_selected_id,
+                sr_by_row,
+                max_workers=workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+                stage="c4",
+                discard_partial_groups=discard_partial_groups,
+                time_budget=time_budget,
+            )
+            slice_statuses.append(f0_slice_status)
+        else:
+            f0_by_instance, f0_unusable_instances = _build_f0_by_instance(
+                campaign,
+                all_instances,
+                f0_selected_id,
+                sr_by_row,
+                max_workers=workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+                stage="c4",
+                discard_partial_groups=discard_partial_groups,
+            )
     else:
         # round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): mirrors `_run_c3b`'s else
         # branch — C3a recorded SELECTION_FAILED_CLOSED, so every C4
@@ -1170,17 +1370,34 @@ def _run_c4(
             }
         )
 
-    records_by_family = holdout_stage.render_and_measure_holdout(
-        campaign,
-        matrix_rows,
-        candidates_by_family=candidates_by_family,
-        max_workers=workers,
-        f0_by_instance=f0_by_instance,
-        f0_unusable_instances=f0_unusable_instances,
-        f0_missing_reason=f0_missing_reason,
-        cap_counters=cap_counters,
-        cost_caps=cost_caps,
-    )
+    if time_budget is not None:
+        records_by_family, render_measure_slice_status = holdout_stage.render_and_measure_holdout(
+            campaign,
+            matrix_rows,
+            candidates_by_family=candidates_by_family,
+            max_workers=workers,
+            f0_by_instance=f0_by_instance,
+            f0_unusable_instances=f0_unusable_instances,
+            f0_missing_reason=f0_missing_reason,
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            discard_partial_groups=discard_partial_groups,
+            time_budget=time_budget,
+        )
+        slice_statuses.append(render_measure_slice_status)
+    else:
+        records_by_family = holdout_stage.render_and_measure_holdout(
+            campaign,
+            matrix_rows,
+            candidates_by_family=candidates_by_family,
+            max_workers=workers,
+            f0_by_instance=f0_by_instance,
+            f0_unusable_instances=f0_unusable_instances,
+            f0_missing_reason=f0_missing_reason,
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            discard_partial_groups=discard_partial_groups,
+        )
 
     # finding #11: candidate_id -> Candidate lookup, for annotating gate_detail
     # with claim_scope_report() below (covers every pool this stage touches).
@@ -1593,6 +1810,18 @@ def _run_c4(
             )
         )
 
+    # R2: if any sub-phase (F0 measurement, C4 render, or any family's
+    # measure loop — all sharing the same `time_budget`) did not complete,
+    # the whole stage is a PARTIAL_SLICE — no phase transition below. The
+    # gate/status computation above ran on `records_by_family` regardless
+    # (it is pure and side-effect free — no ledger writes between the
+    # `render_and_measure_holdout()` call above and here), but its result
+    # (`results`) is simply discarded in favor of the PARTIAL_SLICE report.
+    if slice_statuses:
+        overall_slice_status = SliceStatus.aggregate(slice_statuses)
+        if not overall_slice_status.completed_all:
+            return _partial_slice_report("c4-holdout", overall_slice_status)
+
     # round 16 finding #2 ordering ruling: see `_run_c3a`'s identical
     # comment — recheck the compute cap immediately before
     # `holdout_executed_valid` is appended below.
@@ -1837,6 +2066,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     secret_dir = args.secret_dir or default_secret_dir()
     approval_dir = args.approval_dir or default_approval_dir()
 
+    # R2 (design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`):
+    # `--time-budget-seconds` must be a positive float — reject before any
+    # side effect (mirrors `TimeBudget.start_now()`'s own guard, checked
+    # here too so a bad value is reported without touching the campaign at
+    # all rather than surfacing mid-dispatch).
+    if args.time_budget_seconds is not None and not (args.time_budget_seconds > 0.0):
+        _print(
+            {
+                "result": "ERROR",
+                "detail": f"--time-budget-seconds must be > 0, got {args.time_budget_seconds!r}",
+            }
+        )
+        return 1
+
     if args.subcommand == "plan":
         _print(build_plan_report(args.campaign_dir, secret_dir))
         return 0
@@ -2035,10 +2278,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     parent_cpu_checkpoint = [parent_cpu_t0]
     try:
         if args.subcommand == "c1-fixtures":
-            out = _run_c1(campaign, matrix_rows, cap_counters=cap_counters, cost_caps=cost_caps_obj)
+            out = _run_c1(
+                campaign,
+                matrix_rows,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps_obj,
+                time_budget_seconds=args.time_budget_seconds,
+            )
         elif args.subcommand == "c2-baseline":
             out = _run_c2(
-                campaign, matrix_rows, args.workers, cap_counters=cap_counters, cost_caps=cost_caps_obj
+                campaign,
+                matrix_rows,
+                args.workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps_obj,
+                discard_partial_groups=args.discard_partial_groups,
+                time_budget_seconds=args.time_budget_seconds,
             )
         elif args.subcommand == "c3a-f0-selection":
             out = _run_c3a(
@@ -2048,6 +2303,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 cap_counters=cap_counters,
                 cost_caps=cost_caps_obj,
                 parent_cpu_checkpoint=parent_cpu_checkpoint,
+                discard_partial_groups=args.discard_partial_groups,
+                time_budget_seconds=args.time_budget_seconds,
             )
         elif args.subcommand == "c3b-selection":
             out = _run_c3b(
@@ -2057,6 +2314,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 cap_counters=cap_counters,
                 cost_caps=cost_caps_obj,
                 parent_cpu_checkpoint=parent_cpu_checkpoint,
+                discard_partial_groups=args.discard_partial_groups,
+                time_budget_seconds=args.time_budget_seconds,
             )
         elif args.subcommand == "unseal":
             out = _run_unseal(campaign, approval_dir)
@@ -2068,6 +2327,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 cap_counters=cap_counters,
                 cost_caps=cost_caps_obj,
                 parent_cpu_checkpoint=parent_cpu_checkpoint,
+                discard_partial_groups=args.discard_partial_groups,
+                time_budget_seconds=args.time_budget_seconds,
             )
         elif args.subcommand == "close":
             out = _run_close(
@@ -2098,18 +2359,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         residual_cpu_seconds = now_cpu - parent_cpu_checkpoint[0]
         if residual_cpu_seconds < 0.0:  # pragma: no cover - defensive only
             residual_cpu_seconds = 0.0
+        # R2 (design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`):
+        # a `PARTIAL_SLICE` exit charges this dispatch's parent CPU to
+        # `cap_counters`/`counters.json` exactly like a normal transition
+        # (below, unconditionally) — caps stay honest across slices — but
+        # does NOT append the `stage_summary` ledger event, matching "NO
+        # phase transition, NO stage_summary event" (no phase transition
+        # happened, and the *next* invocation's own `stage_summary` will
+        # cover the CPU spent finishing the stage).
+        out_is_partial_slice = isinstance(out, dict) and out.get("result") == "PARTIAL_SLICE"
         cap_counters.add(compute=residual_cpu_seconds)
         save_cap_counters(campaign.campaign_dir, cap_counters)
         full_dispatch_parent_cpu_seconds = now_cpu - parent_cpu_t0
         if full_dispatch_parent_cpu_seconds < 0.0:  # pragma: no cover - defensive only
             full_dispatch_parent_cpu_seconds = 0.0
-        campaign.ledger.append(
-            {
-                "kind": "stage_summary",
-                "stage": args.subcommand,
-                "parent_cpu_seconds": full_dispatch_parent_cpu_seconds,
-            }
-        )
+        if not out_is_partial_slice:
+            campaign.ledger.append(
+                {
+                    "kind": "stage_summary",
+                    "stage": args.subcommand,
+                    "parent_cpu_seconds": full_dispatch_parent_cpu_seconds,
+                }
+            )
         # round 16 finding #2 (`[UNDERSPEC-CAL-D34]`) — the base fix:
         # recheck the cap with this residual charge folded in, and refuse
         # to report success if it alone breaches. For `close` specifically,
@@ -2130,7 +2401,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             out = {"result": "COST_CAP_EXCEEDED", "detail": post_breach.detail}
 
     _print(out)
-    return 0 if isinstance(out, dict) and out.get("result") == "OK" else 1
+    # R2: `PARTIAL_SLICE` is a clean, expected stop (not a failure) — the
+    # design memo requires the stage to "exit 0" so a slice loop (re-running
+    # the same command until the stage completes) can rely on exit code
+    # alone.
+    ok_results = ("OK", "PARTIAL_SLICE")
+    return 0 if isinstance(out, dict) and out.get("result") in ok_results else 1
 
 
 if __name__ == "__main__":

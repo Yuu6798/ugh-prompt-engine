@@ -490,3 +490,73 @@ checkout（凍結済み generator/candidate ファイル）も campaign dir 配�
   / c4 = holdout non-control ×2」として明確化し、control instances の c4 再 render を
   否定 = PR #343 第 5 巡採用） / meter calls 13,680 per impl / selection ≈10^5）と
   cap の照合表を出力
+
+### 6.5 D2 — runner のスライス/再開堅牢化（`[UNDERSPEC-CAL-D79]`。design memo
+`design_runner_robustness.md`, 2026-09-03 user-approved「推奨で続行」）
+
+rehearsal（`freeze_execution_13.txt`, 2026-09-02）: production stage は 8h+ 走るが
+実行環境が約 4 分ごとにプロセスを kill する。(1) meter_call group の途中で kill
+されると次回起動が `StaleMeasurementError`（fail-closed by design、round 9
+finding #9）で詰まり、手動 ledger 修復なしに再開できない。(2) instance 境界で
+stage を安全に止める手段が無い。(3) resume するたびに ledger 全体を再走査する
+（superlinear）。以下 R1〜R3 で対応する。**新規 BlockedCode なし。新フラグ不在時の
+挙動は不変**（無中断 run のledger 内容はバイト同一）。
+
+- **R1 — 部分 meter_call group の明示的 operator recovery**: 新規 CLI flag
+  `--discard-partial-groups`（`c2-baseline`/`c3a-f0-selection`/`c3b-selection`/
+  `c4-holdout` — measure する全 stage）。既定 OFF（従来どおり
+  `StaleMeasurementError`）。ON 時、`measure_stage._completed_meter_call_records`
+  （`MeterCallIndex.completed_records`）が PARTIAL（`StaleMeasurementError.kind ==
+  "partial"` — 一部 repeat key のみ記帳・重複なし）を検出したら、`run_
+  measurement_for_instance` は `stop_event`/re-raise の代わりに ledger event
+  `{"kind": "meter_call_group_discarded", "row_id", "probe_index",
+  "candidate_id", "discarded_repeat_keys": [[repeat_kind, repeat_index], ...]
+  (sorted), "discarded_count", "reason":
+  "operator_discard_partial_group_after_interrupt", "stage"}` を 1 件記帳し、
+  フルグループ（within3+fresh3 全 6 call）を測定・記帳して継続する。
+  **reconstruction rule**（`meter_call` を読むあらゆる箇所に適用 —
+  `_completed_meter_call_records`/`MeterCallIndex`/selection・holdout・close・
+  `caps.cap_counters_from_ledger` 含む）: あるキー K への discard event は K の
+  累積をリセットする。K についてその event **以降**に記帳された `meter_call` の
+  みが完全性判定・重複判定・scoring の対象。discard 前の記録は ledger には残る
+  （append-only）が、以降の完全性判定からは除外される — ただし compute/storage
+  counter へは引き続き課金される（work は実際に行われた。round 25
+  `[UNDERSPEC-CAL-D57]` の per-attempt charging 方針と整合。`caps.
+  cap_counters_from_ledger` は discard event でその key の dedup 集計を
+  リセットし、discard 前の attempt と discard 後の remeasure の双方の
+  `cpu_seconds` を個別に課金する）。DUPLICATE（`kind == "duplicate"`）はフラグの
+  有無に関わらず常に `stop_event`+re-raise のまま（discard 対象は PARTIAL のみ）。
+- **R2 — instance 境界でのスライス実行**: 新規 CLI flag
+  `--time-budget-seconds N`（float > 0。`c1-fixtures`/`c2-baseline`/
+  `c3a-f0-selection`/`c3b-selection`/`c4-holdout`）。既定 `None`＝無制限
+  （従来どおり）。dispatch 開始（`campaign/time_budget.py` の `TimeBudget`、
+  `time.monotonic()` 基準）から N 秒経過したら新規 instance を dispatch しない
+  （既に dispatch 済みの instance——`--workers` の worker pool 分含む——は完走する）。
+  instance 境界は render では 1 `(row_id, probe_index)` render 単位、measure では
+  1 `(row_id, probe_index)` の全 candidate 測定単位（`run_measure_stage`/
+  `_build_f0_by_instance` の outer loop）。超過時、stage は phase transition も
+  `stage_summary` ledger event も一切記帳せず exit 0 で
+  `{"result": "PARTIAL_SLICE", "stage": <subcommand>, "slice": {
+  "time_budget_seconds", "elapsed_seconds", "instances_completed_this_run",
+  "instances_remaining"}}` を報告する（`cli._partial_slice_report`）。parent CPU
+  は通常の phase transition と同額だけ `cap_counters`/`counters.json` へ課金する
+  （`cli.main()` の `finally` 節は `stage_summary` event の記帳だけを PARTIAL_SLICE
+  時にスキップし、CPU 課金自体は常に実行——caps がスライスを跨いで正直であり
+  続ける）。同一コマンドの再実行は既存 resume 経路で継続し、残 instance が全て
+  完了すれば budget が 0 でも通常どおり phase transition + `stage_summary` を行う。
+  `c3b-selection`/`c4-holdout` は複数サブフェーズ（F0 測定・render・family 別
+  measure）を持つため、それら全てが**同一の** `TimeBudget` インスタンスを共有する
+  （`time_budget.SliceStatus.aggregate()` で単純合算するだけで stage 全体の完走
+  可否・進捗が正しく合成される——budget 切れ後に呼ばれるサブフェーズは自分の
+  instance を 1 件も dispatch せず自分の総数をそのまま `instances_remaining` として
+  返す）。
+- **R3 — stage 呼び出し 1 回につき ledger 走査 1 回**: `measure_stage.MeterCallIndex`
+  が `run_measure_stage`（および `cli._build_f0_by_instance`）の呼び出しごとに
+  ledger を 1 回だけ走査してメモリ上に索引化し（`campaign.ledger.entries` への
+  唯一のアクセス）、以降は `run_measurement_for_instance` が `Ledger.append()` の
+  戻り値を index へ直接反映する（`observe_entry()`、O(1) 増分更新——ledger の
+  再取得なし）。`_completed_meter_call_records`（1 回スキャン版）と
+  `MeterCallIndex.completed_records`（索引版）は同一の判定関数
+  （`_resolve_meter_group`）を共有するため構造的に等価——`test_campaign_measure.py`
+  の equivalence test が増分更新と 1 回スキャンの結果一致を complete/partial/
+  duplicate/discarded の全パターンで検証する。

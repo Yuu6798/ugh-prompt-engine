@@ -38,6 +38,7 @@ from pathlib import Path
 from voice_genesis.calibration.campaign import measure_stage, workunits
 from voice_genesis.calibration.campaign.render_stage import run_render_stage
 from voice_genesis.calibration.campaign.state import FrozenCampaign
+from voice_genesis.calibration.campaign.time_budget import SliceStatus, TimeBudget
 from voice_genesis.calibration.candidates.registry import Candidate, candidate_by_id
 from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
 from voice_genesis.calibration.e_use_table import row_from_dict
@@ -490,7 +491,12 @@ def render_and_measure_holdout(
     f0_missing_reason: str = "F0_UNUSABLE",
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
-) -> dict[str, list[measure_stage.MeasurementRecord]]:
+    discard_partial_groups: bool = False,
+    time_budget: TimeBudget | None = None,
+) -> (
+    dict[str, list[measure_stage.MeasurementRecord]]
+    | tuple[dict[str, list[measure_stage.MeasurementRecord]], SliceStatus]
+):
     """C4: holdout 非 control 行を render（determinism 検査つき。§7 leakage
     検査は `render_stage.run_render_stage` が行う）→ family ごとに指定
     candidate（選択済み候補 + B0）で測定する。戻り値は
@@ -505,27 +511,78 @@ def render_and_measure_holdout(
     round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): `f0_missing_reason` is forwarded
     unchanged to `measure_stage.run_measure_stage()`'s `missing_reason` — the
     caller passes `"F0_SELECTION_FAILED"` when `f0_unusable_instances` is
-    every C4 instance because C3a itself has no F0 winner."""
-    run_render_stage(campaign, matrix_rows, stage="c4", cap_counters=cap_counters, cost_caps=cost_caps)
+    every C4 instance because C3a itself has no F0 winner.
+
+    R1 の `discard_partial_groups`（design memo `design_runner_robustness.md`,
+    `[UNDERSPEC-CAL-D79]`）は素通しで `measure_stage.run_measure_stage` へ
+    渡す（`stage="c4"`）。
+
+    R2: `time_budget` が渡されれば、render サブフェーズと family ごとの
+    measure サブフェーズすべてが**同一の** `time_budget` を共有する — 予算
+    切れ以降に呼ばれるサブフェーズは自分の instance を 1 件も dispatch せず
+    自分の総数をそのまま `instances_remaining` として返すので、
+    `SliceStatus.aggregate()` で単純合算するだけで stage 全体の完走可否・
+    進捗が正しく合成される（render を打ち切った場合、後続の family measure
+    はまだ 1 件も dispatch されていない — leakage 検査は最初の
+    `run_render_stage` 呼び出しの中で完走済みの前提で毎回安全に呼べる）。
+    この場合、戻り値は `(results, SliceStatus)` の 2-tuple になる。
+    `time_budget` が `None`（既定）のときは従来どおり `results` 単体を
+    返す（呼び出し元の挙動・シグネチャは不変）。"""
+    if time_budget is not None:
+        _outcomes, render_slice_status = run_render_stage(
+            campaign,
+            matrix_rows,
+            stage="c4",
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            time_budget=time_budget,
+        )
+        slice_statuses = [render_slice_status]
+    else:
+        run_render_stage(campaign, matrix_rows, stage="c4", cap_counters=cap_counters, cost_caps=cost_caps)
+        slice_statuses = []
 
     assignment = campaign.realized_split.assignment
     sr_by_row = {mr.row_id: mr.row.sr_hz for mr in matrix_rows}
     results: dict[str, list[measure_stage.MeasurementRecord]] = {}
     for family, candidates in sorted(candidates_by_family.items()):
         instances = workunits.c4_holdout_instances(matrix_rows, assignment, family=family)
-        results[family] = measure_stage.run_measure_stage(
-            campaign,
-            instances,
-            candidates,
-            sr_by_row=sr_by_row,
-            f0_by_instance=f0_by_instance,
-            f0_unusable_instances=f0_unusable_instances,
-            max_workers=max_workers,
-            cap_counters=cap_counters,
-            cost_caps=cost_caps,
-            missing_reason=f0_missing_reason,
-        )
-    return results
+        if time_budget is not None:
+            family_records, family_slice_status = measure_stage.run_measure_stage(
+                campaign,
+                instances,
+                candidates,
+                sr_by_row=sr_by_row,
+                f0_by_instance=f0_by_instance,
+                f0_unusable_instances=f0_unusable_instances,
+                max_workers=max_workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+                missing_reason=f0_missing_reason,
+                discard_partial_groups=discard_partial_groups,
+                stage="c4",
+                time_budget=time_budget,
+            )
+            results[family] = family_records
+            slice_statuses.append(family_slice_status)
+        else:
+            results[family] = measure_stage.run_measure_stage(
+                campaign,
+                instances,
+                candidates,
+                sr_by_row=sr_by_row,
+                f0_by_instance=f0_by_instance,
+                f0_unusable_instances=f0_unusable_instances,
+                max_workers=max_workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+                missing_reason=f0_missing_reason,
+                discard_partial_groups=discard_partial_groups,
+                stage="c4",
+            )
+    if time_budget is None:
+        return results
+    return results, SliceStatus.aggregate(slice_statuses)
 
 
 def resolve_candidates(candidate_ids: Sequence[str]) -> tuple[Candidate, ...]:
