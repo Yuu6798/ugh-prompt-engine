@@ -35,7 +35,22 @@ class MissingReason(str, Enum):
 
 
 class BlockedCode(str, Enum):
-    """fail-closed code の閉語彙（設計正本 §3.3）。C0 で列挙済み、事後追加禁止。"""
+    """fail-closed code の閉語彙（設計正本 §3.3、~L140-143）。C0 で列挙済みの
+    6 値で凍結され、事後の場当たり追加を禁止する。
+
+    UNDERSPEC-CAL-D78 ruling（#344 round 9 ADOPT, 分類②。round 9 finding #1
+    + audit 発見の 2 件を統合）: D76 ruling (2) が追加した
+    `BLOCKED_C0_SWEEP_DECLARATION_INVALID` と D77 ruling (1) が追加した
+    `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` はいずれも本 enum を設計正本の
+    凍結 6 値を超えて事後拡張する contract vocabulary contamination だった
+    （両追加とも設計正本 §3.3 自体の改訂を経由していない）。両方を撤去し、
+    それぞれが検出していた fail-closed 事由は既存の `BLOCKED_C0_MANIFEST_
+    INCOMPLETE` を発行しつつ `c0_validate.SweepManifestViolationDetail`
+    （`violation="sweep_truth_level_insufficient"` / `"sweep_declaration_
+    mismatch"`）という機械可読 detail フィールドで表現するよう
+    `c0_validate.py` を改めた——downstream consumer は凍結 6 値のみを見れば
+    よく、診断に必要な情報は detail 構造から失われない。
+    """
 
     BLOCKED_DOMAIN_MANIFEST_INCOMPLETE = "BLOCKED_DOMAIN_MANIFEST_INCOMPLETE"
     BLOCKED_C0_MANIFEST_INCOMPLETE = "BLOCKED_C0_MANIFEST_INCOMPLETE"

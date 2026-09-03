@@ -69,6 +69,7 @@ from voice_genesis.calibration.campaign.caps import (
     validate_worker_cpu_seconds,
 )
 from voice_genesis.calibration.campaign.state import FrozenCampaign
+from voice_genesis.calibration.candidates import adapter
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import Candidate
 from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
@@ -277,6 +278,79 @@ def primary_output_value(candidate: Candidate, output: MeterOutput) -> float | N
         return None
     value = output.values.get(field)
     return float(value) if value is not None else None
+
+
+def usable_primary_instances(
+    candidate: Candidate,
+    records: Sequence[MeasurementRecord],
+    *,
+    within_fresh_tol: float = 0.0,
+) -> frozenset[tuple[str, int]]:
+    """UNDERSPEC-CAL-D76 ruling (4)（instance usability。`sweep_truth_
+    investigation.md` Codex round 7 #1）: instance `(row_id, probe_index)`
+    は、その候補について記録されている **全** record（repeat）が有限な
+    primary 値を返し、かつ within 群と fresh 群がどちらも存在する場合は
+    `candidates.adapter.within_fresh_process_mismatch()`（D67 一貫性規則）
+    で不一致と判定されない場合にのみ usable とする。
+
+    旧実装（`campaign/cli.py` `_run_c4` の直書き set comprehension）は
+    instance の record を 1 件でも走査し、その 1 件の値が有限なら instance
+    全体を usable とみなす existential collapse だった——6 repeat 中 1 件が
+    たまたま有限であれば、残り 5 件が missing/不整合でも usable 側へ倒れて
+    いた。本関数は record を `(row_id, probe_index)` でグループ化し、
+    グループ内**全** record が有限・（within/fresh 両方揃っていれば）相互
+    整合であることを要求する（1 件でも欠落/不整合なら instance 全体を
+    不採用 — 呼び出し側は `OUTPUT_MISSING`（部分被覆）として扱う）。
+
+    within `WITHIN_PROCESS_REPEATS` + fresh `FRESH_PROCESS_REPEATS` の
+    閉集合が揃っているかどうか自体はここでは検査しない——実キャンペーンの
+    ledger 記帳（`_completed_meter_call_records`/`StaleMeasurementError`）
+    が「within 3 + fresh 3 がちょうど揃うか、測定を一切行わないか」を
+    既に fail-closed で保証しているため、実測 record が 1 件でも
+    `records` に現れる時点で完全な 6 repeat が揃っている（本関数が実際に
+    塞ぐのは「揃った 6 repeat のうち一部だけが有限/整合」というケース）。
+    軽量な単一 record/instance のテスト fixture（このモジュールの呼び出し
+    元テスト群が広く使う慣用句）とも両立する。
+
+    `algorithm_family` の主要出力 field が未知（`PRIMARY_OUTPUT_FIELD_BY_
+    ALGORITHM_FAMILY` に無い）候補、または within/fresh の一方しか
+    record が無い場合（軽量テスト fixture の典型形）は D67 一貫性検査を
+    スキップする（比較対象が揃っていないため——`within_fresh_process_
+    mismatch()` 自身は「一方が空なら不一致」という production 前提の
+    `candidate_fail_filter_report()` 向け規約を持つが、本関数はその規約を
+    継承しない）。
+    """
+    own = [r for r in records if r.candidate_id == candidate.candidate_id]
+    by_instance: dict[tuple[str, int], list[MeasurementRecord]] = {}
+    for r in own:
+        by_instance.setdefault((r.row_id, r.probe_index), []).append(r)
+
+    required_field = PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY.get(candidate.algorithm_family)
+
+    usable: set[tuple[str, int]] = set()
+    for key, group in by_instance.items():
+        if not group:
+            continue
+        values_are_finite = True
+        for r in group:
+            value = primary_output_value(candidate, r.output)
+            if value is None or not math.isfinite(value):
+                values_are_finite = False
+                break
+        if not values_are_finite:
+            continue
+        if required_field is not None:
+            within_values = [r.output.values for r in group if r.repeat_kind == "within"]
+            fresh_values = [r.output.values for r in group if r.repeat_kind == "fresh"]
+            if not within_values or not fresh_values:
+                usable.add(key)
+                continue  # no evidence to compare (abbreviated/lightweight record set)
+            if adapter.within_fresh_process_mismatch(
+                within_values, fresh_values, field_name=required_field, tol=within_fresh_tol
+            ):
+                continue  # D67: within/fresh disagree beyond tol -> not usable
+        usable.add(key)
+    return frozenset(usable)
 
 
 #: round 26 ADOPT (1) (`[UNDERSPEC-CAL-D58]`): the 3 non-finite kinds a

@@ -61,12 +61,21 @@ from voice_genesis.calibration.vocab import ClaimCeiling, Domain, MeterId, Missi
 # frozen fixture_spec からの invariance 軸宣言 [UNDERSPEC-CAL-D18]
 # ---------------------------------------------------------------------------
 
-#: `[UNDERSPEC-CAL-D18]` 設計正本/`c0_freeze._fixture_specs()` は per-family
-#: の「変動しうる軸名」を `frozen_design.fixture_spec.<FAMILY>.confound_axes`
-#: として宣言するが、gate4' invariance axis・DIRECTIONAL gate の sweep_id と
-#: して直接使う契約までは規定しない。本モジュールはこの `confound_axes` 列を
-#: そのまま invariance axis 宣言（gate4'）/ sweep_id 宣言（directional gate）
-#: として再利用する、最も単純な写像を採る。
+#: `[UNDERSPEC-CAL-D18]`（UNDERSPEC-CAL-D76 により訂正）: 設計正本/
+#: `c0_freeze._fixture_specs()` は per-family の「変動しうる軸名」を
+#: `frozen_design.fixture_spec.<FAMILY>.confound_axes` として宣言する。
+#: 本モジュールはこの `confound_axes` 列を gate4' invariance axis 宣言
+#: としてのみ使う（§10.1「truth 自体が変わる軸は invariance 対象に混ぜない」
+#: の nuisance 軸 = confound_axes そのものであり、この用途は正しい）。
+#: **旧 D18 は同じ列を DIRECTIONAL gate の sweep_id 宣言としても再利用する
+#: と記していたが、これは誤りだった**（`sweep_truth_investigation.md`：
+#: nuisance 軸で group 化すると truth が anchor 固定になり全 pair
+#: `delta_truth == 0`、§10.4 の resolvable pair が構造的に 0 件になる）。
+#: DIRECTIONAL sweep 宣言は `frozen_design.fixture_spec.<FAMILY>.
+#: declared_sweeps`（`fixtures.matrix.declared_sweeps_by_family()`、def A:
+#: truth-core block の nuisance-constant series）という別 key に分離した
+#: （`campaign.cli._run_c4` が消費する）。本関数は confound_axes 専用のまま
+#: 変更しない。
 def declared_axes_for_family(manifest: Mapping[str, object], family: str) -> tuple[str, ...]:
     frozen_design = manifest.get("frozen_design")
     if not isinstance(frozen_design, Mapping):

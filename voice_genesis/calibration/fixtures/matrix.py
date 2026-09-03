@@ -17,6 +17,7 @@ nuisance 系列・正準 boundary/negative 系列・per-family targeted interact
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -830,3 +831,140 @@ def assert_no_duplicate_row_ids(rows: list[MatrixRow]) -> None:
         if mr.row_id in seen:
             raise ValueError(f"matrix: duplicate row_id detected: {mr.row_id}")
         seen.add(mr.row_id)
+
+
+# ---------------------------------------------------------------------------
+# 宣言済み sweep（UNDERSPEC-CAL-D76 def A。D75/`[UNDERSPEC-CAL-D75]` の
+# nuisance-axis 定義を SUPERSEDE する。§10.4 DIRECTIONAL gate 前提）
+#
+# 調査結論（`sweep_truth_investigation.md`）: 設計正本 §10.4 の
+# `Delta_truth(i,j) > R_ij` は truth が変動する pair を前提にしており
+# （`Delta_truth == 0` は原理的に resolvable になり得ない）、§4.2 L169
+# 「content/F0/duration/SNR 固定の one-factor causal sweep」、§10.1
+# L325-326/L334「truth 自体が変わる軸は invariance 対象に混ぜない」+
+# 「invariance 軸ごとに >= 5 pairs」（nuisance 軸 = 別語・別最小数）から、
+# sweep は「nuisance/covariate 設定を固定し truth 水準だけを動かす行集合」
+# （= truth-core block の因子分解そのもの）であって nuisance 軸そのもの
+# ではない。D75 の `declared_sweeps_by_family()`（nuisance_tag の軸名を
+# sweep_id とする定義）は 7 family 中 7 family で「全 sweep >= 3」を
+# 構造的に満たせず（group 内 truth が anchor 固定のため全 pair
+# `delta_truth == 0`）、462 セル化はこの誤った定義への対症療法だった
+# （本 D76 で revert 済み）。
+# ---------------------------------------------------------------------------
+
+#: family の主要 truth スカラー field（`campaign.selection_stage.
+#: _TRUTH_FIELD_BY_FAMILY`/`c0_freeze._KNOWN_TRUTH_FIELD` と同じ対応だが、
+#: 他 module（campaign 層）には依存せず本モジュールで独立に宣言する
+#: （`selection_stage.py` 冒頭コメント「他 agent が並行編集中の... には
+#: 依存せず本モジュールで独立に宣言する」と同じ規約）。値は「sweep 内で
+#: 固定される行フィールド」の key から除外する対象そのもの——TRANSITION_GT
+#: のみ `severity`/`discontinuity_magnitude` の 2 field が同一 truth
+#: construct を指す（severity から discontinuity_magnitude が 1:1 導出
+#: される、`axes.TRANSITION_SEVERITY_MAGNITUDE`）ため両方を除外する。
+_SWEEP_TRUTH_FIELDS_BY_FAMILY: dict[str, tuple[str, ...]] = {
+    FixtureFamily.F0_CONTROL.value: ("f0_hz",),
+    FixtureFamily.FORMANT_GT.value: ("pole_freqs_hz",),
+    FixtureFamily.TILT_GT.value: ("slope_db_per_oct",),
+    FixtureFamily.APERIODICITY_GT.value: ("injected_noise_fraction",),
+    FixtureFamily.RESONANCE_GT.value: ("center_hz",),
+    FixtureFamily.TRANSITION_GT.value: ("severity", "discontinuity_magnitude"),
+    FixtureFamily.IDENTITY_CAUSAL_SWEEP.value: ("delta",),
+}
+
+#: sweep の group key から常に除外するメタデータ field。`block` は
+#: `declared_sweeps_by_family()` の呼び出し前に TRUTH_CORE へ既に絞り込んで
+#: いるため常に同一値だが明示的に除外する。`positive_control` は
+#: family anchor（TRUTH_CORE 行の一部）にのみ True が立つタグであり、
+#: 同一 sweep 内の行を anchor/non-anchor で誤って分断しないよう
+#: 明示的に除外する（UNDERSPEC-CAL-D76: 「do NOT include positive_control/
+#: block in the key」）。`family` は呼び出し側で既に family ごとに
+#: 分割済みのため冗長だが、明示的に除外して意図を残す。
+_SWEEP_KEY_EXCLUDED_FIELDS: frozenset[str] = frozenset({"family", "block", "positive_control"})
+
+
+def _sweep_fixed_fields(row: FixtureRow) -> dict[str, Any]:
+    """`row` の「sweep 内で固定される（=held-fixed）」canonical field。
+    truth field 群 + メタデータ除外 field を除いた `to_canonical_dict()` の
+    残り——同じ値を持つ TRUTH_CORE/PRIMARY 行が 1 declared sweep を成す。"""
+    d = row.to_canonical_dict()
+    excluded = _SWEEP_KEY_EXCLUDED_FIELDS | set(_SWEEP_TRUTH_FIELDS_BY_FAMILY.get(row.family, ()))
+    return {k: v for k, v in d.items() if k not in excluded}
+
+
+def truth_identity_for_row(row: FixtureRow) -> tuple[Any, ...]:
+    """`row` の family の truth construct を一意に識別するタプル
+    （`_SWEEP_TRUTH_FIELDS_BY_FAMILY` の値をそのまま読む——FORMANT_GT は
+    `pole_freqs_hz` tuple 全体、TRANSITION_GT は `severity`+
+    `discontinuity_magnitude` の組）。同一 declared sweep 内で相異なる
+    truth level を数える唯一の入力（C0 の sweep 宣言検証・C4 の holdout
+    構造下界チェックの両方が使う）。"""
+    fields = _SWEEP_TRUTH_FIELDS_BY_FAMILY.get(row.family, ())
+    return tuple(getattr(row, f) for f in fields)
+
+
+def _varying_fixed_field_names(rows: Sequence[FixtureRow]) -> tuple[str, ...]:
+    """`rows`（同一 family の TRUTH_CORE/PRIMARY 行）の held-fixed field の
+    うち、family 内で実際に複数値を取る field 名だけを sweep_id の可読な
+    構成要素として返す（定数 field を含めても分割結果は変わらないが、
+    id の可読性のため差分だけを載せる）。"""
+    seen: dict[str, set[Any]] = {}
+    for row in rows:
+        for k, v in _sweep_fixed_fields(row).items():
+            seen.setdefault(k, set()).add(v)
+    return tuple(sorted(k for k, values in seen.items() if len(values) > 1))
+
+
+def declared_sweeps_by_family(rows: Sequence[MatrixRow]) -> dict[str, dict[str, tuple[str, ...]]]:
+    """UNDERSPEC-CAL-D76 def A（sweep_truth_investigation.md）: family の
+    declared sweep 集合は、PRIMARY domain の TRUTH_CORE 行のうち
+    nuisance/covariate 設定（held-fixed field）が同一で truth 水準
+    （`truth_identity_for_row()`）だけが異なる行の集合。sweep_id は
+    held-fixed field のうち family 内で実際に変動する field を
+    `field=value` 形式で連結した文字列として決定的に導出する
+    （`positive_control`/`block` は除く）。
+
+    戻り値: `family -> {sweep_id: (member row_id, ...)}`（`axes.FAMILY_ORDER`
+    の全 family を key に持つ。宣言 sweep が無い family は空 dict）。
+    C0 freeze（`c0_freeze._fixture_specs()`）がこの出力をそのまま
+    `frozen_design.fixture_spec.<FAMILY>.declared_sweeps` として凍結し
+    （`manifest_core_sha` に含まれる）、`campaign.cli._run_c4` の
+    DIRECTIONAL 最小数チェックも同じ入口を使う（`campaign.holdout_stage.
+    declared_axes_for_family()` は gate4' invariance 軸専用に残り、この
+    sweep 宣言とは独立——旧 D18/D75 の「confound_axes を sweep_id として
+    再利用する」写像は誤りとして本関数へ一本化した）。
+    """
+    by_family: dict[str, list[MatrixRow]] = {family.value: [] for family in axes.FAMILY_ORDER}
+    for mr in rows:
+        if mr.row.block != "TRUTH_CORE" or mr.domain is not Domain.PRIMARY:
+            continue
+        by_family.setdefault(mr.row.family, []).append(mr)
+
+    result: dict[str, dict[str, tuple[str, ...]]] = {}
+    for family, family_matrix_rows in by_family.items():
+        id_fields = _varying_fixed_field_names([mr.row for mr in family_matrix_rows])
+        groups: dict[tuple[tuple[str, Any], ...], list[str]] = {}
+        for mr in family_matrix_rows:
+            fixed = _sweep_fixed_fields(mr.row)
+            key = tuple(sorted(fixed.items(), key=lambda kv: kv[0]))
+            groups.setdefault(key, []).append(mr.row_id)
+        family_sweeps: dict[str, tuple[str, ...]] = {}
+        for key, member_row_ids in groups.items():
+            fixed = dict(key)
+            sweep_id = (
+                "|".join(f"{field}={fixed[field]!r}" for field in id_fields)
+                if id_fields
+                else "anchor"
+            )
+            family_sweeps[sweep_id] = tuple(sorted(member_row_ids))
+        result[family] = family_sweeps
+    return result
+
+
+def declared_sweep_ids_by_family(rows: Sequence[MatrixRow]) -> dict[str, tuple[str, ...]]:
+    """`declared_sweeps_by_family()` の sweep_id のみ（member row_id を
+    落とした軽量版）。C4 の `expected_sweep_ids` 引数など、member を
+    必要としない消費側向け。"""
+    return {
+        family: tuple(sorted(sweeps))
+        for family, sweeps in declared_sweeps_by_family(rows).items()
+    }

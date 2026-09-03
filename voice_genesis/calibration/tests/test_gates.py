@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from voice_genesis.calibration.gates import (
@@ -7,9 +9,11 @@ from voice_genesis.calibration.gates import (
     EUseEvidenceRow,
     InstanceMargin,
     InvariancePair,
+    MIN_RESOLVABLE_PAIRS_PER_SWEEP,
     absolute_gates as _absolute_gates_impl,
     auto_ceiling_for_unjustified,
     directional_gates,
+    resolvable_pairs_possible,
     threshold_margin,
 )
 from voice_genesis.calibration.vocab import ClaimCeiling, Domain, EvidenceClass
@@ -982,6 +986,41 @@ def test_directional_multi_sweep_each_meeting_minimum_passes() -> None:
     assert result.sweeps_with_warning == ("sweep-A",)  # sweep-B has 4, not exactly 3
 
 
+def test_directional_full_coverage_with_real_frozen_sweep_ids_passes() -> None:
+    """UNDERSPEC-CAL-D76 (supersedes D75 ruling (1)): `directional_gates()`
+    itself is agnostic to what the `sweep_id` strings mean — the tests above
+    already exercise the per-sweep minimum with arbitrary names — but this
+    test wires in the *real* declared sweep set a production family
+    actually gets (`fixtures.matrix.declared_sweeps_by_family()`, def A:
+    truth-core block, nuisance-constant series), replacing the fabricated
+    `"default"` sweep D74 left in place and D75's (incorrect, nuisance-axis)
+    sweep ids. A full-coverage synthetic record set (3 resolvable pairs per
+    declared sweep) for `TILT_GT` (6 declared sweeps under def A) can
+    PASS."""
+    from voice_genesis.calibration.fixtures.matrix import build_matrix, declared_sweeps_by_family
+
+    declared = declared_sweeps_by_family(build_matrix())["TILT_GT"]
+    assert len(declared) == 6, sorted(declared)
+
+    pairs = [
+        _pair(f"{sweep_id}-{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=True, sweep_id=sweep_id)
+        for sweep_id in declared
+        for i in range(3)
+    ]
+    result = directional_gates(
+        pairs,
+        u_rep=0.02,
+        u_proc=0.01,
+        expected_sweep_ids=set(declared),
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+    )
+    assert result.passed is True
+    assert result.sweeps_below_minimum == ()
+    assert result.sweep_resolvable_counts == {sweep_id: 3 for sweep_id in declared}
+
+
 def test_directional_expected_sweep_with_no_observed_pairs_fails() -> None:
     """[Codex レビュー 2026-09-01] regression: `expected_sweep_ids` で宣言した
     2 sweep のうち 1 つに observed pair が 1 件もない場合、frozen closed-set
@@ -1324,3 +1363,90 @@ def test_directional_gates_rejects_observations_from_undeclared_sweep() -> None:
     )
     assert result.passed is False
     assert any("undeclared sweep" in reason and "hidden" in reason for reason in result.failure_reasons)
+
+
+# ---------------------------------------------------------------------------
+# resolvable_pairs_possible() (#344 round 4 ADOPT, `[UNDERSPEC-CAL-D74]`,
+# amends round 3's `[UNDERSPEC-CAL-D73]`): structural per-sweep precondition
+# check, mirroring directional_gates()'s own per-sweep partitioning
+# (`sweep_resolvable_counts`/`sweeps_below_minimum`) but from coverage
+# counts alone (no real delta_truth/delta_output values required).
+# ---------------------------------------------------------------------------
+
+
+def test_resolvable_pairs_possible_three_instances_spread_over_three_sweeps_fails() -> None:
+    """D74 の核心例: 3 件の usable PRIMARY instance が meter 全体では
+    `C(3,2)=3 >= MIN_RESOLVABLE_PAIRS_PER_SWEEP` を満たしているように見えるが、
+    3 つの異なる宣言 sweep に 1 件ずつ分散していれば、各 sweep 単独では
+    `C(1,2)=0` で最低数を満たさない——`directional_gates()` の per-sweep 判定
+    と同じく、宣言済み全 sweep が独立に基準を満たさなければならない（sweep 間
+    で集約した合計では不十分）。round 3 の旧実装
+    （`math.comb(n_total, 2) >= MIN_RESOLVABLE_PAIRS_PER_SWEEP`、meter 全体の
+    集約カウント）はこのケースを誤って「構造的に達成可能」と判定していた。"""
+    assert (
+        resolvable_pairs_possible(
+            {"sweep-A": 1, "sweep-B": 1, "sweep-C": 1},
+            {"sweep-A", "sweep-B", "sweep-C"},
+        )
+        is False
+    )
+
+
+def test_resolvable_pairs_possible_one_sweep_with_enough_instances_passes() -> None:
+    """全 usable PRIMARY instance (3 件) が単一の宣言 sweep に属していれば、
+    その sweep は `C(3,2)=3 >= MIN_RESOLVABLE_PAIRS_PER_SWEEP` を満たすため
+    `True`（旧・round 3 実装と同じ「1 sweep に集中していれば足りる」結果）。"""
+    assert resolvable_pairs_possible({"sweep-A": 3}, {"sweep-A"}) is True
+
+
+def test_resolvable_pairs_possible_multi_sweep_each_meeting_minimum_passes() -> None:
+    """複数の宣言 sweep がそれぞれ独立に最低数を満たせば `True`。"""
+    assert (
+        resolvable_pairs_possible(
+            {"sweep-A": 3, "sweep-B": 4},
+            {"sweep-A", "sweep-B"},
+        )
+        is True
+    )
+
+
+def test_resolvable_pairs_possible_multi_sweep_one_below_minimum_fails() -> None:
+    """宣言済み sweep のうち 1 つでも最低数を満たさなければ全体で `False`
+    （§10.4「resolvable pair は各 sweep で >= 3」——1 sweep のみの未達でも
+    全体の gate は FAIL する `directional_gates()` の `sweeps_below_minimum`
+    判定と同じ意味論）。"""
+    assert (
+        resolvable_pairs_possible(
+            {"sweep-A": 3, "sweep-B": 2},
+            {"sweep-A", "sweep-B"},
+        )
+        is False
+    )
+
+
+def test_resolvable_pairs_possible_expected_sweep_with_zero_usable_instances_fails() -> None:
+    """観測 0 件の宣言 sweep が黙って消えてはならない
+    （`directional_gates()` の `expected_sweep_ids` 引数と同じ扱い） —
+    `usable_primary_instance_counts_by_sweep` に鍵が無い宣言 sweep は
+    `n=0` として扱い、`C(0,2)=0 < 3` で FAIL する。"""
+    assert (
+        resolvable_pairs_possible({"sweep-A": 5}, {"sweep-A", "sweep-B"}) is False
+    )
+
+
+def test_resolvable_pairs_possible_no_declared_sweep_fails_closed() -> None:
+    """宣言済み sweep が 1 つも無ければ防御的に `False`
+    （`directional_gates()` の "no expected sweep declared" と同じ
+    fail-closed 側）。"""
+    assert resolvable_pairs_possible({}, set()) is False
+
+
+def test_resolvable_pairs_possible_uses_frozen_min_resolvable_pairs_per_sweep_constant() -> None:
+    """`MIN_RESOLVABLE_PAIRS_PER_SWEEP` ちょうどの usable instance 数から作れる
+    pair 数がしきい値ちょうどのとき（`C(3,2)=3`）は `True`——境界値は
+    `directional_gates()` の `sweeps_with_warning`（3 ちょうど）と同じ側で
+    PASS する。"""
+    n = 3
+    assert math.comb(n, 2) == MIN_RESOLVABLE_PAIRS_PER_SWEEP
+    assert resolvable_pairs_possible({"sweep-A": n}, {"sweep-A"}) is True
+    assert resolvable_pairs_possible({"sweep-A": n - 1}, {"sweep-A"}) is False

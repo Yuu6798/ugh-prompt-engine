@@ -9,6 +9,7 @@ import json
 import math
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -25,7 +26,8 @@ from voice_genesis.calibration.campaign.caps import (
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import candidates_for_meter
-from voice_genesis.calibration.vocab import MeterId, MissingReason
+from voice_genesis.calibration.fixtures.matrix import build_matrix, declared_sweeps_by_family
+from voice_genesis.calibration.vocab import MeterId, MissingReason, Split
 
 from ._campaign_fixture import (
     _canonical_candidates_section,
@@ -229,6 +231,91 @@ def test_c1_fixtures_armed_end_to_end_via_cli(
         e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "render"
     ]
     assert len(render_events) == 5  # 1 row x PROBE_REPEATS(5)
+
+
+# ---------------------------------------------------------------------------
+# round 30 ADOPT (`[UNDERSPEC-CAL-D67]`, Codex round 30 PR #343 finding #2
+# 「Allow stable negative-control non-detections」採用) production E2E:
+# real render + real `librosa.pyin` measurement (no fabricated
+# `MeasurementRecord`/`MeterOutput`) on a genuine F0_CONTROL SILENCE negative
+# control row, run through the real `cli._run_c3a` orchestration
+# (`selection_stage.run_c3a_f0_selection` inside it, not a hand-built
+# `CandidateCriteria`). Before the fix, pyin's real (deterministic, all-6-
+# repeats) `OUTPUT_MISSING` on silence tripped `within_fresh_process_mismatch`
+# and made F0-B0-CURRENT the only candidate ineligible, so
+# `select_across_ceilings` had zero eligible candidates and C3a recorded
+# `SELECTION_FAILED_CLOSED` — i.e. no candidate could ever pass a negative
+# control.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_c3a_f0_selection_passes_with_candidate_that_correctly_non_detects_on_silence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """3 F0_CONTROL TRUTH_CORE rows (n=3 lands exactly 1 in the SELECTION
+    split under the default test split secret) + the family's 1 real SILENCE
+    negative control row (included in C3a's instance set regardless of home
+    split, `[UNDERSPEC-CAL-D37]`/`workunits.c3a_f0_selection_instances`).
+    `librosa.pyin` genuinely finds no voiced frames on true silence and
+    returns `OUTPUT_MISSING` for every within- and fresh-process repeat
+    (`candidates/impl/f0_pyin.py::measure`) — deterministically, so this is
+    not flaky."""
+    from voice_genesis.calibration.fixtures.matrix import build_matrix
+
+    all_rows = build_matrix()
+    truth_rows = [
+        mr
+        for mr in all_rows
+        if mr.row.family == "F0_CONTROL" and mr.row.block == "TRUTH_CORE"
+    ][:3]
+    silence_rows = [
+        mr
+        for mr in all_rows
+        if mr.row.family == "F0_CONTROL" and mr.row.control_class == "SILENCE"
+    ]
+    assert silence_rows, "test setup requires a real F0_CONTROL SILENCE fixture row"
+    subset = truth_rows + silence_rows
+
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+
+    only_b0 = (candidate_by_id("F0-B0-CURRENT"),)
+    orig_candidates_for_meter = cli.candidates_for_meter
+
+    def _trimmed_candidates_for_meter(meter):
+        if meter is MeterId.F0_CONTROL:
+            return only_b0
+        return orig_candidates_for_meter(meter)
+
+    monkeypatch.setattr(cli, "candidates_for_meter", _trimmed_candidates_for_meter)
+
+    result = cli._run_c3a(campaign, subset, 1)
+    assert result["result"] == "OK", result
+    assert result["outcome"] == "SELECTED", result
+    assert result["selected_candidate_id"] == "F0-B0-CURRENT"
+
+    # confirm this really exercised the consistent-missing shape (not an
+    # accidental finite reading on the silent row): every meter_call for the
+    # SILENCE row's instances came back OUTPUT_MISSING.
+    silence_row_ids = {mr.row_id for mr in silence_rows}
+    meter_calls = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"
+    ]
+    silence_calls = [m for m in meter_calls if m["row_id"] in silence_row_ids]
+    assert silence_calls
+    assert all(m.get("missing_reason") == "OUTPUT_MISSING" for m in silence_calls)
+
+    f0_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "f0_selection_frozen"
+    ]
+    assert f0_events
+    fail_filters = f0_events[-1]["fail_filters_by_candidate"]["F0-B0-CURRENT"]
+    assert fail_filters["within_fresh_process_mismatch"] is False
+    assert fail_filters["negative_control_false_fire"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -955,6 +1042,1121 @@ def test_c4_never_calls_f0_dependent_candidate_when_selection_failed_closed(
     m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
     assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
     assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+
+
+@pytest.mark.slow
+def test_c4_f0_unusable_selected_candidate_through_real_holdout_path_closes_not_evaluable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """round 30 self-review ADOPT (finding #5(a), test gap): the production
+    shape `test_c4_never_calls_f0_dependent_candidate_when_selection_failed_
+    closed` above verifies via a monkeypatched `holdout_stage.
+    render_and_measure_holdout` — this test drives the real function
+    instead (real `render_stage.run_render_stage(stage="c4")` audio synth +
+    real `measure_stage.run_measure_stage()` measurement, exactly what
+    `render_and_measure_holdout()` itself calls), so the coverage check
+    under test (`[UNDERSPEC-CAL-D66]`/`[UNDERSPEC-CAL-D69]`) is exercised
+    against real `MeasurementRecord`s the real production function returns,
+    not a hand-fabricated dict that could silently diverge from its actual
+    shape.
+
+    `render_stage._refuse_if_pre_unseal_holdout()` — the pre-unseal leakage
+    guard `run_render_stage(stage="c4")` also calls — is stubbed out: that
+    guard's `provenance.Ledger.check_leakage()` hard-requires the row-id set
+    to equal the *full* canonical `fixtures.matrix.build_matrix()` (§7's
+    "verification rows contain the complete canonical frozen matrix row-id
+    set"), which a tiny per-test fixture can never satisfy, and a real
+    unseal run against the full canonical matrix is far too expensive for a
+    unit test — it is an orthogonal, already-dedicated-tested concern
+    (`tests/test_render_stage.py`/`tests/test_provenance_unseal_
+    prerequisites.py`), not what this test isolates (the CLI-side coverage
+    check on real `MeasurementRecord`s)."""
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+
+    subset = small_matrix_subset(4, family="APERIODICITY_GT")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+
+    # F0 selection genuinely failed closed (no F0 winner) — the deterministic
+    # way to force every F0-dependent candidate's C4 instances F0_UNUSABLE
+    # without needing a real F0_CONTROL family measurement in this tiny
+    # fixture (mirrors the setup `test_c4_never_calls_f0_dependent_candidate_
+    # when_selection_failed_closed` above uses).
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": None,
+            "outcome": "SELECTION_FAILED_CLOSED",
+        }
+    )
+    campaign.ledger.append(
+        {
+            "kind": "selection_frozen",
+            "selected_by_family": {"APERIODICITY_GT": harmonic_residual.candidate_id},
+        }
+    )
+
+    trimmed_pool = (harmonic_residual, independent_candidate)
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.APERIODICITY_GT:
+            return trimmed_pool
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+    monkeypatch.setattr(render_stage, "_refuse_if_pre_unseal_holdout", lambda *a, **kw: None)
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    # real measurement really did run for the non-dependent B0 candidate
+    # (proof this is the real, unmocked path — the family key IS present in
+    # `records_by_family` via B0, unlike the fully-mocked sibling test above
+    # whose `records_by_family == {}`).
+    meter_calls = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"
+    ]
+    assert any(m.get("candidate_id") == independent_candidate.candidate_id for m in meter_calls)
+    assert not any(m.get("candidate_id") == harmonic_residual.candidate_id for m in meter_calls)
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    assert holdout_events
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+    assert m2a_result["selected_candidate_id"] == harmonic_residual.candidate_id
+    assert "claim_scope" in m2a_result["gate_detail"]
+
+
+# ---------------------------------------------------------------------------
+# round 30 ADOPT (`[UNDERSPEC-CAL-D66]`, Codex round 30 PR #343 finding #1
+# 「Require records from the selected holdout candidate」採用) → round 30
+# self-review ADOPT (`[UNDERSPEC-CAL-D69]`/`[UNDERSPEC-CAL-D70]`, findings
+# #2/#3/#4 採用): the `family.value not in records_by_family` guard in
+# `_run_c4`'s per-family loop only proves *some* candidate in the family (B0
+# always runs) produced a record — not that the *selected* candidate itself
+# has any usable C4 output. Most of these tests fabricate
+# `render_and_measure_holdout()`'s return value directly (real render/measure
+# of a genuinely F0-unusable selected candidate is exercised end-to-end by
+# `test_c3b_selection_blocks_f0_dependent_candidate_when_selection_failed_
+# closed` above, and by `test_c4_f0_unusable_selected_candidate_through_
+# real_holdout_path_closes_not_evaluable` immediately above this comment
+# block (finding #5(a): drives the real C4 path, not a monkeypatched
+# holdout, per the self-review's test-gap finding); this isolates the
+# CLI-side coverage check itself, mirroring how `test_c4_never_calls_f0_
+# dependent_candidate_when_selection_failed_closed` isolates the
+# F0_UNUSABLE-instance guard).
+#
+# Design line (`DESIGN_VG_METER_CAL_DEBT_v1.0.md` §11): 「critical output
+# 全欠損 or 最小数割れで score/gate 計算不能 → NOT_EVALUABLE/OUTPUT_NOT_
+# EVALUABLE」対「score 計算可能だが PRIMARY 一部 output missing で gate
+# 不通過 → DIAGNOSTIC_ONLY/OUTPUT_MISSING」——self-review round 30 MAJOR
+# finding #2 が指摘したとおり、D66 は前者を「selected candidate の PRIMARY
+# output が丸ごと**または一部**無い」場合の両方に適用しており、後者（部分
+# 被覆）の帰結を取り違えていた。本 ADOPT は両者を分離する: 全欠損（usable
+# instance が 0 件）のみ `NOT_EVALUABLE`/`OUTPUT_NOT_EVALUABLE`、部分被覆
+# （1 件以上は usable だが期待集合の一部を欠く）は `DIAGNOSTIC_ONLY`/
+# `OUTPUT_MISSING`（gate 1 不通過の事実を `gate_detail` に記録）。finding
+# #3: 判定は record の有無ではなく**値の有無**（`measure_stage.
+# primary_output_value()` + 有限性）。finding #4: `claim_scope_report()` を
+# 分岐の前で計算し、NOT_EVALUABLE/DIAGNOSTIC_ONLY いずれの `gate_detail`
+# にも含める。
+# ---------------------------------------------------------------------------
+
+
+def _c4_measurement_record(
+    row_id: str, probe_index: int, candidate_id: str, *, field: str = "residual_fraction"
+) -> measure_stage.MeasurementRecord:
+    return measure_stage.MeasurementRecord(
+        row_id=row_id,
+        probe_index=probe_index,
+        candidate_id=candidate_id,
+        repeat_kind="within",
+        repeat_index=0,
+        process_id="p0",
+        output=MeterOutput(values={field: 1.0}),
+    )
+
+
+def _c4_measurement_record_missing(
+    row_id: str, probe_index: int, candidate_id: str
+) -> measure_stage.MeasurementRecord:
+    """finding #3: a record that *exists* (unlike the fully-skipped case
+    above, where `render_and_measure_holdout()` never calls the candidate at
+    all and the cell is simply absent from `records_by_family`) but carries
+    no finite primary value — the shape a candidate that runs and correctly
+    reports `OUTPUT_MISSING` leaves behind. The old record-presence-only
+    check treated this as "usable"; the value-aware check must not."""
+    return measure_stage.MeasurementRecord(
+        row_id=row_id,
+        probe_index=probe_index,
+        candidate_id=candidate_id,
+        repeat_kind="within",
+        repeat_index=0,
+        process_id="p0",
+        output=MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING),
+    )
+
+
+def _aperiodicity_family_subset() -> list[Any]:
+    """`APERIODICITY_GT` subset that declares **exactly one** def-A sweep
+    (`fixtures.matrix.declared_sweeps_by_family()`): the chosen sweep's 6
+    TRUTH_CORE rows + every non-TRUTH_CORE row of the family (CONFOUND +
+    BOUNDARY + NEGATIVE_CONTROL). round 6-7 #344 ADOPT (`[UNDERSPEC-CAL-
+    D76]`, supersedes D75's `_aperiodicity_single_sweep_subset()`): declared
+    sweep membership is now def A (truth-core block rows sharing identical
+    nuisance settings, truth level varying), not a nuisance axis
+    (`nuisance_axis_family()` no longer exists) — so a single declared
+    sweep is exactly "the TRUTH_CORE rows of one sweep, no other TRUTH_CORE
+    rows in the subset" (any other family's/sweep's TRUTH_CORE row would
+    declare a second sweep, and `gates.resolvable_pairs_possible()` demands
+    *every* declared sweep clear the minimum independently — D76 ruling
+    (2)). Excluding the other 9 sweeps' TRUTH_CORE rows keeps
+    `expected_sweep_ids` a singleton. The non-TRUTH_CORE rows are kept
+    (unlike D75's narrower 7-row subset) because split-coverage repair
+    (`splitter._repair_coverage`) needs the family's fuller row population
+    to find a feasible donor/victim assignment — a bare 6-row single-sweep
+    subset raises `CoverageRepairInfeasible`."""
+    family_rows = [mr for mr in build_matrix() if mr.row.family == "APERIODICITY_GT"]
+    non_truth_core = [mr for mr in family_rows if mr.row.block != "TRUTH_CORE"]
+    truth_core = [mr for mr in family_rows if mr.row.block == "TRUTH_CORE"]
+    declared = declared_sweeps_by_family(family_rows)["APERIODICITY_GT"]
+    sweep_id, member_row_ids = sorted(declared.items())[0]
+    member_row_id_set = set(member_row_ids)
+    sweep_truth_core = [mr for mr in truth_core if mr.row_id in member_row_id_set]
+    assert len(sweep_truth_core) == len(member_row_ids) == 6, sweep_truth_core
+    return sweep_truth_core + non_truth_core
+
+
+def _force_rows_into_holdout(campaign: Any, row_ids: list[str]) -> Any:
+    """Override `campaign.realized_split.assignment` so each of `row_ids` is
+    unconditionally `Split.HOLDOUT`, leaving every other row's assignment as
+    the (frozen-secret) stratified split already produced. `FrozenCampaign`/
+    `RealizedSplitMap` are both frozen dataclasses, so this returns a new
+    `campaign` object (`dataclasses.replace`) rather than mutating in place.
+
+    Used by the DIRECTIONAL coverage tests below to deterministically place
+    a chosen declared sweep's member rows into holdout — natural (50/25/25,
+    `(block, domain)`-stratified) splitting of a handful of rows from one
+    6-row `APERIODICITY_GT` sweep is not reliable enough (varies with which
+    sweep is picked) to guarantee a specific holdout row count on demand."""
+    import dataclasses
+
+    new_assignment = dict(campaign.realized_split.assignment)
+    for row_id in row_ids:
+        new_assignment[row_id] = Split.HOLDOUT
+    new_split = dataclasses.replace(campaign.realized_split, assignment=new_assignment)
+    return dataclasses.replace(campaign, realized_split=new_split)
+
+
+def _c4_setup_selected_candidate_coverage_test(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    select_directional: bool = False,
+    subset_override: list[Any] | None = None,
+) -> tuple[Any, Any, Any, frozenset[tuple[str, int]]]:
+    """Shared scaffolding for the coverage tests below: a tiny campaign with
+    `APERIODICITY_GT`'s HARMONIC_RESIDUAL candidate (F0-dependent, but F0
+    dependency itself is irrelevant here — `render_and_measure_holdout` is
+    monkeypatched directly below) and its `-B0-` sibling both in the pool.
+
+    round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`): `select_directional=False`
+    (default, unchanged) names the ABSOLUTE-ceiling HARMONIC_RESIDUAL
+    candidate as the family's selected candidate — the shape every
+    pre-existing caller of this helper exercises. `select_directional=True`
+    instead names the DIRECTIONAL-ceiling `-B0-` (`B0_CURRENT_HNR_APPROX`)
+    candidate as selected, so the D74 DIRECTIONAL-only minimum-count branch
+    can be exercised at this same CLI call site. `subset_override`
+    (round 5 #344 ADOPT `[UNDERSPEC-CAL-D75]`) lets a caller pass a matrix
+    subset that declares real sweeps (see `_aperiodicity_single_sweep_
+    subset()`) instead of the plain TRUTH_CORE-only default — needed by the
+    two `select_directional=True` DIRECTIONAL coverage tests below, since
+    the minimum-count check now partitions usable instances by the real
+    declared sweep set of whatever `matrix_rows` is passed to `_run_c4`.
+    Returns `(campaign, subset, selected_candidate, expected_instances)`."""
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+    from voice_genesis.calibration.vocab import ClaimCeiling
+
+    subset = subset_override if subset_override is not None else small_matrix_subset(
+        4, family="APERIODICITY_GT"
+    )
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": "F0-B0-CURRENT",
+            "outcome": "SELECTED",
+        }
+    )
+
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+    assert independent_candidate.claim_ceiling == ClaimCeiling.DIRECTIONAL
+    assert harmonic_residual.claim_ceiling == ClaimCeiling.ABSOLUTE
+    trimmed_pool = (harmonic_residual, independent_candidate)
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.APERIODICITY_GT:
+            return trimmed_pool
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+
+    selected_candidate = independent_candidate if select_directional else harmonic_residual
+    campaign.ledger.append(
+        {
+            "kind": "selection_frozen",
+            "selected_by_family": {"APERIODICITY_GT": selected_candidate.candidate_id},
+        }
+    )
+
+    # avoid real per-instance F0 measurement (irrelevant to what this test
+    # isolates — the CLI-side coverage check on `records_by_family`).
+    monkeypatch.setattr(cli, "_build_f0_by_instance", lambda *a, **kw: ({}, frozenset()))
+
+    expected_instances = frozenset(
+        workunits.c4_holdout_instances(
+            subset, campaign.realized_split.assignment, family="APERIODICITY_GT"
+        )
+    )
+    assert expected_instances, "test setup must realize a HOLDOUT-split APERIODICITY_GT instance"
+    return campaign, subset, selected_candidate, expected_instances
+
+
+def test_c4_selected_candidate_fully_skipped_closes_not_evaluable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The selected (F0-dependent) candidate has zero holdout records for
+    every expected instance — only B0 (always run) supplied any — the exact
+    shape `render_and_measure_holdout()` leaves behind when
+    `f0_unusable_instances` covers every C4 instance
+    (`[UNDERSPEC-CAL-D61]`/`[UNDERSPEC-CAL-D65]`). The family key IS present
+    in `records_by_family` (from B0), so the pre-fix `family.value not in
+    records_by_family` guard alone would fall through and close
+    DIAGNOSTIC_ONLY under `selected_id` — the fix must instead close
+    NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE."""
+    campaign, subset, harmonic_residual, expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(tmp_path, monkeypatch)
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+
+    b0_only_records = [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in sorted(expected_instances)
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": b0_only_records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    assert holdout_events
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+    assert m2a_result["selected_candidate_id"] == harmonic_residual.candidate_id
+    # finding #4: claim_scope must be recorded even on the NOT_EVALUABLE
+    # early-close branch (previously dropped by the early `continue`).
+    assert "claim_scope" in m2a_result["gate_detail"]
+
+    # the authoritative close report must carry the same terminal status
+    # (close.close_campaign() copies `per_meter` from this event verbatim).
+    close_result = cli.close_stage.close_campaign(campaign, holdout_events[-1])
+    assert close_result.campaign_closed_entry_sha
+    close_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "campaign_closed"
+    ]
+    assert close_events
+    assert close_events[-1]["per_meter"][MeterId.M2_APERIODICITY.value]["terminal_status"] == (
+        "NOT_EVALUABLE"
+    )
+
+
+def test_c4_selected_candidate_present_but_all_missing_values_closes_not_evaluable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """finding #3: unlike the fully-skipped case above (candidate never
+    called, cells absent), here the selected candidate *is* called on every
+    expected instance and *does* produce a record for each — but every
+    record is `OUTPUT_MISSING` (no finite primary value). The old
+    record-presence-only check (`seen_holdout_instances = {(r.row_id,
+    r.probe_index) for r in own_selected_records}`) would have treated this
+    as full coverage and closed DIAGNOSTIC_ONLY; the value-aware check must
+    still close NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE (zero *usable* records)."""
+    campaign, subset, harmonic_residual, expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(tmp_path, monkeypatch)
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+
+    records = [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in sorted(expected_instances)
+    ] + [
+        _c4_measurement_record_missing(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in sorted(expected_instances)
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+
+
+def test_c4_selected_candidate_partially_covered_closes_diagnostic_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 30 self-review ADOPT (finding #2, `[UNDERSPEC-CAL-D69]`): the
+    selected candidate has usable records for *some* but not all of the
+    expected C4 instances. Design line (`DESIGN_VG_METER_CAL_DEBT_v1.0.md`
+    §11): 「score 計算可能だが PRIMARY 一部 output missing で gate 不通過 →
+    DIAGNOSTIC_ONLY/OUTPUT_MISSING」——1 missing instance out of N does not by
+    itself make the score uncomputable, so this must close DIAGNOSTIC_ONLY/
+    OUTPUT_MISSING (with the gate-1 failure recorded in `gate_detail`), not
+    NOT_EVALUABLE (that terminal status is reserved for zero usable records —
+    see `test_c4_selected_candidate_fully_skipped_closes_not_evaluable`
+    above)."""
+    campaign, subset, harmonic_residual, expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(tmp_path, monkeypatch)
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+    ordered_instances = sorted(expected_instances)
+    partial_instances = ordered_instances[:-1]  # drop exactly one instance
+    assert partial_instances, "test setup needs >=2 expected instances to show a partial gap"
+
+    records = [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in ordered_instances
+    ] + [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in partial_instances
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "DIAGNOSTIC_ONLY"
+    assert m2a_result["reason_code"] == "OUTPUT_MISSING"
+    assert m2a_result["selected_candidate_id"] == harmonic_residual.candidate_id
+    # finding #4: the gate-1 coverage failure fact, and the claim_scope
+    # audit fact (previously dropped on the NOT_EVALUABLE early `continue`),
+    # must both be present in gate_detail.
+    gate_detail = m2a_result["gate_detail"]
+    assert gate_detail["expected_instance_count"] == len(expected_instances)
+    assert gate_detail["seen_instance_count"] == len(partial_instances)
+    assert "claim_scope" in gate_detail
+
+    # the authoritative close report must carry the same terminal status.
+    close_result = cli.close_stage.close_campaign(campaign, holdout_events[-1])
+    assert close_result.campaign_closed_entry_sha
+    close_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "campaign_closed"
+    ]
+    assert close_events[-1]["per_meter"][MeterId.M2_APERIODICITY.value]["terminal_status"] == (
+        "DIAGNOSTIC_ONLY"
+    )
+
+
+def test_c4_absolute_partial_coverage_below_minimum_count_still_closes_diagnostic_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`, amends `[UNDERSPEC-CAL-
+    D73]`): D73 (round 3) applied the frozen minimum-count / resolvable-pair
+    condition (`gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP == 3`) to *every*
+    meter's partial coverage, including ABSOLUTE-ceiling candidates — but
+    that condition is a §10.4 DIRECTIONAL-gate concept ("resolvable pair は
+    各 sweep で >= 3", design §10.4 ~L375). Design quote, §10.3 ABSOLUTE
+    holdout gate (~L351-353): "gate 1: 全 PRIMARY instance が eligible
+    （critical missing/undefined なし）" — §10.3 states no minimum sample
+    count beyond that eligibility precondition, so an ABSOLUTE-ceiling
+    candidate's MAE/BIAS/q95 (§10.1) are computable from any nonzero-usable-
+    instance population. `HARMONIC_RESIDUAL` (`M2A-HARMONIC-RESIDUAL-*`) is
+    an ABSOLUTE-ceiling candidate (asserted in the shared fixture below), so
+    with 2 usable PRIMARY instances out of the 5 expected (the other 3
+    explained by e.g. OUTPUT_MISSING misses), §11's "score 計算可能だが
+    PRIMARY 一部 output missing で gate 不通過 → DIAGNOSTIC_ONLY/
+    OUTPUT_MISSING" applies — not `NOT_EVALUABLE` (D73's now-corrected
+    expectation for this exact fixture shape; the DIRECTIONAL-ceiling
+    analogue is `test_c4_directional_partial_coverage_below_minimum_count_
+    closes_not_evaluable` below)."""
+    campaign, subset, harmonic_residual, expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(tmp_path, monkeypatch)
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+    ordered_instances = sorted(expected_instances)
+    usable_instances = ordered_instances[:2]  # only 2 usable -> below the D73 minimum
+    assert len(expected_instances) > len(usable_instances) >= 2, (
+        "test setup needs >=3 expected instances with exactly 2 usable to "
+        "exercise the below-minimum branch"
+    )
+
+    records = [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in ordered_instances
+    ] + [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in usable_instances
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "DIAGNOSTIC_ONLY"
+    assert m2a_result["reason_code"] == "OUTPUT_MISSING"
+    assert m2a_result["selected_candidate_id"] == harmonic_residual.candidate_id
+    gate_detail = m2a_result["gate_detail"]
+    assert gate_detail["expected_instance_count"] == len(expected_instances)
+    assert gate_detail["seen_instance_count"] == len(usable_instances)
+    # ABSOLUTE effective ceiling never hits the DIRECTIONAL-only minimum-count
+    # branch, so its D73-era key must be absent here.
+    assert "min_resolvable_pairs_per_sweep" not in gate_detail
+    assert "claim_scope" in gate_detail
+
+    # the authoritative close report must carry the same terminal status.
+    close_result = cli.close_stage.close_campaign(campaign, holdout_events[-1])
+    assert close_result.campaign_closed_entry_sha
+    close_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "campaign_closed"
+    ]
+    assert close_events[-1]["per_meter"][MeterId.M2_APERIODICITY.value]["terminal_status"] == (
+        "DIAGNOSTIC_ONLY"
+    )
+
+
+def test_c4_directional_partial_coverage_below_minimum_count_closes_not_evaluable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`): the DIRECTIONAL-ceiling
+    counterpart of the ABSOLUTE test above — `M2A-B0-AUTOCORR-PERIODICITY`
+    (`-B0-`, asserted DIRECTIONAL in the shared fixture) is named the
+    family's selected candidate here (`select_directional=True`). §11's
+    cascade (~L395-396: "critical output 全欠損 or 最小数割れで score/gate
+    計算不能 → NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE") applies, exactly as D73
+    originally intended, now correctly scoped to a DIRECTIONAL effective
+    ceiling.
+
+    round 6-7 #344 ADOPT (`[UNDERSPEC-CAL-D76]` ruling (3), supersedes D75):
+    the structural minimum-count check now counts DISTINCT TRUTH LEVELS
+    (row-level, never probe repeats) among usable instances **within one
+    declared sweep** (`fixtures.matrix.declared_sweeps_by_family()`, def
+    A), not a raw usable-instance count. `usable_instances` below covers
+    exactly 2 distinct rows of the chosen declared sweep
+    (`_aperiodicity_holdout_sweep_row_ids()`) — 2 distinct truth levels, so
+    at most C(2,2)=1 resolvable pair exists, below `gates.
+    MIN_RESOLVABLE_PAIRS_PER_SWEEP == 3` regardless of how many probe
+    instances or measured values are attached to those 2 rows."""
+    campaign, subset, independent_candidate, _stale_expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(
+            tmp_path,
+            monkeypatch,
+            select_directional=True,
+            subset_override=_aperiodicity_family_subset(),
+        )
+    )
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.fixtures.controls import non_boundary_selection_instances
+    from voice_genesis.calibration.vocab import Split as _Split
+
+    _sweep_id, member_row_ids = sorted(declared_sweeps_by_family(subset)["APERIODICITY_GT"].items())[0]
+    usable_row_ids = list(member_row_ids[:2])  # 2 distinct rows -> below minimum
+    campaign = _force_rows_into_holdout(campaign, usable_row_ids)
+    expected_instances = frozenset(
+        workunits.c4_holdout_instances(
+            subset, campaign.realized_split.assignment, family="APERIODICITY_GT"
+        )
+    )
+    expected_primary_instances = non_boundary_selection_instances(
+        subset, campaign.realized_split.assignment, _Split.HOLDOUT, family="APERIODICITY_GT"
+    )
+    usable_instances = [(row_id, 0) for row_id in usable_row_ids]
+    assert all(inst in expected_instances for inst in usable_instances)
+    ordered_instances = sorted(expected_instances)
+
+    records = [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in ordered_instances
+    ] + [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in usable_instances
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+    assert m2a_result["selected_candidate_id"] == independent_candidate.candidate_id
+    gate_detail = m2a_result["gate_detail"]
+    assert gate_detail["gate_detail_reason_code"] == "DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT"
+    assert gate_detail["expected_instance_count"] == len(expected_primary_instances)
+    assert gate_detail["seen_instance_count"] == len(usable_instances)
+    assert gate_detail["min_resolvable_pairs_per_sweep"] == 3
+    assert gate_detail["usable_truth_level_counts_by_sweep"].get(_sweep_id) == 2
+    assert _sweep_id in gate_detail["sweeps_below_minimum"]
+    assert gate_detail["effective_ceiling"] == "DIRECTIONAL"
+    assert "claim_scope" in gate_detail
+
+    # the authoritative close report must carry the same terminal status.
+    close_result = cli.close_stage.close_campaign(campaign, holdout_events[-1])
+    assert close_result.campaign_closed_entry_sha
+    close_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "campaign_closed"
+    ]
+    assert close_events[-1]["per_meter"][MeterId.M2_APERIODICITY.value]["terminal_status"] == (
+        "NOT_EVALUABLE"
+    )
+
+
+def test_c4_directional_sweep_with_repeated_truth_level_still_unresolvable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UNDERSPEC-CAL-D76 ruling (3) — the specific defect a raw usable-
+    instance count (D75's approach) would miss: multiple usable *instances*
+    (probe repeats) at the SAME truth level (same row_id, several
+    probe_index values) never add a second resolvable pair, because
+    `Delta_truth(i,j) == 0` for same-row pairs is unresolvable by
+    construction (§10.4). 5 usable probe instances, all on the SAME single
+    row (1 distinct truth level) must still fail exactly like the
+    below-minimum test above — not pass because "5 >= 3 usable
+    instances"."""
+    campaign, subset, independent_candidate, _stale_expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(
+            tmp_path,
+            monkeypatch,
+            select_directional=True,
+            subset_override=_aperiodicity_family_subset(),
+        )
+    )
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    from voice_genesis.calibration.campaign import workunits
+
+    _sweep_id, member_row_ids = sorted(declared_sweeps_by_family(subset)["APERIODICITY_GT"].items())[0]
+    single_row_id = member_row_ids[0]
+    campaign = _force_rows_into_holdout(campaign, [single_row_id])
+    expected_instances = frozenset(
+        workunits.c4_holdout_instances(
+            subset, campaign.realized_split.assignment, family="APERIODICITY_GT"
+        )
+    )
+    usable_instances = sorted(
+        inst for inst in expected_instances if inst[0] == single_row_id
+    )
+    assert len(usable_instances) >= 3, (
+        "test setup needs >=3 probe instances on the single chosen row",
+        usable_instances,
+    )
+    ordered_instances = sorted(expected_instances)
+
+    records = [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in ordered_instances
+    ] + [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in usable_instances
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+    gate_detail = m2a_result["gate_detail"]
+    assert gate_detail["gate_detail_reason_code"] == "DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT"
+    # >=3 usable probe *instances*, but only 1 distinct truth level (row).
+    assert gate_detail["seen_instance_count"] == len(usable_instances)
+    assert gate_detail["usable_truth_level_counts_by_sweep"].get(_sweep_id) == 1
+
+
+def test_c4_directional_partial_coverage_at_minimum_count_closes_diagnostic_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`): a DIRECTIONAL effective
+    ceiling with usable PRIMARY coverage that *does* structurally admit the
+    frozen minimum is still partial coverage (many fewer usable instances
+    than the family-wide expected set — see `missing_expected_instances`),
+    so §11's "score 計算可能だが PRIMARY 一部 output missing で gate 不通過 →
+    DIAGNOSTIC_ONLY/OUTPUT_MISSING" applies, mirroring the ABSOLUTE-ceiling
+    control case `test_c4_selected_candidate_partially_covered_closes_
+    diagnostic_only` but for a DIRECTIONAL-ceiling selected candidate.
+
+    round 6-7 #344 ADOPT (`[UNDERSPEC-CAL-D76]` ruling (3), supersedes D75):
+    `usable_instances` covers exactly 3 distinct rows of the chosen
+    declared sweep (`_aperiodicity_holdout_sweep_row_ids()`) — 3 distinct
+    truth levels, `C(3,2)=3 >= gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP`, so the
+    structural check passes and coverage completeness (family-wide, not
+    sweep-scoped) is what determines DIAGNOSTIC_ONLY here."""
+    campaign, subset, independent_candidate, _stale_expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(
+            tmp_path,
+            monkeypatch,
+            select_directional=True,
+            subset_override=_aperiodicity_family_subset(),
+        )
+    )
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.fixtures.controls import non_boundary_selection_instances
+    from voice_genesis.calibration.vocab import Split as _Split
+
+    _sweep_id, member_row_ids = sorted(declared_sweeps_by_family(subset)["APERIODICITY_GT"].items())[0]
+    usable_row_ids = list(member_row_ids[:3])  # 3 distinct rows, C(3,2)=3
+    campaign = _force_rows_into_holdout(campaign, usable_row_ids)
+    expected_instances = frozenset(
+        workunits.c4_holdout_instances(
+            subset, campaign.realized_split.assignment, family="APERIODICITY_GT"
+        )
+    )
+    expected_primary_instances = non_boundary_selection_instances(
+        subset, campaign.realized_split.assignment, _Split.HOLDOUT, family="APERIODICITY_GT"
+    )
+    usable_instances = [(row_id, 0) for row_id in usable_row_ids]
+    assert all(inst in expected_instances for inst in usable_instances)
+    assert len(expected_primary_instances) - len(usable_instances) >= 1, (
+        "test setup needs a genuine coverage gap to exercise partial coverage"
+    )
+    ordered_instances = sorted(expected_instances)
+
+    records = [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in ordered_instances
+    ] + [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in usable_instances
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "DIAGNOSTIC_ONLY"
+    assert m2a_result["reason_code"] == "OUTPUT_MISSING"
+    assert m2a_result["selected_candidate_id"] == independent_candidate.candidate_id
+    gate_detail = m2a_result["gate_detail"]
+    assert gate_detail["expected_instance_count"] == len(expected_primary_instances)
+    assert gate_detail["seen_instance_count"] == len(usable_instances)
+    assert "claim_scope" in gate_detail
+
+    # the authoritative close report must carry the same terminal status.
+    close_result = cli.close_stage.close_campaign(campaign, holdout_events[-1])
+    assert close_result.campaign_closed_entry_sha
+    close_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "campaign_closed"
+    ]
+    assert close_events[-1]["per_meter"][MeterId.M2_APERIODICITY.value]["terminal_status"] == (
+        "DIAGNOSTIC_ONLY"
+    )
+
+
+def test_c4_selected_candidate_fully_covered_is_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Control case: the selected candidate has a usable record for every
+    expected C4 instance — the fix must not disturb this pre-existing
+    DIAGNOSTIC_ONLY behavior ([UNDERSPEC-CAL-D17]: real gate assembly is out
+    of D2 CLI scope, so a fully-covered selected candidate still closes
+    DIAGNOSTIC_ONLY here, not CALIBRATED_ABSOLUTE)."""
+    campaign, subset, harmonic_residual, expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(tmp_path, monkeypatch)
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+    ordered_instances = sorted(expected_instances)
+
+    records = [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in ordered_instances
+    ] + [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in ordered_instances
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "DIAGNOSTIC_ONLY"
+    assert m2a_result["selected_candidate_id"] == harmonic_residual.candidate_id
+
+
+# ---------------------------------------------------------------------------
+# round 2 #344 ADOPT (`[UNDERSPEC-CAL-D72]`, amends D69) "Restrict holdout
+# coverage failures to PRIMARY instances": the D66/D69 coverage set above was
+# built from `workunits.c4_holdout_instances()`, which excludes only
+# *negative-control* rows — it still includes non-control BOUNDARY-domain
+# rows (boundary-axis probes). A correct, expected miss on one of those
+# BOUNDARY instances therefore fell into `missing_expected_instances` and
+# falsely produced a coverage-failure status, even though DESIGN_VG_METER_
+# CAL_DEBT_v1.0.md §10.3 (~L351-361) scopes gate 1 to PRIMARY instances only
+# ("gate 1: 全 PRIMARY instance が eligible") and treats BOUNDARY separately.
+# The 3 tests below share a fixture with one PRIMARY-domain HOLDOUT row and
+# one BOUNDARY-domain (non-control) HOLDOUT row for the same family, so a
+# miss can be placed on exactly one domain at a time.
+# ---------------------------------------------------------------------------
+
+
+def _c4_setup_boundary_and_primary_coverage_test(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Any, Any, Any, frozenset[tuple[str, int]], frozenset[tuple[str, int]]]:
+    """Shared scaffolding for the 3 D72 tests below. Returns `(campaign,
+    subset, harmonic_residual, primary_expected_instances,
+    boundary_only_instances)` — `primary_expected_instances` is the PRIMARY-
+    domain HOLDOUT population (what `non_boundary_selection_instances()`
+    yields), `boundary_only_instances` is the BOUNDARY-domain (non-control)
+    HOLDOUT population that `workunits.c4_holdout_instances()` includes but
+    `non_boundary_selection_instances()` excludes."""
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+    from voice_genesis.calibration.fixtures.controls import non_boundary_selection_instances
+    from voice_genesis.calibration.vocab import Split
+
+    all_rows = _cli_build_matrix()
+    boundary_rows = [
+        mr
+        for mr in all_rows
+        if mr.row.family == "APERIODICITY_GT" and mr.row.block == "BOUNDARY"
+    ]
+    assert boundary_rows, "test setup needs >=1 non-control BOUNDARY row for the family"
+    subset = small_matrix_subset(4, family="APERIODICITY_GT") + boundary_rows
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": "F0-B0-CURRENT",
+            "outcome": "SELECTED",
+        }
+    )
+
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+    trimmed_pool = (harmonic_residual, independent_candidate)
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.APERIODICITY_GT:
+            return trimmed_pool
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+
+    campaign.ledger.append(
+        {
+            "kind": "selection_frozen",
+            "selected_by_family": {"APERIODICITY_GT": harmonic_residual.candidate_id},
+        }
+    )
+    monkeypatch.setattr(cli, "_build_f0_by_instance", lambda *a, **kw: ({}, frozenset()))
+
+    assignment = campaign.realized_split.assignment
+    primary_expected = non_boundary_selection_instances(
+        subset, assignment, Split.HOLDOUT, family="APERIODICITY_GT"
+    )
+    all_holdout = frozenset(
+        workunits.c4_holdout_instances(subset, assignment, family="APERIODICITY_GT")
+    )
+    boundary_only = all_holdout - primary_expected
+    assert primary_expected, "test setup must realize a HOLDOUT-split PRIMARY instance"
+    assert boundary_only, "test setup must realize a HOLDOUT-split BOUNDARY instance"
+    return campaign, subset, harmonic_residual, primary_expected, boundary_only
+
+
+def _cli_build_matrix():
+    from voice_genesis.calibration.fixtures.matrix import build_matrix
+
+    return build_matrix()
+
+
+def test_c4_boundary_only_miss_is_not_a_coverage_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 2 #344 ADOPT P2 (`[UNDERSPEC-CAL-D72]`): the selected candidate
+    fully covers every PRIMARY instance but is correctly, explainedly
+    missing on the BOUNDARY-only instance — this must close exactly like the
+    fully-covered control case (`test_c4_selected_candidate_fully_covered_
+    is_unchanged`), with no coverage-failure `reason`/`reason_code` at all."""
+    campaign, subset, harmonic_residual, primary_expected, boundary_only = (
+        _c4_setup_boundary_and_primary_coverage_test(tmp_path, monkeypatch)
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+    all_instances = sorted(primary_expected | boundary_only)
+
+    records = [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in all_instances
+    ] + [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in sorted(primary_expected)
+    ] + [
+        _c4_measurement_record_missing(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in sorted(boundary_only)
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    m2a_result = holdout_events[-1]["per_meter"][MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "DIAGNOSTIC_ONLY"
+    assert m2a_result["reason_code"] is None
+    assert "reason" not in m2a_result["gate_detail"]
+    assert m2a_result["selected_candidate_id"] == harmonic_residual.candidate_id
+
+
+def test_c4_primary_partial_coverage_closes_diagnostic_only_boundary_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 2 #344 ADOPT P2 (`[UNDERSPEC-CAL-D72]`): one missing PRIMARY
+    instance (BOUNDARY fully covered, to isolate the PRIMARY-only scoping)
+    closes `DIAGNOSTIC_ONLY`/`OUTPUT_MISSING`, and `gate_detail`'s expected/
+    seen counts must be PRIMARY-only (not inflated by the BOUNDARY
+    instance)."""
+    campaign, subset, harmonic_residual, primary_expected, boundary_only = (
+        _c4_setup_boundary_and_primary_coverage_test(tmp_path, monkeypatch)
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+    all_instances = sorted(primary_expected | boundary_only)
+    ordered_primary = sorted(primary_expected)
+    partial_primary = ordered_primary[:-1]  # drop exactly one PRIMARY instance
+    assert partial_primary, "test setup needs >=2 PRIMARY instances to show a partial gap"
+
+    records = [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in all_instances
+    ] + [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in partial_primary
+    ] + [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in sorted(boundary_only)
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    m2a_result = holdout_events[-1]["per_meter"][MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "DIAGNOSTIC_ONLY"
+    assert m2a_result["reason_code"] == "OUTPUT_MISSING"
+    gate_detail = m2a_result["gate_detail"]
+    # PRIMARY-only counts: the BOUNDARY instance's 5 probes must not be
+    # folded into either count.
+    assert gate_detail["expected_instance_count"] == len(primary_expected)
+    assert gate_detail["seen_instance_count"] == len(partial_primary)
+
+
+def test_c4_primary_all_missing_closes_not_evaluable_despite_usable_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 2 #344 ADOPT P2 (`[UNDERSPEC-CAL-D72]`): the selected candidate
+    has zero usable output on every PRIMARY instance but *does* have a
+    usable output on the BOUNDARY-only instance. This must still close
+    `NOT_EVALUABLE`/`OUTPUT_NOT_EVALUABLE` — a usable BOUNDARY record must
+    not paper over zero usable PRIMARY coverage (the `usable_holdout_
+    instances` check below is not itself domain-scoped, since it also has to
+    catch the plain "candidate never called at all" shape)."""
+    campaign, subset, harmonic_residual, primary_expected, boundary_only = (
+        _c4_setup_boundary_and_primary_coverage_test(tmp_path, monkeypatch)
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+    all_instances = sorted(primary_expected | boundary_only)
+
+    records = [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in all_instances
+    ] + [
+        _c4_measurement_record_missing(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in sorted(primary_expected)
+    ] + [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in sorted(boundary_only)
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    m2a_result = holdout_events[-1]["per_meter"][MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+    assert m2a_result["gate_detail"]["seen_instance_count"] == 0
 
 
 # ---------------------------------------------------------------------------

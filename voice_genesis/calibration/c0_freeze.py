@@ -57,7 +57,13 @@ from voice_genesis.calibration.canonical import canonical_json
 from voice_genesis.calibration.canonical import manifest_sha as _full_manifest_sha
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
 from voice_genesis.calibration.fixtures.controls import ControlClass
-from voice_genesis.calibration.fixtures.matrix import MatrixRow, _negative_applicable, build_matrix
+from voice_genesis.calibration.fixtures.matrix import (
+    MatrixRow,
+    _negative_applicable,
+    build_matrix,
+    declared_sweeps_by_family,
+)
+from voice_genesis.calibration.fixtures.matrix import build_matrix as _canonical_build_matrix
 from voice_genesis.calibration.provenance import Ledger
 from voice_genesis.calibration.splitter import (
     RealizedSplitMap,
@@ -303,17 +309,33 @@ _GENERATOR_MODULE_RELATIVE_PATH: dict[str, str] = {
     ),
 }
 
-#: [UNDERSPEC-CAL-D06] `frozen_design.fixture_spec.<FAMILY>.confound_axes` /
+#: [UNDERSPEC-CAL-D06] `frozen_design.fixture_spec.<FAMILY>.confound_axes`/
 #: `.boundary_probes` は、設計正本が C0 manifest 上のこの節に要求する粒度を
 #: 明示しないため、matrix.py が既に厳密に持つ per-family targeted
 #: interaction 実列挙（IMPLEMENTATION_MAP §2.7）を二重管理しない、より粗い
 #: 「変動しうる primary/boundary 軸名」の宣言に留めた（非空 list 要求は満たす。
 #: 値の意味論的相互検証は `c0_validate.py` docstring が明示する範囲外）。
+#: UNDERSPEC-CAL-D76（D75 を SUPERSEDE）: `confound_axes` を DIRECTIONAL gate
+#: の sweep_id 宣言として再利用する D18/D75 の写像は誤りだった（nuisance 軸で
+#: 切ると group 内 truth が anchor 固定になり全 pair `delta_truth == 0` —
+#: `sweep_truth_investigation.md`）。`confound_axes` はこの flat 6-tuple の
+#: ままとし、DIRECTIONAL sweep 宣言は下の `declared_sweeps`（def A: truth-core
+#: block の nuisance-constant series、`fixtures.matrix.declared_sweeps_by_
+#: family()`）という別 key へ分離する。
 _CONFOUND_AXES: tuple[str, ...] = ("f0_hz", "sr_hz", "gain_dbfs", "duration_s", "noise_snr_db", "context")
 _BOUNDARY_PROBES: tuple[str, ...] = ("f0_hz", "sr_hz", "gain_dbfs", "duration_s", "noise_snr_db")
 
 
 def _fixture_specs(root: Path) -> dict[str, object]:
+    #: UNDERSPEC-CAL-D76 ruling (2): declared sweep の宣言は「凍結 matrix
+    #: 生成器 (`fixtures.matrix.build_matrix`) が設計として何を宣言するか」を
+    #: 記録する ground-truth 項目であり、`confound_axes` と同じ理由
+    #: （`_check_hash_content_match` が宣言済み path hash を実ファイル bytes
+    #: と独立に照合するのと同型）で、行レベル matrix の test-only 差し替え
+    #: （`dry_run()`/E2E テストが `build_matrix` を monkeypatch する経路）から
+    #: 意図的に独立させた `_canonical_build_matrix` から導出する。member
+    #: row_id も含めて記録する（`manifest_core_sha` に含まれる）。
+    declared_sweeps = declared_sweeps_by_family(_canonical_build_matrix())
     specs: dict[str, object] = {}
     for family in FixtureFamily:
         rel_path = _GENERATOR_MODULE_RELATIVE_PATH[family.value]
@@ -321,6 +343,7 @@ def _fixture_specs(root: Path) -> dict[str, object]:
         negative_controls = sorted(
             cc.value for cc in ControlClass if _negative_applicable(family, cc.value)
         )
+        family_sweeps = declared_sweeps.get(family.value, {})
         specs[family.value] = {
             "generator_version": "1",
             "generator_hash": generator_hash,
@@ -328,6 +351,10 @@ def _fixture_specs(root: Path) -> dict[str, object]:
             "confound_axes": list(_CONFOUND_AXES),
             "boundary_probes": list(_BOUNDARY_PROBES),
             "negative_controls": negative_controls,
+            "declared_sweeps": {
+                sweep_id: list(member_row_ids)
+                for sweep_id, member_row_ids in sorted(family_sweeps.items())
+            },
         }
     return specs
 

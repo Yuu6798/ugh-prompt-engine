@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 import hashlib
 import json
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 from voice_genesis.calibration import c0_validate, streams, vocab
 from voice_genesis.calibration.candidates import registry as candidate_registry
 from voice_genesis.calibration.fixtures import axes as fixture_axes
+from voice_genesis.calibration.fixtures.matrix import build_matrix, declared_sweeps_by_family
 
 _MEASUREMENT_DIRECTORY_STATUS = "ABSENT:legacy_path=voice_genesis/harness/measure_v3.py"
 
@@ -85,6 +87,16 @@ def _full_path_inventory_maps() -> dict[str, dict[str, str]]:
     return out
 
 
+@functools.lru_cache(maxsize=1)
+def _real_declared_sweeps_by_family() -> dict[str, dict[str, tuple[str, ...]]]:
+    """凍結 matrix (`fixtures.matrix.build_matrix()`) から実際に導出される
+    `family -> {sweep_id: (member row_id, ...)}` を一度だけ計算しキャッシュ
+    する（UNDERSPEC-CAL-D77 ruling (1) の canonical-manifest fixture 用。
+    `_check_declared_sweep_declaration_match()` の完全一致検査を満たす値を
+    生成する必要があり、汎用 placeholder 文字列では通過し得ない）。"""
+    return declared_sweeps_by_family(build_matrix())
+
+
 def _shape_valid_nested_value(key: str, seed: str) -> object:
     """`c0_validate._shape_violation` (BOUNDED shape validation,
     `[UNDERSPEC-CAL-C18]`) が要求する形状を満たす、`key`/`seed` に応じた
@@ -96,6 +108,14 @@ def _shape_valid_nested_value(key: str, seed: str) -> object:
         return [f"{seed}_{key}_0", f"{seed}_{key}_1"]
     if key == "parameter_grid":
         return {f"{seed}_{key}_axis": [0, 1]}
+    if key == "declared_sweeps":
+        # UNDERSPEC-CAL-D77 ruling (1): このフィールドだけは placeholder では
+        # なく、`_check_declared_sweep_declaration_match()` の完全一致検査を
+        # 満たす実際の凍結 matrix 導出値を返す必要がある（`seed` は
+        # `family.value.lower()` — fixture_spec のみが本 key を持つため、
+        # meter_specs 側からこの分岐に到達することはない）。
+        family_sweeps = _real_declared_sweeps_by_family().get(seed.upper(), {})
+        return {sweep_id: list(members) for sweep_id, members in sorted(family_sweeps.items())}
     return f"{seed}_{key}"
 
 
@@ -738,6 +758,203 @@ def test_fixture_spec_generator_version_blank_string_blocks() -> None:
         if k.startswith("frozen_design.fixture_spec.FORMANT_GT.generator_version")
     ]
     assert violations == ["frozen_design.fixture_spec.FORMANT_GT.generator_version"]
+
+
+# ---------------------------------------------------------------------------
+# declared sweep 真値水準検査（UNDERSPEC-CAL-D76 ruling (2). supersedes D75
+# ruling (2)'s sweep-capacity (raw-row-count) check. UNDERSPEC-CAL-D78
+# ruling (#344 round 9 ADOPT, 分類②) 以降は専用 BlockedCode ではなく
+# BLOCKED_C0_MANIFEST_INCOMPLETE + SweepManifestViolationDetail で表現する）
+# ---------------------------------------------------------------------------
+
+
+def test_declared_sweep_truth_levels_check_passes_on_the_real_frozen_matrix() -> None:
+    """`_check_declared_sweep_truth_levels()` は manifest の宣言値ではなく
+    実際の凍結 matrix (`fixtures.matrix.build_matrix()`) を数える構造検査
+    であり、`manifest` 引数の内容とは独立している。canonical 456-cell
+    matrix は 7 family 全てで各 declared sweep が >= 3 distinct truth level
+    を持つ（`sweep_truth_investigation.md` の per-family table）。"""
+    assert c0_validate._check_declared_sweep_truth_levels({}) == ()
+    assert c0_validate._check_declared_sweep_truth_levels(_complete_manifest()) == ()
+
+
+def test_starved_matrix_blocks_with_manifest_incomplete_and_truth_level_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`fixtures.matrix.build_matrix()` を人工的に飢餓状態（TILT_GT の
+    最初の declared sweep — `f0_hz=130.813|sr_hz=24000`、5 truth level —
+    を 2 truth level まで削る）へ差し替えると、`validate_c0_manifest` は
+    `BLOCKED_C0_MANIFEST_INCOMPLETE`（UNDERSPEC-CAL-D78 ruling: 旧専用
+    `BLOCKED_C0_SWEEP_DECLARATION_INVALID` を SUPERSEDE）で fail-closed し、
+    事由は `sweep_declaration_violations` の `SweepManifestViolationDetail`
+    （`violation="sweep_truth_level_insufficient"`）に残る。
+    """
+    from voice_genesis.calibration.fixtures.matrix import (
+        build_matrix as real_build_matrix,
+    )
+    from voice_genesis.calibration.fixtures.matrix import declared_sweeps_by_family
+
+    rows = real_build_matrix()
+    tilt_sweeps = declared_sweeps_by_family(rows)["TILT_GT"]
+    sweep_id, member_row_ids = sorted(tilt_sweeps.items())[0]
+    assert len(member_row_ids) == 5, member_row_ids
+    to_drop = set(member_row_ids[2:])  # keep 2 of 5 -> 2 distinct truth levels
+    starved = [mr for mr in rows if mr.row_id not in to_drop]
+    monkeypatch.setattr(c0_validate, "build_matrix", lambda: starved)
+
+    violations = c0_validate._check_declared_sweep_truth_levels({})
+    assert len(violations) == 1
+    detail = violations[0]
+    assert detail.violation == "sweep_truth_level_insufficient"
+    assert detail.family == "TILT_GT"
+    assert detail.sweep_id == sweep_id
+    assert detail.expected_count == c0_validate.MIN_RESOLVABLE_PAIRS_PER_SWEEP
+    assert detail.actual_count == 2
+    assert f"TILT_GT.declared_sweeps[{sweep_id!r}]" in detail.detail
+    assert "2 distinct truth level(s)" in detail.detail
+
+    result = c0_validate.validate_c0_manifest(_complete_manifest())
+    assert result.is_blocked
+    # UNDERSPEC-CAL-D78: no dedicated BlockedCode any more — the frozen
+    # BLOCKED_C0_MANIFEST_INCOMPLETE carries this failure.
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert result.sweep_declaration_violations == tuple(violations)
+    # this is a structural defect independent of manifest content — none of
+    # the manifest-completeness key-violations mention declared_sweeps for
+    # this cause (unrelated causes, e.g. an actually-dirty checkout, may
+    # still coexist and are not this test's concern).
+    assert not any("declared_sweeps" in key for key in result.missing_required_keys)
+    # `_complete_manifest()` still declares the pre-starvation (full 5-member)
+    # TILT_GT sweep, which now also fails to exactly match the starved
+    # (monkeypatched) matrix's derived mapping — UNDERSPEC-CAL-D77 ruling (1)'s
+    # mismatch check and D76 ruling (2)'s truth-level check are independent
+    # axes and can co-fire on the same starved-matrix scenario (both now fold
+    # into the same BLOCKED_C0_MANIFEST_INCOMPLETE code per D78).
+    assert any(
+        v.violation == "sweep_declaration_mismatch" and v.family == "TILT_GT"
+        for v in result.sweep_declaration_mismatch_violations
+    )
+
+
+# ---------------------------------------------------------------------------
+# declared sweep 宣言一致検査（UNDERSPEC-CAL-D77 ruling (1). #344 round 8
+# finding #1 ADOPT, 分類②: manifest の宣言値そのものを凍結 matrix からの
+# 導出値と完全一致させる。UNDERSPEC-CAL-D78 ruling (#344 round 9 ADOPT) 以降
+# は専用 BlockedCode ではなく BLOCKED_C0_MANIFEST_INCOMPLETE +
+# SweepManifestViolationDetail で表現する）
+# ---------------------------------------------------------------------------
+
+
+def test_declared_sweeps_missing_key_is_manifest_incomplete_not_mismatch() -> None:
+    """`declared_sweeps` キー自体が欠落している場合は既存の
+    `BLOCKED_C0_MANIFEST_INCOMPLETE`（`FIXTURE_SPEC_REQUIRED_KEYS` 経由）で
+    捕捉し、mismatch 側の detail は積まれない（二重報告回避）。"""
+    manifest = _complete_manifest()
+    del manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["declared_sweeps"]
+
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert "frozen_design.fixture_spec.FORMANT_GT.declared_sweeps" in result.missing_required_keys
+    assert result.sweep_declaration_mismatch_violations == ()
+
+
+def test_declared_sweeps_scalar_value_is_manifest_incomplete_not_mismatch() -> None:
+    """`declared_sweeps="x"` のような非 mapping scalar は `_MAPPING_SHAPE_
+    FIELDS` の shape 検査経由で `BLOCKED_C0_MANIFEST_INCOMPLETE` へ倒れ、
+    mismatch チェック側では扱わない（二重報告回避）。"""
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["declared_sweeps"] = "x"
+
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        k.startswith("frozen_design.fixture_spec.FORMANT_GT.declared_sweeps")
+        and "must be a non-empty mapping" in k
+        for k in result.missing_required_keys
+    )
+    assert result.sweep_declaration_mismatch_violations == ()
+
+
+def test_declared_sweeps_dropped_member_blocks_with_manifest_incomplete_detail() -> None:
+    """corrupted membership: 実在する sweep から member row_id を 1 件
+    落としても非空 mapping のままであり `FIXTURE_SPEC_REQUIRED_KEYS`/shape
+    検査は素通りするが、導出値との完全一致検査で
+    `BLOCKED_C0_MANIFEST_INCOMPLETE`（detail:
+    `violation="sweep_declaration_mismatch"`）が fail-closed する。"""
+    manifest = _complete_manifest()
+    declared = manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["declared_sweeps"]
+    sweep_id = sorted(declared)[0]
+    expected_count = len(declared[sweep_id])
+    assert expected_count >= 3, declared[sweep_id]
+    declared[sweep_id] = declared[sweep_id][1:]  # drop the first member row_id
+
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    matches = [
+        v
+        for v in result.sweep_declaration_mismatch_violations
+        if v.family == "FORMANT_GT" and v.sweep_id == sweep_id
+    ]
+    assert len(matches) == 1, result.sweep_declaration_mismatch_violations
+    detail = matches[0]
+    assert detail.violation == "sweep_declaration_mismatch"
+    assert detail.expected_count == expected_count
+    assert detail.actual_count == expected_count - 1
+    assert f"FORMANT_GT.declared_sweeps[{sweep_id!r}]" in detail.detail
+    # a corrupted declaration is a distinct failure mode from an absent one —
+    # it must not also surface as a manifest-completeness key-violation.
+    assert not any("declared_sweeps" in key for key in result.missing_required_keys)
+
+
+def test_declared_sweeps_extra_sweep_id_blocks_with_manifest_incomplete_detail() -> None:
+    """corrupted membership: 実在しない sweep_id を 1 件追加しても
+    `BLOCKED_C0_MANIFEST_INCOMPLETE`（sweep_declaration_mismatch detail）が
+    発火する。"""
+    manifest = _complete_manifest()
+    declared = manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["declared_sweeps"]
+    declared["not_a_real_sweep_id"] = ["FORMANT_GT-bogus-row"]
+
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    matches = [
+        v
+        for v in result.sweep_declaration_mismatch_violations
+        if v.family == "FORMANT_GT" and v.sweep_id == "not_a_real_sweep_id"
+    ]
+    assert len(matches) == 1, result.sweep_declaration_mismatch_violations
+    assert matches[0].expected_count == 0
+    assert matches[0].actual_count == 1
+    assert "frozen_design.fixture_spec.FORMANT_GT.declared_sweeps" in matches[0].detail
+
+
+def test_declared_sweeps_reordered_members_blocks_with_manifest_incomplete_detail() -> None:
+    """corrupted membership: member 集合は同一でも並び順（`ordered list of
+    row ids`）が入れ替わっていれば不一致として `BLOCKED_C0_MANIFEST_
+    INCOMPLETE` を BLOCK する。"""
+    manifest = _complete_manifest()
+    declared = manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["declared_sweeps"]
+    sweep_id = sorted(declared)[0]
+    assert len(declared[sweep_id]) >= 2, declared[sweep_id]
+    declared[sweep_id] = list(reversed(declared[sweep_id]))
+
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        v.family == "FORMANT_GT" and v.sweep_id == sweep_id
+        for v in result.sweep_declaration_mismatch_violations
+    )
+
+
+def test_declared_sweeps_canonical_manifest_passes() -> None:
+    """canonical manifest（凍結 matrix からの実導出値をそのまま宣言する
+    `_full_fixture_spec()`）は sweep 由来の `BLOCKED_C0_MANIFEST_INCOMPLETE`
+    を一切発火しない（UNDERSPEC-CAL-D77 ruling (1) の "canonical manifest →
+    passes" 受け入れ条件。D78 ruling 後も専用コードなしで同じ受け入れ条件を
+    保つ）。"""
+    result = c0_validate.validate_c0_manifest(_complete_manifest())
+    assert result.sweep_declaration_mismatch_violations == ()
+    assert result.sweep_declaration_violations == ()
+    assert result.blocked_codes == ()
 
 
 def test_meter_spec_parameter_grid_scalar_int_blocks() -> None:

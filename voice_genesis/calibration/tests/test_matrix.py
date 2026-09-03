@@ -11,9 +11,12 @@ from voice_genesis.calibration.fixtures.matrix import (
     FixtureRow,
     build_matrix,
     compute_domain,
+    declared_sweeps_by_family,
     f0_band_ok,
+    truth_identity_for_row,
     validate_matrix,
 )
+from voice_genesis.calibration.gates import MIN_RESOLVABLE_PAIRS_PER_SWEEP
 from voice_genesis.calibration.splitter import RowInput, realize_split
 from voice_genesis.calibration.vocab import Domain, Split
 
@@ -69,6 +72,107 @@ def test_per_family_totals_and_block_breakdown_match_section_5_2() -> None:
 def test_sum_of_family_totals_is_456() -> None:
     total = sum(t for (_, _, _, t) in axes.FAMILY_COUNTS.values())
     assert total == 456
+
+
+# ---------------------------------------------------------------------------
+# 宣言済み sweep（UNDERSPEC-CAL-D76 def A。supersedes D75's nuisance-axis
+# definition, tested above through round 5 — see `sweep_truth_investigation.md`
+# for the full derivation and the four candidate definitions it rules out）
+# ---------------------------------------------------------------------------
+
+#: per-family (n_sweeps, rows_per_sweep) expected under def A on the
+#: canonical 456-cell matrix (`sweep_truth_investigation.md` §Q3 table,
+#: reproduced/verified here). FORMANT_GT's 5 distinct truth levels use the
+#: *full* `pole_freqs_hz` tuple as truth identity (not the F1-only scalar
+#: `campaign.selection_stage.truth_value_for_row()` uses for ranking) — this
+#: sidesteps the known F1-collision ambiguity (`[UNDERSPEC-CAL-D13]`: two
+#: pole sets share F1=500Hz) that would otherwise reduce one sweep's count
+#: to 4 distinct levels / 9 resolvable pairs instead of 5 levels / 10 pairs.
+_EXPECTED_DEF_A_SHAPE: dict[str, tuple[int, int]] = {
+    "F0_CONTROL": (3, 4),
+    "FORMANT_GT": (12, 5),
+    "TILT_GT": (6, 5),
+    "APERIODICITY_GT": (10, 6),
+    "RESONANCE_GT": (6, 4),
+    "TRANSITION_GT": (8, 3),
+    "IDENTITY_CAUSAL_SWEEP": (12, 5),
+}
+
+
+def test_declared_sweeps_by_family_matches_investigation_table() -> None:
+    """def A（sweep = nuisance/covariate 設定を固定し truth 水準だけを動かす
+    truth-core block の行集合）の per-family (sweep 数, sweep あたり行数) が
+    `sweep_truth_investigation.md` の調査結果と一致する。"""
+    rows = build_matrix()
+    row_by_id = {mr.row_id: mr.row for mr in rows}
+    declared = declared_sweeps_by_family(rows)
+    for family, (expected_n_sweeps, expected_rows_per_sweep) in _EXPECTED_DEF_A_SHAPE.items():
+        sweeps = declared[family]
+        assert len(sweeps) == expected_n_sweeps, (family, sorted(sweeps))
+        for sweep_id, member_row_ids in sweeps.items():
+            assert len(member_row_ids) == expected_rows_per_sweep, (family, sweep_id, member_row_ids)
+            # every member row must actually belong to this family's TRUTH_CORE/PRIMARY block.
+            for row_id in member_row_ids:
+                row = row_by_id[row_id]
+                assert row.family == family
+                assert row.block == "TRUTH_CORE"
+    # f0_hz/sr_hz are truth-core grid axes, not sweep-defining fields, for
+    # every family except F0_CONTROL itself (whose truth field *is* f0_hz).
+    assert set(declared) == set(_EXPECTED_DEF_A_SHAPE)
+
+
+def test_declared_sweeps_never_split_by_positive_control_or_block() -> None:
+    """UNDERSPEC-CAL-D76: sweep key は `positive_control`/`block` を含んでは
+    ならない——含めると同じ nuisance 条件の行が anchor/non-anchor で別 sweep
+    に誤って分断される（family anchor 行にのみ `positive_control=True` が
+    立つため）。"""
+    rows = build_matrix()
+    row_by_id = {mr.row_id: mr.row for mr in rows}
+    declared = declared_sweeps_by_family(rows)
+    saw_mixed_positive_control_sweep = False
+    for family, sweeps in declared.items():
+        for member_row_ids in sweeps.values():
+            flags = {row_by_id[rid].positive_control for rid in member_row_ids}
+            if len(flags) > 1:
+                saw_mixed_positive_control_sweep = True
+    assert saw_mixed_positive_control_sweep, (
+        "expected at least one declared sweep whose members mix "
+        "positive_control True/False (anchor rows are TRUTH_CORE members "
+        "too) — otherwise this test cannot distinguish the correct key from "
+        "one that wrongly includes positive_control"
+    )
+
+
+def test_every_declared_sweep_has_at_least_3_distinct_truth_levels() -> None:
+    """§10.4「resolvable pair は各 sweep で >= 3」の構造的前提: def A の下
+    では sweep 内の PRIMARY 行数そのものではなく、相異なる truth level 数
+    （`truth_identity_for_row()`）が `C(levels, 2) >= 3` を満たす必要が
+    ある。"""
+    rows = build_matrix()
+    row_by_id = {mr.row_id: mr.row for mr in rows}
+    declared = declared_sweeps_by_family(rows)
+    for family, sweeps in declared.items():
+        assert sweeps, f"{family} declares no sweeps at all"
+        for sweep_id, member_row_ids in sweeps.items():
+            n_levels = len({truth_identity_for_row(row_by_id[rid]) for rid in member_row_ids})
+            assert n_levels >= MIN_RESOLVABLE_PAIRS_PER_SWEEP, (family, sweep_id, n_levels)
+
+
+def test_starved_matrix_drops_a_sweep_below_the_minimum_truth_levels() -> None:
+    """`declared_sweeps_by_family` は与えられた `matrix_rows` から素直に
+    再計算するだけなので、matrix を人工的に飢餓状態へ書き換えれば違反を
+    検出できる（`c0_validate` 側の fail-closed 検査が使うのと同じ入力形）。
+    """
+    rows = build_matrix()
+    tilt_sweeps = declared_sweeps_by_family(rows)["TILT_GT"]
+    sweep_id, member_row_ids = sorted(tilt_sweeps.items())[0]
+    assert len(member_row_ids) == 5
+    to_drop = set(member_row_ids[2:])  # keep 2 of 5 -> 2 distinct truth levels
+    starved = [mr for mr in rows if mr.row_id not in to_drop]
+    row_by_id = {mr.row_id: mr.row for mr in starved}
+    starved_sweeps = declared_sweeps_by_family(starved)["TILT_GT"]
+    n_levels = len({truth_identity_for_row(row_by_id[rid]) for rid in starved_sweeps[sweep_id]})
+    assert n_levels == MIN_RESOLVABLE_PAIRS_PER_SWEEP - 1
 
 
 # ---------------------------------------------------------------------------

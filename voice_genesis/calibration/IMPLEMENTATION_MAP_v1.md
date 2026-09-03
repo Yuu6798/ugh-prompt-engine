@@ -101,6 +101,31 @@ Codex レビュー 2026-09-01（第 2 巡）採用分。正本改訂は §0 保�
   - M5-WAVE-DISCONTINUITY 3 = 検出窓 {2, 5, 10} ms
   - M5-SPECTRAL-FLUX 4 = frame {512, 1024} × flux ノルム {L1, L2}
   - F0-PYIN 4 = frame {2048, 4096} × hop {256, 512}（設計正本で確定済み・再掲）
+- **declared sweep（§10.4 DIRECTIONAL gate 前提。UNDERSPEC-CAL-D76 def A、
+  D75 ruling (1)/(2) を SUPERSEDE — 詳細は `README.md` D76 entry）**: family
+  の declared sweep は、PRIMARY domain の凍結 fixture matrix のうち
+  nuisance/covariate 設定（gain/duration/noise/context 等）を固定し truth
+  水準だけが動く truth-core block の行集合（`fixtures.matrix.
+  declared_sweeps_by_family()`。旧 D75 の「nuisance_tag が変動させる
+  confound 軸そのもの」という定義は誤りで、group 内 truth が anchor 固定
+  になり全 pair `delta_truth == 0` を生む構造的欠陥があった）。C0 freeze
+  時にこの関数で導出し `frozen_design.fixture_spec.<FAMILY>.declared_
+  sweeps`（sweep_id → member row_id 一覧）として記録する（`manifest_
+  core_sha` に含まれる）。`campaign.holdout_stage.declared_axes_for_
+  family()`（`confound_axes` 読み戻し）は gate4' invariance 軸専用のまま
+  変更しない——D18 の「同じ confound_axes 列を DIRECTIONAL sweep_id
+  としても再利用する」という旧写像は誤りとして訂正した（`holdout_
+  stage.py` の D18 note 参照）。
+- **holdout 上の DIRECTIONAL 到達不能性（既知の設計事実。UNDERSPEC-CAL-
+  D76）**: 上記 def A を凍結 matrix 全体で評価すれば 7 family 全てが
+  「各 declared sweep で truth level >= 3」を満たすが、HOLDOUT split
+  （`STRATUM_FACTOR_NAMES = (block, domain)` 層別 25%）は sweep 構造を
+  層別因子に含まないため、各 sweep の holdout 残存行が構造的に 1–2 行へ
+  薄まる。結果として DIRECTIONAL-ceiling 候補は holdout 上で
+  `NOT_EVALUABLE`（`DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT`）に
+  倒れるのが通常の帰結であり、これは matrix/split の設計事実であって
+  回避すべきバグではない（sweep-aware stratification は design v1.1
+  改訂候補）。
 
 ## 2.7 fixture matrix の設計時凍結（Codex レビュー第 5 巡採用。§5.2 件数と厳密一致）
 

@@ -42,6 +42,15 @@ def test_missing_reason_closed_vocab() -> None:
 
 
 def test_blocked_code_closed_vocab() -> None:
+    # UNDERSPEC-CAL-D78 ruling (#344 round 9 ADOPT, 分類②): D76 ruling (2)'s
+    # BLOCKED_C0_SWEEP_DECLARATION_INVALID and D77 ruling (1)'s
+    # BLOCKED_C0_SWEEP_DECLARATION_MISMATCH were both post-hoc extensions of
+    # this frozen vocabulary beyond the design's 6 values (neither addition
+    # went through a DESIGN_VG_METER_CAL_DEBT_v1.0.md §3.3 revision). Both
+    # are removed; the fail-closed events they detected are now reported via
+    # BLOCKED_C0_MANIFEST_INCOMPLETE with a SweepManifestViolationDetail
+    # (violation="sweep_truth_level_insufficient" /
+    # "sweep_declaration_mismatch") in c0_validate.py — count returns to 6.
     assert len(BlockedCode) == 6
     assert {b.value for b in BlockedCode} == {
         "BLOCKED_DOMAIN_MANIFEST_INCOMPLETE",
@@ -51,6 +60,25 @@ def test_blocked_code_closed_vocab() -> None:
         "BLOCKED_LEAKAGE",
         "BLOCKED_CANONICAL_MUTATION_REQUIRED",
     }
+
+
+def test_blocked_code_equals_frozen_design_list() -> None:
+    """UNDERSPEC-CAL-D78 ruling: `BlockedCode` の実際のメンバー集合は設計正本
+    (`DESIGN_VG_METER_CAL_DEBT_v1.0.md` §3.3, ~L140-143 の「fail-closed
+    code の閉語彙」列挙) と厳密に一致する（事後の場当たり追加は禁止 —
+    このテストは #344 round 6-8 で追加された 2 メンバーの再発を防ぐ回帰
+    ガードとして新設）。"""
+    frozen_design_blocked_codes = (
+        "BLOCKED_DOMAIN_MANIFEST_INCOMPLETE",
+        "BLOCKED_C0_MANIFEST_INCOMPLETE",
+        "BLOCKED_C0_UNSEEDED_RNG",
+        "BLOCKED_C1_GENERATOR_NONDETERMINISTIC",
+        "BLOCKED_LEAKAGE",
+        "BLOCKED_CANONICAL_MUTATION_REQUIRED",
+    )
+    assert len(frozen_design_blocked_codes) == 6
+    assert len(BlockedCode) == len(frozen_design_blocked_codes)
+    assert {b.value for b in BlockedCode} == set(frozen_design_blocked_codes)
 
 
 def test_procedure_gate_closed_vocab() -> None:

@@ -119,9 +119,18 @@ from voice_genesis.calibration.cost_caps import check as cost_caps_check
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
 from voice_genesis.calibration.fixtures.controls import (
     negative_control_row_ids,
+    non_boundary_selection_instances,
     positive_detection_instances,
 )
-from voice_genesis.calibration.fixtures.matrix import build_matrix
+from voice_genesis.calibration.fixtures.matrix import (
+    build_matrix,
+    declared_sweeps_by_family,
+    truth_identity_for_row,
+)
+from voice_genesis.calibration.gates import (
+    MIN_RESOLVABLE_PAIRS_PER_SWEEP,
+    resolvable_pairs_possible,
+)
 from voice_genesis.calibration.observables import two_stage_median
 from voice_genesis.calibration.vocab import (
     CLAIM_CRITICAL_SET,
@@ -626,16 +635,36 @@ def _positive_instances_for_selection(
     (`[UNDERSPEC-CAL-D25]`).
 
     round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`): returns the full
-    `(row_id, probe_index)` instance set (not just row_id) — this is also
-    the frozen expected-instance population `_criteria_with_fail_filters`
-    passes to `selection_stage.candidate_fail_filter_report()`'s new
-    `coverage_incomplete` filter, which needs instance granularity to catch
-    an F0-unusable single probe_index gap that a row-id-only view (a row
-    counts as "seen" if any one of its probe_index records exists) cannot
-    see. Callers derive the row-id-only view for the row-level
-    `positive_control_non_fire`/`positive_rows_absent` filters with
-    `frozenset(row_id for row_id, _ in instances)`."""
+    `(row_id, probe_index)` instance set (not just row_id). Callers derive
+    the row-id-only view for the row-level `positive_control_non_fire`/
+    `positive_rows_absent` filters with `frozenset(row_id for row_id, _ in
+    instances)`.
+
+    round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`): this TRUTH_CORE
+    -only instance set no longer feeds `coverage_incomplete` directly — that
+    filter's expected-instance population was widened to TRUTH_CORE +
+    CONFOUND (see `_expected_coverage_instances_for_selection()` below).
+    This function's row-id-only derivative still exclusively backs
+    `positive_control_row_ids`/`positive_control_non_fire`/
+    `positive_rows_absent`, which must stay TRUTH_CORE-scoped (a CONFOUND
+    row is not a positive-detection anchor)."""
     return positive_detection_instances(rows, assignment, Split.SELECTION, family=family)
+
+
+def _expected_coverage_instances_for_selection(
+    rows: Sequence[Any], assignment: Mapping[str, Any], family: str
+) -> frozenset[tuple[str, int]]:
+    """round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`): the expected
+    non-BOUNDARY (TRUTH_CORE + CONFOUND) instance population for `family`'s
+    evaluated SELECTION split (`fixtures.controls.
+    non_boundary_selection_instances()`), passed as `candidate_fail_filter_
+    report()`'s `expected_coverage_instances` — deliberately a *separate*
+    function from `_positive_instances_for_selection()` above (whose
+    TRUTH_CORE-only set must stay narrow for `positive_control_row_ids`).
+    See `non_boundary_selection_instances()`'s docstring for the fail-open
+    scenario this closes (a candidate consistently missing on hard CONFOUND
+    rows was invisible to D64's TRUTH_CORE-only `coverage_incomplete`)."""
+    return non_boundary_selection_instances(rows, assignment, Split.SELECTION, family=family)
 
 
 def _criteria_with_fail_filters(
@@ -645,7 +674,7 @@ def _criteria_with_fail_filters(
     *,
     negative_control_ids: frozenset[str],
     positive_control_ids: frozenset[str],
-    expected_positive_instances: frozenset[tuple[str, int]] = frozenset(),
+    expected_coverage_instances: frozenset[tuple[str, int]] = frozenset(),
     max_claim_scope: frozenset[str],
 ) -> tuple[Any, dict[str, bool], dict[str, object]]:
     """finding #8: `build_candidate_criteria()`（有限値の有無のみ）に加えて
@@ -653,20 +682,22 @@ def _criteria_with_fail_filters(
     発火していれば `eligible=False` へ落とす。finding #11: さらに
     `max_claim_scope` 外の construct なら ceiling を capping する
     （`select_across_ceilings` へ渡す前に反映 — capping 済み ceiling で
-    ABSOLUTE pool から除外される）。round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`):
-    `expected_positive_instances`（`_positive_instances_for_selection()`）を
-    そのまま `candidate_fail_filter_report()` の `expected_truth_core_
-    instances` へ渡し、新設 `coverage_incomplete` filter を通す。
-    `(criteria, fail_filter_report, claim_scope_report)` を返す — 呼び出し元
-    はこれらを `run_c3a_f0_selection`/`run_c3b_selection` の対応する
-    `*_reports*` へ積み上げて SELECTION_FROZEN payload に記録する。"""
+    ABSOLUTE pool から除外される）。round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`)
+    →round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`): `expected_
+    coverage_instances`（`_expected_coverage_instances_for_selection()` —
+    TRUTH_CORE + CONFOUND、D64 時点の TRUTH_CORE 限定から拡張済み）を
+    `candidate_fail_filter_report()` の同名引数へそのまま渡し、
+    `coverage_incomplete` filter を通す。`(criteria, fail_filter_report,
+    claim_scope_report)` を返す — 呼び出し元はこれらを
+    `run_c3a_f0_selection`/`run_c3b_selection` の対応する `*_reports*` へ
+    積み上げて SELECTION_FROZEN payload に記録する。"""
     base = selection_stage.build_candidate_criteria(candidate, records, truth_by_instance)
     report = selection_stage.candidate_fail_filter_report(
         candidate,
         records,
         negative_control_row_ids=negative_control_ids,
         positive_control_row_ids=positive_control_ids,
-        expected_truth_core_instances=expected_positive_instances,
+        expected_coverage_instances=expected_coverage_instances,
     )
     eligible = base.eligible and selection_stage.eligible_after_fail_filters(report)
     capped, scope_report = selection_stage.claim_scope_report(candidate, max_claim_scope)
@@ -798,6 +829,12 @@ def _run_c3a(
         matrix_rows, assignment, FixtureFamily.F0_CONTROL.value
     )
     pos_ids = frozenset(row_id for row_id, _ in pos_instances)
+    # round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`): apply the same
+    # widened (TRUTH_CORE + CONFOUND) expected-instance semantics to C3a's
+    # F0_CONTROL family selection, not just C3b/C4's non-F0 families.
+    coverage_instances = _expected_coverage_instances_for_selection(
+        matrix_rows, assignment, FixtureFamily.F0_CONTROL.value
+    )
     known_truth_by_instance = {k: v for k, v in truth_by_instance.items() if v is not None}
     criteria: list[Any] = []
     fail_filter_reports: dict[str, dict[str, bool]] = {}
@@ -809,7 +846,7 @@ def _run_c3a(
             known_truth_by_instance,
             negative_control_ids=neg_ids,
             positive_control_ids=pos_ids,
-            expected_positive_instances=pos_instances,
+            expected_coverage_instances=coverage_instances,
             max_claim_scope=max_claim_scope,
         )
         criteria.append(candidate_criteria)
@@ -956,6 +993,13 @@ def _run_c3b(
         neg_ids = negative_control_row_ids(family_rows)
         pos_instances = _positive_instances_for_selection(family_rows, assignment, family.value)
         pos_ids = frozenset(row_id for row_id, _ in pos_instances)
+        # round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`): widened
+        # (TRUTH_CORE + CONFOUND) expected-instance population for
+        # `coverage_incomplete`, separate from `pos_instances` above (which
+        # must stay TRUTH_CORE-only for `positive_control_row_ids`).
+        coverage_instances = _expected_coverage_instances_for_selection(
+            family_rows, assignment, family.value
+        )
         family_criteria: list[Any] = []
         family_fail_filter_reports: dict[str, dict[str, bool]] = {}
         family_claim_scope_reports: dict[str, dict[str, object]] = {}
@@ -966,7 +1010,7 @@ def _run_c3b(
                 truth_by_instance,
                 negative_control_ids=neg_ids,
                 positive_control_ids=pos_ids,
-                expected_positive_instances=pos_instances,
+                expected_coverage_instances=coverage_instances,
                 max_claim_scope=max_claim_scope,
             )
             family_criteria.append(candidate_criteria)
@@ -1073,6 +1117,20 @@ def _run_c4(
 
     assignment = campaign.realized_split.assignment
     sr_by_row = {mr.row_id: mr.row.sr_hz for mr in matrix_rows}
+    # UNDERSPEC-CAL-D76 ruling (2)（D75 の nuisance-axis 写像を SUPERSEDE）:
+    # sweep_id 分割の唯一の入力は `fixtures.matrix.declared_sweeps_by_
+    # family()`（def A: truth-core block の nuisance-constant series）——
+    # frozen matrix から決定的に導出する。`gates.resolvable_pairs_
+    # possible()` へ渡す `expected_sweep_ids` と、C4 側で数える「usable
+    # instance の distinct truth level 数」（ruling (3)）の両方がこの宣言を
+    # 単一の入口として共有する（fabricated `"default"` sweep は経由しない）。
+    declared_sweeps_by_family_map = declared_sweeps_by_family(matrix_rows)
+    row_id_to_sweep_id: dict[str, dict[str, str]] = {}
+    for family_value, family_sweeps in declared_sweeps_by_family_map.items():
+        for sweep_id, member_row_ids in family_sweeps.items():
+            for row_id in member_row_ids:
+                row_id_to_sweep_id.setdefault(family_value, {})[row_id] = sweep_id
+    row_by_id = {mr.row_id: mr.row for mr in matrix_rows}
     all_instances = sorted(
         {
             inst
@@ -1151,6 +1209,295 @@ def _run_c4(
         if selected_id is None:
             results.append(holdout_stage.selection_failed_closed_meter(meter.value))
             continue
+        # round 30 ADOPT (`[UNDERSPEC-CAL-D66]`, Codex round 30 PR #343
+        # finding #1 「Require records from the selected holdout candidate」
+        # 採用): the `family.value not in records_by_family` check above only
+        # asks whether *any* candidate in the family produced a record — B0
+        # always runs and always supplies at least one, so that check falls
+        # through even when the *selected* F0-dependent candidate itself was
+        # skipped on every C4 holdout instance (`[UNDERSPEC-CAL-D61]`/
+        # `[UNDERSPEC-CAL-D65]`: `render_and_measure_holdout()` never calls
+        # it, so its cells are simply absent from `records_by_family`, not
+        # present-with-missing_reason). coverage は `selected_id` 自身の
+        # record 集合で判定する（B0 の record 存在は無関係）——期待 instance
+        # 集合と突き合わせる（集合の中身自体は round 2 #344 P2 で PRIMARY 限定
+        # へ改めた。下記コメント参照）。
+        #
+        # round 30 self-review ADOPT 採用（finding #2/#3/#4）: `[UNDERSPEC-
+        # CAL-D66]` の record-presence-only 規約は §11 の 2 帰結を取り違えて
+        # いた。design 引用（`DESIGN_VG_METER_CAL_DEBT_v1.0.md` §11）:
+        # 「critical output 全欠損 or 最小数割れで score/gate 計算不能 →
+        # NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE」対「score 計算可能だが PRIMARY
+        # 一部 output missing で gate 不通過 → DIAGNOSTIC_ONLY/OUTPUT_
+        # MISSING」——1 件の instance を欠くだけでは score 計算不能にはならず
+        # `NOT_EVALUABLE` の対象ではない（finding #2）。**全欠損**（usable な
+        # record が 1 件も無い）のみ `NOT_EVALUABLE`/`OUTPUT_NOT_EVALUABLE`
+        # とし、**部分被覆**（1 件以上は usable だが期待集合の一部を欠く）は
+        # `DIAGNOSTIC_ONLY`/`OUTPUT_MISSING` へ倒す（gate 1 不通過の事実は
+        # `gate_detail` に記録する）。完全被覆時は無変更。
+        #
+        # finding #3: 判定を **値の有無** にする——record が存在するだけでは
+        # 「usable」と数えない。`measure_stage.primary_output_value()`（missing_
+        # reason/ineligible を除外）+ `math.isfinite()` で有限値が読み取れる
+        # record のみ usable instance に数える。`selected_candidate_obj` が
+        # プールに見つからない（`selected_id` が stale/無効）場合は
+        # `algorithm_family` が引けないため record-presence へフォールバック
+        # する——この場合 `own_selected_records` 自体が空であることがほとんど
+        # で、いずれにせよ全欠損 NOT_EVALUABLE 枝に落ちる。
+        #
+        # finding #4: `claim_scope_report()` を分岐の**前**で計算し、
+        # NOT_EVALUABLE/DIAGNOSTIC_ONLY いずれの `gate_detail` にも
+        # `claim_scope` を含める（旧実装は早期 `continue` でこの監査事実を
+        # 落としていた）。
+        own_selected_records = [
+            r for r in records_by_family[family.value] if r.candidate_id == selected_id
+        ]
+        # round 2 #344 ADOPT (`[UNDERSPEC-CAL-D72]`, amends D69): the coverage
+        # set used to belong to `workunits.c4_holdout_instances()`, which is
+        # HOLDOUT-split minus *negative-control* rows only — it still
+        # includes non-control BOUNDARY-domain rows (boundary-axis probes,
+        # `fixtures.matrix.compute_domain()`). A correct, expected miss on
+        # one of those BOUNDARY instances (e.g. a candidate legitimately
+        # returning `OUTPUT_MISSING` at an edge-of-range F0/SR/gain/
+        # duration/noise axis) therefore fell into `missing_expected_
+        # instances` and falsely produced a `DIAGNOSTIC_ONLY`/`OUTPUT_
+        # MISSING` (or, with zero PRIMARY coverage too, `NOT_EVALUABLE`)
+        # gate-1 coverage failure for BOUNDARY rows, which DESIGN_VG_METER_
+        # CAL_DEBT_v1.0.md §10.3 (~L351-361) does not ask this gate to
+        # police: "gate 1: 全 PRIMARY instance が eligible（critical missing/
+        # undefined なし）" — the eligibility precondition ahead of gate 2'.
+        # BOUNDARY rows are handled by their own separate gate/diagnostic
+        # treatment, not folded into this PRIMARY completeness check.
+        # Ruling: build the coverage
+        # set from PRIMARY-domain rows only, reusing `fixtures.controls.
+        # non_boundary_selection_instances()` (already used for the C3
+        # selection-side D68/D71 coverage population, `domain ==
+        # Domain.PRIMARY` = TRUTH_CORE ∪ CONFOUND) against `Split.HOLDOUT`
+        # instead of `Split.SELECTION`. `workunits.c4_holdout_instances()`
+        # itself is unchanged and still used above (`all_instances`) to
+        # decide what actually gets rendered/measured in C4 — BOUNDARY rows
+        # are still measured, just not counted toward this completeness
+        # gate.
+        expected_holdout_instances = non_boundary_selection_instances(
+            matrix_rows, assignment, Split.HOLDOUT, family=family.value
+        )
+        selected_candidate_obj = candidate_by_candidate_id.get(selected_id)
+        claim_scope_detail: dict[str, object] = {}
+        # round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`): the *effective* ceiling
+        # (post `capped_ceiling()`/`max_claim_scope` capping) decides below
+        # whether the DIRECTIONAL-only minimum-count precondition applies —
+        # previously discarded as `_capped`, now kept.
+        effective_ceiling: ClaimCeiling | None = None
+        if selected_candidate_obj is not None:
+            effective_ceiling, claim_scope_detail = selection_stage.claim_scope_report(
+                selected_candidate_obj, max_claim_scope
+            )
+            # UNDERSPEC-CAL-D76 ruling (4): an instance counts as usable
+            # only if ALL of its within/fresh repeats are present, finite,
+            # and mutually consistent (D67) — see
+            # `measure_stage.usable_primary_instances()`. The prior set
+            # comprehension marked an instance usable if ANY single repeat
+            # (out of 6) happened to be finite, an existential collapse that
+            # let 5 missing/divergent repeats hide behind 1 lucky one.
+            usable_holdout_instances = measure_stage.usable_primary_instances(
+                selected_candidate_obj, own_selected_records
+            )
+        else:
+            usable_holdout_instances = {(r.row_id, r.probe_index) for r in own_selected_records}
+        missing_expected_instances = expected_holdout_instances - usable_holdout_instances
+        # round 2 #344 ADOPT (`[UNDERSPEC-CAL-D72]`): "zero usable output"
+        # must mean zero usable *PRIMARY* output — `usable_holdout_instances`
+        # itself is not domain-scoped (it is built from every record the
+        # selected candidate produced, PRIMARY and BOUNDARY alike, since
+        # `all_instances`/`render_and_measure_holdout()` above still render
+        # BOUNDARY too). Without this, a candidate with zero usable PRIMARY
+        # records but at least one usable BOUNDARY record would skip this
+        # branch (`usable_holdout_instances` non-empty) and wrongly fall
+        # through to the partial-coverage `DIAGNOSTIC_ONLY`/`OUTPUT_MISSING`
+        # branch below instead of `NOT_EVALUABLE`. The plain `not usable_
+        # holdout_instances` disjunct is kept for its original meaning (zero
+        # usable output on *any* row — e.g. the candidate was never even
+        # called, `[UNDERSPEC-CAL-D61]`/`[UNDERSPEC-CAL-D65]`) so an empty
+        # PRIMARY population (`expected_holdout_instances`) does not itself
+        # force NOT_EVALUABLE when some other (BOUNDARY) output exists.
+        usable_primary_instances = usable_holdout_instances & expected_holdout_instances
+        if not usable_holdout_instances or (
+            expected_holdout_instances and not usable_primary_instances
+        ):
+            results.append(
+                holdout_stage.MeterHoldoutResult(
+                    meter_id=meter.value,
+                    terminal_status=TerminalStatus.NOT_EVALUABLE.value,
+                    reason_code=MissingReason.OUTPUT_NOT_EVALUABLE.value,
+                    ceiling=ClaimCeiling.NONE.value,
+                    selected_candidate_id=selected_id,
+                    gate_detail={
+                        "reason": (
+                            "[UNDERSPEC-CAL-D69] selected holdout candidate has no "
+                            "measurement record with a usable (finite, non-missing) "
+                            "primary value for any expected C4 instance"
+                        ),
+                        "expected_instance_count": len(expected_holdout_instances),
+                        "seen_instance_count": 0,
+                        "claim_scope": claim_scope_detail,
+                    },
+                )
+            )
+            continue
+        # round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`, amends `[UNDERSPEC-
+        # CAL-D73]`): D73's frozen minimum-count / resolvable-pair
+        # precondition below is a §10.4 DIRECTIONAL-gate concept
+        # ("resolvable pair は各 sweep で >= 3", design §10.4 ~L375,
+        # directly under §10.3) — D73 wrongly applied it to every meter
+        # regardless of the selected candidate's effective ceiling.
+        # Design quote, §10.3 ABSOLUTE holdout gate (~L351-353): "gate 1:
+        # 全 PRIMARY instance が eligible（critical missing/undefined
+        # なし）" — §10.3 states no minimum sample count beyond that
+        # eligibility precondition; MAE/BIAS/q95 (§10.1) are computable
+        # from any nonzero-usable-instance population. Applying D73's
+        # DIRECTIONAL-only minimum to an ABSOLUTE-ceiling candidate
+        # therefore produced a false `NOT_EVALUABLE` for a candidate
+        # whose score genuinely is computable (Codex #344 round 4,
+        # category ③ false terminal status). Ruling: the structural
+        # minimum-count check applies **only** when this meter's
+        # *effective* claim ceiling — `effective_ceiling` above, the same
+        # `capped_ceiling()`/`max_claim_scope` arbitration
+        # `claim_scope_report()` already performs — is `DIRECTIONAL`; for
+        # every other effective ceiling (ABSOLUTE included), nonzero-but-
+        # partial coverage is unconditionally `DIAGNOSTIC_ONLY`/
+        # `OUTPUT_MISSING` (§11 "score 計算可能だが PRIMARY 一部 output
+        # missing で gate 不通過"), matching D69/D72's original rule.
+        # When the check does apply, `gates.resolvable_pairs_possible()`
+        # is still the sole threshold authority (`gates.
+        # MIN_RESOLVABLE_PAIRS_PER_SWEEP`). round 6-7 #344 ADOPT
+        # (`[UNDERSPEC-CAL-D76]` ruling (2)/(3), SUPERSEDES D75 ruling
+        # (1)): D75 partitioned usable PRIMARY instances by nuisance
+        # axis (`nuisance_axis_family()`) and counted raw usable-
+        # instance rows per axis — but nuisance axis is not sweep (see
+        # `sweep_truth_investigation.md`: a nuisance-axis group holds
+        # truth fixed at the family anchor, so every pair inside it has
+        # `delta_truth == 0` and can never be resolvable under §10.4).
+        # The real declared sweep partition is `fixtures.matrix.
+        # declared_sweeps_by_family()` (def A: truth-core block,
+        # nuisance-constant series — `row_id_to_sweep_id` above), and
+        # the count that matters is the number of DISTINCT TRUTH LEVELS
+        # among usable instances in that sweep (row-level `row_id`,
+        # never `probe_index` repeats) — two usable rows at the SAME
+        # truth level still form an unresolvable `delta_truth == 0`
+        # pair, so counting raw instances (as D75 did) over-counts.
+        #
+        # round 8 #344 ADOPT (`[UNDERSPEC-CAL-D77]` ruling (2), 分類③ false
+        # terminal): the block below used to run only inside `if
+        # expected_holdout_instances and missing_expected_instances:` — i.e.
+        # only on *partial* coverage. A DIRECTIONAL-ceiling candidate with
+        # FULL holdout coverage on a partition where some declared sweep
+        # still has < `MIN_RESOLVABLE_PAIRS_PER_SWEEP` distinct truth levels
+        # among usable instances therefore skipped this check entirely and
+        # fell through to the generic `DIAGNOSTIC_ONLY` placeholder further
+        # below — recording a status that implies "score/gate assembly
+        # pending" for a candidate whose score is, in fact, structurally
+        # uncomputable (same §10.4 ~L375 fact as D76 ruling (2)/(3), just
+        # reached via a different — complete, not partial — coverage path).
+        # Ruling: perform this capacity check on the usable PRIMARY holdout
+        # instances **regardless of coverage completeness**, and **before**
+        # the partial-vs-complete coverage branch below (still gated on
+        # `effective_ceiling is ClaimCeiling.DIRECTIONAL`, so ABSOLUTE-
+        # ceiling candidates are unaffected — §10.3 does not depend on sweep
+        # structure). Capacity unmet → `NOT_EVALUABLE` even when coverage is
+        # complete; capacity met (or ceiling is not DIRECTIONAL) → fall
+        # through to the existing partial-coverage `DIAGNOSTIC_ONLY`/
+        # `OUTPUT_MISSING` branch, or, when coverage is also complete, to
+        # the pre-existing generic `DIAGNOSTIC_ONLY` placeholder unchanged.
+        n_usable_primary = len(usable_primary_instances)
+        if expected_holdout_instances and effective_ceiling is ClaimCeiling.DIRECTIONAL:
+            usable_row_ids_by_sweep: dict[str, set[str]] = {}
+            for row_id, _probe_index in usable_primary_instances:
+                sweep_id = row_id_to_sweep_id.get(family.value, {}).get(row_id)
+                if sweep_id is None:
+                    continue  # not a declared-sweep member (e.g. a targeted-interaction row)
+                usable_row_ids_by_sweep.setdefault(sweep_id, set()).add(row_id)
+            usable_truth_level_counts_by_sweep: dict[str, int] = {
+                sweep_id: len({truth_identity_for_row(row_by_id[rid]) for rid in row_ids})
+                for sweep_id, row_ids in usable_row_ids_by_sweep.items()
+            }
+            expected_sweep_ids = set(declared_sweeps_by_family_map.get(family.value, {}))
+            directional_minimum_not_met = not resolvable_pairs_possible(
+                usable_truth_level_counts_by_sweep, expected_sweep_ids
+            )
+            if directional_minimum_not_met:
+                sweeps_below_minimum = sorted(
+                    s
+                    for s in expected_sweep_ids
+                    if math.comb(usable_truth_level_counts_by_sweep.get(s, 0), 2)
+                    < MIN_RESOLVABLE_PAIRS_PER_SWEEP
+                )
+                results.append(
+                    holdout_stage.MeterHoldoutResult(
+                        meter_id=meter.value,
+                        terminal_status=TerminalStatus.NOT_EVALUABLE.value,
+                        reason_code=MissingReason.OUTPUT_NOT_EVALUABLE.value,
+                        ceiling=ClaimCeiling.NONE.value,
+                        selected_candidate_id=selected_id,
+                        gate_detail={
+                            "reason": (
+                                "[UNDERSPEC-CAL-D77] DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_"
+                                "HOLDOUT: declared sweep(s) "
+                                f"{sweeps_below_minimum} have too few distinct truth "
+                                "levels among usable holdout instances: each needs "
+                                f"C(levels,2) >= gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP="
+                                f"{MIN_RESOLVABLE_PAIRS_PER_SWEEP} (design §10.4 ~L375); "
+                                "score/gate is uncomputable regardless of measured "
+                                "values, even when holdout coverage for this meter is "
+                                "otherwise complete (D77 ruling (2): this capacity "
+                                "check now runs unconditionally for DIRECTIONAL-"
+                                "ceiling candidates, not only when "
+                                "missing_expected_instances is non-empty). This is "
+                                "the expected, honest outcome for DIRECTIONAL-ceiling "
+                                "candidates under the canonical 456-cell matrix + "
+                                "(block, domain) holdout split (README ledger D76/D77 "
+                                "— a design fact, not a bug to work around; sweep-"
+                                "aware stratification is a candidate for a future "
+                                "design v1.1 revision)."
+                            ),
+                            "gate_detail_reason_code": "DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT",
+                            "expected_instance_count": len(expected_holdout_instances),
+                            "seen_instance_count": n_usable_primary,
+                            "min_resolvable_pairs_per_sweep": MIN_RESOLVABLE_PAIRS_PER_SWEEP,
+                            "expected_sweep_ids": sorted(expected_sweep_ids),
+                            "usable_truth_level_counts_by_sweep": dict(
+                                sorted(usable_truth_level_counts_by_sweep.items())
+                            ),
+                            "sweeps_below_minimum": sweeps_below_minimum,
+                            "effective_ceiling": (
+                                effective_ceiling.value if effective_ceiling is not None else None
+                            ),
+                            "claim_scope": claim_scope_detail,
+                            "coverage_complete": not bool(missing_expected_instances),
+                        },
+                    )
+                )
+                continue
+        if expected_holdout_instances and missing_expected_instances:
+            results.append(
+                holdout_stage.MeterHoldoutResult(
+                    meter_id=meter.value,
+                    terminal_status=TerminalStatus.DIAGNOSTIC_ONLY.value,
+                    reason_code=MissingReason.OUTPUT_MISSING.value,
+                    ceiling=ClaimCeiling.DIAGNOSTIC_ONLY.value,
+                    selected_candidate_id=selected_id,
+                    gate_detail={
+                        "reason": (
+                            "[UNDERSPEC-CAL-D69] gate 1 not passed: selected holdout "
+                            "candidate has a usable primary value for some but not all "
+                            "expected C4 instances"
+                        ),
+                        "expected_instance_count": len(expected_holdout_instances),
+                        "seen_instance_count": n_usable_primary,
+                        "claim_scope": claim_scope_detail,
+                    },
+                )
+            )
+            continue
         # finding #11: record the claim-scope capping fact for this meter's
         # selected candidate (§b/§c). The placeholder `ceiling` below stays
         # DIAGNOSTIC_ONLY regardless — swapping it for the capped ceiling
@@ -1158,12 +1505,6 @@ def _run_c4(
         # ([UNDERSPEC-CAL-D17]); real gate assembly (out of CLI scope) is
         # where `evaluate_absolute_meter`/`evaluate_directional_meter`
         # would receive the capped ceiling directly as their `ceiling` arg.
-        selected_candidate_obj = candidate_by_candidate_id.get(selected_id)
-        claim_scope_detail: dict[str, object] = {}
-        if selected_candidate_obj is not None:
-            _capped, claim_scope_detail = selection_stage.claim_scope_report(
-                selected_candidate_obj, max_claim_scope
-            )
         results.append(
             holdout_stage.MeterHoldoutResult(
                 meter_id=meter.value,
