@@ -264,3 +264,26 @@ python -m voice_genesis.calibration.approvals refresh --gate gate1 \
 `authorization_nonce`/`cost_caps`/`e_use_bound_accepted`/`max_claim_scope`
 はいずれも無変更）。機械的な再スタンプであり、委任元（User）本人による
 変更内容の再確認は代替しない（本ファイル §9 冒頭の注記どおり）。
+
+## 7. 再承認（2026-09-02 第 2 回）
+
+1. 契機: #344 第 9 巡（memo hash のみの restamp は再承認ではない）。分類②で採用。
+2. 01:46Z 承認以降の memo 変更: D75 撤回（matrix 456 セル復元）、D76（declared
+   sweeps = truth-core 因子分解「nuisance 固定・truth 可変」、`frozen_design` へ
+   凍結）、D77（manifest `declared_sweeps` 必須・完全一致検証）、D78（`BlockedCode`
+   凍結 6 値復元、sweep 宣言不整合は `BLOCKED_C0_MANIFEST_INCOMPLETE` + 詳細
+   フィールド）、D79（runner のスライス/再開堅牢化: `--time-budget-seconds`、
+   `--discard-partial-groups` + `meter_call_group_discarded` ledger イベント、
+   memo §6.5。commit 4169526）。
+3. 設計事実の開示: 正本 matrix + holdout の (block, domain) 層化の下では、いずれの
+   declared sweep も holdout 側に §10.4 の resolvable pair ≥3 を持てず、
+   CALIBRATED_DIRECTIONAL は本 campaign で構造的に到達不能。DIRECTIONAL 天井の
+   候補は NOT_EVALUABLE (`DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT`) で閉じる。
+   ABSOLUTE 経路は影響なし。設計 v1.1 候補（sweep-aware 層化）として User へ
+   報告済み・本 campaign では変更しない。
+4. 承認内容の再確認: cost caps 3 値 / `budget_accounting_mode` / `max_claim_scope`
+   / E_use 境界受容は 01:46Z と同一。変更なし。
+5. nonce 取扱い: 本節時点の nonce は §6.1 の値のまま。Step 3 の Gate 2 dry-run が
+   発行する nonce へ live/record の両方を更新する（§6.2 の手順）。本ファイルは
+   E_use table により digest 固定されるため、freeze 後には編集しない。最終 nonce は
+   record copy JSON と `c0_manifest.json` が正。
