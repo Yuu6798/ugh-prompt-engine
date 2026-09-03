@@ -160,7 +160,12 @@ class StaleRenderError(RuntimeError):
 
 
 def _verify_and_load_rendered_pcm(
-    campaign: FrozenCampaign, row_id: str, probe_index: int, sr_hz: int
+    campaign: FrozenCampaign,
+    row_id: str,
+    probe_index: int,
+    sr_hz: int,
+    *,
+    invocation_id: str | None = None,
 ) -> tuple[np.ndarray, int]:
     """finding #4: 測定の直前に render 済み PCM の実バイト列を読み、sha256 を
     計算して **`.sha256` sidecar と ledger に pin された `render` event の
@@ -186,6 +191,7 @@ def _verify_and_load_rendered_pcm(
                 "row_id": row_id,
                 "probe_index": probe_index,
                 "detail": detail,
+                "invocation_id": invocation_id,
             }
         )
         return StaleRenderError(row_id, probe_index, detail)
@@ -1365,7 +1371,9 @@ def run_measurement_for_instance(
         return resumed
 
     pcm_path = campaign.renders_dir / row_id / f"{probe_index}.pcm"
-    signal, sr = _verify_and_load_rendered_pcm(campaign, row_id, probe_index, sr_hz)
+    signal, sr = _verify_and_load_rendered_pcm(
+        campaign, row_id, probe_index, sr_hz, invocation_id=invocation_id
+    )
 
     wall_t0 = time.perf_counter()
     within_cpu_t0 = _process_cpu_seconds()
@@ -1509,6 +1517,64 @@ def _instance_has_pending_candidate(
         if not meter_call_index.is_complete(row_id, probe_index, candidate.candidate_id):
             return True
     return False
+
+
+def family_has_pending_work(
+    instances: Sequence[tuple[str, int]],
+    candidates: Sequence[Candidate],
+    meter_call_index: MeterCallIndex,
+    f0_unusable_instances: frozenset[tuple[str, int]] = frozenset(),
+) -> bool:
+    """Codex PR #345 round 9 finding ③ (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): stage-level O(1) counterpart to
+    `_instance_has_pending_candidate()`, exported (unprefixed) for callers
+    outside this module — `cli._run_c3b()`'s per-family loop and
+    `holdout_stage.render_and_measure_holdout()`'s per-family loop both call
+    `run_measure_stage()` once per sub-phase (one `FixtureFamily` at a
+    time). Before either loop calls `run_measure_stage()` for a given
+    sub-phase, it must consult this function first: `run_measure_stage()`
+    itself only skips *dispatch* for an already-`is_complete()` cell (finding
+    D's O(1) skip inside its own loop) — it still unconditionally pays
+    `_rebuild_skipped_records()`'s reconstruction cost, and the caller still
+    pays its own criteria-computation cost, the moment *that call's own*
+    `completed_all` comes back `True` — which is trivially true, on EVERY
+    resumed invocation, for a sub-phase whose every cell was already
+    complete before this invocation even started (it dispatches nothing, so
+    it can never fail to "complete"). Repeating that reconstruction +
+    criteria cost on every invocation for a family that finished measuring
+    slices ago — while a DIFFERENT, still-pending family sits later in the
+    same per-family loop sharing the one `time_budget` — can by itself
+    consume the whole slice budget before the genuinely pending family is
+    ever reached, so no invocation ever dispatches its remaining work: a
+    concrete, budget-independent stall (not merely reduced throughput; see
+    rehearsal 4 finding D/G's already-fixed *unbounded growth* variant of
+    this same class of bug for contrast — this one is bounded per call but
+    repeats every call).
+
+    Callers use this to skip the `run_measure_stage()` call entirely (no
+    dispatch attempt, no reconstruction, no criteria computation) for any
+    sub-phase this returns `False` for, in any invocation where at least one
+    OTHER sub-phase still has pending work (a "nonterminal" invocation) —
+    deferring that sub-phase's full reconstruction + criteria computation to
+    the one invocation where every sub-phase's `family_has_pending_work()`
+    now reads `False` (the "completing" invocation), at which point every
+    sub-phase (including ones this function skipped on earlier invocations)
+    is reconstructed and evaluated together, exactly once.
+
+    O(1) per (instance, candidate) pair — index lookups only via
+    `_instance_has_pending_candidate()`, no PCM read, no `MeasurementRecord`
+    reconstruction — so callers may cheaply evaluate this for a sub-phase's
+    full instance set on every invocation, independent of `time_budget`.
+    Raises `StaleMeasurementError` (via `_instance_has_pending_candidate()`)
+    for a duplicate-key cell, same as every other `MeterCallIndex.
+    is_complete()` consumer in this module — callers must wrap this call the
+    same way they already wrap their own `run_measure_stage()` call site."""
+    return any(
+        _instance_has_pending_candidate(
+            row_id, probe_index, candidates, meter_call_index, f0_unusable_instances
+        )
+        for row_id, probe_index in instances
+    )
 
 
 def _append_stale_measurement_stop_event(
@@ -1836,6 +1902,7 @@ def run_measure_stage(
                 "kind": "measurement_missing",
                 "reason": missing_reason,
                 "cells": [[r, p, c] for r, p, c in sorted(newly_missing)],
+                "invocation_id": invocation_id,
             }
         )
 
@@ -1918,4 +1985,5 @@ __all__ = [
     "run_fresh_process_calls",
     "run_measurement_for_instance",
     "run_measure_stage",
+    "family_has_pending_work",
 ]

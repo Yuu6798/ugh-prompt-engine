@@ -161,7 +161,9 @@ def _parse_e_use_table_bytes(path: Path, data: bytes) -> list[EUseEvidenceRow]:
     return rows
 
 
-def load_e_use_rows(campaign: FrozenCampaign) -> tuple[EUseEvidenceRow, ...]:
+def load_e_use_rows(
+    campaign: FrozenCampaign, *, invocation_id: str | None = None
+) -> tuple[EUseEvidenceRow, ...]:
     """凍結 campaign dir 直下の `e_use_table.json`（`e_use_table.load_e_use_table`
     が読む 14 列 JSON 配列。armed `c0_freeze.armed_freeze()` がここへ配置する）
     を読む。
@@ -188,6 +190,7 @@ def load_e_use_rows(campaign: FrozenCampaign) -> tuple[EUseEvidenceRow, ...]:
                 "kind": "stop_event",
                 "reason": "E_USE_TABLE_STALE_OR_MUTATED",
                 "detail": str(exc),
+                "invocation_id": invocation_id,
             }
         )
         raise
@@ -554,31 +557,17 @@ def render_and_measure_holdout(
     assignment = campaign.realized_split.assignment
     sr_by_row = {mr.row_id: mr.row.sr_hz for mr in matrix_rows}
     results: dict[str, list[measure_stage.MeasurementRecord]] = {}
-    for family, candidates in sorted(candidates_by_family.items()):
-        instances = workunits.c4_holdout_instances(matrix_rows, assignment, family=family)
-        if time_budget is not None:
-            family_records, family_slice_status = measure_stage.run_measure_stage(
-                campaign,
-                instances,
-                candidates,
-                sr_by_row=sr_by_row,
-                f0_by_instance=f0_by_instance,
-                f0_unusable_instances=f0_unusable_instances,
-                max_workers=max_workers,
-                cap_counters=cap_counters,
-                cost_caps=cost_caps,
-                missing_reason=f0_missing_reason,
-                discard_partial_groups=discard_partial_groups,
-                stage="c4",
-                time_budget=time_budget,
-                invocation_id=invocation_id,
-            )
-            results[family] = family_records
-            slice_statuses.append(family_slice_status)
-        else:
+    family_order = sorted(candidates_by_family.items())
+    instances_by_family = {
+        family: workunits.c4_holdout_instances(matrix_rows, assignment, family=family)
+        for family, _candidates in family_order
+    }
+
+    if time_budget is None:
+        for family, candidates in family_order:
             results[family] = measure_stage.run_measure_stage(
                 campaign,
-                instances,
+                instances_by_family[family],
                 candidates,
                 sr_by_row=sr_by_row,
                 f0_by_instance=f0_by_instance,
@@ -591,9 +580,91 @@ def render_and_measure_holdout(
                 stage="c4",
                 invocation_id=invocation_id,
             )
-    if time_budget is None:
         return results
-    return results, SliceStatus.aggregate(slice_statuses)
+
+    # Codex PR #345 round 9 finding ③ (adopted, category ③,
+    # `[UNDERSPEC-CAL-D79]`, mirrors `cli._run_c3b()`'s identical fix for
+    # C3b's per-family loop): a family already fully measured before this
+    # invocation must not have `run_measure_stage()` called on it at all
+    # here — that call's own trivial `completed_all=True` unconditionally
+    # pays `_rebuild_skipped_records()`'s reconstruction cost on EVERY
+    # resumed invocation for as long as some OTHER family (or the render
+    # sub-phase above) stays pending, which can by itself exhaust the
+    # slice's `time_budget` before a genuinely pending family is ever
+    # dispatched (see `measure_stage.family_has_pending_work()`'s
+    # docstring). Dispatch is attempted only for families this O(1)
+    # pre-check finds genuinely pending; every family's full record set
+    # (including families skipped here because they were already complete)
+    # is reconstructed only in the completing pass below.
+    precheck_index = measure_stage.MeterCallIndex.build(campaign.ledger.entries)
+    pending_families = [
+        (family, candidates)
+        for family, candidates in family_order
+        if measure_stage.family_has_pending_work(
+            instances_by_family[family], candidates, precheck_index, f0_unusable_instances
+        )
+    ]
+    for family, candidates in pending_families:
+        family_records, family_slice_status = measure_stage.run_measure_stage(
+            campaign,
+            instances_by_family[family],
+            candidates,
+            sr_by_row=sr_by_row,
+            f0_by_instance=f0_by_instance,
+            f0_unusable_instances=f0_unusable_instances,
+            max_workers=max_workers,
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            missing_reason=f0_missing_reason,
+            discard_partial_groups=discard_partial_groups,
+            stage="c4",
+            time_budget=time_budget,
+            invocation_id=invocation_id,
+        )
+        # round 9b fix (this call's own records are already computed above
+        # at no extra cost — capture them rather than discarding, so a
+        # PARTIAL_SLICE return still reflects real per-family progress for
+        # every family this invocation actually dispatched. `cli._run_c4`
+        # still discards `results` wholesale on `not completed_all` (its own
+        # `overall_slice_status.completed_all` check runs first), so this
+        # costs that caller nothing — but `render_and_measure_holdout()` is
+        # a public function other direct callers (e.g.
+        # `test_c4_render_phase_valid_marker_skips_rehash_on_measure_only_
+        # slices`) rely on for real partial data on every slice, not only
+        # the completing one. Families skipped above because they had zero
+        # pending work before this invocation are deliberately NOT
+        # reconstructed here (that is the cost this fix exists to skip) and
+        # so stay absent from `results` on a PARTIAL_SLICE.
+        results[family] = family_records
+        slice_statuses.append(family_slice_status)
+
+    overall_slice_status = SliceStatus.aggregate(slice_statuses)
+    if not overall_slice_status.completed_all:
+        return results, overall_slice_status
+
+    # Completing invocation: every family's cells are now complete (already
+    # complete before this call, or just completed by the dispatch loop
+    # above) — reconstruct full records for EVERY family exactly once here.
+    # Each call below is unsliced (no `time_budget`) and therefore
+    # guaranteed cheap: every cell is already `is_complete()`, so it takes
+    # the pure O(1) skip path with no new dispatch.
+    for family, candidates in family_order:
+        results[family] = measure_stage.run_measure_stage(
+            campaign,
+            instances_by_family[family],
+            candidates,
+            sr_by_row=sr_by_row,
+            f0_by_instance=f0_by_instance,
+            f0_unusable_instances=f0_unusable_instances,
+            max_workers=max_workers,
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            missing_reason=f0_missing_reason,
+            discard_partial_groups=discard_partial_groups,
+            stage="c4",
+            invocation_id=invocation_id,
+        )
+    return results, overall_slice_status
 
 
 def resolve_candidates(candidate_ids: Sequence[str]) -> tuple[Candidate, ...]:
@@ -627,7 +698,10 @@ def _validate_meter_coverage(results: Sequence[MeterHoldoutResult]) -> None:
 
 
 def run_holdout_stage(
-    campaign: FrozenCampaign, results: Sequence[MeterHoldoutResult]
+    campaign: FrozenCampaign,
+    results: Sequence[MeterHoldoutResult],
+    *,
+    invocation_id: str | None = None,
 ) -> LedgerEntry:
     """全 meter の評価結果を単一 `holdout_executed_valid` event として記帳
     する（設計正本 §1: 手続 Gate は meter status とは別軸だが、本 event 自体
@@ -649,7 +723,13 @@ def run_holdout_stage(
         }
         for r in results
     }
-    return campaign.ledger.append({"kind": "holdout_executed_valid", "per_meter": per_meter})
+    return campaign.ledger.append(
+        {
+            "kind": "holdout_executed_valid",
+            "per_meter": per_meter,
+            "invocation_id": invocation_id,
+        }
+    )
 
 
 __all__ = [

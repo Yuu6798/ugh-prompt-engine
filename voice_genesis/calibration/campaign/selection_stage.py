@@ -111,6 +111,7 @@ def run_c3a_f0_selection(
     *,
     fail_filter_reports: Mapping[str, Mapping[str, bool]] | None = None,
     claim_scope_reports: Mapping[str, Mapping[str, object]] | None = None,
+    invocation_id: str | None = None,
 ) -> F0SelectionResult:
     """C3a: F0_CONTROL candidates の selection。`f0_selection_frozen` event を
     記帳する（unseal の 5-sha チェーンには参加しない — 上記モジュール
@@ -139,6 +140,7 @@ def run_c3a_f0_selection(
         "claim_scope_by_candidate": {
             cid: dict(report) for cid, report in sorted((claim_scope_reports or {}).items())
         },
+        "invocation_id": invocation_id,
     }
     entry = campaign.ledger.append(payload)
     return F0SelectionResult(outcome=outcome, f0_selection_frozen_entry_sha=entry.entry_sha)
@@ -161,6 +163,7 @@ def run_c3b_selection(
     baseline_audit_entry_sha: str,
     fail_filter_reports_by_family: Mapping[str, Mapping[str, Mapping[str, bool]]] | None = None,
     claim_scope_reports_by_family: Mapping[str, Mapping[str, Mapping[str, object]]] | None = None,
+    invocation_id: str | None = None,
 ) -> SelectionFreezeResult:
     """C3b: F0_CONTROL を除く各 family の selection を独立に
     `select_across_ceilings()` で行い、4 前提 event（`candidate_space`/
@@ -184,10 +187,18 @@ def run_c3b_selection(
         outcomes[family] = select_across_ceilings(criteria_by_family[family])
 
     cs_entry = campaign.ledger.append(
-        {"kind": "candidate_space", "artifact_sha": candidate_space_sha()}
+        {
+            "kind": "candidate_space",
+            "artifact_sha": candidate_space_sha(),
+            "invocation_id": invocation_id,
+        }
     )
     sr_entry = campaign.ledger.append(
-        {"kind": "selection_rule", "artifact_sha": selection_rule_sha()}
+        {
+            "kind": "selection_rule",
+            "artifact_sha": selection_rule_sha(),
+            "invocation_id": invocation_id,
+        }
     )
 
     selected_by_family = {
@@ -214,6 +225,7 @@ def run_c3b_selection(
             "kind": "selected_candidate",
             "artifact_sha": aggregate_sha,
             "candidate_id": candidate_id_join,
+            "invocation_id": invocation_id,
         }
     )
 
@@ -236,6 +248,7 @@ def run_c3b_selection(
             for family, by_candidate in sorted((claim_scope_reports_by_family or {}).items())
         },
         **aggregate_summary,
+        "invocation_id": invocation_id,
     }
     sf_entry = campaign.ledger.append(selection_frozen_payload)
 

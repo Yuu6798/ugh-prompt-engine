@@ -149,7 +149,12 @@ def run_baseline_stage(
     baseline_audit_sha = manifest_sha(audit_payload)
 
     campaign.ledger.append(
-        {"kind": "baseline_audit", "artifact_sha": baseline_audit_sha, "payload": audit_payload}
+        {
+            "kind": "baseline_audit",
+            "artifact_sha": baseline_audit_sha,
+            "payload": audit_payload,
+            "invocation_id": invocation_id,
+        }
     )
     campaign.ledger.append(
         {
@@ -157,6 +162,7 @@ def run_baseline_stage(
             "baseline_audit_sha": baseline_audit_sha,
             "candidate_count": len(candidates),
             "instance_count": len(instances),
+            "invocation_id": invocation_id,
         }
     )
     return {"baseline_audit_sha": baseline_audit_sha, "tolerances": tolerances}

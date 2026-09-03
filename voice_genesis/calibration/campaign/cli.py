@@ -752,6 +752,7 @@ def _build_f0_by_instance(
                 "stage": stage,
                 "reason": "F0_UNUSABLE",
                 "instances": [[rid, pidx] for rid, pidx in sorted(unusable)],
+                "invocation_id": invocation_id,
             }
         )
     if time_budget is None:
@@ -1108,6 +1109,7 @@ def _run_c3a(
         criteria,
         fail_filter_reports=fail_filter_reports,
         claim_scope_reports=claim_scope_reports,
+        invocation_id=invocation_id,
     )
     return {
         "result": "OK",
@@ -1229,19 +1231,24 @@ def _run_c3b(
                 "stage": "c3b",
                 "reason": "F0_SELECTION_FAILED",
                 "instance_count": len(all_instances),
+                "invocation_id": invocation_id,
             }
         )
 
     criteria_by_family: dict[str, list] = {}
     fail_filter_reports_by_family: dict[str, dict[str, dict[str, bool]]] = {}
     claim_scope_reports_by_family: dict[str, dict[str, dict[str, object]]] = {}
-    for family in FixtureFamily:
-        if family is FixtureFamily.F0_CONTROL:
-            continue
-        meter_candidates = _candidates_for_family(family)
-        if not meter_candidates:
-            continue
-        instances = instances_by_family[family.value]
+
+    def _compute_family_criteria(
+        family: FixtureFamily, meter_candidates: Sequence[Any], records: list
+    ) -> None:
+        """Codex PR #345 round 9 finding ③ (adopted, category ③,
+        `[UNDERSPEC-CAL-D79]`): criteria computation for one family, factored
+        out of the per-family dispatch loop below so it can be deferred to
+        the completing invocation instead of running unconditionally for
+        every already-complete family on every resumed invocation (see
+        `measure_stage.family_has_pending_work()`'s docstring for the full
+        stall mechanism this closure exists to avoid paying into)."""
         truth_by_instance = {
             (mr.row_id, p): selection_stage.truth_value_for_row(mr.row)
             for mr in matrix_rows
@@ -1249,40 +1256,6 @@ def _run_c3b(
             for p in range(_PROBE_REPEATS)
         }
         truth_by_instance = {k: v for k, v in truth_by_instance.items() if v is not None}
-        if time_budget is not None:
-            records, family_slice_status = measure_stage.run_measure_stage(
-                campaign,
-                instances,
-                meter_candidates,
-                sr_by_row=sr_by_row,
-                f0_by_instance=f0_by_instance,
-                f0_unusable_instances=f0_unusable_instances,
-                max_workers=workers,
-                cap_counters=cap_counters,
-                cost_caps=cost_caps,
-                missing_reason=f0_missing_reason,
-                discard_partial_groups=discard_partial_groups,
-                stage="c3b",
-                time_budget=time_budget,
-                invocation_id=invocation_id,
-            )
-            slice_statuses.append(family_slice_status)
-        else:
-            records = measure_stage.run_measure_stage(
-                campaign,
-                instances,
-                meter_candidates,
-                sr_by_row=sr_by_row,
-                f0_by_instance=f0_by_instance,
-                f0_unusable_instances=f0_unusable_instances,
-                max_workers=workers,
-                cap_counters=cap_counters,
-                cost_caps=cost_caps,
-                missing_reason=f0_missing_reason,
-                discard_partial_groups=discard_partial_groups,
-                stage="c3b",
-                invocation_id=invocation_id,
-            )
         family_rows = [mr for mr in matrix_rows if mr.row.family == family.value]
         neg_ids = negative_control_row_ids(family_rows)
         pos_instances = _positive_instances_for_selection(family_rows, assignment, family.value)
@@ -1314,13 +1287,113 @@ def _run_c3b(
         fail_filter_reports_by_family[family.value] = family_fail_filter_reports
         claim_scope_reports_by_family[family.value] = family_claim_scope_reports
 
-    # R2: if any sub-phase (F0 measurement, or any family's measure loop —
-    # all sharing the same `time_budget`) did not complete, the whole stage
-    # is a PARTIAL_SLICE — no phase transition below.
-    if slice_statuses:
-        overall_slice_status = SliceStatus.aggregate(slice_statuses)
-        if not overall_slice_status.completed_all:
-            return _partial_slice_report("c3b-selection", overall_slice_status)
+    family_order: list[FixtureFamily] = []
+    for family in FixtureFamily:
+        if family is FixtureFamily.F0_CONTROL:
+            continue
+        if not _candidates_for_family(family):
+            continue
+        family_order.append(family)
+
+    if time_budget is None:
+        for family in family_order:
+            meter_candidates = _candidates_for_family(family)
+            instances = instances_by_family[family.value]
+            records = measure_stage.run_measure_stage(
+                campaign,
+                instances,
+                meter_candidates,
+                sr_by_row=sr_by_row,
+                f0_by_instance=f0_by_instance,
+                f0_unusable_instances=f0_unusable_instances,
+                max_workers=workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+                missing_reason=f0_missing_reason,
+                discard_partial_groups=discard_partial_groups,
+                stage="c3b",
+                invocation_id=invocation_id,
+            )
+            _compute_family_criteria(family, meter_candidates, records)
+    else:
+        # Codex PR #345 round 9 finding ③ (adopted, category ③,
+        # `[UNDERSPEC-CAL-D79]`): a family already fully measured before this
+        # invocation must not have `run_measure_stage()` called on it at all
+        # here — dispatch is attempted only for families this O(1) pre-check
+        # (`measure_stage.family_has_pending_work()`) finds genuinely
+        # pending. Reconstruction (`_rebuild_skipped_records()` inside
+        # `run_measure_stage()`) and criteria computation
+        # (`_compute_family_criteria()`) for EVERY family — including ones
+        # skipped here because they were already complete — are deferred to
+        # the completing pass below, reached only once every family has no
+        # pending work left.
+        precheck_index = measure_stage.MeterCallIndex.build(campaign.ledger.entries)
+        pending_families = [
+            family
+            for family in family_order
+            if measure_stage.family_has_pending_work(
+                instances_by_family[family.value],
+                _candidates_for_family(family),
+                precheck_index,
+                f0_unusable_instances,
+            )
+        ]
+        for family in pending_families:
+            meter_candidates = _candidates_for_family(family)
+            instances = instances_by_family[family.value]
+            _records, family_slice_status = measure_stage.run_measure_stage(
+                campaign,
+                instances,
+                meter_candidates,
+                sr_by_row=sr_by_row,
+                f0_by_instance=f0_by_instance,
+                f0_unusable_instances=f0_unusable_instances,
+                max_workers=workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+                missing_reason=f0_missing_reason,
+                discard_partial_groups=discard_partial_groups,
+                stage="c3b",
+                time_budget=time_budget,
+                invocation_id=invocation_id,
+            )
+            slice_statuses.append(family_slice_status)
+
+        # R2: if any sub-phase (F0 measurement, or any pending family's
+        # measure loop — all sharing the same `time_budget`) did not
+        # complete, the whole stage is a PARTIAL_SLICE — no criteria
+        # computation, no phase transition below.
+        if slice_statuses:
+            overall_slice_status = SliceStatus.aggregate(slice_statuses)
+            if not overall_slice_status.completed_all:
+                return _partial_slice_report("c3b-selection", overall_slice_status)
+
+        # Completing invocation: every family's cells are now complete
+        # (already complete before this call, or just completed by the
+        # dispatch loop above) — reconstruct full records + compute criteria
+        # for EVERY family exactly once here. Each call below is unsliced
+        # (no `time_budget`) and therefore guaranteed cheap: every cell is
+        # already `is_complete()`, so it takes the pure O(1) skip path with
+        # no new dispatch.
+        for family in family_order:
+            meter_candidates = _candidates_for_family(family)
+            instances = instances_by_family[family.value]
+            records = measure_stage.run_measure_stage(
+                campaign,
+                instances,
+                meter_candidates,
+                sr_by_row=sr_by_row,
+                f0_by_instance=f0_by_instance,
+                f0_unusable_instances=f0_unusable_instances,
+                max_workers=workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+                missing_reason=f0_missing_reason,
+                discard_partial_groups=discard_partial_groups,
+                stage="c3b",
+                invocation_id=invocation_id,
+            )
+            _compute_family_criteria(family, meter_candidates, records)
 
     # round 16 finding #2 ordering ruling: see `_run_c3a`'s identical
     # comment — recheck the compute cap immediately before
@@ -1338,6 +1411,7 @@ def _run_c3b(
         baseline_audit_entry_sha=baseline_audit_entry_sha,
         fail_filter_reports_by_family=fail_filter_reports_by_family,
         claim_scope_reports_by_family=claim_scope_reports_by_family,
+        invocation_id=invocation_id,
     )
     return {
         "result": "OK",
@@ -1364,9 +1438,16 @@ def _candidates_for_family(family: FixtureFamily) -> tuple[Any, ...]:
     return candidates_for_meter(meter)
 
 
-def _run_unseal(campaign: FrozenCampaign, approval_dir: Path) -> dict[str, Any]:
+def _run_unseal(
+    campaign: FrozenCampaign,
+    approval_dir: Path,
+    *,
+    invocation_id: str | None = None,
+) -> dict[str, Any]:
     try:
-        result = unseal_stage.unseal_campaign(campaign, approval_dir=approval_dir)
+        result = unseal_stage.unseal_campaign(
+            campaign, approval_dir=approval_dir, invocation_id=invocation_id
+        )
     except unseal_stage.UnsealError as exc:
         return {"result": "UNSEAL_REFUSED", "detail": str(exc)}
     return {
@@ -1500,6 +1581,7 @@ def _run_c4(
                 "stage": "c4",
                 "reason": "F0_SELECTION_FAILED",
                 "instance_count": len(all_instances),
+                "invocation_id": invocation_id,
             }
         )
 
@@ -1967,7 +2049,7 @@ def _run_c4(
         if breach is not None:
             return {"result": "COST_CAP_EXCEEDED", "detail": breach.detail}
 
-    entry = holdout_stage.run_holdout_stage(campaign, results)
+    entry = holdout_stage.run_holdout_stage(campaign, results, invocation_id=invocation_id)
     return {"result": "OK", "holdout_executed_valid_entry_sha": entry.entry_sha}
 
 
@@ -2002,7 +2084,9 @@ def _run_close(
             return {"result": "COST_CAP_EXCEEDED", "detail": breach.detail}
 
     try:
-        result = close_stage.close_campaign(campaign, holdout_payload)
+        result = close_stage.close_campaign(
+            campaign, holdout_payload, invocation_id=invocation_id
+        )
     except close_stage.CampaignNotClosableError as exc:
         return {"result": "NOT_CLOSABLE", "detail": str(exc)}
     out: dict[str, Any] = {
@@ -2011,7 +2095,7 @@ def _run_close(
         "debt_discharged": result.debt_discharged,
     }
     if reveal:
-        reveal_entry = close_stage.reveal_split_secret(campaign)
+        reveal_entry = close_stage.reveal_split_secret(campaign, invocation_id=invocation_id)
         out["split_secret_revealed_entry_sha"] = reveal_entry.entry_sha
     return out
 
@@ -2394,7 +2478,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if reconstructed:
         campaign.ledger.append(
-            {"kind": "counters_reconstructed", "counters": cap_counters.as_dict()}
+            {
+                "kind": "counters_reconstructed",
+                "counters": cap_counters.as_dict(),
+                "invocation_id": invocation_id,
+            }
         )
     # Persist the reconciled counters before dispatch (finding #3).
     save_cap_counters(campaign.campaign_dir, cap_counters)
@@ -2480,7 +2568,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 invocation_id=invocation_id,
             )
         elif args.subcommand == "unseal":
-            out = _run_unseal(campaign, approval_dir)
+            out = _run_unseal(campaign, approval_dir, invocation_id=invocation_id)
         elif args.subcommand == "c4-holdout":
             out = _run_c4(
                 campaign,

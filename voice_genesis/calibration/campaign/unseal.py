@@ -92,7 +92,12 @@ class UnsealResult:
     selection_frozen_entry_sha: str
 
 
-def unseal_campaign(campaign: FrozenCampaign, *, approval_dir: Path) -> UnsealResult:
+def unseal_campaign(
+    campaign: FrozenCampaign,
+    *,
+    approval_dir: Path,
+    invocation_id: str | None = None,
+) -> UnsealResult:
     """§7 の 5-sha 相互参照検査 → Gate 3 承認検証 → `GATE3_ACCEPTED` event →
     `holdout_unseal` event の順で実行する。いずれかが失敗すれば `UnsealError`
     を送出し ledger には一切書き込まない。"""
@@ -114,6 +119,7 @@ def unseal_campaign(campaign: FrozenCampaign, *, approval_dir: Path) -> UnsealRe
             "seal_protection_level_accepted": gate3_result.record.seal_protection_level_accepted,
             "approver": gate3_result.record.approver,
             "approved_at_utc": gate3_result.record.approved_at_utc,
+            "invocation_id": invocation_id,
         }
     )
 
@@ -128,6 +134,7 @@ def unseal_campaign(campaign: FrozenCampaign, *, approval_dir: Path) -> UnsealRe
             "selection_rule_sha": payload["selection_rule_sha"],
             "selected_candidate_sha": payload["selected_candidate_sha"],
             "gate3_accepted_sha": gate3_entry.entry_sha,
+            "invocation_id": invocation_id,
         }
     )
     return UnsealResult(

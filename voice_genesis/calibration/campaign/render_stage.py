@@ -945,6 +945,7 @@ def run_render_stage(
                         "kind": RENDER_PHASE_VALID_KIND,
                         "stage": stage,
                         "instance_count": len({(u.row_id, u.probe_index) for u in units}),
+                        "invocation_id": invocation_id,
                     }
                 )
 
@@ -953,6 +954,7 @@ def run_render_stage(
             {
                 "kind": "fixture_valid",
                 "instance_count": len({(u.row_id, u.probe_index) for u in units}),
+                "invocation_id": invocation_id,
             }
         )
     if time_budget is None:
