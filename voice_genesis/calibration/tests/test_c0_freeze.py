@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -2192,7 +2193,31 @@ def test_armed_freeze_through_full_campaign_cli_never_hits_blocked_leakage(
 
     from ._campaign_fixture import write_gate3_approval
 
-    write_gate3_approval(approval_dir)
+    # `write_gate3_approval()`'s default `approved_at_utc` is tuned for the
+    # synthetic `build_tiny_campaign()` fixture's fixed freeze time, but this
+    # test drives a *real* `c0_freeze.armed_freeze()` whose `c0_freeze`
+    # ledger event carries a wall-clock `event_time_utc`. `unseal_campaign()`
+    # (D85) requires `freeze_time < gate3_time <= now`, so the approval must
+    # be timestamped strictly after the real freeze event instead. Read the
+    # freeze event's actual time and prefer wall-clock `now` (several real
+    # campaign stages have run since the freeze, so `now` is normally
+    # already later); fall back to `freeze_time + 1s` only if clock
+    # resolution ever makes `now` appear no later than the freeze event.
+    freeze_event_time_str = frozen_entries[0].payload.get("event_time_utc")
+    assert isinstance(freeze_event_time_str, str)
+    freeze_event_time = datetime.fromisoformat(
+        freeze_event_time_str.removesuffix("Z") + "+00:00"
+        if freeze_event_time_str.endswith("Z")
+        else freeze_event_time_str
+    )
+    now_utc = datetime.now(timezone.utc)
+    gate3_approved_at = now_utc if now_utc > freeze_event_time else freeze_event_time + timedelta(
+        seconds=1
+    )
+    write_gate3_approval(
+        approval_dir,
+        approved_at_utc=gate3_approved_at.isoformat().replace("+00:00", "Z"),
+    )
     run_stage("unseal")
 
     # This is the actual regression assertion: before round 14 finding #1,
