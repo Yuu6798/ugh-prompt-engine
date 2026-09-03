@@ -528,14 +528,15 @@ def cap_counters_from_ledger(
       serialized size — genuinely additive per record, so it is summed
       without dedup.
     - `meter_call_group_discarded` events, `discarded_within_cpu_seconds`
-      field (round 6 finding #3, adopted, category ③, `[UNDERSPEC-CAL-D79]`):
-      the round-16 `within_cpu_seconds` subtraction above (on `meter_call`)
-      assumes the within-process CPU it excludes is always recovered via a
-      `stage_summary`/`slice_summary` event instead — but that assumption
-      is false for a *discarded* partial group whose writing process was
-      hard-killed (SIGKILL/OOM) mid-append: such a process never reaches
-      `cli.py` `main()`'s `finally` block, so it never emits *any*
-      `stage_summary`/`slice_summary` for that dispatch, and the group's
+      field (round 6 finding #3, adopted, category ③, `[UNDERSPEC-CAL-D79]`;
+      **pairing rule revised by round 7 finding #1**, same category,
+      `[UNDERSPEC-CAL-D79]`): the round-16 `within_cpu_seconds` subtraction
+      above (on `meter_call`) assumes the within-process CPU it excludes is
+      always recovered via a `stage_summary`/`slice_summary` event instead
+      — but that assumption is false for a *discarded* partial group whose
+      writing invocation never reached `cli.py` `main()`'s `finally` block
+      at all (a hard kill — SIGKILL/OOM/power loss — is the only way that
+      happens; see the corrected invariant below), and the group's
       within-process CPU would otherwise be permanently unrecoverable
       (silently understating `compute_used` — a false-success path past
       the frozen compute cap). `measure_stage.run_measurement_for_instance`
@@ -543,27 +544,52 @@ def cap_counters_from_ledger(
       (`discarded_within_cpu_seconds` — the shared within-process CPU
       aggregate of the discarded group's surviving records; see
       `measure_stage._partial_group_within_cpu_seconds` docstring for why
-      this is one shared value, not a per-record sum), and it is summed
-      here 1:1 per discard event, unconditionally.
+      this is one shared value, not a per-record sum).
 
-      **Exactly-once invariant**: this addition is the *only* place
-      `within_cpu_seconds` is ever charged for records that end up
-      discarded — the `meter_call` bullet's subtraction above still always
-      excludes `within_cpu_seconds` from every record's `compute`
-      contribution regardless of eventual discard, so there is no
-      complementary subtraction to double against. This is provably safe
-      against the *completing* case (finally ran, `stage_summary`/
-      `slice_summary` already covers this CPU): a group can only remain
-      partial in the ledger for `--discard-partial-groups` to later find at
-      all if the writing process's own `finally` never ran — any ordinary
-      (non-hard-kill) Python exception mid-append still propagates through
-      `cli.py` `main()`'s `try`/`finally` and appends that dispatch's own
-      `stage_summary`/`slice_summary` before the process exits, which would
-      already fully complete or otherwise resolve the group (not leave it
-      resumably partial for a *later*, distinct invocation to discard).
-      Only a kill that Python itself cannot intercept leaves the ledger in
-      the specific state this code path handles, so charging on the
-      discard event is exactly-once by construction, not by coincidence.
+      **Exactly-once invariant, revised (round 7 finding #1)**: round 6's
+      original invariant assumed "a partial group survives only after a
+      hard kill, so no summary exists for its epoch" — this is wrong. A
+      *catchable* interruption (`KeyboardInterrupt`, or any exception
+      `cli.py` `main()`'s own `try`/`finally` does not swallow) after some
+      of a work unit's 6 `meter_call` records have already been appended
+      still unwinds through that `finally` block normally, which still
+      appends exactly one `stage_summary`/`slice_summary` for that SAME
+      invocation before the process exits — charging that invocation's
+      full parent CPU delta, which (being `RUSAGE_SELF` on the *same*
+      process) already includes the within-process CPU the surviving
+      partial records spent. Only a kill Python itself cannot intercept
+      (SIGKILL/OOM/power loss) prevents `finally` from ever running for
+      that invocation, leaving its within-process CPU with no covering
+      summary anywhere in the ledger's future. The two cases are
+      indistinguishable from `discarded_within_cpu_seconds`/
+      `present_keys`/`discarded_repeat_keys` alone (both leave an
+      identical-shaped partial group for a later `--discard-partial-groups`
+      invocation to find) — telling them apart requires knowing whether
+      the SPECIFIC invocation that wrote the surviving records is the one
+      that (later, but still within its own run) appended a summary, which
+      this function derives purely from ledger order: `dispatch_epoch`
+      counts `stage_summary`/`slice_summary` events seen so far in the
+      scan — each closes exactly one invocation's epoch (`cli.py main()`
+      appends at most one such event per dispatch, on every exit path,
+      including `PARTIAL_SLICE` and every caught interruption) — and
+      `last_meter_epoch[key]` records the epoch a key's `meter_call`
+      records were written in. At a `meter_call_group_discarded` event for
+      `key`: if `last_meter_epoch[key] == dispatch_epoch` (no fence has
+      closed that epoch since — the writing invocation never got to append
+      its own summary, i.e. was hard-killed), charge
+      `discarded_within_cpu_seconds`; if it is strictly less (a summary
+      already closed that epoch — a caught interruption ran `finally`
+      normally, or the group was written and then genuinely completed by
+      the same invocation before some later, unrelated interruption), do
+      not — that CPU is already inside the `stage_summary`/`slice_summary`
+      branch's `parent_cpu_seconds` charge above. `last_meter_epoch.pop()`
+      also performs the round 6 dedup-epoch reset (mirrors
+      `seen_meter_keys.discard(key)` on the same line) so a subsequent
+      remeasurement of the same key is tracked as its own new epoch entry.
+      A key with no `last_meter_epoch` entry at all (e.g. a ledger fragment
+      that omits its `meter_call` history) charges by default — the same
+      overcount-safe, fail-closed direction this module already takes for
+      every other legacy/partial-data fallback.
     - `stage_summary` events (round 15 finding #5, `[UNDERSPEC-CAL-D31]`):
       the CLI dispatch path's own parent-side CPU for the whole stage,
       not captured by either of the above (matrix build, ledger/JSON I/O,
@@ -639,6 +665,15 @@ def cap_counters_from_ledger(
     meter_units = 0
     worker_batch_budget_units = 0
     seen_meter_keys: set[tuple[object, object, object]] = set()
+    # round 7 finding #1 (`[UNDERSPEC-CAL-D79]`): `dispatch_epoch` counts
+    # `stage_summary`/`slice_summary` events seen so far in this scan — each
+    # is the closing fence of exactly one `cli.py main()` invocation (see
+    # the epoch-pairing paragraph below). `last_meter_epoch` records, per
+    # `meter_call` key, the epoch its first-of-a-work-unit record was
+    # written in, so a later `meter_call_group_discarded` for that key can
+    # tell whether a fence has closed that epoch since.
+    dispatch_epoch = 0
+    last_meter_epoch: dict[tuple[object, object, object], int] = {}
     for entry in ledger_entries:
         payload = entry.payload
         if not isinstance(payload, Mapping):
@@ -675,13 +710,29 @@ def cap_counters_from_ledger(
             # the ledger and are still charged".
             key = (payload.get("row_id"), payload.get("probe_index"), payload.get("candidate_id"))
             seen_meter_keys.discard(key)
-            # round 6 finding #3 (adopted, category 3, `[UNDERSPEC-CAL-D79]`):
-            # `discarded_within_cpu_seconds` — see the dedicated docstring
-            # paragraph below for the exactly-once invariant this recovers.
-            compute += _finite_nonneg_float(payload.get("discarded_within_cpu_seconds"))
+            # round 7 finding #1 (`[UNDERSPEC-CAL-D79]`, revises round 6
+            # finding #3): `discarded_within_cpu_seconds` is charged iff no
+            # `stage_summary`/`slice_summary` fence has closed the epoch
+            # this key's surviving records were written in — see the
+            # dedicated docstring paragraph below for why that (not "a hard
+            # kill left no summary anywhere in the ledger") is the correct
+            # exactly-once test.
+            record_epoch = last_meter_epoch.pop(key, None)
+            if record_epoch is None or record_epoch == dispatch_epoch:
+                compute += _finite_nonneg_float(payload.get("discarded_within_cpu_seconds"))
+            # else: `record_epoch < dispatch_epoch` — a `stage_summary`/
+            # `slice_summary` event already closed that epoch and its
+            # `parent_cpu_seconds` already covers this within-process CPU
+            # (charged below); charging it again here would double count.
         elif kind == "meter_call":
             storage += _finite_nonneg_int(payload.get("storage_bytes"))
             key = (payload.get("row_id"), payload.get("probe_index"), payload.get("candidate_id"))
+            # round 7 finding #1: record which (still-open, by construction
+            # — see below) epoch this key's records belong to, regardless of
+            # dedup state, so a discard later reset to this same key can
+            # look it up even if this particular record is itself a 2nd..6th
+            # (deduped) one.
+            last_meter_epoch[key] = dispatch_epoch
             if key in seen_meter_keys:
                 continue
             seen_meter_keys.add(key)
@@ -696,6 +747,10 @@ def cap_counters_from_ledger(
             meter_units += 1
         elif kind == "stage_summary":
             compute += _finite_nonneg_float(payload.get("parent_cpu_seconds"))
+            # round 7 finding #1: this event is the closing fence of the
+            # invocation that appended it — every `meter_call`/discard from
+            # here on belongs to a new, not-yet-closed epoch.
+            dispatch_epoch += 1
         elif kind == "slice_summary":
             # Codex PR #345 finding #2 (adopted, category ③,
             # `[UNDERSPEC-CAL-D79]`): a `PARTIAL_SLICE` dispatch (`cli.py`
@@ -709,6 +764,13 @@ def cap_counters_from_ledger(
             # dispatch of a stage reconstructs the same total the persisted
             # cache accumulated, with no overlap between them.
             compute += _finite_nonneg_float(payload.get("parent_cpu_seconds"))
+            # round 7 finding #1: `slice_summary` closes an epoch the same
+            # way `stage_summary` does (see above) — both are the one
+            # summary event `cli.py main()`'s `finally` block appends per
+            # dispatch, on every exit path (including a caught
+            # interruption), just tagged by whether a phase transition
+            # happened.
+            dispatch_epoch += 1
         elif kind == "worker_failed":
             # round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): compute — no dedup,
             # every event is its own charged attempt.

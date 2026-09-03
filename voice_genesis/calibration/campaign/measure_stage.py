@@ -720,20 +720,37 @@ class MeterCallIndex:
         touches only the small in-memory `dict[(repeat_kind, repeat_index),
         list[payload]]` this key already maps to).
 
-        A duplicate-key group (the `_resolve_meter_group` `"duplicate"`
-        fail-closed case) returns `False` here rather than raising — this
-        method is a cheap pre-filter for resumed-slice loops deciding
-        whether to skip re-dispatching a cell, not a validator. A caller
-        that actually dispatches a `False` cell goes through
-        `completed_records()`/`run_measurement_for_instance()` as before,
-        which still raises `StaleMeasurementError` on that same duplicate
-        state — no fail-closed coverage is lost, only deferred to the point
-        real work would otherwise have been skipped or repeated."""
+        Codex PR #345 round 7 finding #2 (adopted, category ③,
+        `[UNDERSPEC-CAL-D79]`): a duplicate-key group now raises
+        `StaleMeasurementError(kind="duplicate")` immediately, the same as
+        `completed_records()`/`_resolve_meter_group()` — it previously
+        returned `False` here instead (treating the cell as merely
+        "pending"), which let a resumed-slice caller's time-budget check
+        (`run_measure_stage()`'s per-instance boundary check, evaluated
+        strictly before any candidate is dispatched) exit with a clean
+        `PARTIAL_SLICE` for an already-tiny/exhausted budget *before*
+        `completed_records()`/`run_measurement_for_instance()` was ever
+        reached for that cell — silently hiding a genuine single-writer
+        contract violation behind an indefinitely repeatable "still
+        pending" report instead of failing closed. Raising here instead
+        means every caller — `run_measure_stage()`'s own `is_complete()`
+        checks included — now surfaces the duplicate regardless of budget
+        size; each such call site is responsible for its own `stop_event`
+        ledger entry before letting the exception propagate, mirroring
+        `run_measurement_for_instance()`'s existing duplicate handling."""
         by_key = self._by_key.get((row_id, probe_index, candidate_id))
         if not by_key:
             return False
-        if any(len(entries) > 1 for entries in by_key.values()):
-            return False
+        duplicate_keys = sorted(k for k, entries in by_key.items() if len(entries) > 1)
+        if duplicate_keys:
+            raise StaleMeasurementError(
+                row_id,
+                probe_index,
+                candidate_id,
+                f"duplicate ledger meter_call entries for repeat keys {duplicate_keys!r} "
+                "(single-writer contract violated, or conflicting re-measurement)",
+                kind="duplicate",
+            )
         return frozenset(by_key.keys()) == _EXPECTED_REPEAT_KEYS
 
 
@@ -1316,7 +1333,15 @@ def _instance_has_pending_candidate(
     O(1) per candidate — index lookups only, no PCM read, no record
     reconstruction — so callers may cheaply evaluate this for every
     instance in a stage's full instance set, including ones a
-    budget-bounded dispatch loop never reached this invocation."""
+    budget-bounded dispatch loop never reached this invocation.
+
+    round 7 finding #2 (`[UNDERSPEC-CAL-D79]`): `MeterCallIndex.
+    is_complete()` now raises `StaleMeasurementError(kind="duplicate")`
+    instead of returning `False` for a duplicate-key cell — this function
+    does not catch it, so it propagates unchanged to whichever
+    `run_measure_stage()` call site invoked this helper (both wrap the
+    call in `try`/`except StaleMeasurementError` to log a `stop_event`
+    before re-raising; see `_append_stale_measurement_stop_event()`)."""
     for candidate in candidates:
         if (row_id, probe_index) in f0_unusable_instances and (
             candidate.algorithm_family in F0_DEPENDENT_ALGORITHM_FAMILIES
@@ -1325,6 +1350,34 @@ def _instance_has_pending_candidate(
         if not meter_call_index.is_complete(row_id, probe_index, candidate.candidate_id):
             return True
     return False
+
+
+def _append_stale_measurement_stop_event(
+    campaign: FrozenCampaign, exc: StaleMeasurementError
+) -> None:
+    """Codex PR #345 round 7 finding #2 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): shared `stop_event` shape for a
+    `StaleMeasurementError` raised by `MeterCallIndex.is_complete()` (see
+    its docstring) at one of `run_measure_stage()`'s own `is_complete()`
+    call sites — same payload shape `run_measurement_for_instance()`'s
+    pre-existing "duplicate"/"partial" branches already use, so a
+    duplicate ledger state is always logged exactly once before the
+    exception propagates out of `run_measure_stage()`. Deliberately not
+    reused inside `run_measurement_for_instance()` itself: that function
+    logs its own `stop_event` from `completed_records()`'s raise
+    independently, and routing both through one shared call site risks
+    double-logging the same failure key if a future change ever let both
+    raise for the same cell within one call."""
+    campaign.ledger.append(
+        {
+            "kind": "stop_event",
+            "reason": "STALE_MEASUREMENT_STATE",
+            "row_id": exc.row_id,
+            "probe_index": exc.probe_index,
+            "candidate_id": exc.candidate_id,
+            "detail": str(exc),
+        }
+    )
 
 
 def run_measure_stage(
@@ -1486,9 +1539,19 @@ def run_measure_stage(
         # `is_complete()`/F0-unusable skip path (no PCM read, no dispatch),
         # budget-independent, same as `render_stage`'s already-completed
         # unit skip.
-        has_pending = _instance_has_pending_candidate(
-            row_id, probe_index, candidates, meter_call_index, f0_unusable_instances
-        )
+        # round 7 finding #2 (`[UNDERSPEC-CAL-D79]`): `is_complete()` (via
+        # this helper) now raises `StaleMeasurementError(kind="duplicate")`
+        # for a duplicate-key cell instead of returning `False` — surfaced
+        # HERE, before the budget check below, so a duplicate is never
+        # masked as merely "pending" and hidden behind a repeatable clean
+        # `PARTIAL_SLICE` exit regardless of how small `time_budget` is.
+        try:
+            has_pending = _instance_has_pending_candidate(
+                row_id, probe_index, candidates, meter_call_index, f0_unusable_instances
+            )
+        except StaleMeasurementError as exc:
+            _append_stale_measurement_stop_event(campaign, exc)
+            raise
         # R2 instance boundary: checked before starting a NEW (row_id,
         # probe_index) group that actually has pending work — an instance
         # already in flight (its own `for candidate` loop below) always
@@ -1505,7 +1568,15 @@ def run_measure_stage(
                     newly_missing.append(cell)
                 continue
             candidate_id = candidate.candidate_id
-            if meter_call_index.is_complete(row_id, probe_index, candidate_id):
+            # round 7 finding #2: same duplicate-surfacing rule as the
+            # `has_pending` check above, at this cell's own `is_complete()`
+            # call.
+            try:
+                cell_is_complete = meter_call_index.is_complete(row_id, probe_index, candidate_id)
+            except StaleMeasurementError as exc:
+                _append_stale_measurement_stop_event(campaign, exc)
+                raise
+            if cell_is_complete:
                 # Finding D: O(1) skip — no PCM read, no `MeasurementRecord`
                 # reconstruction here (contrast the pre-fix behavior, which
                 # called `run_measurement_for_instance()` unconditionally
@@ -1581,13 +1652,23 @@ def run_measure_stage(
     # checks via `is_complete()`, never a PCM read or record reconstruction
     # — so it stays cheap even though it (deliberately) covers every
     # instance in `sorted_instances`, including any this call never reached.
-    instances_remaining = sum(
-        1
-        for row_id, probe_index in sorted_instances
-        if _instance_has_pending_candidate(
-            row_id, probe_index, candidates, meter_call_index, f0_unusable_instances
-        )
-    )
+    # round 7 finding #2: same duplicate-surfacing rule as the two
+    # `is_complete()`-consulting call sites above — an explicit loop (not a
+    # generator expression) so the `StaleMeasurementError` a duplicate cell
+    # anywhere in `sorted_instances` now raises can be logged before it
+    # propagates, even for an instance this call's own dispatch loop above
+    # never reached.
+    instances_remaining = 0
+    for row_id, probe_index in sorted_instances:
+        try:
+            pending = _instance_has_pending_candidate(
+                row_id, probe_index, candidates, meter_call_index, f0_unusable_instances
+            )
+        except StaleMeasurementError as exc:
+            _append_stale_measurement_stop_event(campaign, exc)
+            raise
+        if pending:
+            instances_remaining += 1
     slice_status = SliceStatus(
         time_budget_seconds=time_budget.seconds,
         elapsed_seconds=time_budget.elapsed(),

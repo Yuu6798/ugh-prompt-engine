@@ -1267,6 +1267,60 @@ def test_discard_partial_groups_true_duplicate_still_raises(tmp_path: Path) -> N
     )
 
 
+def test_run_measure_stage_duplicate_key_fails_closed_regardless_of_budget(
+    tmp_path: Path,
+) -> None:
+    """Codex PR #345 round 7 finding #2 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): before this fix, a duplicate `meter_call` repeat
+    key made `MeterCallIndex.is_complete()` return `False` (treated as
+    merely "pending"), so a tiny/already-expired `time_budget` tripped
+    `run_measure_stage()`'s per-instance boundary check and returned a clean
+    `PARTIAL_SLICE` *before* `completed_records()`/`run_measurement_for_
+    instance()` was ever reached for that cell — hiding the duplicate
+    indefinitely across repeated short-budget resumes. `is_complete()` now
+    raises `StaleMeasurementError(kind="duplicate")` itself, surfaced at
+    `run_measure_stage()`'s own `is_complete()` call sites regardless of
+    `time_budget` — the cell must fail closed with a `stop_event`, never
+    return a `PARTIAL_SLICE`."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", i, 100.0))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "fresh", i, 200.0))
+    # duplicate write to the same (repeat_kind, repeat_index) key.
+    campaign.ledger.append(_fake_meter_call("F0-B0-CURRENT", "r1", 0, "within", 0, 999.0))
+    candidate = candidate_by_id("F0-B0-CURRENT")
+
+    budget = TimeBudget.start_now(0.0001)
+    time.sleep(0.05)  # guarantee expiry regardless of machine speed/scheduling
+
+    with pytest.raises(measure_stage.StaleMeasurementError) as excinfo:
+        measure_stage.run_measure_stage(
+            campaign,
+            [("r1", 0)],
+            [candidate],
+            sr_by_row={"r1": 16000},
+            time_budget=budget,
+        )
+    assert excinfo.value.kind == "duplicate"
+    stop_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "stop_event"
+    ]
+    assert len(stop_events) == 1
+    assert stop_events[0]["reason"] == "STALE_MEASUREMENT_STATE"
+    assert stop_events[0]["row_id"] == "r1"
+    assert stop_events[0]["probe_index"] == 0
+    assert stop_events[0]["candidate_id"] == "F0-B0-CURRENT"
+    # never a clean PARTIAL_SLICE: no `slice_summary`-shaped event, and no
+    # `meter_call_group_discarded` (this is `kind == "duplicate"`, which
+    # `--discard-partial-groups` never covers).
+    assert not any(
+        e.payload.get("kind") == measure_stage.METER_CALL_GROUP_DISCARDED_KIND
+        for e in campaign.ledger.entries
+    )
+
+
 def test_partial_group_within_cpu_seconds_takes_shared_value(tmp_path: Path) -> None:
     """Codex PR #345 round 6 finding #3 (adopted, category ③,
     `[UNDERSPEC-CAL-D79]`): every record of one work unit carries the SAME

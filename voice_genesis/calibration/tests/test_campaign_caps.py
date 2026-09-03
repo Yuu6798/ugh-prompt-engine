@@ -355,6 +355,139 @@ def test_cap_counters_from_ledger_discard_charge_does_not_double_count_with_stag
     assert derived.compute_used == pytest.approx(5.0 + 1.5 + 1.5)
 
 
+# ---------------------------------------------------------------------------
+# Codex PR #345 round 7 finding #1 (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
+# the round-6 "exactly-once" invariant above assumed "a partial group
+# survives only after a hard kill, so no summary exists for its epoch" — but
+# a CATCHABLE interruption (KeyboardInterrupt, or any exception `cli.py`
+# `main()`'s own `try`/`finally` does not swallow) after some `meter_call`
+# records were appended still runs `main()`'s `finally`, which appends a
+# `stage_summary`/`slice_summary` for that SAME invocation, charging its full
+# parent CPU (RUSAGE_SELF on the same process — includes the within-process
+# CPU those surviving records already spent). Charging
+# `discarded_within_cpu_seconds` unconditionally on every discard (the
+# pre-round-7 behaviour) double-counts that CPU whenever this happens. The
+# fix pairs each discard against the specific epoch its group's records were
+# written in (`dispatch_epoch`/`last_meter_epoch` in `cap_counters_from_
+# ledger()`) and charges only when that epoch has no closing summary yet.
+# ---------------------------------------------------------------------------
+
+
+def test_cap_counters_from_ledger_catchable_interruption_epoch_discard_charges_zero(
+    tmp_path: Path,
+) -> None:
+    """Round 7 scenario (a): the SAME invocation that wrote the partial
+    group's surviving records also appends its own `stage_summary` before
+    exiting (a caught `KeyboardInterrupt`, not a hard kill) — that summary's
+    `parent_cpu_seconds` already covers the within-process CPU. A later
+    `--discard-partial-groups` invocation's discard event must add 0, not
+    `discarded_within_cpu_seconds` again."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    for i in range(2):
+        payload = _fake_meter_call_event(
+            "r1", 0, "F0-B0-CURRENT", "within", i, cpu_seconds=6.0, storage_bytes=100
+        )
+        payload["within_cpu_seconds"] = 4.0
+        ledger.append(payload)
+    # the SAME (interrupted-but-caught) invocation's own closing summary —
+    # its full parent CPU delta already includes the 4.0 within-process CPU
+    # spent on the two records above.
+    ledger.append({"kind": "stage_summary", "stage": "c2", "parent_cpu_seconds": 10.0})
+    # a LATER, separate `--discard-partial-groups` invocation discards it.
+    ledger.append(
+        _fake_meter_call_group_discarded_event(
+            "r1", 0, "F0-B0-CURRENT", discarded_within_cpu_seconds=4.0
+        )
+    )
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # fresh CPU from the first surviving record (6.0 - 4.0 = 2.0) +
+    # stage_summary's full parent CPU (10.0) + discard's OWN contribution
+    # (0.0, NOT 4.0 again — already covered by stage_summary above).
+    assert derived.compute_used == pytest.approx(2.0 + 10.0 + 0.0)
+
+
+def test_cap_counters_from_ledger_hard_kill_epoch_discard_charges_once(
+    tmp_path: Path,
+) -> None:
+    """Round 7 scenario (b): no `stage_summary`/`slice_summary` anywhere for
+    the group's own epoch (the writing invocation was truly hard-killed, no
+    `finally` ever ran) — the discard event is the ONLY place that CPU is
+    ever recovered, charged exactly once."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    for i in range(2):
+        payload = _fake_meter_call_event(
+            "r1", 0, "F0-B0-CURRENT", "within", i, cpu_seconds=6.0, storage_bytes=100
+        )
+        payload["within_cpu_seconds"] = 4.0
+        ledger.append(payload)
+    # NOTE: no `stage_summary`/`slice_summary` at all — hard-killed, no
+    # `finally` ever ran for this epoch.
+    ledger.append(
+        _fake_meter_call_group_discarded_event(
+            "r1", 0, "F0-B0-CURRENT", discarded_within_cpu_seconds=4.0
+        )
+    )
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    assert derived.compute_used == pytest.approx(2.0 + 4.0)
+
+
+def test_cap_counters_from_ledger_mixed_caught_and_hard_kill_epochs(tmp_path: Path) -> None:
+    """Round 7 scenario (c): one ledger with both an already-covered
+    (caught-interruption) discard epoch and a still-open (hard-kill) discard
+    epoch — each key's discard is paired against its OWN epoch independently,
+    the covered one charging 0 and the open one charging its recovered CPU,
+    regardless of scan order or of an intervening, unrelated `stage_summary`
+    from a third dispatch."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    # key A: caught interruption, own stage_summary closes its epoch.
+    for i in range(2):
+        payload = _fake_meter_call_event(
+            "rA", 0, "F0-B0-CURRENT", "within", i, cpu_seconds=6.0, storage_bytes=100
+        )
+        payload["within_cpu_seconds"] = 4.0
+        ledger.append(payload)
+    ledger.append({"kind": "stage_summary", "stage": "c2", "parent_cpu_seconds": 10.0})
+    ledger.append(
+        _fake_meter_call_group_discarded_event(
+            "rA", 0, "F0-B0-CURRENT", discarded_within_cpu_seconds=4.0
+        )
+    )
+    # an unrelated, later dispatch's own completed work — must not affect
+    # key B's still-open epoch below (it is a DIFFERENT epoch, opened after
+    # key A's stage_summary already fired).
+    for i in range(3):
+        ledger.append(
+            _fake_meter_call_event(
+                "rZ", 0, "F0-B0-CURRENT", "within", i, cpu_seconds=1.0, storage_bytes=10
+            )
+        )
+    for i in range(3):
+        ledger.append(
+            _fake_meter_call_event(
+                "rZ", 0, "F0-B0-CURRENT", "fresh", i, cpu_seconds=1.0, storage_bytes=10
+            )
+        )
+    # key B: hard-killed, no summary anywhere for its epoch before discard.
+    for i in range(2):
+        payload = _fake_meter_call_event(
+            "rB", 0, "F0-B1-CURRENT", "within", i, cpu_seconds=3.0, storage_bytes=50
+        )
+        payload["within_cpu_seconds"] = 1.5
+        ledger.append(payload)
+    ledger.append(
+        _fake_meter_call_group_discarded_event(
+            "rB", 0, "F0-B1-CURRENT", discarded_within_cpu_seconds=1.5
+        )
+    )
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # key A: 2.0 (fresh remainder) + 10.0 (stage_summary) + 0.0 (discard,
+    # already covered).
+    # key Z: fully-completed work unit, 1.0 (dedup'd per-work-unit compute).
+    # key B: 1.5 (fresh remainder) + 1.5 (discard, its epoch was never
+    # closed).
+    assert derived.compute_used == pytest.approx((2.0 + 10.0 + 0.0) + 1.0 + (1.5 + 1.5))
+
+
 def test_cap_counters_from_ledger_includes_stage_summary_parent_cpu(tmp_path: Path) -> None:
     ledger = Ledger(tmp_path / "ledger.jsonl")
     ledger.append({"kind": "stage_summary", "stage": "c1-fixtures", "parent_cpu_seconds": 0.75})
