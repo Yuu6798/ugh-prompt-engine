@@ -26,6 +26,7 @@ from voice_genesis.calibration.campaign.caps import (
     save_cap_counters,
 )
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
+from voice_genesis.calibration.campaign.time_budget import TimeBudget
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import candidates_for_meter
 from voice_genesis.calibration.fixtures.matrix import build_matrix, declared_sweeps_by_family
@@ -2263,6 +2264,69 @@ def test_f0_reuse_accepts_exactly_complete_non_duplicated_coverage(tmp_path: Pat
     assert result == {("r1", 0): pytest.approx(100.0)}
     assert unusable == frozenset()
     # reused, not re-measured: no new ledger entries.
+    assert len(campaign.ledger.entries) == entries_before
+
+
+def test_build_f0_by_instance_all_recorded_ignores_expired_budget(tmp_path: Path) -> None:
+    """Codex PR #345 round 5 finding S1 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`, terminal sweep of the slice/resume family — same
+    rule as round 3/4's `render_stage.run_render_stage()`/`measure_stage.
+    run_measure_stage()` fixes applied to the F0 loop): pre-fix,
+    `_build_f0_by_instance()` checked `time_budget.expired()` BEFORE
+    consulting `meter_call_index` at all. If every selected-F0 instance is
+    already fully recorded in the ledger (`meter_call_index.is_complete()`
+    true for all of them) but the caller passes an already-expired budget
+    (e.g. because building `meter_call_index` itself consumed it), the loop
+    tripped the budget check on the very first instance and returned
+    `completed_all=False` forever — no dispatch was ever pending, yet the
+    aggregate stayed `PARTIAL_SLICE` on every resume, unable to reach the
+    C3b/C4 measurement it gates.
+
+    Fix: the budget boundary is now checked only for a genuinely pending
+    instance (`meter_call_index.is_complete()` consulted first, mirroring
+    `render_stage`'s `completed_units.get(...)` / `measure_stage`'s
+    `_instance_has_pending_candidate()`). With both instances already
+    complete, this call must reach `completed_all=True` even with an
+    already-expired budget, and must report 0 new progress (same round 5
+    finding S2 counting rule, applied here too)."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    candidate_id = "F0-B0-CURRENT"
+    instances = [("r1", 0), ("r2", 0)]
+    for row_id, probe_index in instances:
+        for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+            campaign.ledger.append(_fake_meter_call(candidate_id, row_id, probe_index, "within", i, 100.0))
+        for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+            campaign.ledger.append(_fake_meter_call(candidate_id, row_id, probe_index, "fresh", i, 100.0))
+    meter_call_index = measure_stage.MeterCallIndex.build(campaign.ledger.entries)
+    entries_before = len(campaign.ledger.entries)
+
+    result, unusable, slice_status = cli._build_f0_by_instance(
+        campaign,
+        instances,
+        candidate_id,
+        {"r1": 48000, "r2": 48000},
+        max_workers=1,
+        cap_counters=None,
+        cost_caps=None,
+        stage="c3b",
+        meter_call_index=meter_call_index,
+        # already-expired-before-the-first-check budget, same contract as
+        # `render_stage`/`measure_stage`'s equivalent regression tests.
+        time_budget=TimeBudget.start_now(0.0001),
+    )
+
+    assert slice_status.completed_all is True
+    assert result == {
+        ("r1", 0): pytest.approx(100.0),
+        ("r2", 0): pytest.approx(100.0),
+    }
+    assert unusable == frozenset()
+    # round 5 finding S2 rule applied to this loop too: no NEW dispatch
+    # happened (every instance was already recorded), so 0 -- not 2.
+    assert slice_status.instances_completed_this_run == 0
+    assert slice_status.instances_remaining == 0
+    # purely a reuse/reconstruction pass: no new ledger entries.
     assert len(campaign.ledger.entries) == entries_before
 
 

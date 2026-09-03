@@ -16,11 +16,13 @@ from pathlib import Path
 
 import pytest
 
-from voice_genesis.calibration.campaign import render_stage
+from voice_genesis.calibration.campaign import holdout_stage, render_stage
 from voice_genesis.calibration.campaign.caps import cap_counters_from_ledger
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.campaign.time_budget import TimeBudget
+from voice_genesis.calibration.candidates.registry import candidates_for_meter
 from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
+from voice_genesis.calibration.vocab import MeterId
 
 from ._campaign_fixture import build_tiny_campaign, small_matrix_subset
 
@@ -457,7 +459,15 @@ def test_c1_render_resume_stale_fails_closed_on_corrupted_file(tmp_path: Path) -
     assert len(exc_info.value.failing_units) == 1
     failing_row_id, failing_probe_index, failing_detail = exc_info.value.failing_units[0]
     assert (failing_row_id, failing_probe_index) == (target.row_id, target.probe_index)
-    assert "current file sha256=" in failing_detail
+    # round 5 finding S4 (adopted, `[UNDERSPEC-CAL-D79]`): the detail wording
+    # now comes from the shared `render_stage._verify_pcm_sidecar()` helper
+    # (also used by `measure_stage._verify_and_load_rendered_pcm()`).
+    # Corrupting only the `.pcm` file (not its `.sha256` sidecar, which
+    # still holds the ORIGINAL correct sha256) now fails the sidecar check
+    # first — a strictly earlier, stricter checkpoint than the old
+    # render_stage-only "current file sha256=" wording this test used to
+    # assert, which compared straight against the ledger-pinned sha.
+    assert "does not match sidecar" in failing_detail
 
     # transition blocked: still exactly the 1 `fixture_valid` from the first
     # (clean) run — no second one from the failed resume — and a
@@ -609,6 +619,105 @@ def test_c1_render_resume_stale_lists_all_failing_units_then_recovers(tmp_path: 
     deleted_path.write_bytes(bytes.fromhex(_render_pcm_hex(campaign, subset, deleted_target)))
     corrupted_path.write_bytes(bytes.fromhex(_render_pcm_hex(campaign, subset, corrupted_target)))
 
+    recovered = render_stage.run_render_stage(campaign, subset, stage="c1")
+    assert all(o.status == "skipped_resume" for o in recovered)
+    fixture_valid_events_after = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "fixture_valid"
+    ]
+    assert len(fixture_valid_events_after) == 2
+
+
+@pytest.mark.slow
+def test_c1_render_resume_stale_fails_closed_on_missing_sidecar(tmp_path: Path) -> None:
+    """Codex PR #345 round 5 finding S4 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): the pre-fix `_validate_skipped_resume_outcomes()`
+    only recomputed the PCM's own sha256 and compared it to the recorded
+    ledger sha — it never read the `.sha256` sidecar at all, so an intact
+    PCM whose sidecar was deleted/corrupted passed resume validation
+    cleanly and only surfaced later as a completely different error
+    (`StaleRenderError` at measure time, well past `fixture_valid`/
+    `NOOP_ALREADY_COMPLETE`, with no resumable path back to render). With
+    the shared `_verify_pcm_sidecar()` check in place, a missing sidecar on
+    an otherwise byte-identical PCM now fails the completing invocation's
+    resume validation directly."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    outcomes = render_stage.run_render_stage(campaign, subset, stage="c1")
+    target = outcomes[0]
+    pcm_path = campaign.renders_dir / target.row_id / f"{target.probe_index}.pcm"
+    sha_path = pcm_path.with_suffix(".sha256")
+    assert pcm_path.is_file()
+    sha_path.unlink()
+
+    with pytest.raises(render_stage.RenderResumeIndexIntegrityError) as exc_info:
+        render_stage.run_render_stage(campaign, subset, stage="c1")
+    assert len(exc_info.value.failing_units) == 1
+    failing_row_id, failing_probe_index, failing_detail = exc_info.value.failing_units[0]
+    assert (failing_row_id, failing_probe_index) == (target.row_id, target.probe_index)
+    assert "sha256 sidecar missing" in failing_detail
+
+    # transition still blocked: no second `fixture_valid`, and the mismatch
+    # is recorded as a `stop_event` — same contract as the corrupted/missing
+    # PCM cases above.
+    fixture_valid_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "fixture_valid"
+    ]
+    assert len(fixture_valid_events) == 1
+    stop_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "stop_event"
+        and e.payload.get("reason") == "RENDER_RESUME_INDEX_INTEGRITY_MISMATCH"
+    ]
+    assert len(stop_events) == 1
+
+    # recovery: restore the sidecar (what a fresh render would write
+    # alongside the byte-identical PCM) — no ledger mutation required.
+    sha_path.write_text(hashlib.sha256(pcm_path.read_bytes()).hexdigest(), encoding="utf-8")
+    recovered = render_stage.run_render_stage(campaign, subset, stage="c1")
+    assert all(o.status == "skipped_resume" for o in recovered)
+    fixture_valid_events_after = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "fixture_valid"
+    ]
+    assert len(fixture_valid_events_after) == 2
+
+
+@pytest.mark.slow
+def test_c1_render_resume_stale_fails_closed_on_wrong_sidecar(tmp_path: Path) -> None:
+    """Same round 5 finding S4 coverage as the missing-sidecar test above,
+    for the sidecar-content-mismatch branch of `_verify_pcm_sidecar()`: an
+    intact PCM whose sidecar content no longer matches the PCM's own
+    (still ledger-correct) sha256 must also fail the completing
+    invocation's resume validation, not just pass silently through the
+    old PCM-vs-ledger-sha-only check."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    outcomes = render_stage.run_render_stage(campaign, subset, stage="c1")
+    target = outcomes[0]
+    pcm_path = campaign.renders_dir / target.row_id / f"{target.probe_index}.pcm"
+    sha_path = pcm_path.with_suffix(".sha256")
+    assert pcm_path.is_file()
+    original_sidecar = sha_path.read_text(encoding="utf-8")
+    sha_path.write_text("0" * 64, encoding="utf-8")
+
+    with pytest.raises(render_stage.RenderResumeIndexIntegrityError) as exc_info:
+        render_stage.run_render_stage(campaign, subset, stage="c1")
+    assert len(exc_info.value.failing_units) == 1
+    failing_row_id, failing_probe_index, failing_detail = exc_info.value.failing_units[0]
+    assert (failing_row_id, failing_probe_index) == (target.row_id, target.probe_index)
+    assert "does not match sidecar" in failing_detail
+
+    fixture_valid_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "fixture_valid"
+    ]
+    assert len(fixture_valid_events) == 1
+
+    # recovery: restore the original sidecar content.
+    sha_path.write_text(original_sidecar, encoding="utf-8")
     recovered = render_stage.run_render_stage(campaign, subset, stage="c1")
     assert all(o.status == "skipped_resume" for o in recovered)
     fixture_valid_events_after = [
@@ -1120,3 +1229,116 @@ def test_c1_render_worker_invalid_pcm_hex_charged_malformed_output(
 
     derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
     assert derived.compute_used == pytest.approx(counters.compute_used)
+
+
+@pytest.mark.slow
+def test_c4_render_phase_valid_marker_skips_rehash_on_measure_only_slices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex PR #345 round 5 finding S3 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): once C4 rendering is fully done but the paired
+    measure sub-phase (`holdout_stage.render_and_measure_holdout()`) still
+    has slices left, EVERY subsequent call re-enters `render_stage.
+    run_render_stage(stage="c4", ...)`, which pre-fix re-ran its
+    `completed_all` block (nothing left to render -> `completed_all=True`
+    on every call) and re-read+re-hashed every already-rendered PCM from
+    scratch — competing with measurement for the same `time_budget` instead
+    of running once at the real render->measure transition.
+
+    `_refuse_if_pre_unseal_holdout()` is stubbed out for the same reason
+    `test_c4_f0_unusable_selected_candidate_through_real_holdout_path_
+    closes_not_evaluable` above stubs it: `provenance.Ledger.check_leakage()`
+    hard-requires the full canonical matrix row-id set, which a tiny
+    per-test fixture can never satisfy, and is an orthogonal, already
+    dedicated-tested concern."""
+    subset = small_matrix_subset(12, family="APERIODICITY_GT")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+    monkeypatch.setattr(render_stage, "_refuse_if_pre_unseal_holdout", lambda *a, **kw: None)
+
+    # Complete the C4 render sub-phase up front (no `time_budget` -- this
+    # call IS the render->measure transition: it validates every
+    # `skipped_resume`/newly-rendered unit once and records the durable
+    # `RENDER_PHASE_VALID_KIND` marker).
+    render_stage.run_render_stage(campaign, subset, stage="c4")
+    render_phase_valid_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == render_stage.RENDER_PHASE_VALID_KIND
+    ]
+    assert len(render_phase_valid_events) == 1
+    assert render_phase_valid_events[0]["stage"] == "c4"
+
+    # count invocations of the completing-invocation resume validator itself
+    # (not `_verify_pcm_sidecar`, which `measure_stage._verify_and_load_
+    # rendered_pcm()` also legitimately calls once per real measurement
+    # dispatch -- that per-measurement read is unrelated to what S3 fixes:
+    # the render validator's own full `skipped_resume` rescan re-running on
+    # every slice).
+    call_count = {"n": 0}
+    orig_validate = render_stage._validate_skipped_resume_outcomes
+
+    def _counting_validate(*args, **kwargs):
+        call_count["n"] += 1
+        return orig_validate(*args, **kwargs)
+
+    monkeypatch.setattr(render_stage, "_validate_skipped_resume_outcomes", _counting_validate)
+
+    candidates_by_family = {"APERIODICITY_GT": (independent_candidate,)}
+
+    # Slice 1: render sub-phase re-enters `run_render_stage(stage="c4")`
+    # (nothing pending -> `completed_all=True` immediately, marker already
+    # present -> the validation scan is skipped entirely) and the whole
+    # small budget goes to measurement dispatch.
+    budget = TimeBudget.start_now(0.1)
+    records1, status1 = holdout_stage.render_and_measure_holdout(
+        campaign,
+        subset,
+        candidates_by_family=candidates_by_family,
+        max_workers=1,
+        time_budget=budget,
+    )
+    assert call_count["n"] == 0
+    assert status1.completed_all is False  # more work remains after 0.05s
+
+    # Slice 2: same contract -- no re-hash, real NEW measurement progress
+    # under the same small per-slice budget (round 5 finding S2's counter
+    # fix is what makes this progress visible/nonzero rather than an
+    # over/under count).
+    records2, status2 = holdout_stage.render_and_measure_holdout(
+        campaign,
+        subset,
+        candidates_by_family=candidates_by_family,
+        max_workers=1,
+        time_budget=TimeBudget.start_now(0.1),
+    )
+    assert call_count["n"] == 0
+    assert status2.instances_completed_this_run > 0
+    assert len(records2["APERIODICITY_GT"]) > 0
+
+    # sanity: render's own sub-phase status never reports new work on
+    # either measure-only slice (everything was already rendered up front).
+    assert status1.instances_remaining >= 0
+    assert status2.instances_remaining >= 0
+
+    # eventually finishing the stage (a generous, effectively-unbounded
+    # budget) does not append a second marker.
+    _records, status = holdout_stage.render_and_measure_holdout(
+        campaign,
+        subset,
+        candidates_by_family=candidates_by_family,
+        max_workers=1,
+        time_budget=TimeBudget.start_now(3600.0),
+    )
+    assert status.completed_all is True
+    assert call_count["n"] == 0
+    render_phase_valid_events_after = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == render_stage.RENDER_PHASE_VALID_KIND
+    ]
+    assert len(render_phase_valid_events_after) == 1

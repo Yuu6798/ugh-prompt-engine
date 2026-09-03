@@ -1486,7 +1486,16 @@ def test_run_measure_stage_partial_slice_skips_completed_prefix_without_reconstr
     budget double below is calibrated to expire on the FIRST call it
     actually receives (from the first genuinely pending instance), not
     after walking half the completed prefix — the whole completed prefix
-    is walked for free regardless of the budget."""
+    is walked for free regardless of the budget.
+
+    Codex PR #345 round 5 finding S2 (adopted, category ②,
+    `[UNDERSPEC-CAL-D79]`): `instances_completed_this_run` now counts only
+    instances with at least one newly dispatched measurement — the whole
+    completed prefix this call walks for free contributes 0 (not
+    `len(completed_prefix)`, the pre-fix over-count this test used to
+    assert), and the one genuinely pending instance it reaches never gets
+    dispatched either (the already-expired budget stops the call before
+    it)."""
     subset = small_matrix_subset(3, family="F0_CONTROL")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
@@ -1529,7 +1538,10 @@ def test_run_measure_stage_partial_slice_skips_completed_prefix_without_reconstr
     # the entire already-complete prefix is walked for free (never gated
     # by the budget) -- only the first genuinely pending instance trips
     # the (already-expired) budget double and stops the slice.
-    assert slice_status.instances_completed_this_run == len(completed_prefix)
+    # round 5 finding S2: the walked prefix is entirely already-complete
+    # (no new dispatch), so this call's "new progress" is 0 -- not
+    # `len(completed_prefix)`, the pre-fix over-count.
+    assert slice_status.instances_completed_this_run == 0
     # zero reconstructions for the walked already-complete prefix (0, not
     # merely "constant" -- this call never reaches unfinished work at all).
     assert call_count["n"] == 0
@@ -1596,13 +1608,23 @@ def test_run_measure_stage_time_budget_remaining_matches_true_completed_state(
     `instances_remaining` jump backward 77->85 at a 0.001s budget).
 
     Codex PR #345 round 4 finding #3 (adopted, category ③,
-    `[UNDERSPEC-CAL-D79]`): `instances_completed_this_run` is no longer 0
+    `[UNDERSPEC-CAL-D79]`): `instances_remaining` is no longer inflated
     here -- the already-measured `half` is walked for free regardless of
     the expired budget (`_instance_has_pending_candidate()` gates the
     budget check, so an instance with nothing pending never calls
-    `time_budget.expired()`), so this call's own loop DOES walk (and count)
-    every one of those instances before stopping at the first genuinely
-    pending one."""
+    `time_budget.expired()`), so this call's own loop DOES walk every one
+    of those instances before stopping at the first genuinely pending one
+    (which is what lets `instances_remaining` below read the TRUE
+    remaining count instead of regressing to `len(all_instances)`).
+
+    Codex PR #345 round 5 finding S2 (adopted, category ②,
+    `[UNDERSPEC-CAL-D79]`): walking `half` for free is not the same as
+    making new progress on it -- `instances_completed_this_run` counts
+    only instances with at least one newly dispatched measurement, so it
+    is 0 here (not `len(half)`, the pre-fix over-count this test used to
+    assert): `half` was already complete before this call, and the one
+    genuinely pending instance this call reaches is never dispatched
+    either (the already-expired budget stops it first)."""
     subset = small_matrix_subset(2, family="F0_CONTROL")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
@@ -1627,7 +1649,8 @@ def test_run_measure_stage_time_budget_remaining_matches_true_completed_state(
 
     assert records == []
     assert slice_status.completed_all is False
-    assert slice_status.instances_completed_this_run == len(half)
+    # round 5 finding S2: no new work happened this call (see docstring).
+    assert slice_status.instances_completed_this_run == 0
     true_remaining = len(all_instances) - len(half)
     assert slice_status.instances_remaining == true_remaining
     # not the pre-fix bug: remaining must NOT regress to the full instance

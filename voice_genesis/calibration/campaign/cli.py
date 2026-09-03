@@ -608,7 +608,26 @@ def _build_f0_by_instance(
     instance を dispatch しない（既に dispatch 済みの instance は完走する）。
     この場合、戻り値は `(result, unusable, SliceStatus)` の 3-tuple になる。
     `time_budget` が `None`（既定）のときは従来どおり `(result, unusable)`
-    の 2-tuple を返す（呼び出し元の挙動・シグネチャは不変）。"""
+    の 2-tuple を返す（呼び出し元の挙動・シグネチャは不変）。
+
+    Codex PR #345 round 5 finding S1（adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`, `render_stage.run_render_stage()`/
+    `measure_stage.run_measure_stage()`の round 3/4 修正と同一規則の
+    F0 ループへの適用）: 予算境界検査は、この instance の F0 candidate が
+    既に `meter_call_index.is_complete()`（＝真に pending ではない）場合は
+    発動しない — index 参照を budget 検査より先に行う。`meter_call_index`
+    が渡されている（＝実運用の唯一の経路。呼び出し元は必ず一度だけ
+    構築して渡す）限り、直前の呼び出しが最終 instance の F0 測定完了後・
+    集約完了前に中断され、かつ `meter_call_index` 自体の構築（全 ledger
+    スキャン）が time_budget を使い切っていても、選択済み F0 が全 instance
+    で既に揃っている限り毎回の resume 呼び出しが `PARTIAL_SLICE` のまま
+    stuck せず集約へ到達する（`meter_call_index` が `None` の呼び出し元は
+    存在しないが、防御的に旧来の「budget を先に見る」挙動へフォールバック
+    する）。同じ index 参照は `instances_completed_this_run` の計上にも
+    使う——既に `is_complete()` な instance は index 参照/floats 再構成のみで
+    新規測定を一切 dispatch しないため、`render_stage`/`measure_stage` の
+    counter 修正（round 3 finding F6 / round 5 finding S2）と同じ規則で
+    このループの「新規分」からも除外する。"""
     f0_candidate = candidate_by_id(f0_candidate_id)
     result: dict[tuple[str, int], float] = {}
     unusable: set[tuple[str, int]] = set()
@@ -616,12 +635,33 @@ def _build_f0_by_instance(
     instances_completed_this_run = 0
     completed_all = True
     for row_id, probe_index in sorted_instances:
-        # R2 instance boundary: checked before dispatching a NEW instance —
-        # an instance already in flight always runs to completion.
-        if time_budget is not None and time_budget.expired():
+        # round 5 finding S1: an instance whose F0 candidate is already
+        # `is_complete()` in the ledger is never a "genuinely pending"
+        # dispatch — checked BEFORE the budget boundary below, mirroring
+        # `render_stage.run_render_stage()`'s `completed_units.get(...)`
+        # check and `measure_stage.run_measure_stage()`'s
+        # `_instance_has_pending_candidate()` check (both round 3/4 fixes
+        # for this exact ordering bug).
+        has_pending = (
+            not meter_call_index.is_complete(row_id, probe_index, f0_candidate_id)
+            if meter_call_index is not None
+            else True
+        )
+        # R2 instance boundary: checked before dispatching a NEW, genuinely
+        # pending instance — an instance already in flight always runs to
+        # completion, and an already-complete instance never reaches this
+        # check (see finding S1 note above).
+        if has_pending and time_budget is not None and time_budget.expired():
             completed_all = False
             break
-        instances_completed_this_run += 1
+        if has_pending:
+            # round 5 finding S1 (counter half, same rule as finding S2):
+            # only a genuinely pending instance results in new work below
+            # (`_reusable_f0_values_by_process` reconstructs from the
+            # ledger with no new dispatch, or `run_measurement_for_
+            # instance` is called for real); an already-`is_complete()`
+            # instance must not inflate "new progress this run".
+            instances_completed_this_run += 1
         by_process = _reusable_f0_values_by_process(
             campaign, f0_candidate_id, row_id, probe_index, meter_call_index=meter_call_index
         )
@@ -689,11 +729,34 @@ def _build_f0_by_instance(
         )
     if time_budget is None:
         return result, frozenset(unusable)
+    # round 5 finding S1 (counter fix's corollary, same "finding G" class as
+    # render_stage/measure_stage's round 3/4 fixes): now that
+    # `instances_completed_this_run` counts only genuinely NEW work (not
+    # every instance this call merely walked through), `len(sorted_
+    # instances) - instances_completed_this_run` would over-report
+    # `instances_remaining` by the size of the already-complete prefix this
+    # call walked for free — exactly the bug `render_stage.run_render_
+    # stage()`'s `completed_in_stage` / `measure_stage.run_measure_stage()`'s
+    # full `_instance_has_pending_candidate()` pass already fix for their
+    # own loops. Read the TRUE remaining count from the index instead: an
+    # instance is remaining iff its F0 candidate is not yet `is_complete()`.
+    if meter_call_index is not None:
+        instances_remaining = sum(
+            1
+            for row_id, probe_index in sorted_instances
+            if not meter_call_index.is_complete(row_id, probe_index, f0_candidate_id)
+        )
+    else:
+        # Defensive fallback for the (never exercised in production —
+        # every caller always builds and passes a `MeterCallIndex`) case
+        # with no index to consult: best-effort local count, same as
+        # before this fix.
+        instances_remaining = len(sorted_instances) - instances_completed_this_run
     slice_status = SliceStatus(
         time_budget_seconds=time_budget.seconds,
         elapsed_seconds=time_budget.elapsed(),
         instances_completed_this_run=instances_completed_this_run,
-        instances_remaining=len(sorted_instances) - instances_completed_this_run,
+        instances_remaining=instances_remaining,
         completed_all=completed_all,
     )
     return result, frozenset(unusable), slice_status

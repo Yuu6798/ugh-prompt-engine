@@ -321,3 +321,29 @@ index skip が completing invocation でも一切検証を行わず、削除・�
 からの直接算出へ修正）を採用した。memo §6.5/§6.5.1/§6.5.2 を追補し、memo_sha256 を
 `6f693a213881dfd8c6c5a213c969fc913ee5c6f6063d638eb5ae74c5d5232a0d` へ更新した。
 承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。
+
+### 10.3 D79 追補 3（2026-09-03）
+
+Codex #345 第 5 巡の 4 件（slice/resume ファミリーの終端掃討）を採用した。
+③ 1 件（S1: `cli._build_f0_by_instance()` の budget 境界検査が F0 再開状態の
+`meter_call_index.is_complete()` 参照より先に走っていたため、選択済み F0 が
+全 instance で記帳済みでも resume 呼び出しが永久に `PARTIAL_SLICE` を報告し
+続け得た欠落——index 参照を budget 検査より先に行う既存規則の未適用箇所を
+是正。副次的に露呈した `instances_remaining` の同型過大報告も index からの
+直接算出へ修正）。② 1 件（S2: `measure_stage.run_measure_stage()` の
+`instances_completed_this_run` が、全 candidate が `is_complete()` fast path
+を通っただけの instance も計上していた欠落——既存の `has_pending` 判定を
+流用し新規分のみ計上へ修正）。③ 2 件（S3: c4-holdout の render サブフェーズ
+完了後、measure サブフェーズが複数 slice に渡ると毎 slice が完了時整合検証
+（第 3 巡 F5）を再実行し PCM を再読込・再ハッシュしていた欠落——新設
+ノンゲート ledger event `holdout_render_valid`（`state.CampaignPhase`/
+`vocab.ProcedureGate` の gate 語彙とは無関係）で render→measure 遷移時の
+検証を 1 回だけ記録し、以降の completing invocation は O(1) のマーカー確認
+のみで検証本体をスキップする。S4: 上記完了時整合検証（`_validate_skipped_
+resume_outcomes`）が `.sha256` sidecar を一度も読まず、測定時検証
+（`measure_stage._verify_and_load_rendered_pcm`）と異なる（緩い）チェック
+集合になっていた欠落——両関数が共有する新設ヘルパー `render_stage.
+_verify_pcm_sidecar()` へ集約し検証項目を同値化）。memo §6.5.3 を追補し、
+memo_sha256 を
+`d23305cd3feea1fba7904c43524a97621d04177d8756132b93556b894efe4d45` へ更新した。
+承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。

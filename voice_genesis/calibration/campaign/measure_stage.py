@@ -44,7 +44,6 @@ event を記帳した上で `StaleMeasurementError` により fail-closed する
 
 from __future__ import annotations
 
-import hashlib
 import importlib
 import json
 import math
@@ -166,21 +165,18 @@ def _verify_and_load_rendered_pcm(
     計算して **`.sha256` sidecar と ledger に pin された `render` event の
     sha256 の両方**と照合する。一方でも欠落/不一致なら測定を一切行わず
     `StaleRenderError`（ledger `stale` event 付き）で fail-closed する
-    （差し替えられた/破損した bytes を測定しない — `render_stage.py` の
-    resume 判定が sidecar 無しの sha だけを見ていたのに対し、本関数は
-    ledger 側の pin も独立に要求する二重照合）。PCM ファイル自体が存在
+    （差し替えられた/破損した bytes を測定しない）。PCM ファイル自体が存在
     しない場合は（render が一度も行われていない、より基本的な状態）
     `FileNotFoundError` のまま送出する — こちらは「差し替え」ではなく
     「まだ render していない」なので既存呼び出し元の分岐と型を変えない。
-    """
-    pcm_path = campaign.renders_dir / row_id / f"{probe_index}.pcm"
-    if not pcm_path.is_file():
-        raise FileNotFoundError(
-            f"measure_stage: pcm not rendered for row_id={row_id!r} "
-            f"probe_index={probe_index}: {pcm_path}"
-        )
-    pcm_bytes = pcm_path.read_bytes()
-    actual_sha = hashlib.sha256(pcm_bytes).hexdigest()
+
+    round 5 finding S4 (adopted, category ③, `[UNDERSPEC-CAL-D79]`): the
+    PCM-vs-sidecar half of this check is now `render_stage._verify_pcm_
+    sidecar()` — the same shared helper `render_stage._validate_skipped_
+    resume_outcomes()` uses for its completing-invocation resume check, so
+    the two can never again independently drift apart on which checks a
+    "valid rendered PCM" requires (pre-fix, render_stage's own resume
+    validator never read the sidecar at all)."""
 
     def _stale(detail: str) -> StaleRenderError:
         campaign.ledger.append(
@@ -193,14 +189,12 @@ def _verify_and_load_rendered_pcm(
         )
         return StaleRenderError(row_id, probe_index, detail)
 
-    sha_path = pcm_path.with_suffix(".sha256")
-    if not sha_path.is_file():
-        raise _stale(f"sha256 sidecar missing: {sha_path}")
-    sidecar_sha = sha_path.read_text(encoding="utf-8").strip()
-    if sidecar_sha != actual_sha:
-        raise _stale(
-            f"pcm sha256={actual_sha!r} does not match sidecar {sha_path}={sidecar_sha!r}"
-        )
+    # `_verify_pcm_sidecar()` raises `FileNotFoundError` uncaught (the more
+    # basic "never rendered" state, distinct from "stale" — see its
+    # docstring), matching this function's own pre-fix contract.
+    pcm_bytes, actual_sha, detail = render_stage._verify_pcm_sidecar(campaign, row_id, probe_index)
+    if detail is not None:
+        raise _stale(detail)
 
     ledger_sha = render_stage._recorded_render_sha(campaign.ledger.entries, row_id, probe_index)
     if ledger_sha is None:
@@ -1467,7 +1461,22 @@ def run_measure_stage(
                     meter_call_index=meter_call_index,
                 )
             )
-        instances_completed_this_run += 1
+        if has_pending:
+            # Codex PR #345 round 5 finding S2 (adopted, category ②,
+            # `[UNDERSPEC-CAL-D79]`, same rule as round 3 finding F6's
+            # `render_stage.run_render_stage()` fix): only count an
+            # instance as "completed this run" when it had at least one
+            # genuinely pending candidate — `has_pending` (computed above,
+            # before this instance's `for candidate` loop) is exactly that
+            # signal, since a `False` value means every candidate already
+            # took the `is_complete()` O(1) skip path with no dispatch, and
+            # a `True` value guarantees at least one candidate below is not
+            # yet `is_complete()` and so IS dispatched via `run_measurement_
+            # for_instance()`. Pre-fix, this incremented unconditionally for
+            # every instance the loop merely walked through — so a resumed
+            # slice re-entering a fully completed prefix (every candidate
+            # skipped) still reported nonzero "new" progress.
+            instances_completed_this_run += 1
     if newly_missing:
         campaign.ledger.append(
             {

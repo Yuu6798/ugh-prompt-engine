@@ -765,3 +765,133 @@ stage を安全に止める手段が無い。(3) resume するたびに ledger �
   §6.5.1 finding #2 のとおり `PARTIAL_SLICE` exit（phase transition なし）
   専用の non-transition event であり、両者は 1 dispatch につきどちらか
   一方のみが記帳される（本 memo 上記「二重計上なしの根拠」参照）。
+
+#### 6.5.3 第 5 巡追補（Codex PR #345 レビュー採用、2026-09-03。slice/resume
+ファミリーの終端宣言 — ordering/progress counting/validate-once/検証項目の
+loader 同値の 4 パターンを c1/c2/c3a/c3b/c4 の render/measure/F0 各ループで
+監査し、該当する全箇所を是正）
+
+- **S1（③、`cli.py` ~623、`_build_f0_by_instance`）— budget 境界検査が F0
+  再開状態の参照より先に走る**: §6.5.1 finding #1 は `_run_c3b`/`_run_c4` に
+  `MeterCallIndex` を渡すところまでは直したが、`_build_f0_by_instance()`
+  自身のループ内での budget 検査順序は §6.5.1 finding #3（render_stage）/
+  §6.5.2 finding D（measure_stage）と同じ「index 参照を budget 検査より
+  先に行う」規則の適用対象から漏れていた——`time_budget.expired()` を
+  `meter_call_index.is_complete()` より先に見ていたため、選択済み F0
+  candidate が全 instance で既に記帳済み（かつ `meter_call_index` の構築
+  自体が budget を使い切っていた）場合でも、resume 呼び出しのたびに集約
+  すら到達できず、C3b/C4 側の `f0_slice_status` が永久に
+  `completed_all=False` を返し続け、これが `SliceStatus.aggregate()` 経由で
+  stage 全体を `PARTIAL_SLICE` に固定してしまう（新規 dispatch が 1 件も
+  無いにも関わらず）。修正: `render_stage.run_render_stage()`/
+  `measure_stage.run_measure_stage()` と同一規則——`meter_call_index` が
+  渡されていれば（実運用の唯一の経路）`is_complete()` を budget 検査より
+  先に参照し、真に pending な instance のみ budget 境界を課す。同じ
+  index 参照は `instances_completed_this_run` の計上（下記 S2 と同一規則）
+  にも流用する。**副次的な発見**: この修正で `instances_completed_this_run`
+  の意味が「歩いた instance 数」から「新規 dispatch した instance 数」へ
+  変わった結果、`instances_remaining = len(sorted_instances) -
+  instances_completed_this_run` という既存の引き算式が、全 instance
+  既知済みのケースで残数を過大報告する潜在バグとして露呈した（§6.5.2
+  finding G と同型——このケースはこれまで `instances_completed_this_run`
+  自体が過大計上されていたため式全体としては偶然正しい値を返しており、
+  finding G の監査でも発見されなかった）。finding G と同じ是正——index を
+  独立に 1 パス再走査（`meter_call_index.is_complete()` のみ、O(1)、PCM
+  読込・record 再構成なし）して真の残数を数え直す——を本関数にも適用した。
+  テスト: 選択済み F0 candidate が全 instance で記帳済み + budget=0.0001 で
+  `completed_all=True`・`instances_completed_this_run=0`・
+  `instances_remaining=0` を固定する regression
+  （`test_build_f0_by_instance_all_recorded_ignores_expired_budget`）。
+- **S2（②、`measure_stage.py` ~1470、`run_measure_stage`）—
+  `instances_completed_this_run` が「全 candidate が `is_complete()` fast
+  path を通っただけの instance」も計上する**: §6.5.2 finding D は完了済み
+  candidate を `run_measurement_for_instance()` を呼ばずに skip する
+  O(1) 経路を追加したが、ループ末尾の `instances_completed_this_run += 1`
+  はその skip 経路を通っただけの instance にも無条件で発火しており、
+  §6.5.1 finding F6（render_stage）が是正したのと同型の過大計上が
+  measure_stage 側に残っていた——完了済み prefix しか歩かない
+  `PARTIAL_SLICE` でも 0 でない progress を報告し得る。修正: 既にループ先頭で
+  budget 境界検査用に計算している `has_pending`（`_instance_has_pending_
+  candidate()` の戻り値 — 「この instance の candidate のうち
+  `is_complete()` でないものが少なくとも 1 つある」の意）をそのまま流用し、
+  `has_pending` が真の instance のみ加算する（`has_pending` が真なら、その
+  instance の `for candidate` ループは少なくとも 1 回
+  `run_measurement_for_instance()` を実際に呼ぶことが保証されるため、
+  この流用は正確）。テスト: 完了済み prefix を歩く resumed slice で
+  `instances_completed_this_run == 0` を固定する regression 2 件
+  （既存 `test_run_measure_stage_partial_slice_skips_completed_prefix_
+  without_reconstruction`/`test_run_measure_stage_time_budget_remaining_
+  matches_true_completed_state` を、§6.5.2 策定時点ではまだこの過大計上が
+  残っていたために `len(completed_prefix)`/`len(half)` を期待値としていた
+  ものから `0` へ改訂）。
+- **S3（③、`render_stage.py` ~790、`run_render_stage`）— C4 render 完了後、
+  measure サブフェーズが複数 slice に渡ると、毎 slice が §6.5.1 finding F5
+  の完了時整合検証を再実行し PCM を再読込・再ハッシュする**:
+  finding F5 の検証（`_validate_skipped_resume_outcomes`）は
+  `completed_all` ブロックの中で毎回無条件に走る。`c1-fixtures` はこの
+  ブロックに 2 度と入れない（`cli._stage_already_complete()` が
+  `FIXTURE_VALID` 到達後の再実行を `run_render_stage()` 呼び出しごと
+  NOOP にする）ため実質「1 度きり」だったが、c4-holdout は render
+  サブフェーズと measure サブフェーズを 1 つの `holdout_stage.
+  render_and_measure_holdout()` が束ねており、stage 全体の完了マーカー
+  （`holdout_executed_valid`）は measure まで終わらないと記帳されない
+  ——render だけが先に終わっても `_stage_already_complete()` の NOOP 判定は
+  効かず、measure に残り slice がある限り `render_and_measure_holdout()`
+  は毎回 `run_render_stage(stage="c4", ...)` を再度呼ぶ。render すべき
+  unit が既に無いため `completed_all=True` に**毎回**到達し、`skipped_
+  resume` にした全 unit（campaign 全体の render 済み PCM）を毎 slice
+  フルスキャン・再ハッシュしてから measure へ進む——この検証コストが
+  measure 用の `time_budget` を消費し、measure の実質進捗を奪う。
+  修正: 新設ノンゲート ledger event kind **`RENDER_PHASE_VALID_KIND`
+  （`"holdout_render_valid"`。`{"kind": "holdout_render_valid", "stage":
+  "c4", "instance_count": ...}`）**を、`stage="c4"` の completing
+  invocation が検証に成功した直後（不一致があれば従来どおり
+  `RenderResumeIndexIntegrityError` で fail-closed し、このマーカーは
+  記帳しない）に一度だけ記帳する。以降の `stage="c4"` completing
+  invocation は、まずこのマーカーの有無を ledger から O(1)-per-entry で
+  確認し（PCM I/O なし）、既に存在すれば `_validate_skipped_resume_
+  outcomes()` を丸ごとスキップする。**`stage="c1"` は対象外**——上記のとおり
+  `c1-fixtures` はそもそも 2 度目の completing invocation に到達しない
+  ため、マーカーを記帳・参照する意味が無いばかりか、`render_instance()`
+  を経由しない直接呼び出しで意図的に破損を注入する既存の resume regression
+  テスト群（`test_c1_render_resume_stale_fails_closed_on_*`）が repeated
+  な直接呼び出しに依存しており、c1 でもマーカーを効かせると 2 回目以降の
+  呼び出しで検証自体がスキップされ、これらのテストが検出すべき破損を
+  見逃してしまう。本マーカーは `state.CampaignPhase`/`vocab.ProcedureGate`
+  の 8/5 値 gate 語彙とは無関係の別レイヤ（`stop_event`/`stale`/
+  `f0_injection_rejected` と同じノンゲート tier）——`state.py` の
+  `LEDGER_KIND_FOR_PHASE`/`gate_monotonicity_ok` は変更していない。
+  テスト: c4 render 完了後の 2 回の measure-only slice で、検証関数
+  （`_validate_skipped_resume_outcomes`）の呼び出し回数が最初の
+  completing invocation（render→measure 遷移そのもの）でのみ非ゼロになり
+  以降は 0 のまま、かつ 2 slice 目が実際に新規測定 progress を報告する
+  regression（`test_c4_render_phase_valid_marker_skips_rehash_on_measure_
+  only_slices`）。
+- **S4（③、`render_stage.py` ~311、`_validate_skipped_resume_outcomes`）—
+  completing invocation の検証が `.sha256` sidecar を一度も読まない**:
+  finding F5 の検証はファイル存在 + 「PCM の実 sha256 == ledger 記録値」
+  のみを見ており、`measure_stage._verify_and_load_rendered_pcm()`
+  （finding #4、§6.4）が要求する 3 点照合（sidecar 存在・sidecar 内容 ==
+  実 sha256・実 sha256 == ledger 記録値）のうち sidecar の 2 点を一切
+  検査していなかった——`.sha256` sidecar が削除/改竄されても F5 の検証は
+  素通りし、`fixture_valid`/c4 render→measure 遷移は false advance する。
+  実際に破損を検出するのは後段の測定時 `_verify_and_load_rendered_pcm()`
+  だけになり、その時点では（c1 なら）render へ戻る resumable path は既に
+  失われている——F5 が閉じたはずの exact な穴が sidecar 経由で再開通する。
+  修正: 両関数が共有する新設ヘルパー `render_stage._verify_pcm_sidecar()`
+  へ「PCM 読込 + sidecar 存在/内容照合」の部分を集約し
+  （`measure_stage._verify_and_load_rendered_pcm()` はこのヘルパーの結果に
+  自前の ledger-sha 照合を重ねる形へ書き換え）、`_validate_skipped_resume_
+  outcomes()` もこの同じヘルパーを呼んでから ledger-pinned sha
+  （`outcome.sha256`）との一致を確認する——2 つの検証が同じチェック集合を
+  個別に再実装する経路を構造的に閉じ、以後の乖離を防ぐ。テスト:
+  sidecar 欠損・sidecar 内容不一致の 2 パターンそれぞれで、intact な PCM
+  でも completing invocation が `RenderResumeIndexIntegrityError`
+  + `stop_event`(`RENDER_RESUME_INDEX_INTEGRITY_MISMATCH`) で fail-closed
+  する regression 2 件（`test_c1_render_resume_stale_fails_closed_on_
+  missing_sidecar`/`_on_wrong_sidecar`）を追加。既存の corrupted-PCM
+  regression（`test_c1_render_resume_stale_fails_closed_on_corrupted_
+  file`）も、PCM のみ破損させ sidecar は元のまま残す構成のため、この
+  是正後は「sidecar 不一致」検査で先に捕捉されるようになった（旧
+  `"current file sha256=" != ...` 文言から `"does not match sidecar"`
+  文言へ改訂——F5 導入時より一段厳格な検査で捕捉される、意味論的な改善）。

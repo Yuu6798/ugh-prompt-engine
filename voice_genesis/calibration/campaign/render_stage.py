@@ -20,8 +20,14 @@
   （c1 の `fixture_valid` / c4-holdout の render サブフェーズ→measure
   サブフェーズ引き渡し）に進む**completing invocation**でのみ、index が
   skip した unit を一度だけ検証する（`RenderResumeIndexIntegrityError`。
-  round 3 ADOPT ③ `[UNDERSPEC-CAL-D79]`）——`PARTIAL_SLICE` 終了時はこの
-  検証を行わない（index skip は O(1) のまま）。
+  round 3 ADOPT ③ `[UNDERSPEC-CAL-D79]`。検証自体は `.sha256` sidecar と
+  ledger 側 pin の両方を要求する `_verify_pcm_sidecar` 共有 helper に委譲し、
+  `measure_stage._verify_and_load_rendered_pcm` と判定を一本化する —
+  round 5 finding S4）——`PARTIAL_SLICE` 終了時はこの検証を行わない
+  （index skip は O(1) のまま）。`stage="c4"` はこの検証が通ったことを
+  `RENDER_PHASE_VALID_KIND`（`"holdout_render_valid"`）ledger event として
+  記帳し、以降 render サブフェーズが完了した状態で measure サブフェーズが
+  続く呼び出しは検証を再実行しない（round 5 finding S3）。
 - **leakage 検査**: holdout 非 control instance の render を試みる **前**に
   `provenance.Ledger.check_leakage()` を呼び、unseal 前なら
   `BLOCKED_LEAKAGE` で拒否する（§7）。C1 は holdout instance を対象にしない
@@ -288,6 +294,94 @@ def _pcm_path(campaign: FrozenCampaign, row_id: str, probe_index: int) -> Path:
     return campaign.renders_dir / row_id / f"{probe_index}.pcm"
 
 
+#: Codex PR #345 round 5 finding S3 (adopted, category ③, `[UNDERSPEC-CAL-D79]`,
+#: memo §6.5.3): ledger event kind marking that `stage`'s completing-
+#: invocation resume-index integrity scan (`_validate_skipped_resume_
+#: outcomes`, which re-reads and re-hashes every `skipped_resume` PCM) has
+#: already run once and passed — mirrors `fixture_valid`'s "phase reached"
+#: role but at a finer grain: `fixture_valid` (c1) / `holdout_executed_
+#: valid` (c4, the WHOLE stage) only fire once the stage is entirely done,
+#: while this marks just the render sub-phase of a `stage="c4"` call.
+#: Not one of `state.CampaignPhase`'s 8 gate values (`state.py`'s
+#: `LEDGER_KIND_FOR_PHASE`/`gate_monotonicity_ok` machinery is untouched by
+#: this event) — a plain idempotency marker, same non-gate tier as
+#: `stop_event`/`stale`/`f0_injection_rejected`.
+RENDER_PHASE_VALID_KIND = "holdout_render_valid"
+
+
+def _render_phase_already_valid(ledger_entries: Sequence[LedgerEntry], stage: str) -> bool:
+    """O(1)-per-entry, PCM-free scan for `stage`'s `RENDER_PHASE_VALID_KIND`
+    marker. Cheap even on a large ledger — unlike the full `skipped_resume`
+    PCM rehash it lets a later invocation skip entirely."""
+    for entry in ledger_entries:
+        payload = entry.payload
+        if (
+            isinstance(payload, Mapping)
+            and payload.get("kind") == RENDER_PHASE_VALID_KIND
+            and payload.get("stage") == stage
+        ):
+            return True
+    return False
+
+
+def _verify_pcm_sidecar(
+    campaign: FrozenCampaign, row_id: str, probe_index: int
+) -> tuple[bytes, str, str | None]:
+    """Codex PR #345 round 5 finding S4 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): the single source of truth for "does this
+    rendered PCM's `.sha256` sidecar agree with its own bytes", shared by
+    `_validate_skipped_resume_outcomes()` below (render_stage's completing-
+    invocation resume-index integrity check) and
+    `measure_stage._verify_and_load_rendered_pcm()` (the per-measurement
+    stale check, which also compares against the ledger-pinned sha —
+    that comparison is each caller's own responsibility, not this
+    function's, since the two callers source and report a mismatch against
+    the ledger-pinned value slightly differently: render_stage already has
+    it on hand as `outcome.sha256`, measure_stage looks it up itself via
+    `_recorded_render_sha()` and has a distinct message for "no ledger
+    event pins this instance at all").
+
+    Pre-fix, `_validate_skipped_resume_outcomes()` re-derived this same
+    PCM-vs-ledger-sha check from scratch instead of reusing
+    `measure_stage._verify_and_load_rendered_pcm()`'s stricter contract —
+    and, unlike that function, never read the `.sha256` sidecar at all. A
+    deleted or corrupted sidecar therefore passed render_stage's resume
+    validation cleanly (it only ever compared the PCM's own recomputed sha
+    to the ledger-pinned one) and only failed downstream at measure time
+    with a completely different error (`StaleRenderError`), defeating the
+    whole point of validating once at the render→measure transition: C1
+    would already read back as `NOOP_ALREADY_COMPLETE`
+    (`fixture_valid` reached) by the time C2 discovered the corruption, with
+    no resumable path back to render. Reusing one shared check here makes
+    the two validators structurally unable to diverge again.
+
+    Reads the PCM file (raises `FileNotFoundError` if absent — a distinct,
+    more basic "never rendered" state, not "stale"; both callers already
+    branch on this), then checks the `.sha256` sidecar's presence and match
+    against the actual bytes. Returns `(pcm_bytes, actual_sha256,
+    failure_detail)` where `failure_detail` is `None` iff the sidecar check
+    passes — callers still owe their own comparison against whatever
+    ledger-pinned sha256 they consider authoritative for this instance."""
+    pcm_path = _pcm_path(campaign, row_id, probe_index)
+    if not pcm_path.is_file():
+        raise FileNotFoundError(
+            f"pcm not rendered for row_id={row_id!r} probe_index={probe_index}: {pcm_path}"
+        )
+    pcm_bytes = pcm_path.read_bytes()
+    actual_sha = hashlib.sha256(pcm_bytes).hexdigest()
+    sha_path = pcm_path.with_suffix(".sha256")
+    if not sha_path.is_file():
+        return pcm_bytes, actual_sha, f"sha256 sidecar missing: {sha_path}"
+    sidecar_sha = sha_path.read_text(encoding="utf-8").strip()
+    if sidecar_sha != actual_sha:
+        return (
+            pcm_bytes,
+            actual_sha,
+            f"pcm sha256={actual_sha!r} does not match sidecar {sha_path}={sidecar_sha!r}",
+        )
+    return pcm_bytes, actual_sha, None
+
+
 def _validate_skipped_resume_outcomes(
     campaign: FrozenCampaign, outcomes: Sequence[RenderOutcome]
 ) -> list[tuple[str, int, str]]:
@@ -297,25 +391,35 @@ def _validate_skipped_resume_outcomes(
     not a per-unit ledger rescan (the recorded sha is already on hand from
     `outcome.sha256`; `_recorded_render_sha` is not called again here).
     Returns `(row_id, probe_index, detail)` for every unit whose PCM file is
-    missing or whose current sha256 no longer matches the recorded render
-    sha (empty if every skipped unit is still intact)."""
+    missing, whose `.sha256` sidecar is missing/mismatched, or whose
+    current sha256 no longer matches the recorded render sha (empty if
+    every skipped unit is still intact).
+
+    round 5 finding S4 (adopted, category ③, `[UNDERSPEC-CAL-D79]`): now
+    delegates the PCM-vs-sidecar half of this check to `_verify_pcm_
+    sidecar()` — see that function's docstring for why the pre-fix version
+    (which recomputed the PCM's sha and compared it only against
+    `outcome.sha256`, never reading the sidecar) let a deleted/corrupted
+    sidecar silently pass."""
     failing: list[tuple[str, int, str]] = []
     for outcome in outcomes:
         if outcome.status != "skipped_resume":
             continue
-        pcm_path = _pcm_path(campaign, outcome.row_id, outcome.probe_index)
-        if not pcm_path.is_file():
+        try:
+            _pcm_bytes, actual_sha, detail = _verify_pcm_sidecar(
+                campaign, outcome.row_id, outcome.probe_index
+            )
+        except FileNotFoundError:
+            pcm_path = _pcm_path(campaign, outcome.row_id, outcome.probe_index)
             failing.append((outcome.row_id, outcome.probe_index, f"pcm missing: {pcm_path}"))
             continue
-        actual_sha = hashlib.sha256(pcm_path.read_bytes()).hexdigest()
-        if actual_sha != outcome.sha256:
-            failing.append(
-                (
-                    outcome.row_id,
-                    outcome.probe_index,
-                    f"current file sha256={actual_sha!r} != ledger sha256={outcome.sha256!r}",
-                )
+        if detail is None and actual_sha != outcome.sha256:
+            detail = (
+                f"pcm sha256={actual_sha!r} does not match ledger-pinned render "
+                f"sha256={outcome.sha256!r}"
             )
+        if detail is not None:
+            failing.append((outcome.row_id, outcome.probe_index, detail))
     return failing
 
 
@@ -778,8 +882,8 @@ def run_render_stage(
             )
 
     if completed_all:
-        # F5 (round 3 ADOPT ③, `[UNDERSPEC-CAL-D79]`): this is the
-        # "completing invocation" — the one that is about to transition the
+        # F5 (round 3 ADOPT ③, `[UNDERSPEC-CAL-D79]`): this is a
+        # "completing invocation" — one that is about to transition the
         # stage (c1's `fixture_valid` below, or hand c4-holdout's render
         # sub-phase off to its measure sub-phase). A `PARTIAL_SLICE` exit
         # (`completed_all=False`) never reaches here, so the O(1) index skip
@@ -787,20 +891,49 @@ def run_render_stage(
         # `skipped_resume` unit THIS call produced once, before allowing the
         # transition, so a deleted/corrupted PCM under an already-recorded
         # `render` event cannot silently ride a false phase transition.
-        failing_units = _validate_skipped_resume_outcomes(campaign, outcomes)
-        if failing_units:
-            campaign.ledger.append(
-                {
-                    "kind": "stop_event",
-                    "reason": "RENDER_RESUME_INDEX_INTEGRITY_MISMATCH",
-                    "stage": stage,
-                    "units": [
-                        {"row_id": rid, "probe_index": pidx, "detail": detail}
-                        for rid, pidx, detail in failing_units
-                    ],
-                }
-            )
-            raise RenderResumeIndexIntegrityError(stage, failing_units)
+        #
+        # round 5 finding S3 (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
+        # for `stage="c1"`, "completing invocation" truly means "the only
+        # one" — `cli._stage_already_complete()` makes every later c1 call a
+        # NOOP before `run_render_stage()` is even invoked again once
+        # `fixture_valid` is recorded, so validating unconditionally here is
+        # already exactly-once. `stage="c4"` has no such outer guard while
+        # its paired measure sub-phase (`holdout_stage.render_and_measure_
+        # holdout()`) still has slices left: once every c4 render unit is
+        # done, `completed_all=True` on EVERY subsequent call too (nothing
+        # left to dispatch), so this block re-ran — and re-hashed every
+        # `skipped_resume` PCM from scratch — on every measure-only slice,
+        # competing with measurement for the same `time_budget` instead of
+        # running once at the real render→measure transition.
+        # `RENDER_PHASE_VALID_KIND` makes that one-time validation durable:
+        # once recorded for `stage="c4"`, later completing invocations of
+        # the SAME stage skip the scan (and the marker append) entirely.
+        already_valid = stage == "c4" and _render_phase_already_valid(
+            campaign.ledger.entries, stage
+        )
+        if not already_valid:
+            failing_units = _validate_skipped_resume_outcomes(campaign, outcomes)
+            if failing_units:
+                campaign.ledger.append(
+                    {
+                        "kind": "stop_event",
+                        "reason": "RENDER_RESUME_INDEX_INTEGRITY_MISMATCH",
+                        "stage": stage,
+                        "units": [
+                            {"row_id": rid, "probe_index": pidx, "detail": detail}
+                            for rid, pidx, detail in failing_units
+                        ],
+                    }
+                )
+                raise RenderResumeIndexIntegrityError(stage, failing_units)
+            if stage == "c4":
+                campaign.ledger.append(
+                    {
+                        "kind": RENDER_PHASE_VALID_KIND,
+                        "stage": stage,
+                        "instance_count": len({(u.row_id, u.probe_index) for u in units}),
+                    }
+                )
 
     if stage == "c1" and completed_all:
         campaign.ledger.append(
@@ -861,6 +994,7 @@ __all__ = [
     "RenderLeakageBlockedError",
     "RenderResumeIndexIntegrityError",
     "RenderOutcome",
+    "RENDER_PHASE_VALID_KIND",
     "render_instance",
     "run_render_stage",
 ]
