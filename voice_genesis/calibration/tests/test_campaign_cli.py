@@ -3750,6 +3750,70 @@ def test_deleted_counters_json_with_ledger_work_is_reconstructed_and_precheck_us
     assert reconstructed_events[0]["counters"]["compute_used"] == pytest.approx(10.0)
 
 
+def test_deleted_counters_json_with_unsummarized_complete_meter_group_blocks_on_precheck(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex PR #345 round 12 finding (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): a process killed right after appending the
+    SIXTH (final) `meter_call` record of a group — but before `cli.py`
+    `main()`'s `finally` ever writes a `stage_summary` — leaves a COMPLETE
+    group with no discard event and no summary anywhere in the ledger. A
+    lost/rolled-back `counters.json` must not silently reconstruct a total
+    that omits that group's within-process CPU: the round 13 finding #2
+    pre-dispatch breach check on the NEXT dispatch must see it and refuse
+    with `COST_CAP_EXCEEDED`, exactly like the analogous `render`-event
+    scenario above."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, gate1_cost_caps=_TINY_COST_CAPS)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+    # a COMPLETE (within3 + fresh3), never-discarded, never-summarized
+    # group whose within-process CPU alone already exceeds the tiny 5.0s
+    # compute cap above.
+    for repeat_kind in ("within", "fresh"):
+        for i in range(3):
+            campaign.ledger.append(
+                {
+                    "kind": "meter_call",
+                    "row_id": "r1",
+                    "probe_index": 0,
+                    "candidate_id": "F0-B0-CURRENT",
+                    "repeat_kind": repeat_kind,
+                    "repeat_index": i,
+                    "cpu_seconds": 10.0,
+                    "within_cpu_seconds": 10.0,
+                    "storage_bytes": 100,
+                    "invocation_id": "invA",
+                }
+            )
+    # no `meter_call_group_discarded`, no `stage_summary`/`slice_summary`
+    # anywhere — the writer ("invA") never reached `finally`.
+    assert not counters_path(campaign_dir).is_file()
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir, cost_caps=_TINY_COST_CAPS)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    called = {"n": 0}
+
+    def _fake_run_baseline_stage(*_args, **_kwargs):
+        called["n"] += 1
+        return {"baseline_audit_sha": "0" * 64}
+
+    monkeypatch.setattr(cli.baseline_stage, "run_baseline_stage", _fake_run_baseline_stage)
+
+    exit_code = cli.main(_armed_c2_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 1, out
+    assert '"result": "COST_CAP_EXCEEDED"' in out
+    assert called["n"] == 0  # pre-dispatch refusal: no stage work performed
+
+    persisted = json.loads(counters_path(campaign_dir).read_text(encoding="utf-8"))
+    # the group's own fresh remainder (0.0, cpu_seconds == within_cpu_seconds
+    # here) plus the recovered within-process CPU (10.0, "invA" never
+    # summarized) — the group's full CPU, not silently dropped.
+    assert persisted["compute_used"] == pytest.approx(10.0)
+
+
 def test_stale_lower_persisted_counters_ledger_derived_max_wins(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

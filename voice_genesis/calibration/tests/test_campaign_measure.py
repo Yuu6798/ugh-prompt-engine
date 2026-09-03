@@ -264,9 +264,29 @@ def test_measure_ledger_derived_reconstruction_equals_persisted_compute(
         sr_hz=row.row.sr_hz,
         cap_counters=counters,
         cost_caps=caps,
+        invocation_id="test-inv",
     )
     expected_fresh = measure_stage.FRESH_PROCESS_REPEATS * fresh_cpu_seconds_per_call
     assert counters.compute_used == pytest.approx(expected_fresh)
+    # Codex PR #345 round 12 finding (`[UNDERSPEC-CAL-D79]`): this call
+    # completes the group's all-6 records but, being a narrower unit-test
+    # call directly into `measure_stage` rather than a real `cli.py
+    # main()` dispatch, never appends the `stage_summary`/`slice_summary`
+    # that a real dispatch's `finally` block always writes. Without one,
+    # `cap_counters_from_ledger()` now (correctly, per the round 12 fix)
+    # treats "test-inv" as an unsummarized writer and recovers its
+    # within-process CPU directly from the group's own records — so a
+    # zero-cost stand-in summary under the SAME `invocation_id` is appended
+    # here to mirror what a real dispatch guarantees, keeping this test's
+    # reconstruction-equals-persisted comparison meaningful.
+    campaign.ledger.append(
+        {
+            "kind": "stage_summary",
+            "stage": "c2",
+            "parent_cpu_seconds": 0.0,
+            "invocation_id": "test-inv",
+        }
+    )
 
     derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
     # render_stage.run_render_stage charged its own cpu_seconds too (real,

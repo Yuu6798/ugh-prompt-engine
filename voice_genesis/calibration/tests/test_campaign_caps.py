@@ -573,6 +573,170 @@ def test_cap_counters_from_ledger_retry_without_discard_then_discard_charges_wri
 
 
 # ---------------------------------------------------------------------------
+# Codex PR #345 round 12 finding (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
+# a COMPLETE (all 6 records present), never-discarded `meter_call` group
+# whose writer invocation never appended a `stage_summary`/`slice_summary`
+# (killed right after the 6th record, before `cli.py` `main()`'s `finally`
+# ever ran) must still have its within-process CPU recovered — generalizing
+# the round 6/7/8 discard-time pairing rule to every `meter_call` group, not
+# only discarded partial ones. See `cap_counters_from_ledger()`'s docstring
+# for the exactly-once invariant these tests exercise: scenarios (a)-(d) are
+# the design-ruling's own lettered cases; (e) is covered by the CLI-level
+# `test_deleted_counters_json_with_unsummarized_complete_meter_group_blocks_
+# on_precheck` in `test_campaign_cli.py` (rollback + reconcile reproduces
+# the live total and enforces the cap before new dispatch).
+# ---------------------------------------------------------------------------
+
+
+def test_cap_counters_from_ledger_complete_unsummarized_group_charged_once(
+    tmp_path: Path,
+) -> None:
+    """Design-ruling scenario (a): a COMPLETE group (6 records), writer
+    never summarized (killed after the 6th call) — the within-process CPU
+    is charged exactly once via the deferred post-scan pass, on top of the
+    fresh remainder each record already contributes."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    for repeat_kind in ("within", "fresh"):
+        for i in range(3):
+            payload = _fake_meter_call_event(
+                "r1", 0, "F0-B0-CURRENT", repeat_kind, i, cpu_seconds=6.0, storage_bytes=100
+            )
+            payload["within_cpu_seconds"] = 4.0
+            payload["invocation_id"] = "invA"
+            ledger.append(payload)
+    # no discard event, no stage_summary/slice_summary anywhere.
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # fresh remainder (6.0 - 4.0 = 2.0, from the first record) + the
+    # recovered within CPU (4.0, "invA" never summarized) = 6.0 — the
+    # group's full cpu_seconds, matching what a stage_summary would have
+    # captured had the writer not been killed.
+    assert derived.compute_used == pytest.approx(2.0 + 4.0)
+
+
+def test_cap_counters_from_ledger_partial_group_discard_unsummarized_charged_once(
+    tmp_path: Path,
+) -> None:
+    """Design-ruling scenario (b): a partial group + discard, writer
+    unsummarized — regression coverage that the discard path (unchanged)
+    still charges exactly once after the round 12 generalization, and the
+    new deferred post-scan pass does NOT also revisit it (the discard event
+    pops the key out of the writer-invocation map before the pass runs)."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    for i in range(2):
+        payload = _fake_meter_call_event(
+            "r1", 0, "F0-B0-CURRENT", "within", i, cpu_seconds=6.0, storage_bytes=100
+        )
+        payload["within_cpu_seconds"] = 4.0
+        payload["invocation_id"] = "invA"
+        ledger.append(payload)
+    ledger.append(
+        _fake_meter_call_group_discarded_event(
+            "r1", 0, "F0-B0-CURRENT", discarded_within_cpu_seconds=4.0
+        )
+    )
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # fresh remainder (2.0) + the discard's own recovery (4.0) = 6.0, not
+    # 10.0 (which double-counting via the new pass would produce).
+    assert derived.compute_used == pytest.approx(2.0 + 4.0)
+
+
+def test_cap_counters_from_ledger_complete_summarized_group_not_double_charged(
+    tmp_path: Path,
+) -> None:
+    """Design-ruling scenario (c): a partial group whose writer IS
+    summarized (e.g. a caught `KeyboardInterrupt` that still reaches
+    `finally`) is covered by that summary alone — the deferred post-scan
+    pass must not add the group's within CPU a second time."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    for repeat_kind in ("within", "fresh"):
+        for i in range(3):
+            payload = _fake_meter_call_event(
+                "r1", 0, "F0-B0-CURRENT", repeat_kind, i, cpu_seconds=6.0, storage_bytes=100
+            )
+            payload["within_cpu_seconds"] = 4.0
+            payload["invocation_id"] = "invA"
+            ledger.append(payload)
+    ledger.append(
+        {"kind": "stage_summary", "stage": "c2", "parent_cpu_seconds": 5.0, "invocation_id": "invA"}
+    )
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # fresh remainder (2.0) + the summary's own parent CPU (5.0, already
+    # covers "invA"'s within-process CPU via its own RUSAGE_SELF delta) —
+    # NOT + the 4.0 within CPU again.
+    assert derived.compute_used == pytest.approx(2.0 + 5.0)
+
+
+def test_cap_counters_from_ledger_normal_summarized_groups_totals_unchanged(
+    tmp_path: Path,
+) -> None:
+    """Design-ruling scenario (d): the common case — multiple complete
+    groups, each summarized under its own writer invocation, no discards
+    anywhere — reconstructs the same total the round-16/round-8 rules
+    already produced before this round 12 generalization (regression: the
+    new deferred pass is a no-op here since every writer is summarized)."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    for repeat_kind in ("within", "fresh"):
+        for i in range(3):
+            payload = _fake_meter_call_event(
+                "r1", 0, "F0-B0-CURRENT", repeat_kind, i, cpu_seconds=6.0, storage_bytes=100
+            )
+            payload["within_cpu_seconds"] = 4.0
+            payload["invocation_id"] = "invA"
+            ledger.append(payload)
+    ledger.append(
+        {"kind": "stage_summary", "stage": "c2", "parent_cpu_seconds": 5.0, "invocation_id": "invA"}
+    )
+    for repeat_kind in ("within", "fresh"):
+        for i in range(3):
+            payload = _fake_meter_call_event(
+                "r2", 0, "F0-B1-CURRENT", repeat_kind, i, cpu_seconds=3.0, storage_bytes=50
+            )
+            payload["within_cpu_seconds"] = 1.0
+            payload["invocation_id"] = "invB"
+            ledger.append(payload)
+    ledger.append(
+        {"kind": "stage_summary", "stage": "c3a", "parent_cpu_seconds": 2.0, "invocation_id": "invB"}
+    )
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # group r1: fresh (6.0 - 4.0 = 2.0) + summary (5.0) = 7.0.
+    # group r2: fresh (3.0 - 1.0 = 2.0) + summary (2.0) = 4.0.
+    assert derived.compute_used == pytest.approx(7.0 + 4.0)
+
+
+def test_reconcile_reproduces_live_total_for_unsummarized_complete_group(
+    tmp_path: Path,
+) -> None:
+    """Design-ruling scenario (e): rolling back/losing `counters.json` and
+    reconciling against the ledger reproduces the live total — for the
+    round 12 scenario specifically (a COMPLETE, unsummarized group), not
+    just the pre-existing discard-path scenarios. `reconcile_cap_counters`
+    delegates straight to `cap_counters_from_ledger()`, so a missing
+    `counters.json` reconstructs the full group CPU (not a lower,
+    pre-round-12 total) and flags it for a one-time `counters_reconstructed`
+    log, matching the CLI-level breach-precheck behaviour exercised in
+    `test_campaign_cli.py`."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    for repeat_kind in ("within", "fresh"):
+        for i in range(3):
+            payload = _fake_meter_call_event(
+                "r1", 0, "F0-B0-CURRENT", repeat_kind, i, cpu_seconds=6.0, storage_bytes=100
+            )
+            payload["within_cpu_seconds"] = 4.0
+            payload["invocation_id"] = "invA"
+            ledger.append(payload)
+    assert not counters_path(tmp_path).is_file()
+    effective, reconstructed = reconcile_cap_counters(tmp_path, ledger.entries, None)
+    assert reconstructed is True
+    assert effective.compute_used == pytest.approx(2.0 + 4.0)
+    # a stale, lower persisted snapshot must not win over the ledger either
+    # (same per-dimension max() rule as every other reconcile scenario).
+    save_cap_counters(tmp_path, CapCounters(compute_used=0.5, storage_used=0, budget_used=0.0))
+    effective_after_stale, reconstructed_again = reconcile_cap_counters(tmp_path, ledger.entries, None)
+    assert reconstructed_again is False
+    assert effective_after_stale.compute_used == pytest.approx(2.0 + 4.0)
+
+
+# ---------------------------------------------------------------------------
 # round 8 finding #1 (R8-1, category ③, `[UNDERSPEC-CAL-D79]`):
 # `is_invocation_id_summarized()` — the standalone pairing predicate
 # `measure_stage.run_measurement_for_instance()`/`run_measure_stage()`/

@@ -604,6 +604,47 @@ def cap_counters_from_ledger(
       also lack the field (`None`) always charges — the same overcount-
       safe, fail-closed direction this module already takes for every
       other legacy/partial-data fallback.
+
+      **Round 12 finding (adopted, category ③, `[UNDERSPEC-CAL-D79]`) —
+      generalized to a COMPLETE, never-discarded group**: the pairing rule
+      above only recovers a killed writer's within-process CPU when an
+      operator explicitly discards the partial group. A process killed
+      right after appending the group's SIXTH (final) `meter_call` record
+      — but before `cli.py` `main()`'s `finally` block ever runs — leaves a
+      COMPLETE group in the ledger with no `meter_call_group_discarded`
+      event at all (there is nothing partial to discard) and no
+      `stage_summary`/`slice_summary` either (the process never reached
+      `finally`). On resume, that group's 6 records already satisfy the
+      work unit, so it is silently treated as done and no remeasurement,
+      discard, or summary ever appends for it — its within-process CPU
+      would otherwise be permanently lost, the same false-undercount this
+      round 12 finding demonstrated on a *complete* group specifically
+      (rather than the partial-and-discarded ones round 6/7/8 covered).
+
+      **Exactly-once invariant (generalized to every `meter_call` group,
+      complete or discarded)**: within-process CPU is charged from exactly
+      one of two sources, never both — (1) a *discarded* group's own
+      `meter_call_group_discarded` event, via its
+      `discarded_within_cpu_seconds` field (the pairing rule above,
+      unchanged), or (2) a group whose key is still present in the
+      per-key writer-invocation map at the end of the ledger scan (i.e.
+      never popped by a discard event for that key) is charged directly
+      from its own first `meter_call` record's `within_cpu_seconds` in a
+      deferred pass after the forward scan completes — deferred because
+      the writer's own `stage_summary`/`slice_summary`, when it exists, is
+      always appended to the ledger AFTER that writer's `meter_call`
+      records, so the pairing test cannot be decided inline while still
+      scanning those records. Source (2) is skipped (covered by the
+      summary instead) iff that group's writer `invocation_id` appears in
+      `invocation_ids_with_summary`. A discarded key is never visited by
+      source (2) (discard pops it from the writer-invocation map), and a
+      key visited by source (2) was by definition never discarded (still
+      present in the map) — so the two sources partition every group's
+      within-process CPU with no overlap. This subsumes the discard-path
+      docstring's `discarded_within_cpu_seconds` field, which remains the
+      charge for a *discarded partial* group specifically; it is not
+      re-derived from source (2) for that same key, since the discard
+      event's pop already removes it from the deferred pass entirely.
     - `stage_summary` events (round 15 finding #5, `[UNDERSPEC-CAL-D31]`):
       the CLI dispatch path's own parent-side CPU for the whole stage,
       not captured by either of the above (matrix build, ledger/JSON I/O,
@@ -690,6 +731,24 @@ def cap_counters_from_ledger(
     # has appeared anywhere in the ledger.
     invocation_ids_with_summary: set[object] = set()
     last_meter_invocation: dict[tuple[object, object, object], object] = {}
+    # round 12 finding (adopted, category ③, `[UNDERSPEC-CAL-D79]`): the
+    # round-16 `within_cpu_seconds` subtraction on `meter_call` (below)
+    # assumes a `stage_summary`/`slice_summary` from the SAME writer
+    # invocation always shows up later in the ledger to recover it — true
+    # for the round 8 discard path (which reads the aggregate off the
+    # discard event's own `discarded_within_cpu_seconds` field instead) but
+    # NOT for a group that completes all 6 records and is never discarded:
+    # a writer killed right after appending its 6th record (before
+    # `cli.py` `main()`'s `finally` ever runs) leaves a COMPLETE group with
+    # no discard event and no summary — its within-process CPU would
+    # otherwise be silently lost. `meter_group_within_cpu` records each
+    # key's shared within-process aggregate from its own first record (the
+    # same "one shared value per group" reading `discarded_within_cpu_
+    # seconds` captures for the discard path — see `measure_stage._
+    # partial_group_within_cpu_seconds`), so it can be charged after the
+    # scan for any key still active (i.e. not popped by a
+    # `meter_call_group_discarded` reset) whose writer never got summarized.
+    meter_group_within_cpu: dict[tuple[object, object, object], float] = {}
     for entry in ledger_entries:
         payload = entry.payload
         if not isinstance(payload, Mapping):
@@ -757,13 +816,19 @@ def cap_counters_from_ledger(
             seen_meter_keys.add(key)
             # round 16 finding #3 (`[UNDERSPEC-CAL-D35]`): exclude the
             # within-process portion — see the docstring above.
-            fresh_cpu_seconds = _finite_nonneg_float(
-                payload.get("cpu_seconds")
-            ) - _finite_nonneg_float(payload.get("within_cpu_seconds"))
+            within_cpu_seconds = _finite_nonneg_float(payload.get("within_cpu_seconds"))
+            fresh_cpu_seconds = _finite_nonneg_float(payload.get("cpu_seconds")) - within_cpu_seconds
             if fresh_cpu_seconds < 0.0:
                 fresh_cpu_seconds = 0.0
             compute += fresh_cpu_seconds
             meter_units += 1
+            # round 12 finding (`[UNDERSPEC-CAL-D79]`): capture this key's
+            # shared within-process aggregate off its own first record — the
+            # post-scan pass below charges it iff this key's writer never
+            # gets a discard event (which would pop it and charge via
+            # `discarded_within_cpu_seconds` instead) and never gets
+            # summarized.
+            meter_group_within_cpu[key] = within_cpu_seconds
         elif kind == "stage_summary":
             compute += _finite_nonneg_float(payload.get("parent_cpu_seconds"))
             # round 8 finding #2 (R8-2): this invocation's own summary now
@@ -818,6 +883,22 @@ def cap_counters_from_ledger(
             # per-BATCH `budget_units` field as `worker_failed` above (NOT
             # the count of `discarded_success_attempts` entries).
             worker_batch_budget_units += _finite_nonneg_int(payload.get("budget_units", 1))
+    # round 12 finding (adopted, category ③, `[UNDERSPEC-CAL-D79]`): charge
+    # the within-process CPU of every key still active at scan end (i.e.
+    # never popped by a `meter_call_group_discarded` reset — see that
+    # branch above) whose writer invocation never appears in
+    # `invocation_ids_with_summary`. This must run as a deferred pass, not
+    # inline inside the `meter_call` branch, because the writer's own
+    # `stage_summary`/`slice_summary` (the normal, expected case) is
+    # appended to the ledger AFTER that writer's `meter_call` records, not
+    # before. Exactly-once with the discard path above: a key popped by
+    # `meter_call_group_discarded` is absent from `last_meter_invocation`
+    # here, so its within CPU (already charged via that event's own
+    # `discarded_within_cpu_seconds`) is never revisited; a key charged
+    # here was never discarded, so it was never charged there either.
+    for key, invocation_id in last_meter_invocation.items():
+        if invocation_id is None or invocation_id not in invocation_ids_with_summary:
+            compute += meter_group_within_cpu.get(key, 0.0)
     budget = 0.0
     if cost_caps is not None:
         per_unit = cost_caps.budget_charge_per_work_unit()

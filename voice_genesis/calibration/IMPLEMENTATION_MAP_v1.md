@@ -1050,3 +1050,75 @@ loader 同値の 4 パターンを c1/c2/c3a/c3b/c4 の render/measure/F0 各ル
 - **ファミリー終端宣言**: 割込み invocation を跨ぐ cap 会計ファミリー
   （round 6 finding #3・round 7 finding #1・round 8 finding #1/#2/#3）は
   第 8 巡で終端。以降は新規の具体的な偽成功/偽失敗経路を示す指摘のみ採用。
+
+#### 6.5.6 第 12 巡追補（Codex PR #345 レビュー採用、2026-09-03。COMPLETE かつ
+never-discarded な meter_call group の within CPU 未回収——第 8 巡の
+ファミリー終端宣言後、新規の具体的な偽成功経路として採用）
+
+- **（③、`campaign/caps.py` `cap_counters_from_ledger()`）— プロセスが
+  group の 6 件目（最後）の `meter_call` record を追記した直後に kill され、
+  `cli.py` `main()` の `finally` に一度も到達しなかった場合、COMPLETE
+  （6 record 揃っている）かつ discard event の無い group が残る**: これは
+  round 6〜8 が扱った「discard される partial group」ファミリーとは別の
+  経路——discard すべき欠損が無い（6 件とも揃っている）ため
+  `meter_call_group_discarded` は一切記帳されず、再開時はこの group を
+  「済」として扱い remeasure も discard も一切走らない。round 16 finding
+  #3 の `within_cpu_seconds` 除外（§6.4 systematic subtraction、`stage_
+  summary`/`slice_summary` が回収する前提）はこの writer について永久に
+  成立しない——within CPU が静かに失われ、`counters.json` の削除/rollback
+  から `cap_counters_from_ledger()` で再構成すると凍結 compute cap を
+  falsely 下回り得る（false-success）。設計判定: pairing rule を discard
+  event 限定から**全 `meter_call` group**へ一般化する——「writer の
+  `invocation_id` に `stage_summary`/`slice_summary` が一件も無い group」
+  は、discard されたか否かに関わらず within CPU を回収対象とする。
+  **exactly-once 不変条件**（採用: discard 経路は現状維持、COMPLETE
+  かつ未 discard の group のみ新規に直接計上——discard 経由と
+  per-record 経由を単一ルールへ統合する案は見送り、両者の分岐を
+  シンプルに保った）: (1) discard される group は従来どおり
+  `meter_call_group_discarded` 自身の `discarded_within_cpu_seconds` から
+  1 回だけ課金（§6.5.4/§6.5.5、変更なし）。(2) discard されなかった
+  group（COMPLETE か否かを問わない——`--discard-partial-groups` 無しで
+  resume され得る未解決 partial も同型のため）は、forward scan 完了後の
+  deferred pass で `last_meter_invocation`（discard で pop されなかった
+  key のみが scan 終端まで残る）を走査し、writer `invocation_id` が
+  `invocation_ids_with_summary` に無ければ、その key の最初の
+  `meter_call` record が運ぶ `within_cpu_seconds`（discard 経路が読む
+  のと同じ「group 共有の 1 値」）を 1 回だけ加算する。deferred にする
+  理由: 実運用では writer 自身の `stage_summary`/`slice_summary` は
+  その writer の `meter_call` record 群より**後**に ledger へ現れるため、
+  forward scan 中には pairing を確定できない。discard された key は
+  scan 中に `last_meter_invocation`/`seen_meter_keys` から pop 済みで
+  deferred pass に現れず、deferred pass で課金される key は定義上一度も
+  discard されていない——2 経路は排他的で二重計上しない。実装:
+  `caps.cap_counters_from_ledger()` に `meter_call_group_within_cpu`
+  （key ごとの最初の record の `within_cpu_seconds`）を追加し、forward
+  scan 後に上記 deferred pass を実行。`reconcile_cap_counters()`
+  （stage 起動時に呼ばれる pre-dispatch breach check の入力）は
+  `cap_counters_from_ledger()` を素通しするため、この一般化は
+  「未 summary の COMPLETE group の CPU も次回 dispatch 前に cap 検査
+  される」ことを追加コード無しで含意する。テスト:
+  `test_campaign_caps.py`
+  `test_cap_counters_from_ledger_complete_unsummarized_group_charged_once`
+  （シナリオ a: COMPLETE・未 summary → 1 回課金）/
+  `test_cap_counters_from_ledger_partial_group_discard_unsummarized_charged_once`
+  （シナリオ b: partial + discard・未 summary → 従来どおり 1 回・回帰）/
+  `test_cap_counters_from_ledger_complete_summarized_group_not_double_charged`
+  （シナリオ c: writer が summary 済み → summary のみでカバー、二重計上
+  なし）/
+  `test_cap_counters_from_ledger_normal_summarized_groups_totals_unchanged`
+  （シナリオ d: 通常の summary 済み group 群 → 総額不変の回帰）/
+  `test_reconcile_reproduces_live_total_for_unsummarized_complete_group`
+  （シナリオ e: `counters.json` rollback + `reconcile_cap_counters()` が
+  live 総額を再現）。`test_campaign_cli.py`
+  `test_deleted_counters_json_with_unsummarized_complete_meter_group_blocks_on_precheck`
+  （live counters: `counters.json` 消失 + 未 summary の COMPLETE group
+  → 次回 dispatch 前の pre-check が `COST_CAP_EXCEEDED` で fail-closed
+  することを CLI end-to-end で確認）。既存
+  `test_measure_ledger_derived_reconstruction_equals_persisted_compute`
+  は `run_measurement_for_instance()` を `cli.py` main() 経由せず単体で
+  呼ぶため `stage_summary` が一切記帳されず、本追補が意図どおり
+  「未 summary」経路を発火させて回帰した——同テストへ明示的
+  `invocation_id` と、それに対応する 0-cost の `stage_summary`
+  スタブを追加し、実運用で `main()` の `finally` が必ず 1 個の summary
+  を残す前提を模した（意味的な後退ではなく、単体テストが実運用の
+  ラッパー保証を暗黙に借りていた箇所を明示化）。

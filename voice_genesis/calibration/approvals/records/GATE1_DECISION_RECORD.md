@@ -401,3 +401,30 @@ event の payload 一覧に `invocation_id` を追記）/§6.5.5 を追補し、
 memo_sha256 を
 `144aa62beb8e72a3cb2d50fa5fcd28717a7864a5e23ac528500103ca960f7fab` へ更新した。
 承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。
+
+### 10.6 D79 追補 6（2026-09-03）
+
+Codex #345 第 12 巡の ③ 1 件（COMPLETE かつ never-discarded な meter_call
+group の within CPU 未回収——第 8 巡のファミリー終端宣言後、新規の具体的な
+偽成功経路として採用）を採用した。プロセスが group の 6 件目（最後）の
+`meter_call` record を追記した直後に kill され、`cli.py` `main()` の
+`finally` に一度も到達しなかった場合、discard すべき欠損が無い（6 件とも
+揃っている）ため `meter_call_group_discarded` は一切記帳されず、再開時は
+この group を「済」として扱い remeasure も discard も一切走らない——round
+16 finding #3 の `within_cpu_seconds` 除外（`stage_summary`/`slice_
+summary` が回収する前提）はこの writer について永久に成立せず、
+`counters.json` の削除/rollback から再構成すると凍結 compute cap を
+falsely 下回り得た（false-success）。修正: `caps.cap_counters_from_
+ledger()` の pairing rule を discard event 限定から全 `meter_call`
+group へ一般化——「writer の `invocation_id` に `stage_summary`/`slice_
+summary` が一件も無い group」は discard の有無に関わらず within CPU を
+回収対象とする。exactly-once 不変条件は discard 経路（現状維持）と、
+forward scan 完了後の deferred pass（discard で pop されなかった key の
+みを対象に、writer が非カバーなら最初の record の `within_cpu_seconds`
+を 1 回加算）の 2 経路排他で維持する（discard された key は deferred
+pass に現れず、deferred pass で課金される key は一度も discard されて
+いない）。`reconcile_cap_counters()`（stage 起動時の pre-dispatch breach
+check の入力）はこの関数を素通しするため、live counters への反映も
+追加コード無しで含意される。memo §6.5.6 を追補し、memo_sha256 を
+`bccab5978b12f4f6f36b2c9de25fd2b4d2abf87104a2a3f2861ce860a3473a70` へ
+更新した。承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。
