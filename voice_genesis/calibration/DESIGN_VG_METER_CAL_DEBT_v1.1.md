@@ -12,8 +12,8 @@ evidence_basis:
   - discarded campaign RUN10-CAL-20260903-591cadcd (abort record)
   - discarded campaign RUN10-CAL-20260903-9bcbbf86 (abort record)
 authorship:
-  design_compiler: CLAUDE (Fable session, 2026-09-04)
-  approving_authority: USER (directive 2026-09-04: 設計 v1.1 を Design Memo から起こし再 freeze → 再 campaign を実行、D82/D87/D88/D90 を事前に修正)
+  design_compiler: "CLAUDE (Fable session, 2026-09-04)"
+  approving_authority: "USER (directive 2026-09-04: 設計 v1.1 を Design Memo から起こし再 freeze → 再 campaign を実行、D82/D87/D88/D90 を事前に修正)"
 execution_authorized: false
 meter_changes_authorized: false
 run11_measurement_entry_authorized: false
@@ -33,14 +33,18 @@ campaign `RUN10-CAL-20260904-862dec28`（2026-09-04 close、`debt_discharged = f
 | 節 | 上書き対象（v1.0） | 内容 |
 |---|---|---|
 | §V1 | §8（F0_CONTROL の selection / 共通 fail filter） | F0 C3a の negative control fail filter を control class で分割 |
-| §V2 | §7（split 層別規則）+ §10.4 の holdout sweep 意味論 | TRUTH_CORE∧PRIMARY 行の sweep-cluster 割当 |
+| §V2 | §7（split 層別規則）+ §10.4 の holdout sweep 意味論 + **§12/§13 の claim 適用範囲**（M6 および DIRECTIONAL 終端 status の claim を holdout 評価済み範囲へ縮小、claim text / prohibited interpretations 欄の必須記載を追加） | holdout sweep pinning + claim 被覆の正直化 |
 | §V3 | （v1.0 の変更ではなく実装欠落 D17 の閉塞） | c4 の実 gate 組み立て配線を campaign 成立要件に昇格 |
 | §V4 | §13 運用（artifact layout の運用細則） | 破棄 campaign ledger の圧縮保全規約 |
 | §V5 | （設計外・コード是正の記録） | D82/D87/D88/D90 の correction record |
 
 上記以外の全て（D1–D3 裁定・語彙・C0 manifest・independence tier・456 セル行列・
-repeat 構造・selection rule・誤差式・終端 status・M6・provenance schema・費用上限・
-RUN11 Gate・§16 対象外事項・§18 承認 Gate）は v1.0 のまま不変。
+repeat 構造・selection rule・誤差式・終端 status cascade・provenance schema の欄構成・
+費用上限・RUN11 Gate・§16 対象外事項・§18 承認 Gate）は v1.0 のまま不変。
+§15（RUN11 Hard Claim-Dependency Gate）の**文言と凍結は不変**だが、§V2 の claim
+縮小により「preregistered RUN11 claim-critical meter がその claim に十分な final
+status を持つか」（§15 条件 (3)）の判定材料は縮小後の claim 範囲となる — 縮小 claim
+で足りるか否かの判断は §15 (4) の User レビューに属し、本書は先取りしない。
 
 ## V1. F0_CONTROL C3a の negative control fail filter 分割（v1.0 §8 の部分改訂）
 
@@ -141,6 +145,20 @@ secret 依存で充足不能になる条件付き実行不能、(b) IDENTITY_CAU
   trait を `HMAC-SHA256(split_secret, trait)` 昇順に並べ、i 番目（i = 0..k_hold-1）の
   founder に trait `i mod 3` の sweep を割当てる（4 pin で全 founder × 全 trait を
   被覆。各 (founder, trait) cell は sweep 1 個なので一意に定まる）。
+- **claim-relevant 次元の一般規則**（Codex レビュー第 5 巡 P1 採用、2026-09-04 —
+  IDENTITY 特例の一般化）: 各 family について、declared sweep を区別する held-fixed
+  field のうち **construct の適用範囲を分割するもの**（= claim-relevant field。例:
+  TRANSITION_GT の `join_type`/`duration_class`、APERIODICITY_GT の bandwise band、
+  IDENTITY_CAUSAL_SWEEP の `founder_id`/`trait`。nuisance 設定のみが変動する family
+  は該当なし、§16-1 で DIAGNOSTIC_ONLY 固定の RESONANCE_GT は claim を持たない）を
+  C0 で宣言・凍結し、c0_validate が matrix 実体からの機械導出値と照合する。pin 選抜
+  は claim-relevant field の値多様性を最大化する決定論的ラウンドロビン（値組を
+  HMAC 昇順に巡回し、各値組グループ内は HMAC 昇順）で行い、**cap 内で全値被覆が
+  不能な family は V2.4 の IDENTITY と同一の機構で claim を縮小する**: DIRECTIONAL
+  終端 status の claim text に評価済み値組を機械可読で列挙し、prohibited
+  interpretations に非評価値への directional 外挿の禁止を必須化する（456 セルでの
+  帰結: TRANSITION_GT は k=2 で join_type 4 値中 2 値のみ評価 → claim 縮小適用。
+  APERIODICITY_GT も k=2 で評価済み band 組へ縮小。FORMANT_GT / IDENTITY は被覆成立）。
 
 ```
 k_hold(family) = min( max(1, floor(0.25 * S + 0.5)),   # 25% 目標の half-up 丸め、最低 1
@@ -254,6 +272,14 @@ campaign 成立要件とする:
   sidecar `ledger.jsonl.sha256` に記録した上で gzip（`ledger.jsonl.gz`）へ置換して
   保全する。原本同一性は `zcat ledger.jsonl.gz | sha256sum` と sidecar の照合で機械
   検証できる（chain 検証は伸長後に従来どおり可能）。
+- **置換は原子的に行う**（Codex レビュー第 5 巡 P1 採用、2026-09-04 — abort record
+  は当該 campaign の唯一の正本であり、部分置換はそれを破損する）: (1) 同一
+  ディレクトリ内の staging 名で `ledger.jsonl.gz` と sidecar を書き、(2) staging の
+  gz を実際に伸長して sidecar の sha256 および原本バイト列と一致すること・伸長結果の
+  ledger chain が verify を通ることを確認し、(3) fsync 後に rename で公開してから
+  (4) 原本を削除する。中断からの回復規則: 公開済み gz + sidecar が検証を通る場合
+  のみ残存原本を除去してよく、それ以外は原本を正とし staging/部分成果物を破棄する。
+  この手順は故障注入（各段階間での中断を模す）テストで検証する。
 - 既存の破棄 campaign `RUN10-CAL-20260903-9bcbbf86` / `RUN10-CAL-20260903-591cadcd`
   に本規約を遡及適用する。
 - **閉鎖（CAMPAIGN_CLOSED）campaign の凍結ディレクトリは不変のまま**（本規約の対象外。
