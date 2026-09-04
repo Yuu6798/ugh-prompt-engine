@@ -42,7 +42,7 @@ import resource
 import subprocess
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,7 +57,7 @@ from voice_genesis.calibration.campaign.caps import (
 )
 from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.campaign.time_budget import SliceStatus, TimeBudget
-from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
+from voice_genesis.calibration.cost_caps import CapCounters, CostCaps, StopDecision
 from voice_genesis.calibration.cost_caps import check as cost_caps_check
 from voice_genesis.calibration.fixtures.controls import control_row_ids
 from voice_genesis.calibration.fixtures.matrix import FixtureRow, MatrixRow
@@ -733,6 +733,7 @@ def run_render_stage(
     cost_caps: CostCaps | None = None,
     time_budget: TimeBudget | None = None,
     invocation_id: str | None = None,
+    pre_transition_checkpoint: Callable[[], StopDecision | None] | None = None,
 ) -> tuple[RenderOutcome, ...] | tuple[tuple[RenderOutcome, ...], SliceStatus]:
     """`stage='c1'` または `stage='c4'`。C4 は render を試みる前に leakage
     検査を行う。determinism 違反時は既に render 済みの outcome を保ったまま
@@ -950,6 +951,28 @@ def run_render_stage(
                 )
 
     if stage == "c1" and completed_all:
+        # `[UNDERSPEC-CAL-D87]`(ii): `c1-fixtures` delegates its entire
+        # stage body — every per-unit render charge *and* the phase-
+        # transition event itself — to this single function call, so
+        # `cli.py` has no chance to interject its own `_checkpoint_parent_
+        # cpu_before_transition()` call between "last render charged" and
+        # "`fixture_valid` appended" the way `_run_c3a`/`_run_c3b`/`_run_
+        # c4`/`_run_close` do around their own (separately-called) library
+        # functions. `pre_transition_checkpoint`, when given, is `cli.py`'s
+        # `_checkpoint_parent_cpu_before_transition()` wrapped as a
+        # zero-arg callable (mirrors `holdout_stage.render_and_measure_
+        # holdout()`'s `f0_prepass` callback convention, `[UNDERSPEC-CAL-D86]`)
+        # — called here, immediately before the transition append, so a
+        # breach blocks `fixture_valid` from ever being recorded. A breach
+        # raises `CostCapExceededError` (the same type/propagation style
+        # this function's own per-unit dispatch loop already uses above —
+        # uncaught out of `main()`), rather than returning a sentinel,
+        # since this function's return type is a plain outcomes tuple with
+        # no room for a COST_CAP_EXCEEDED variant.
+        if pre_transition_checkpoint is not None:
+            breach = pre_transition_checkpoint()
+            if breach is not None:
+                raise CostCapExceededError(breach.detail)
         campaign.ledger.append(
             {
                 "kind": "fixture_valid",

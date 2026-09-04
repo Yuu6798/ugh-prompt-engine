@@ -1,6 +1,6 @@
 import pytest
 
-from voice_genesis.calibration.provenance import Ledger
+from voice_genesis.calibration.provenance import Ledger, _verified_holdout_unseal_seq
 from voice_genesis.calibration.tests.test_provenance import _check_leakage
 from voice_genesis.calibration.vocab import BlockedCode
 
@@ -408,6 +408,213 @@ def test_unseal_gate3_accepted_sha_referencing_production_envelope_passes(tmp_pa
         unseal_seq=unseal.seq,
     )
     assert result.blocked is None
+
+
+# ---------------------------------------------------------------------------
+# `[UNDERSPEC-CAL-D88]`(a): replay-verifier parity for the D85 freeze-
+# ordering check `campaign.unseal.unseal_campaign()` already enforces live
+# (`freeze_time < gate3_time`, `unseal.py:166-183`) -- `_verified_holdout_
+# unseal_detail()` must independently re-derive the same ordering from the
+# ledger's own `c0_freeze`/`gate3_accepted`/`holdout_unseal` timestamps when
+# entry 0 is a `c0_freeze` event (the shape every real campaign ledger has,
+# `campaign/state.py::load_frozen_campaign`). These tests build the ledger
+# directly (not via `_check_leakage()`'s wrapper, which always prepends its
+# own synthetic `split_frozen` entry 0 for the unrelated split-authentication
+# checks -- entry 0 must be literally `c0_freeze` for this new check to
+# engage at all) and assert against `_verified_holdout_unseal_seq()` itself.
+# ---------------------------------------------------------------------------
+
+
+def test_replay_verifier_rejects_gate3_predating_c0_freeze(tmp_path) -> None:
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append({"kind": "c0_freeze", "event_time_utc": "2026-09-04T10:00:00+00:00"})
+    commitments = _append_prerequisites(ledger)
+    gate3_sha = ledger.append(
+        {
+            "kind": "gate3_accepted",
+            "approval_content_sha256": "f" * 64,
+            "seal_protection_level_accepted": True,
+            "approver": "test-approver",
+            # predates the c0_freeze event above -- must be rejected even
+            # though the 4-prerequisite/commitment linkage is otherwise
+            # entirely valid.
+            "approved_at_utc": "2026-09-04T09:00:00+00:00",
+        }
+    ).entry_sha
+    frozen = ledger.append({"kind": "selection_frozen", **commitments})
+    ledger.append(
+        {
+            "kind": "holdout_unseal",
+            **commitments,
+            "selection_freeze_event_sha": frozen.entry_sha,
+            "gate3_accepted_sha": gate3_sha,
+            "event_time_utc": "2026-09-04T11:00:00+00:00",
+        }
+    )
+
+    assert _verified_holdout_unseal_seq(ledger.entries) is None
+
+
+def test_replay_verifier_accepts_gate3_after_c0_freeze(tmp_path) -> None:
+    """Companion to the rejection test above: the same ledger shape, but
+    with `gate3_accepted.approved_at_utc` strictly after `c0_freeze.event_
+    time_utc` and at or before `holdout_unseal.event_time_utc` -- the
+    ordering holds, so the unseal boundary is accepted exactly as it would
+    be without this check (D88 must not introduce a false failure on a
+    genuinely valid, freeze-after ledger)."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append({"kind": "c0_freeze", "event_time_utc": "2026-09-04T10:00:00+00:00"})
+    commitments = _append_prerequisites(ledger)
+    gate3_sha = ledger.append(
+        {
+            "kind": "gate3_accepted",
+            "approval_content_sha256": "f" * 64,
+            "seal_protection_level_accepted": True,
+            "approver": "test-approver",
+            "approved_at_utc": "2026-09-04T10:30:00+00:00",
+        }
+    ).entry_sha
+    frozen = ledger.append({"kind": "selection_frozen", **commitments})
+    unseal = ledger.append(
+        {
+            "kind": "holdout_unseal",
+            **commitments,
+            "selection_freeze_event_sha": frozen.entry_sha,
+            "gate3_accepted_sha": gate3_sha,
+            "event_time_utc": "2026-09-04T11:00:00+00:00",
+        }
+    )
+
+    assert _verified_holdout_unseal_seq(ledger.entries) == unseal.seq
+
+
+def test_replay_verifier_accepts_gate3_30s_ahead_of_holdout_unseal(tmp_path) -> None:
+    """Design revision (Codex review, adopted): the upper bound carries the
+    same 60s clock-skew tolerance `unseal.py`'s own `_CLOCK_SKEW_TOLERANCE_
+    SECONDS` allows Gate 3's `approved_at_utc` relative to the live check-
+    time clock -- `unseal_campaign()` accepts a Gate 3 approval up to 60s
+    ahead of "now" and then stamps `holdout_unseal.event_time_utc` moments
+    later with the *local* clock, so a strict `gate3_time <= unseal_time`
+    would falsely reject this entirely normal-path shape. Gate3 30s ahead
+    of `holdout_unseal.event_time_utc` (well within the 60s tolerance) must
+    verify as a valid unseal boundary."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append({"kind": "c0_freeze", "event_time_utc": "2026-09-04T10:00:00+00:00"})
+    commitments = _append_prerequisites(ledger)
+    gate3_sha = ledger.append(
+        {
+            "kind": "gate3_accepted",
+            "approval_content_sha256": "f" * 64,
+            "seal_protection_level_accepted": True,
+            "approver": "test-approver",
+            # 30s AFTER the holdout_unseal event_time_utc below -- within
+            # the 60s tolerance.
+            "approved_at_utc": "2026-09-04T11:00:30+00:00",
+        }
+    ).entry_sha
+    frozen = ledger.append({"kind": "selection_frozen", **commitments})
+    unseal = ledger.append(
+        {
+            "kind": "holdout_unseal",
+            **commitments,
+            "selection_freeze_event_sha": frozen.entry_sha,
+            "gate3_accepted_sha": gate3_sha,
+            "event_time_utc": "2026-09-04T11:00:00+00:00",
+        }
+    )
+
+    assert _verified_holdout_unseal_seq(ledger.entries) == unseal.seq
+
+
+def test_replay_verifier_rejects_gate3_61s_ahead_of_holdout_unseal(tmp_path) -> None:
+    """Companion boundary test: 61s ahead of `holdout_unseal.event_time_
+    utc` -- 1s past the 60s tolerance -- must be rejected (fixes the
+    tolerance's value at exactly 60s from both sides, matching `unseal.py`'s
+    own `_CLOCK_SKEW_TOLERANCE_SECONDS`)."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append({"kind": "c0_freeze", "event_time_utc": "2026-09-04T10:00:00+00:00"})
+    commitments = _append_prerequisites(ledger)
+    gate3_sha = ledger.append(
+        {
+            "kind": "gate3_accepted",
+            "approval_content_sha256": "f" * 64,
+            "seal_protection_level_accepted": True,
+            "approver": "test-approver",
+            "approved_at_utc": "2026-09-04T11:01:01+00:00",
+        }
+    ).entry_sha
+    frozen = ledger.append({"kind": "selection_frozen", **commitments})
+    ledger.append(
+        {
+            "kind": "holdout_unseal",
+            **commitments,
+            "selection_freeze_event_sha": frozen.entry_sha,
+            "gate3_accepted_sha": gate3_sha,
+            "event_time_utc": "2026-09-04T11:00:00+00:00",
+        }
+    )
+
+    assert _verified_holdout_unseal_seq(ledger.entries) is None
+
+
+def test_replay_verifier_rejects_holdout_unseal_missing_event_time_utc(tmp_path) -> None:
+    """A `holdout_unseal` event that (unlike every event `campaign.unseal.
+    unseal_campaign()` actually emits, which always stamps `event_time_utc`
+    -- see D88(a)) lacks the field entirely is rejected fail-closed rather
+    than silently skipping the upper-bound check."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append({"kind": "c0_freeze", "event_time_utc": "2026-09-04T10:00:00+00:00"})
+    commitments = _append_prerequisites(ledger)
+    gate3_sha = ledger.append(
+        {
+            "kind": "gate3_accepted",
+            "approval_content_sha256": "f" * 64,
+            "seal_protection_level_accepted": True,
+            "approver": "test-approver",
+            "approved_at_utc": "2026-09-04T10:30:00+00:00",
+        }
+    ).entry_sha
+    frozen = ledger.append({"kind": "selection_frozen", **commitments})
+    ledger.append(
+        {
+            "kind": "holdout_unseal",
+            **commitments,
+            "selection_freeze_event_sha": frozen.entry_sha,
+            "gate3_accepted_sha": gate3_sha,
+            # no event_time_utc.
+        }
+    )
+
+    assert _verified_holdout_unseal_seq(ledger.entries) is None
+
+
+def test_replay_verifier_ignores_ordering_check_when_entry_zero_is_not_c0_freeze(
+    tmp_path,
+) -> None:
+    """The D88(a) ordering check only engages when `ledger_entries[0]` is
+    itself a `c0_freeze` event (see `_c0_freeze_ordering_violation()`
+    docstring) -- a ledger that does not start with one (every other test
+    in this file) is unaffected, exactly as before this fix. This directly
+    exercises the same guard `test_prior_prerequisite_events_allow_normal_
+    unseal_path` (no `c0_freeze` at all) already relies on implicitly, this
+    time with a non-`c0_freeze` entry occupying position 0 instead."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append({"kind": "meter_call", "row_id": "unrelated"})
+    commitments = _append_prerequisites(ledger)
+    gate3_sha = _append_gate3_accepted(ledger)
+    frozen = ledger.append({"kind": "selection_frozen", **commitments})
+    unseal = ledger.append(
+        {
+            "kind": "holdout_unseal",
+            **commitments,
+            "selection_freeze_event_sha": frozen.entry_sha,
+            "gate3_accepted_sha": gate3_sha,
+            # no event_time_utc either -- must not matter since the check
+            # does not engage without a c0_freeze entry 0.
+        }
+    )
+
+    assert _verified_holdout_unseal_seq(ledger.entries) == unseal.seq
 
 
 def test_unseal_gate3_accepted_sha_referencing_declined_gate3_fails_closed(tmp_path) -> None:

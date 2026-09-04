@@ -518,6 +518,56 @@ def _reusable_f0_values_by_process(
     return by_process
 
 
+def _record_f0_resume_precheck_duplicate_stop_event(
+    campaign: FrozenCampaign,
+    exc: measure_stage.StaleMeasurementError,
+    *,
+    stage: str,
+    invocation_id: str | None,
+) -> None:
+    """`[UNDERSPEC-CAL-D82]`: `_build_f0_by_instance()` の index 参照
+    （`MeterCallIndex.is_complete()`/`completed_records()`）が重複 repeat key
+    を検出して `StaleMeasurementError(kind="duplicate")` を送出する直前に、
+    `render_stage.run_render_stage()` の既存 append→raise パターン
+    （`RENDER_RESUME_INDEX_INTEGRITY_MISMATCH` 等、`render_stage.py:929-940`）
+    に倣い説明用 `stop_event` を記帳する。fail-closed 自体は index 参照が
+    `StaleMeasurementError` を送出することで既に成立している——欠けていたのは
+    ledger 上の説明のみ。
+
+    cli.py `_refuse_if_caps_already_breached()`（cli.py:2283 近傍）の重複
+    抑止規約を踏襲し、直近の `stop_event` が同一 reason・同一
+    row_id/probe_index/stage なら再記帳しない（append-only ledger 上で同一
+    情報を無限に積み増さない——resume のたびに同じ duplicate key を再検出
+    しても 1 件だけ記帳する）。"""
+    reason = "F0_RESUME_PRECHECK_DUPLICATE_KEY"
+    last_payload: Mapping[str, object] | None = None
+    for entry in reversed(campaign.ledger.entries):
+        if isinstance(entry.payload, Mapping) and entry.payload.get("kind") == "stop_event":
+            last_payload = entry.payload
+            break
+    already_recorded = (
+        isinstance(last_payload, Mapping)
+        and last_payload.get("reason") == reason
+        and last_payload.get("stage") == stage
+        and last_payload.get("row_id") == exc.row_id
+        and last_payload.get("probe_index") == exc.probe_index
+    )
+    if already_recorded:
+        return
+    campaign.ledger.append(
+        {
+            "kind": "stop_event",
+            "reason": reason,
+            "stage": stage,
+            "row_id": exc.row_id,
+            "probe_index": exc.probe_index,
+            "candidate_id": exc.candidate_id,
+            "detail": str(exc),
+            "invocation_id": invocation_id,
+        }
+    )
+
+
 def _build_f0_by_instance(
     campaign: FrozenCampaign,
     instances: Sequence[tuple[str, int]],
@@ -668,11 +718,22 @@ def _build_f0_by_instance(
         # check and `measure_stage.run_measure_stage()`'s
         # `_instance_has_pending_candidate()` check (both round 3/4 fixes
         # for this exact ordering bug).
-        has_pending = (
-            not meter_call_index.is_complete(row_id, probe_index, f0_candidate_id)
-            if meter_call_index is not None
-            else True
-        )
+        try:
+            has_pending = (
+                not meter_call_index.is_complete(row_id, probe_index, f0_candidate_id)
+                if meter_call_index is not None
+                else True
+            )
+        except measure_stage.StaleMeasurementError as exc:
+            # `[UNDERSPEC-CAL-D82]`: record the explanatory stop_event before
+            # re-raising (fail-closed itself is unchanged — see helper
+            # docstring). `kind == "partial"` never reaches here (`is_
+            # complete()` only raises for "duplicate", see its docstring).
+            if exc.kind == "duplicate":
+                _record_f0_resume_precheck_duplicate_stop_event(
+                    campaign, exc, stage=stage, invocation_id=invocation_id
+                )
+            raise
         # R2 instance boundary: checked before dispatching a NEW, genuinely
         # pending instance — an instance already in flight always runs to
         # completion, and an already-complete instance never reaches this
@@ -688,9 +749,23 @@ def _build_f0_by_instance(
             # instance` is called for real); an already-`is_complete()`
             # instance must not inflate "new progress this run".
             instances_completed_this_run += 1
-        by_process = _reusable_f0_values_by_process(
-            campaign, f0_candidate_id, row_id, probe_index, meter_call_index=meter_call_index
-        )
+        try:
+            by_process = _reusable_f0_values_by_process(
+                campaign, f0_candidate_id, row_id, probe_index, meter_call_index=meter_call_index
+            )
+        except measure_stage.StaleMeasurementError as exc:
+            # `[UNDERSPEC-CAL-D82]`: same treatment as the `is_complete()`
+            # precheck above — `completed_records()` can also raise
+            # `kind == "duplicate"` for this instance's F0 candidate (e.g.
+            # when `meter_call_index` is `None`, the defensive fallback that
+            # rescans `campaign.ledger.entries` directly). `kind ==
+            # "partial"` is unchanged/out of scope for D82 and propagates as
+            # before (no stop_event appended here for it).
+            if exc.kind == "duplicate":
+                _record_f0_resume_precheck_duplicate_stop_event(
+                    campaign, exc, stage=stage, invocation_id=invocation_id
+                )
+            raise
         # round 28 ADOPT (1) (`[UNDERSPEC-CAL-D63]`): tracks whether any
         # repeat came back OUTPUT_MISSING (f0_hz is None) during the manual
         # `by_process` reconstruction below — the *sole* place a partially-
@@ -746,15 +821,51 @@ def _build_f0_by_instance(
             continue
         result[(row_id, probe_index)] = aggregate
     if unusable:
-        campaign.ledger.append(
-            {
-                "kind": "f0_injection_rejected",
-                "stage": stage,
-                "reason": "F0_UNUSABLE",
-                "instances": [[rid, pidx] for rid, pidx in sorted(unusable)],
-                "invocation_id": invocation_id,
-            }
-        )
+        # `[UNDERSPEC-CAL-D90]`: a resumed slice re-walks the same instance
+        # prefix and reconstructs the same `unusable` set every invocation
+        # (index-driven reconstruction above, not a new measurement) — do
+        # not re-append an `f0_injection_rejected` event for instances this
+        # `stage` already recorded as rejected in a prior invocation. One
+        # full pass over `campaign.ledger.entries` (mirrors `MeterCallIndex.
+        # build()`'s "1 stage call = 1 full scan" convention above — no
+        # superlinear per-instance rescan) collects every already-recorded
+        # `(row_id, probe_index)` for this `stage`; only the set difference
+        # is appended, and nothing is appended if that difference is empty.
+        already_rejected: set[tuple[str, int]] = set()
+        for entry in campaign.ledger.entries:
+            payload = entry.payload
+            if (
+                not isinstance(payload, Mapping)
+                or payload.get("kind") != "f0_injection_rejected"
+                or payload.get("stage") != stage
+            ):
+                continue
+            recorded_instances = payload.get("instances")
+            if not isinstance(recorded_instances, Sequence) or isinstance(
+                recorded_instances, (str, bytes)
+            ):
+                continue
+            for item in recorded_instances:
+                if (
+                    isinstance(item, Sequence)
+                    and not isinstance(item, (str, bytes))
+                    and len(item) == 2
+                    and isinstance(item[0], str)
+                    and isinstance(item[1], int)
+                    and not isinstance(item[1], bool)
+                ):
+                    already_rejected.add((item[0], item[1]))
+        newly_unusable = unusable - already_rejected
+        if newly_unusable:
+            campaign.ledger.append(
+                {
+                    "kind": "f0_injection_rejected",
+                    "stage": stage,
+                    "reason": "F0_UNUSABLE",
+                    "instances": [[rid, pidx] for rid, pidx in sorted(newly_unusable)],
+                    "invocation_id": invocation_id,
+                }
+            )
     if time_budget is None:
         return result, frozenset(unusable)
     # round 5 finding S1 (counter fix's corollary, same "finding G" class as
@@ -893,16 +1004,34 @@ def _checkpoint_parent_cpu_before_transition(
     return a `COST_CAP_EXCEEDED` result *without* making that call when this
     returns non-`None`.
 
-    Scope: only wired into `_run_c3a`/`_run_c3b`/`_run_c4`/`_run_close`.
-    `c1-fixtures`/`c2-baseline` deliberately are not: those two delegate
-    their entire stage body (every render/measure per-unit charge *and* the
-    phase-transition event itself) to `render_stage`/`baseline_stage` in a
-    single call with no intervening `cli.py`-side work, so a checkpoint
-    immediately before that call would charge/check `cap_counters`
-    unchanged from what `_refuse_if_caps_already_breached` (the dispatch-
-    entry guard) already checked moments earlier — a same-value no-op. Those
-    two stages still get the `finally`-block recheck in `main()` (the base
-    round 16 finding #2 fix), same as every other stage.
+    Directly wired into `_run_c3a`/`_run_c3b`/`_run_c4`/`_run_close`
+    (calling this function itself, between two separately-invoked library
+    calls). `c1-fixtures`/`c2-baseline`/`unseal` (`_run_c1`/`_run_c2`/
+    `_run_unseal`) cannot call this function directly the same way — those
+    three delegate their entire stage body (every render/measure per-unit
+    charge *and* the phase-transition event itself) to `render_stage.
+    run_render_stage()`/`baseline_stage.run_baseline_stage()`/`unseal_
+    stage.unseal_campaign()` in a single call with no intervening `cli.py`
+    -side work, so a checkpoint immediately BEFORE that call would
+    charge/check `cap_counters` unchanged from what `_refuse_if_caps_
+    already_breached` (the dispatch-entry guard) already checked moments
+    earlier — a same-value no-op — while a checkpoint AFTER that call is
+    too late (the transition event is already appended by then).
+
+    `[UNDERSPEC-CAL-D87]`(ii): those three stages instead pass this
+    function, wrapped in a zero-arg closure over their own `campaign`/
+    `cap_counters`/`cost_caps`/`parent_cpu_checkpoint`/`invocation_id`, as
+    the `pre_transition_checkpoint` callback each of `run_render_
+    stage()`/`run_baseline_stage()`/`unseal_campaign()` now accepts and
+    calls internally at the correct point — after their own per-unit
+    loop/verification work, immediately before their own phase-transition
+    append (`fixture_valid`/`baseline_audited`/`holdout_unseal`) — closing
+    the exact gap this paragraph used to describe as unreachable from
+    `cli.py`. A breach there is signalled by raising `CostCapExceededError`
+    (not returning a sentinel — those three functions' return types have no
+    room for one), propagating uncaught out of `main()` exactly like any
+    other mid-stage cap breach already does for these same stages (their
+    own per-unit dispatch loops already raise the same type on breach).
 
     Mutates `parent_cpu_checkpoint[0]` to the new checkpoint so `main()`'s
     `finally` block charges only the residual CPU spent after this point,
@@ -916,6 +1045,38 @@ def _checkpoint_parent_cpu_before_transition(
     return _refuse_if_caps_already_breached(
         campaign, cost_caps, cap_counters, invocation_id=invocation_id
     )
+
+
+def _pre_transition_checkpoint_callback(
+    campaign: FrozenCampaign,
+    cap_counters: CapCounters | None,
+    cost_caps: CostCaps | None,
+    parent_cpu_checkpoint: list[float] | None,
+    *,
+    invocation_id: str | None,
+) -> Callable[[], StopDecision | None] | None:
+    """`[UNDERSPEC-CAL-D87]`(ii): build the `pre_transition_checkpoint`
+    zero-arg callback `render_stage.run_render_stage()`/`baseline_stage.
+    run_baseline_stage()`/`unseal_stage.unseal_campaign()` call internally,
+    right before their own phase-transition ledger append (see
+    `_checkpoint_parent_cpu_before_transition()`'s docstring for why those
+    three stages need a callback rather than calling that function
+    directly from `cli.py` the way `_run_c3a`/`_run_c3b`/`_run_c4`/`_run_
+    close` do). Returns `None` (equivalent to omitting the callback
+    entirely) when any of the three optional inputs it needs is `None`,
+    mirroring the existing `if parent_cpu_checkpoint is not None and
+    cap_counters is not None and cost_caps is not None:` guard those other
+    four stages use before calling `_checkpoint_parent_cpu_before_
+    transition()` directly."""
+    if cap_counters is None or cost_caps is None or parent_cpu_checkpoint is None:
+        return None
+
+    def _checkpoint() -> StopDecision | None:
+        return _checkpoint_parent_cpu_before_transition(
+            campaign, cap_counters, cost_caps, parent_cpu_checkpoint, invocation_id=invocation_id
+        )
+
+    return _checkpoint
 
 
 def _partial_slice_report(stage: str, slice_status: SliceStatus) -> dict[str, Any]:
@@ -939,9 +1100,14 @@ def _run_c1(
     *,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
+    parent_cpu_checkpoint: list[float] | None = None,
     time_budget_seconds: float | None = None,
     invocation_id: str | None = None,
 ) -> dict[str, Any]:
+    # `[UNDERSPEC-CAL-D87]`(ii): see `_pre_transition_checkpoint_callback()`.
+    pre_transition_checkpoint = _pre_transition_checkpoint_callback(
+        campaign, cap_counters, cost_caps, parent_cpu_checkpoint, invocation_id=invocation_id
+    )
     if time_budget_seconds is not None:
         outcomes, slice_status = render_stage.run_render_stage(
             campaign,
@@ -951,6 +1117,7 @@ def _run_c1(
             cost_caps=cost_caps,
             time_budget=TimeBudget.start_now(time_budget_seconds),
             invocation_id=invocation_id,
+            pre_transition_checkpoint=pre_transition_checkpoint,
         )
         if not slice_status.completed_all:
             return _partial_slice_report("c1-fixtures", slice_status)
@@ -962,6 +1129,7 @@ def _run_c1(
             cap_counters=cap_counters,
             cost_caps=cost_caps,
             invocation_id=invocation_id,
+            pre_transition_checkpoint=pre_transition_checkpoint,
         )
     return {
         "result": "OK",
@@ -978,10 +1146,15 @@ def _run_c2(
     *,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
+    parent_cpu_checkpoint: list[float] | None = None,
     discard_partial_groups: bool = False,
     time_budget_seconds: float | None = None,
     invocation_id: str | None = None,
 ) -> dict[str, Any]:
+    # `[UNDERSPEC-CAL-D87]`(ii): see `_pre_transition_checkpoint_callback()`.
+    pre_transition_checkpoint = _pre_transition_checkpoint_callback(
+        campaign, cap_counters, cost_caps, parent_cpu_checkpoint, invocation_id=invocation_id
+    )
     result = baseline_stage.run_baseline_stage(
         campaign,
         matrix_rows,
@@ -991,6 +1164,7 @@ def _run_c2(
         discard_partial_groups=discard_partial_groups,
         time_budget=TimeBudget.start_now(time_budget_seconds) if time_budget_seconds else None,
         invocation_id=invocation_id,
+        pre_transition_checkpoint=pre_transition_checkpoint,
     )
     if "slice_status" in result:
         return _partial_slice_report("c2-baseline", result["slice_status"])
@@ -1456,11 +1630,21 @@ def _run_unseal(
     campaign: FrozenCampaign,
     approval_dir: Path,
     *,
+    cap_counters: CapCounters | None = None,
+    cost_caps: CostCaps | None = None,
+    parent_cpu_checkpoint: list[float] | None = None,
     invocation_id: str | None = None,
 ) -> dict[str, Any]:
+    # `[UNDERSPEC-CAL-D87]`(ii): see `_pre_transition_checkpoint_callback()`.
+    pre_transition_checkpoint = _pre_transition_checkpoint_callback(
+        campaign, cap_counters, cost_caps, parent_cpu_checkpoint, invocation_id=invocation_id
+    )
     try:
         result = unseal_stage.unseal_campaign(
-            campaign, approval_dir=approval_dir, invocation_id=invocation_id
+            campaign,
+            approval_dir=approval_dir,
+            invocation_id=invocation_id,
+            pre_transition_checkpoint=pre_transition_checkpoint,
         )
     except unseal_stage.UnsealError as exc:
         return {"result": "UNSEAL_REFUSED", "detail": str(exc)}
@@ -2371,6 +2555,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
+    # `[UNDERSPEC-CAL-D87]`(i): snapshot this process's own parent-side CPU
+    # BEFORE `load_frozen_campaign()` (full ledger-chain verification,
+    # `provenance.Ledger.load_with_verification()`) rather than after — the
+    # pre-D87 checkpoint below (charged only from dispatch, well after this
+    # point) silently excluded the CPU spent on campaign load + every
+    # pre-dispatch integrity check between here and dispatch (canonical
+    # path/environment-drift/gate1-binding/phase-order checks, cost-caps
+    # loading, `reconcile_cap_counters()`) from every cap accounting window
+    # entirely — it was never charged to `cap_counters`/`counters.json` nor
+    # covered by any `stage_summary`/`slice_summary` ledger event. Moving
+    # the checkpoint here means the residual/`full_dispatch_parent_cpu_
+    # seconds` computed in the `finally` block below (unchanged position)
+    # now includes it. `parent_cpu_checkpoint` (the mutable single-element
+    # box `_run_c3a`/`_run_c3b`/`_run_c4`/`_run_close`'s mid-stage
+    # checkpoints advance) is created here too so its very first checkpoint
+    # already covers this same pre-dispatch span, not just the dispatch
+    # call itself. Every early return between here and the `try/finally`
+    # below (`CAMPAIGN_STATE_ERROR`/`BLOCKED_CANONICAL_MUTATION_REQUIRED`/
+    # `BLOCKED_ENVIRONMENT_DRIFT`/`AUTHORIZATION_REQUIRED`/
+    # `PHASE_ORDER_VIOLATION`/budget-accounting/counters-corrupt errors)
+    # never reaches that `finally` block and so never charges/persists this
+    # CPU either — unchanged from before this fix, since none of those
+    # paths charged `cap_counters` at all pre-D87.
+    parent_cpu_t0 = _process_cpu_seconds()
+    parent_cpu_checkpoint = [parent_cpu_t0]
+
     try:
         campaign = load_frozen_campaign(args.campaign_dir, secret_dir)
     except CampaignStateError as exc:
@@ -2554,17 +2764,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     # once per dispatch, regardless of exit path.
     #
     # round 16 finding #2 (`[UNDERSPEC-CAL-D34]`): `parent_cpu_checkpoint`
-    # is a mutable single-element box, not a plain float — `_run_c3a`/
-    # `_run_c3b`/`_run_c4`/`_run_close` advance it (via
-    # `_checkpoint_parent_cpu_before_transition`) when they perform their
-    # own pre-transition recheck, so the residual charge below only covers
-    # CPU spent *after* that last mid-stage checkpoint (or the whole
-    # dispatch, for `c1-fixtures`/`c2-baseline`/`unseal`, which never
-    # checkpoint mid-stage — see `_checkpoint_parent_cpu_before_transition`'s
-    # docstring for why).
+    # is a mutable single-element box, not a plain float — every stage
+    # runner (`_run_c1`/`_run_c2`/`_run_unseal`/`_run_c3a`/`_run_c3b`/
+    # `_run_c4`/`_run_close`, `[UNDERSPEC-CAL-D87]`(ii)) advances it (via
+    # `_checkpoint_parent_cpu_before_transition`, or a `pre_transition_
+    # checkpoint` callback wrapping the same function for the stages that
+    # delegate their phase-transition append to `render_stage`/
+    # `baseline_stage`/`unseal_stage`) when they perform their own
+    # pre-transition recheck, so the residual charge below only covers CPU
+    # spent *after* that last mid-stage checkpoint. `parent_cpu_t0`/
+    # `parent_cpu_checkpoint` are created above, before `load_frozen_
+    # campaign()` (`[UNDERSPEC-CAL-D87]`(i)) — not re-created here.
     out: dict[str, Any] | None = None
-    parent_cpu_t0 = _process_cpu_seconds()
-    parent_cpu_checkpoint = [parent_cpu_t0]
     try:
         if args.subcommand == "c1-fixtures":
             out = _run_c1(
@@ -2572,6 +2783,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 matrix_rows,
                 cap_counters=cap_counters,
                 cost_caps=cost_caps_obj,
+                parent_cpu_checkpoint=parent_cpu_checkpoint,
                 time_budget_seconds=args.time_budget_seconds,
                 invocation_id=invocation_id,
             )
@@ -2582,6 +2794,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.workers,
                 cap_counters=cap_counters,
                 cost_caps=cost_caps_obj,
+                parent_cpu_checkpoint=parent_cpu_checkpoint,
                 discard_partial_groups=args.discard_partial_groups,
                 time_budget_seconds=args.time_budget_seconds,
                 invocation_id=invocation_id,
@@ -2611,7 +2824,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 invocation_id=invocation_id,
             )
         elif args.subcommand == "unseal":
-            out = _run_unseal(campaign, approval_dir, invocation_id=invocation_id)
+            out = _run_unseal(
+                campaign,
+                approval_dir,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps_obj,
+                parent_cpu_checkpoint=parent_cpu_checkpoint,
+                invocation_id=invocation_id,
+            )
         elif args.subcommand == "c4-holdout":
             out = _run_c4(
                 campaign,
@@ -2650,10 +2870,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         # the persisted cache for any stage that checkpoints mid-dispatch
         # (`c3a`/`c3b`/`c4`/`close`) — the checkpoint delta was charged to
         # `counters.json` but never appeared anywhere in the ledger.
-        now_cpu = _process_cpu_seconds()
-        residual_cpu_seconds = now_cpu - parent_cpu_checkpoint[0]
-        if residual_cpu_seconds < 0.0:  # pragma: no cover - defensive only
-            residual_cpu_seconds = 0.0
+        # `[UNDERSPEC-CAL-D87]`(iii): recompute the CPU checkpoint delta
+        # immediately before whichever summary append actually happens
+        # below, rather than once here (the pre-D87 position) — so the
+        # `parent_cpu_seconds` recorded on that event, and the residual
+        # charged to `cap_counters`, include the CPU this `finally` block
+        # itself spends beforehand (`out_is_partial_slice`/`slice_fields`
+        # construction). The append call's own CPU stays excluded — a
+        # deliberate, documented boundary (memo `design_v1_1_
+        # implementation.md` R5/D87(iii)): unlike the O(n) full-ledger
+        # verification D87(i)/(ii) target, a single `Ledger.append()` is
+        # O(1) since D84, so this residual is bounded and not worth a
+        # third snapshot after the write.
+        def _checkpoint_before_summary() -> float:
+            now = _process_cpu_seconds()
+            residual = now - parent_cpu_checkpoint[0]
+            if residual < 0.0:  # pragma: no cover - defensive only
+                residual = 0.0
+            cap_counters.add(compute=residual)
+            full_dispatch = now - parent_cpu_t0
+            return full_dispatch if full_dispatch >= 0.0 else 0.0  # pragma: no cover - defensive only
+
         # R2 (design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`):
         # a `PARTIAL_SLICE` exit charges this dispatch's parent CPU to
         # `cap_counters` (in-memory; `counters.json` persisted below, AFTER
@@ -2663,10 +2900,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         # event" (no phase transition happened, and the *next* invocation's
         # own `stage_summary` will cover the CPU spent finishing the stage).
         out_is_partial_slice = isinstance(out, dict) and out.get("result") == "PARTIAL_SLICE"
-        cap_counters.add(compute=residual_cpu_seconds)
-        full_dispatch_parent_cpu_seconds = now_cpu - parent_cpu_t0
-        if full_dispatch_parent_cpu_seconds < 0.0:  # pragma: no cover - defensive only
-            full_dispatch_parent_cpu_seconds = 0.0
         if out_is_partial_slice:
             # Codex PR #345 finding #2 (adopted, category ③): a PARTIAL_SLICE
             # exit charges this dispatch's full parent CPU to `cap_counters`/
@@ -2695,6 +2928,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             # full stage total exactly once per dispatch, with no overlap.
             slice_report = out.get("slice") if isinstance(out, dict) else None
             slice_fields = dict(slice_report) if isinstance(slice_report, Mapping) else {}
+            full_dispatch_parent_cpu_seconds = _checkpoint_before_summary()
             campaign.ledger.append(
                 {
                     "kind": "slice_summary",
@@ -2705,6 +2939,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 }
             )
         else:
+            full_dispatch_parent_cpu_seconds = _checkpoint_before_summary()
             campaign.ledger.append(
                 {
                     "kind": "stage_summary",

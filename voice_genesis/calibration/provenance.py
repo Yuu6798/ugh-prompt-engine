@@ -613,6 +613,101 @@ def _valid_gate3_accepted_payload(payload: Mapping[str, Any]) -> bool:
     return _is_iso8601_utc_timestamp(payload.get("approved_at_utc"))
 
 
+def _parse_iso8601_utc(value: object) -> datetime | None:
+    """`[UNDERSPEC-CAL-D88]`(a) 独立実装: ISO 8601 UTC 文字列を `datetime` へ
+    変換する（`Z` または `+00:00` の明示 UTC オフセットのみ許容）。
+    `campaign.unseal._parse_iso8601_utc()`/`approvals._is_iso8601_utc_timestamp()`
+    と同じ意味論。本モジュールは `unseal.py`/`approvals.py` の編集対象外
+    ではないが、両モジュールが既に採用している「ISO 8601 UTC パーサを
+    モジュールごとに独立実装として重複させる」方針（`unseal.py`
+    `_parse_iso8601_utc()` の docstring 参照）をここでも踏襲する——本モジュール
+    の `_is_iso8601_utc_timestamp()`（上記）は bool のみを返し、比較に使う
+    `datetime` を返さないため別名で新設する。"""
+    if not isinstance(value, str) or not value:
+        return None
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        return None
+    return parsed
+
+
+#: `[UNDERSPEC-CAL-D88]`(a) design revision (Codex review, adopted): the
+#: same clock-skew tolerance `campaign.unseal.unseal_campaign()`'s
+#: `_CLOCK_SKEW_TOLERANCE_SECONDS` allows for a Gate 3 `approved_at_utc` up
+#: to 60s ahead of the live check-time clock (`unseal.py:166-183`'s
+#: `gate3_time <= now_utc + timedelta(seconds=_CLOCK_SKEW_TOLERANCE_
+#: SECONDS)`) means a legitimate, freshly-approved Gate 3 can genuinely be
+#: dated up to 60s after the `holdout_unseal` event this replay check
+#: compares it against (that event is itself stamped moments later by the
+#: *local* clock in the same `unseal_campaign()` call — see `unseal.py`'s
+#: own `event_time_utc` field). A strict `gate3_time <= unseal_time` here
+#: would therefore falsely reject a normal-path ledger whenever the
+#: approval file's clock ran up to 60s ahead of the unsealing process's
+#: own clock. Independently redefined here (not imported) per this
+#: module's/`unseal.py`'s existing convention of duplicating small ISO
+#: 8601 helpers/constants across modules rather than adding a cross-module
+#: dependency — kept numerically identical to `unseal.py`'s constant and
+#: pinned by tests on both sides.
+_CLOCK_SKEW_TOLERANCE_SECONDS = 60
+
+
+def _c0_freeze_ordering_violation(
+    ledger_entries: Sequence[LedgerEntry],
+    holdout_unseal_payload: Mapping[str, Any],
+    gate3_accepted_payload: Mapping[str, Any],
+) -> bool:
+    """`[UNDERSPEC-CAL-D88]`(a): replay-verifier parity for the D85
+    freeze-ordering check `campaign.unseal.unseal_campaign()` already
+    enforces live (`freeze_time < gate3_time`, `unseal.py:166-183`) —
+    before this fix, `_verified_holdout_unseal_detail()` never re-checked
+    that ordering when independently replaying a ledger, so a `holdout_
+    unseal` boundary that (by some means other than the live `unseal_
+    campaign()` path — e.g. hand-crafted/corrupted ledger data) references
+    a `gate3_accepted` event predating the campaign's own `c0_freeze`
+    would still verify as a valid unseal boundary here.
+
+    Only engaged when `ledger_entries[0]` is itself a `c0_freeze` event —
+    the shape `campaign.state.load_frozen_campaign()` already requires of
+    entry 0 for any ledger that represents an actual frozen campaign
+    (`state.py:299`, `freeze_event = entries[0].payload`). A synthetic
+    ledger built for narrow prerequisite/gate3-linkage unit tests, which
+    never claims to model a full campaign lifecycle and does not start
+    with `c0_freeze`, is unaffected by this new check — this function
+    returns `False` (no violation *found*, i.e. the check does not apply)
+    for it, exactly as `_verified_holdout_unseal_detail()` behaved before
+    D88 for every ledger. Every real campaign/replay ledger always starts
+    with `c0_freeze` (`c0_freeze.py:1417`), so production use is fully
+    covered.
+
+    Returns `True` (a violation — the caller must NOT accept this as a
+    valid unseal boundary) iff entry 0 is `c0_freeze` and the ordering
+    `freeze_time < gate3_time <= unseal_time + _CLOCK_SKEW_TOLERANCE_
+    SECONDS` fails to hold, including when any of the three timestamps is
+    missing/unparseable (fail-closed, matching D85's own ruling — see
+    `unseal.py:166-183`). The upper bound carries the same 60s clock-skew
+    tolerance `unseal.py` itself allows for Gate 3's `approved_at_utc`
+    relative to the live check-time clock (see `_CLOCK_SKEW_TOLERANCE_
+    SECONDS` above) — a strict `<=` would falsely reject a normal-path
+    ledger whenever the approval file's clock ran ahead of the unsealing
+    process's own clock by less than that same tolerance."""
+    if not ledger_entries:
+        return False
+    first_payload = ledger_entries[0].payload
+    if not isinstance(first_payload, Mapping) or first_payload.get("kind") != "c0_freeze":
+        return False
+    freeze_time = _parse_iso8601_utc(first_payload.get("event_time_utc"))
+    gate3_time = _parse_iso8601_utc(gate3_accepted_payload.get("approved_at_utc"))
+    unseal_time = _parse_iso8601_utc(holdout_unseal_payload.get("event_time_utc"))
+    if freeze_time is None or gate3_time is None or unseal_time is None:
+        return True
+    unseal_upper_bound = unseal_time + timedelta(seconds=_CLOCK_SKEW_TOLERANCE_SECONDS)
+    return not (freeze_time < gate3_time <= unseal_upper_bound)
+
+
 def _references_prior_gate3_acceptance(
     payload: Mapping[str, Any],
     prior_entries_by_sha: Mapping[str, LedgerEntry],
@@ -724,7 +819,26 @@ def _verified_holdout_unseal_detail(
                         for key in _UNSEAL_COMMITMENT_KEYS
                     )
                 ):
-                    if _references_prior_gate3_acceptance(payload, prior_entries_by_sha):
+                    gate3_valid = _references_prior_gate3_acceptance(
+                        payload, prior_entries_by_sha
+                    )
+                    # `[UNDERSPEC-CAL-D88]`(a): a gate3-valid candidate must
+                    # also pass the freeze/gate3/unseal ordering re-check
+                    # (see `_c0_freeze_ordering_violation()` docstring —
+                    # only engaged when this looks like a real, frozen-
+                    # campaign ledger). `gate3_valid` already proved
+                    # `gate3_accepted_sha` resolves to a well-formed prior
+                    # `gate3_accepted` payload, so it is safe to look it up
+                    # again here without re-validating its shape.
+                    ordering_ok = True
+                    if gate3_valid:
+                        gate3_entry = prior_entries_by_sha[payload["gate3_accepted_sha"]]
+                        gate3_payload = gate3_entry.payload
+                        assert isinstance(gate3_payload, Mapping)
+                        ordering_ok = not _c0_freeze_ordering_violation(
+                            ledger_entries, payload, gate3_payload
+                        )
+                    if gate3_valid and ordering_ok:
                         return entry.seq, False
                     gate3_candidate_unverified = True
         prior_entries_by_sha[entry.entry_sha] = entry
@@ -1215,23 +1329,48 @@ class Ledger:
                         # 実際の終端より後ろを指し、正当な台帳の append を
                         # 偽の tamper 検出として拒否していた（`#345` 指摘③
                         # 追補: 末尾空行での偽 append 失敗）。
-                        last_len = self._v_last_line_len
-                        last_start = self._v_last_line_start
-                        f.seek(last_start)
-                        last_bytes = f.read(last_len)
-                        if (
-                            len(last_bytes) != last_len
-                            or hashlib.sha256(last_bytes).hexdigest()
-                            != self._v_last_line_sha256
-                        ):
-                            raise LedgerChainInvalidError(
-                                self.path,
-                                f"on-disk content at this instance's verified watermark "
-                                f"(seq={v_seq}) no longer matches what was last verified: "
-                                "content tamper at/behind the watermark; refusing to "
-                                "append without re-verifying the full chain.",
-                                v_seq,
-                            )
+                        # `[UNDERSPEC-CAL-D88]`(b): a "genesis watermark" —
+                        # a validated chain of zero JSON entries (the file
+                        # holds only blank lines, so `v_bytes` (total file
+                        # byte length) is nonzero even though there is no
+                        # JSON line to fingerprint). `_v_seq == -1` alone is
+                        # not sufficient to identify this case (a tampered/
+                        # unverified watermark also sentinels `_v_seq = -1`,
+                        # but takes the `v_bytes == 0` branch below instead —
+                        # see `_set_watermark()`'s `else` branch), so require
+                        # the last-line fingerprint fields to be at their
+                        # "no prior line" defaults too. There is nothing to
+                        # re-read/compare against, so the O(1) fingerprint
+                        # check below (which would otherwise always mismatch
+                        # — `hashlib.sha256(b"").hexdigest()` is never equal
+                        # to `None`) is skipped and this append proceeds as a
+                        # normal first-entry append. Any other `None` sha
+                        # (i.e. `_v_seq != -1`, which cannot arise from a
+                        # `chain.ok=True` watermark — see `_set_watermark()`)
+                        # keeps failing closed via the mismatch below.
+                        is_genesis_watermark = (
+                            self._v_seq == -1
+                            and self._v_last_line_sha256 is None
+                            and self._v_last_line_len == 0
+                        )
+                        if not is_genesis_watermark:
+                            last_len = self._v_last_line_len
+                            last_start = self._v_last_line_start
+                            f.seek(last_start)
+                            last_bytes = f.read(last_len)
+                            if (
+                                len(last_bytes) != last_len
+                                or hashlib.sha256(last_bytes).hexdigest()
+                                != self._v_last_line_sha256
+                            ):
+                                raise LedgerChainInvalidError(
+                                    self.path,
+                                    f"on-disk content at this instance's verified watermark "
+                                    f"(seq={v_seq}) no longer matches what was last verified: "
+                                    "content tamper at/behind the watermark; refusing to "
+                                    "append without re-verifying the full chain.",
+                                    v_seq,
+                                )
                     else:
                         # G1（stat が想定外に変化）または G2（遷移 event）:
                         # watermark より前の in-place 同一長改ざんは stat の

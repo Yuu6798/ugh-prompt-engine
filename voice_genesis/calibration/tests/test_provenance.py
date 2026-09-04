@@ -627,6 +627,53 @@ def test_ledger_append_succeeds_after_two_trailing_blank_lines(tmp_path) -> None
     assert result.tamper_at_seq is None
 
 
+def test_ledger_append_succeeds_on_blank_only_file(tmp_path) -> None:
+    """`[UNDERSPEC-CAL-D88]`(b): a file holding only blank lines (no JSON
+    entries at all -- distinct from the trailing-blank-line-*after*-valid-
+    entries cases above) is a validated chain of zero entries (`chain.ok`
+    True, `entries == []` -- the "genesis watermark", `_v_seq == -1` /
+    `_v_last_line_sha256 is None` / `_v_last_line_len == 0`). Before this
+    fix, the O(1) last-line fingerprint re-check in `append()`'s `stat_
+    unchanged` branch always compared `hashlib.sha256(b"").hexdigest()`
+    (there is no prior JSON line to re-read -- `last_len == 0`) against
+    `self._v_last_line_sha256 is None`, which can never match, so `append()`
+    raised `LedgerChainInvalidError` -- a false failure -- for the very
+    first append to a blank-only file."""
+    path = tmp_path / "ledger.jsonl"
+    path.write_text("\n\n", encoding="utf-8")
+
+    pre_append_check = Ledger(path).verify_chain()
+    assert pre_append_check.ok is True
+    assert pre_append_check.entries_verified == 0
+
+    ledger = Ledger(path)
+    entry = ledger.append({"kind": "meter_call", "row_id": "r0"})
+    assert entry.seq == 0
+    assert entry.prev_sha == GENESIS_PREV_SHA
+
+    result = Ledger(path).verify_chain()
+    assert result.ok is True
+    assert result.entries_verified == 1
+    assert result.tamper_at_seq is None
+
+
+def test_ledger_append_succeeds_on_completely_empty_file(tmp_path) -> None:
+    """Companion to the blank-only-file test above: a genuinely 0-byte file
+    (`v_bytes == 0`, not the `stat_unchanged` fingerprint path D88(b)
+    touches) was -- and remains -- unaffected by that fix."""
+    path = tmp_path / "ledger.jsonl"
+    path.write_text("", encoding="utf-8")
+
+    ledger = Ledger(path)
+    entry = ledger.append({"kind": "meter_call", "row_id": "r0"})
+    assert entry.seq == 0
+    assert entry.prev_sha == GENESIS_PREV_SHA
+
+    result = Ledger(path).verify_chain()
+    assert result.ok is True
+    assert result.entries_verified == 1
+
+
 def test_ledger_append_g1_detects_early_entry_same_length_tamper(tmp_path) -> None:
     """[#345 指摘③ G1, Codex finding P1] 既に open 済みの `Ledger`
     （watermark = 3 エントリ分）に対し、watermark 末尾（seq=2）ではなく

@@ -18,14 +18,15 @@ values は記録するため、後段でより細かい再集計を行う余地�
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from voice_genesis.calibration.campaign import measure_stage, workunits
+from voice_genesis.calibration.campaign.caps import CostCapExceededError
 from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.campaign.time_budget import TimeBudget
 from voice_genesis.calibration.candidates.registry import ALL_CANDIDATES, Candidate
 from voice_genesis.calibration.canonical import manifest_sha
-from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
+from voice_genesis.calibration.cost_caps import CapCounters, CostCaps, StopDecision
 from voice_genesis.calibration.fixtures.matrix import MatrixRow
 from voice_genesis.calibration.tolerance import derive_floor, pooled_dispersion
 from voice_genesis.calibration.tolerance import tolerance as tolerance_of
@@ -64,6 +65,7 @@ def run_baseline_stage(
     discard_partial_groups: bool = False,
     time_budget: TimeBudget | None = None,
     invocation_id: str | None = None,
+    pre_transition_checkpoint: Callable[[], StopDecision | None] | None = None,
 ) -> dict[str, object]:
     """C2: B0 candidates × CALIBRATION split の実測 → pooled tolerance 導出
     → `baseline_audit` + `baseline_audited` ledger event。戻り値は
@@ -156,6 +158,23 @@ def run_baseline_stage(
             "invocation_id": invocation_id,
         }
     )
+    # `[UNDERSPEC-CAL-D87]`(ii): `c2-baseline` delegates its entire stage
+    # body to this single function call (see `render_stage.run_render_
+    # stage()`'s identical note for `c1-fixtures`) — `pre_transition_
+    # checkpoint`, when given, is `cli.py`'s `_checkpoint_parent_cpu_
+    # before_transition()` wrapped as a zero-arg callable, called here
+    # immediately before the `baseline_audited` transition append so a
+    # breach blocks it from ever being recorded. Raises `CostCapExceededError`
+    # (this module's own `measure_stage.run_measure_stage()` call above
+    # already propagates the same type for per-unit breaches, so this is
+    # consistent with how a cap breach anywhere else in this stage already
+    # surfaces — uncaught out of `main()` — rather than a return-value
+    # sentinel this function's plain-dict return type has no room for).
+    if pre_transition_checkpoint is not None:
+        breach = pre_transition_checkpoint()
+        if breach is not None:
+            raise CostCapExceededError(breach.detail)
+
     campaign.ledger.append(
         {
             "kind": "baseline_audited",

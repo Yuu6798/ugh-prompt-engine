@@ -2850,7 +2850,93 @@ def test_f0_reuse_refuses_duplicated_repeat_record_as_stale(tmp_path: Path) -> N
 
     # refusal is read-only: no F0 was computed, and no new ledger entry was
     # appended chasing a fresh re-measurement of an already-duplicated key.
-    assert len(campaign.ledger.entries) == entries_before
+    #
+    # `[UNDERSPEC-CAL-D82]` (AC1): the duplicate-key raise from `_reusable_
+    # f0_values_by_process()` (`meter_call_index=None` here, so it goes
+    # through `measure_stage._completed_meter_call_records()`) must record
+    # an explanatory `stop_event` (reason `F0_RESUME_PRECHECK_DUPLICATE_
+    # KEY`) immediately before propagating, exactly once — read-only above
+    # means this is the *only* new entry.
+    new_entries = campaign.ledger.entries[entries_before:]
+    assert len(new_entries) == 1
+    stop_event = new_entries[0].payload
+    assert stop_event["kind"] == "stop_event"
+    assert stop_event["reason"] == "F0_RESUME_PRECHECK_DUPLICATE_KEY"
+    assert stop_event["stage"] == "c3b"
+    assert stop_event["row_id"] == "r1"
+    assert stop_event["probe_index"] == 0
+    assert stop_event["candidate_id"] == candidate_id
+
+
+def test_build_f0_by_instance_duplicate_precheck_via_is_complete_emits_stop_event(
+    tmp_path: Path,
+) -> None:
+    """`[UNDERSPEC-CAL-D82]` (AC1), the `MeterCallIndex.is_complete()` call
+    site: when a `meter_call_index` is passed (the production path — every
+    real caller builds one), `_build_f0_by_instance()`'s `has_pending =
+    not meter_call_index.is_complete(...)` precheck itself raises
+    `StaleMeasurementError(kind="duplicate")` for a duplicated repeat key,
+    before `_reusable_f0_values_by_process()` is ever reached. Exactly one
+    explanatory `stop_event` must be appended immediately before it
+    propagates, and a second (resumed) invocation over the same duplicate
+    ledger state must not append a second one — mirroring the existing
+    "don't duplicate the most recent stop_event" convention `cli.
+    _refuse_if_caps_already_breached()` already uses for cap-breach
+    stop_events."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    candidate_id = "F0-B0-CURRENT"
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "within", i, 100.0 + i))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "fresh", i, 200.0 + i))
+    # duplicate ledger entry for the same (repeat_kind="within", repeat_index=0) key.
+    campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "within", 0, 999.0))
+    meter_call_index = measure_stage.MeterCallIndex.build(campaign.ledger.entries)
+    entries_before = len(campaign.ledger.entries)
+
+    with pytest.raises(measure_stage.StaleMeasurementError) as excinfo:
+        cli._build_f0_by_instance(
+            campaign,
+            [("r1", 0)],
+            candidate_id,
+            {"r1": 48000},
+            max_workers=1,
+            cap_counters=None,
+            cost_caps=None,
+            stage="c3b",
+            meter_call_index=meter_call_index,
+            invocation_id="inv-1",
+        )
+    assert excinfo.value.kind == "duplicate"
+
+    new_entries = campaign.ledger.entries[entries_before:]
+    stop_events = [e.payload for e in new_entries if e.payload.get("kind") == "stop_event"]
+    assert len(stop_events) == 1
+    stop_event = stop_events[0]
+    assert stop_event["reason"] == "F0_RESUME_PRECHECK_DUPLICATE_KEY"
+    assert stop_event["stage"] == "c3b"
+    assert stop_event["row_id"] == "r1"
+    assert stop_event["probe_index"] == 0
+    assert stop_event["invocation_id"] == "inv-1"
+
+    # resume: a second invocation over the same duplicate ledger state must
+    # not append a second stop_event.
+    entries_before_resume = len(campaign.ledger.entries)
+    with pytest.raises(measure_stage.StaleMeasurementError):
+        cli._build_f0_by_instance(
+            campaign,
+            [("r1", 0)],
+            candidate_id,
+            {"r1": 48000},
+            max_workers=1,
+            cap_counters=None,
+            cost_caps=None,
+            stage="c3b",
+            meter_call_index=meter_call_index,
+            invocation_id="inv-2",
+        )
+    assert len(campaign.ledger.entries) == entries_before_resume
 
 
 def test_f0_reuse_accepts_exactly_complete_non_duplicated_coverage(tmp_path: Path) -> None:
@@ -3334,6 +3420,126 @@ def test_f0_injection_rejects_unusable_repeat(tmp_path: Path, bad_value: float) 
     assert rejected[0]["stage"] == "c3b"
     assert rejected[0]["reason"] == "F0_UNUSABLE"
     assert rejected[0]["instances"] == [["r1", 0]]
+
+
+def test_f0_injection_rejected_dedupes_across_resumed_invocations(tmp_path: Path) -> None:
+    """`[UNDERSPEC-CAL-D90]` (AC4): a resumed slice re-walks the same
+    instance prefix and reconstructs the same `unusable` set from ledger
+    state every invocation (no new measurement — the same `bad_value`
+    repeat is read back from the ledger each time), so a second call over
+    an unchanged unusable set must not re-append `f0_injection_rejected`.
+    A third call that adds one genuinely new unusable instance must record
+    only the set difference (`r2`), not `r1` again."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    candidate_id = "F0-B0-CURRENT"
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "within", i, math.nan))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "fresh", i, math.nan))
+
+    result1, unusable1 = cli._build_f0_by_instance(
+        campaign,
+        [("r1", 0)],
+        candidate_id,
+        {"r1": 48000},
+        max_workers=1,
+        cap_counters=None,
+        cost_caps=None,
+        stage="c3b",
+    )
+    assert result1 == {}
+    assert unusable1 == frozenset({("r1", 0)})
+    rejected_after_first = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "f0_injection_rejected"
+    ]
+    assert len(rejected_after_first) == 1
+    assert rejected_after_first[0]["instances"] == [["r1", 0]]
+
+    entries_before_resume = len(campaign.ledger.entries)
+    result2, unusable2 = cli._build_f0_by_instance(
+        campaign,
+        [("r1", 0)],
+        candidate_id,
+        {"r1": 48000},
+        max_workers=1,
+        cap_counters=None,
+        cost_caps=None,
+        stage="c3b",
+    )
+    # same unusable set reconstructed again -- no new ledger entry at all
+    # (not even a fresh f0_injection_rejected).
+    assert result2 == {}
+    assert unusable2 == frozenset({("r1", 0)})
+    assert len(campaign.ledger.entries) == entries_before_resume
+    rejected_after_resume = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "f0_injection_rejected"
+    ]
+    assert len(rejected_after_resume) == 1
+
+    # a third call whose instance set adds one genuinely new unusable
+    # instance (r2) must record only the difference, not r1 again.
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r2", 0, "within", i, math.nan))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r2", 0, "fresh", i, math.nan))
+    result3, unusable3 = cli._build_f0_by_instance(
+        campaign,
+        [("r1", 0), ("r2", 0)],
+        candidate_id,
+        {"r1": 48000, "r2": 48000},
+        max_workers=1,
+        cap_counters=None,
+        cost_caps=None,
+        stage="c3b",
+    )
+    assert result3 == {}
+    assert unusable3 == frozenset({("r1", 0), ("r2", 0)})
+    rejected_after_third = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "f0_injection_rejected"
+    ]
+    assert len(rejected_after_third) == 2
+    assert rejected_after_third[1]["instances"] == [["r2", 0]]
+
+
+def test_f0_injection_rejected_dedup_scoped_to_stage(tmp_path: Path) -> None:
+    """The dedup index in `[UNDERSPEC-CAL-D90]` is scoped to the same
+    `stage` (mirroring the existing per-stage `f0_injection_rejected.stage`
+    field) -- the same instance rejected under `c3b` must still be recorded
+    (not silently dropped) when it recurs under `c4`."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    candidate_id = "F0-B0-CURRENT"
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "within", i, math.nan))
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(_fake_meter_call(candidate_id, "r1", 0, "fresh", i, math.nan))
+
+    cli._build_f0_by_instance(
+        campaign,
+        [("r1", 0)],
+        candidate_id,
+        {"r1": 48000},
+        max_workers=1,
+        cap_counters=None,
+        cost_caps=None,
+        stage="c3b",
+    )
+    cli._build_f0_by_instance(
+        campaign,
+        [("r1", 0)],
+        candidate_id,
+        {"r1": 48000},
+        max_workers=1,
+        cap_counters=None,
+        cost_caps=None,
+        stage="c4",
+    )
+    rejected = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "f0_injection_rejected"
+    ]
+    assert [r["stage"] for r in rejected] == ["c3b", "c4"]
+    assert all(r["instances"] == [["r1", 0]] for r in rejected)
 
 
 def test_f0_injection_accepts_instance_when_every_repeat_is_valid(tmp_path: Path) -> None:
@@ -4028,7 +4234,16 @@ def test_stale_lower_persisted_counters_ledger_derived_max_wins(
     assert seen.storage_used == 7_000
 
     persisted = json.loads(counters_path(campaign_dir).read_text(encoding="utf-8"))
-    assert persisted["compute_used"] == pytest.approx(42.0)
+    # `[UNDERSPEC-CAL-D87]`(i): `parent_cpu_t0` now snapshots before
+    # `load_frozen_campaign()` (full ledger-chain re-verification) instead
+    # of after, so `main()`'s `finally`-block residual charge legitimately
+    # folds in real pre-dispatch parent CPU on top of the reconciled 42.0
+    # floor this test seeds -- no longer exactly 42.0. The reconciliation
+    # behavior this test actually exercises (stale-lower-persisted-cache
+    # does not win against the ledger-derived floor) is unaffected and
+    # already asserted above via `seen.compute_used`, captured from the
+    # `cap_counters` handed to the stage *before* any dispatch-CPU charging.
+    assert persisted["compute_used"] >= 42.0
     assert persisted["storage_used"] == 7_000
 
 
@@ -4585,6 +4800,284 @@ def test_close_stage_summary_records_full_dispatch_cpu_across_checkpoint(
     cost_caps_obj = cost_caps_from_manifest(reloaded.manifest)
     derived = cap_counters_from_ledger(reloaded.ledger.entries, cost_caps_obj)
     assert derived.compute_used == pytest.approx(persisted["compute_used"])
+
+
+# ---------------------------------------------------------------------------
+# `[UNDERSPEC-CAL-D87]`(ii): `c1-fixtures`/`c2-baseline`/`unseal` delegate
+# their entire stage body (including the phase-transition append itself) to
+# `render_stage.run_render_stage()`/`baseline_stage.run_baseline_stage()`/
+# `unseal_stage.unseal_campaign()` in a single call — `cli.py` has no chance
+# to interject its own `_checkpoint_parent_cpu_before_transition()` call
+# between the stage's own work and the transition append (see that
+# function's updated docstring). These three functions now accept a
+# `pre_transition_checkpoint` zero-arg callback, called internally
+# immediately before the transition append, that `cli._run_c1`/`_run_c2`/
+# `_run_unseal` build via `_pre_transition_checkpoint_callback()`. Tested
+# directly against each library function (an empty/minimal-work matrix for
+# `render_stage`/`baseline_stage` needs no real subprocess dispatch, so
+# these stay fast and unmarked) rather than through `cli.main()` — a full
+# CLI-level breach test would need to pin an exact `_process_cpu_seconds()`
+# call sequence across a real render/measure loop, which is fragile; the
+# callback-wiring half (`cli._run_c1`/`_run_c2`/`_run_unseal` actually pass
+# a working callback through) is exercised separately below.
+# ---------------------------------------------------------------------------
+
+
+def test_c1_pre_transition_checkpoint_blocks_fixture_valid_on_breach(tmp_path: Path) -> None:
+    """An empty `matrix_rows` reaches `run_render_stage()`'s `stage == "c1"
+    and completed_all` transition branch with zero units to render (no real
+    subprocess dispatch needed), so this test isolates the new
+    `pre_transition_checkpoint` gate: a breaching callback must raise
+    `CostCapExceededError` and the `fixture_valid` event must never be
+    appended."""
+    from voice_genesis.calibration.cost_caps import StopDecision
+
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, subset=small_matrix_subset(1, family="F0_CONTROL")
+    )
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    def _breaching_checkpoint():
+        return StopDecision(exceeded_dims=("compute",), detail="simulated breach")
+
+    with pytest.raises(render_stage.CostCapExceededError):
+        render_stage.run_render_stage(
+            campaign, [], stage="c1", pre_transition_checkpoint=_breaching_checkpoint
+        )
+
+    assert not any(e.payload.get("kind") == "fixture_valid" for e in campaign.ledger.entries)
+
+
+def test_c1_pre_transition_checkpoint_none_still_transitions(tmp_path: Path) -> None:
+    """Companion to the breach test above: `pre_transition_checkpoint=None`
+    (the default -- unchanged existing behavior) still transitions
+    normally."""
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, subset=small_matrix_subset(1, family="F0_CONTROL")
+    )
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    render_stage.run_render_stage(campaign, [], stage="c1")
+
+    assert any(e.payload.get("kind") == "fixture_valid" for e in campaign.ledger.entries)
+
+
+def test_c2_pre_transition_checkpoint_blocks_baseline_audited_on_breach(tmp_path: Path) -> None:
+    """`baseline_stage.run_baseline_stage()` analogue of the c1 test above:
+    an empty `matrix_rows` needs no real measurement dispatch to reach the
+    `baseline_audited` transition, isolating the same new gate."""
+    from voice_genesis.calibration.cost_caps import StopDecision
+
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    def _breaching_checkpoint():
+        return StopDecision(exceeded_dims=("compute",), detail="simulated breach")
+
+    with pytest.raises(cli.baseline_stage.CostCapExceededError):
+        cli.baseline_stage.run_baseline_stage(
+            campaign, [], pre_transition_checkpoint=_breaching_checkpoint
+        )
+
+    assert not any(e.payload.get("kind") == "baseline_audited" for e in campaign.ledger.entries)
+    # `baseline_audit` (the artifact -- not itself the phase-transition
+    # event) is appended BEFORE the checkpoint, so it is unaffected.
+    assert any(e.payload.get("kind") == "baseline_audit" for e in campaign.ledger.entries)
+
+
+def test_unseal_pre_transition_checkpoint_blocks_holdout_unseal_on_breach(
+    tmp_path: Path,
+) -> None:
+    """`unseal_stage.unseal_campaign()` analogue: a breaching callback must
+    block the `holdout_unseal` transition append -- the `gate3_accepted`
+    event above it (not itself the phase-transition event, see
+    `campaign/state.py::LEDGER_KIND_FOR_PHASE`) is unaffected."""
+    from voice_genesis.calibration.campaign import selection_stage
+    from voice_genesis.calibration.campaign import unseal as unseal_stage
+    from voice_genesis.calibration.cost_caps import StopDecision
+    from voice_genesis.calibration.selection import CandidateCriteria
+    from voice_genesis.calibration.vocab import ClaimCeiling
+
+    from ._campaign_fixture import write_gate3_approval
+
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    entry = campaign.ledger.append(
+        {"kind": "baseline_audit", "artifact_sha": "2" * 64, "payload": {}}
+    )
+    campaign.ledger.append({"kind": "baseline_audited", "baseline_audit_sha": entry.entry_sha})
+    selection_stage.run_c3b_selection(
+        campaign,
+        {
+            "TILT_GT": [
+                CandidateCriteria(
+                    candidate_id="M2T-HARMONIC-OLS-K4-WINhann",
+                    ceiling=ClaimCeiling.ABSOLUTE,
+                    primary_normalized_mae=0.05,
+                    signed_bias=0.01,
+                    primary_q95_ae=0.1,
+                )
+            ]
+        },
+        baseline_audit_entry_sha=entry.entry_sha,
+    )
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    write_gate3_approval(approval_dir)
+
+    def _breaching_checkpoint():
+        return StopDecision(exceeded_dims=("compute",), detail="simulated breach")
+
+    with pytest.raises(unseal_stage.CostCapExceededError):
+        unseal_stage.unseal_campaign(
+            campaign, approval_dir=approval_dir, pre_transition_checkpoint=_breaching_checkpoint
+        )
+
+    assert not any(e.payload.get("kind") == "holdout_unseal" for e in campaign.ledger.entries)
+    assert any(e.payload.get("kind") == "gate3_accepted" for e in campaign.ledger.entries)
+
+
+def test_run_c1_c2_unseal_wire_a_working_pre_transition_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cli._run_c1`/`_run_c2`/`_run_unseal` must actually build and pass a
+    non-`None` `pre_transition_checkpoint` (via `_pre_transition_checkpoint_
+    callback()`) whenever `cap_counters`/`cost_caps`/`parent_cpu_checkpoint`
+    are all given -- the direct library-level tests above only prove the
+    callback mechanism works once invoked; this proves `cli.py` actually
+    wires a real (`_checkpoint_parent_cpu_before_transition`-backed)
+    callback through, not `None`, under the conditions `main()` always
+    supplies (see the dispatch call sites)."""
+    from voice_genesis.calibration.cost_caps import CostCaps
+
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    cap_counters = CapCounters()
+    cost_caps = CostCaps(
+        compute=10.0, storage=10**9, budget=1000.0, budget_accounting_mode="local_zero_cost"
+    )
+    # `_process_cpu_seconds()` is this *pytest process's* cumulative
+    # RUSAGE_SELF CPU time, not a per-test-reset value -- seed the
+    # checkpoint baseline from a real reading taken right here (exactly
+    # how `main()` itself initializes `parent_cpu_checkpoint`), not a bare
+    # 0.0, so the delta this test observes stays small regardless of how
+    # much CPU earlier tests in the same pytest run have already burned.
+    parent_cpu_checkpoint = [cli._process_cpu_seconds()]
+
+    captured: dict[str, object] = {}
+
+    def _fake_run_render_stage(*_args, pre_transition_checkpoint=None, **_kwargs):
+        captured["pre_transition_checkpoint"] = pre_transition_checkpoint
+        return ()
+
+    monkeypatch.setattr(cli.render_stage, "run_render_stage", _fake_run_render_stage)
+    cli._run_c1(
+        campaign,
+        [],
+        cap_counters=cap_counters,
+        cost_caps=cost_caps,
+        parent_cpu_checkpoint=parent_cpu_checkpoint,
+    )
+    checkpoint = captured["pre_transition_checkpoint"]
+    assert checkpoint is not None
+    # calling it charges the elapsed CPU since `parent_cpu_checkpoint[0]`
+    # and reports no breach (well under the 10.0s cap).
+    assert checkpoint() is None
+    assert cap_counters.compute_used >= 0.0
+
+    def _fake_run_baseline_stage(*_args, pre_transition_checkpoint=None, **_kwargs):
+        captured["pre_transition_checkpoint"] = pre_transition_checkpoint
+        return {"baseline_audit_sha": "0" * 64}
+
+    monkeypatch.setattr(cli.baseline_stage, "run_baseline_stage", _fake_run_baseline_stage)
+    cli._run_c2(
+        campaign,
+        [],
+        1,
+        cap_counters=cap_counters,
+        cost_caps=cost_caps,
+        parent_cpu_checkpoint=parent_cpu_checkpoint,
+    )
+    assert captured["pre_transition_checkpoint"] is not None
+
+    def _fake_unseal_campaign(*_args, pre_transition_checkpoint=None, **_kwargs):
+        captured["pre_transition_checkpoint"] = pre_transition_checkpoint
+        raise cli.unseal_stage.UnsealError("stubbed -- only the callback wiring is under test")
+
+    monkeypatch.setattr(cli.unseal_stage, "unseal_campaign", _fake_unseal_campaign)
+    out = cli._run_unseal(
+        campaign,
+        tmp_path / "approvals",
+        cap_counters=cap_counters,
+        cost_caps=cost_caps,
+        parent_cpu_checkpoint=parent_cpu_checkpoint,
+    )
+    assert out["result"] == "UNSEAL_REFUSED"
+    assert captured["pre_transition_checkpoint"] is not None
+
+
+def test_run_c1_c2_unseal_omit_checkpoint_when_caps_untracked(tmp_path: Path) -> None:
+    """Companion to the wiring test above: when `cap_counters`/`cost_caps`
+    are `None` (the historical default -- no cap tracking configured),
+    `_pre_transition_checkpoint_callback()` returns `None`, matching the
+    existing `if parent_cpu_checkpoint is not None and cap_counters is not
+    None and cost_caps is not None:` guard `_run_c3a`/`_run_c3b`/`_run_c4`/
+    `_run_close` already use before calling `_checkpoint_parent_cpu_before_
+    transition()` directly."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    assert (
+        cli._pre_transition_checkpoint_callback(campaign, None, None, None, invocation_id=None)
+        is None
+    )
+    assert (
+        cli._pre_transition_checkpoint_callback(
+            campaign, CapCounters(), None, [0.0], invocation_id=None
+        )
+        is None
+    )
+
+
+def test_pre_dispatch_load_frozen_campaign_cpu_is_charged(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`[UNDERSPEC-CAL-D87]`(i) (AC2): CPU burned inside `load_frozen_
+    campaign()` itself -- full ledger-chain verification -- must now be
+    included in the charged/persisted compute total, since `parent_cpu_t0`
+    snapshots BEFORE that call (not after, as before this fix). Monkeypatches
+    `load_frozen_campaign` to burn a real, measurable amount of CPU
+    (>= 0.05s) before delegating to the real implementation, and asserts
+    that amount is reflected in the final persisted `compute_used` -- pre-
+    D87(i), this CPU would have been spent entirely before `parent_cpu_
+    t0`'s first snapshot and never charged to any cap-accounting window at
+    all."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    real_load = cli.load_frozen_campaign
+
+    def _burning_load_frozen_campaign(*args, **kwargs):
+        _burn_cpu()
+        return real_load(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "load_frozen_campaign", _burning_load_frozen_campaign)
+
+    def _fake_run_baseline_stage(*_args, **_kwargs):
+        return {"baseline_audit_sha": "0" * 64}
+
+    monkeypatch.setattr(cli.baseline_stage, "run_baseline_stage", _fake_run_baseline_stage)
+
+    exit_code = cli.main(_armed_c2_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+
+    persisted = json.loads(counters_path(campaign_dir).read_text(encoding="utf-8"))
+    assert persisted["compute_used"] >= 0.05
 
 
 # ---------------------------------------------------------------------------
