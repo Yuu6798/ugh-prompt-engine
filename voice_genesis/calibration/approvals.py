@@ -36,6 +36,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from voice_genesis.calibration.cost_caps import CostCaps, cost_caps_from_mapping
 
 #: pre-campaign 拒否コード。`vocab.BlockedCode`（設計正本 §3.3 の C0 manifest
@@ -49,8 +51,88 @@ _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: 承認 hash が束縛する 2 文書（`c0_freeze.py` と同じ repo root からの相対 path）。
-DESIGN_DOC_RELATIVE_PATH = "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.0.md"
+#: v1.1 (`DESIGN_VG_METER_CAL_DEBT_v1.1.md` §V6, 2026-09-04 統治文書切替):
+#: pin 対象は v1.1 統治文書へ切り替わった。v1.0 は read-only の基底文書として
+#: 残り、`BASE_DESIGN_DOC_RELATIVE_PATH` 経由で実行時 pin の対象になる
+#: （下記 `_verify_base_document_pin()` 参照）。
+DESIGN_DOC_RELATIVE_PATH = "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.1.md"
+#: v1.1 の基底（承継元）文書。v1.1 front matter の `base_document_sha256` が
+#: これの実測 sha256 と一致することを `load_approval()` が毎回検証する
+#: （信頼の連鎖: 承認 → v1.1 バイト列 → v1.0 バイト列。§V6）。
+BASE_DESIGN_DOC_RELATIVE_PATH = "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.0.md"
 MEMO_RELATIVE_PATH = "voice_genesis/calibration/IMPLEMENTATION_MAP_v1.md"
+
+#: front matter を区切る `---` 行（先頭固定・複数行 YAML ブロック）を抜き出す
+#: 正規表現。`re.DOTALL` で `.` が改行を跨ぐ（front matter 本体の複数行取得）。
+_FRONT_MATTER_RE = re.compile(r"\A---\r?\n(.*?\r?\n)---\r?\n", re.DOTALL)
+
+
+def _parse_front_matter(text: str) -> Mapping[str, Any] | None:
+    """先頭の `---`...`---` YAML front matter を `yaml.safe_load` で解析する。
+    front matter が存在しない・YAML としてパース不能・トップレベルが
+    mapping でない場合は `None`（呼び出し側が fail-closed の reason へ変換
+    する）。"""
+    match = _FRONT_MATTER_RE.match(text)
+    if match is None:
+        return None
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return None
+    if not isinstance(data, Mapping):
+        return None
+    return data
+
+
+def _verify_base_document_pin(repo_root: Path) -> list[str]:
+    """v1.1 統治文書（`DESIGN_DOC_RELATIVE_PATH`）の front matter が宣言する
+    `base_document_sha256` と、checkout 上の基底文書
+    （`BASE_DESIGN_DOC_RELATIVE_PATH` = v1.0）の実測 sha256 の一致を検証する
+    （§V6「基底文書の実行時 pin」）。
+
+    v1.1 だけを pin すると、承継元 v1.0 が承認後・freeze 後に改変されても
+    `check_armed()` が無効化されない穴が残るため、この検証を毎回の
+    `load_approval()` に組み込む。不一致・欠落・パース不能はすべて
+    fail-closed の reason 文字列として返す（空リストは pin 成立、つまり
+    「未承認にする理由がない」ことを意味する — 承認そのものが成り立つかは
+    呼び出し側の他の検査と合わせて判定される）。"""
+    reasons: list[str] = []
+    design_doc_path = repo_root / DESIGN_DOC_RELATIVE_PATH
+    try:
+        design_doc_text = design_doc_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [
+            f"base_document_sha256: cannot read design doc {design_doc_path} "
+            f"for front matter: {exc}"
+        ]
+
+    front_matter = _parse_front_matter(design_doc_text)
+    if front_matter is None:
+        return [
+            "base_document_sha256: design doc front matter is missing or unparsable "
+            f"({design_doc_path})"
+        ]
+
+    declared_base_sha = front_matter.get("base_document_sha256")
+    if not isinstance(declared_base_sha, str) or _SHA256_HEX_RE.match(declared_base_sha) is None:
+        return [
+            "base_document_sha256: design doc front matter missing/invalid "
+            "base_document_sha256 (must be a 64-char lowercase hex sha256 string)"
+        ]
+
+    base_doc_path = repo_root / BASE_DESIGN_DOC_RELATIVE_PATH
+    try:
+        actual_base_sha = _sha256_file(base_doc_path)
+    except OSError as exc:
+        return [f"base_document_sha256: cannot read base document {base_doc_path}: {exc}"]
+
+    if declared_base_sha != actual_base_sha:
+        reasons.append(
+            "base_document_sha256 mismatch: design doc front matter pins "
+            f"{declared_base_sha!r}, current base document ({base_doc_path}) is "
+            f"{actual_base_sha!r}"
+        )
+    return reasons
 
 #: `VG_CAL_APPROVAL_DIR` の既定値（checkout 外。IMPLEMENTATION_MAP §6.1）。
 DEFAULT_APPROVAL_DIR = Path.home() / ".vg_cal" / "approvals"
@@ -365,6 +447,11 @@ def load_approval(
 
     gate_specific = _GATE_PAYLOAD_PARSERS[gate](payload, reasons)
 
+    # §V6「基底文書の実行時 pin」: 承認ファイル自体の shape/hash 検査とは独立に、
+    # checkout 上の v1.1/v1.0 バイト列の整合を毎回検証する（承認ファイルの
+    # 内容に関わらず必須 — v1.0 の事後改変を無効化する経路がこれ以外にない）。
+    reasons.extend(_verify_base_document_pin(root))
+
     if reasons:
         return ApprovalLoadResult(
             gate=gate, approved=False, record=None, content_sha256=content_sha256,
@@ -415,9 +502,10 @@ def refresh_document_hashes(
     approval_path: Path, repo_root: Path | None = None
 ) -> HashRefreshResult:
     """既存の承認ファイルを再読込し、`design_doc_sha256`/`memo_sha256` を
-    現在の `DESIGN_VG_METER_CAL_DEBT_v1.0.md`/`IMPLEMENTATION_MAP_v1.md` の
+    現在の `DESIGN_VG_METER_CAL_DEBT_v1.1.md`/`IMPLEMENTATION_MAP_v1.md` の
     実測ハッシュへ書き換えて atomic に書き戻す（他フィールドは一切変更
-    しない）。
+    しない）。v1.0 基底文書の pin（`base_document_sha256`）は v1.1 の
+    front matter 側にあり、本関数の再スタンプ対象ではない。
 
     メモ編集はハッシュ束縛を毎回無効化するため、承認者はメモ編集の都度
     再承認しなければならない（`load_approval()` の hash mismatch 検査）。
@@ -558,10 +646,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "refresh",
         help=(
             "Re-stamp design_doc_sha256/memo_sha256 on an existing approval file to "
-            "the current DESIGN_VG_METER_CAL_DEBT_v1.0.md/IMPLEMENTATION_MAP_v1.md "
+            "the current DESIGN_VG_METER_CAL_DEBT_v1.1.md/IMPLEMENTATION_MAP_v1.md "
             "file hashes. All other fields untouched. Every memo edit invalidates "
             "the old hash binding; the approver must still re-issue/re-confirm the "
-            "approval — this only re-stamps the hash fields mechanically."
+            "approval — this only re-stamps the hash fields mechanically. Note: "
+            "the v1.0 base document is pinned separately via its sha256 embedded "
+            "in the v1.1 front matter (base_document_sha256), not via this refresh."
         ),
     )
     refresh.add_argument(
@@ -600,6 +690,7 @@ if __name__ == "__main__":
 __all__ = [
     "AUTHORIZATION_REQUIRED",
     "DESIGN_DOC_RELATIVE_PATH",
+    "BASE_DESIGN_DOC_RELATIVE_PATH",
     "MEMO_RELATIVE_PATH",
     "DEFAULT_APPROVAL_DIR",
     "APPROVAL_DIR_ENV_VAR",

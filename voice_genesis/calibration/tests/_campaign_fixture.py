@@ -17,6 +17,7 @@ import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from voice_genesis.calibration import approvals
 from voice_genesis.calibration.c0_freeze import split_frozen_event_payload
 from voice_genesis.calibration.canonical import canonical_json
 from voice_genesis.calibration.canonical import manifest_sha as _manifest_sha
@@ -91,8 +92,12 @@ def _canonical_candidates_section(repo_root: Path | None = None) -> dict[str, di
     }
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-DESIGN_DOC_PATH = _REPO_ROOT / "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.0.md"
-MEMO_DOC_PATH = _REPO_ROOT / "voice_genesis/calibration/IMPLEMENTATION_MAP_v1.md"
+#: v1.1 統治文書切替（§V6, 2026-09-04）: pin 対象文書は `approvals` モジュール
+#: の定数を経由して解決する（ハードコードすると `DESIGN_DOC_RELATIVE_PATH` の
+#: 切替に追随できず、`approvals.load_approval()` の design_doc_sha256 照合が
+#: 常に不一致になる）。
+DESIGN_DOC_PATH = _REPO_ROOT / approvals.DESIGN_DOC_RELATIVE_PATH
+MEMO_DOC_PATH = _REPO_ROOT / approvals.MEMO_RELATIVE_PATH
 
 
 def design_doc_sha256() -> str:

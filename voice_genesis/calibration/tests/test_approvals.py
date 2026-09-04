@@ -25,6 +25,16 @@ def _memo_sha() -> str:
     return hashlib.sha256((_REPO_ROOT / approvals.MEMO_RELATIVE_PATH).read_bytes()).hexdigest()
 
 
+def _base_design_sha() -> str:
+    """v1.0（read-only 基底文書）の実測 sha256。v1.1 統治文書切替後、
+    `_design_sha()` は `approvals.DESIGN_DOC_RELATIVE_PATH`（= v1.1）を指す
+    ため、v1.0 に直接 pin された過去の承認レコード（v1.1 切替前に発行）を
+    照合するにはこちらを使う。"""
+    return hashlib.sha256(
+        (_REPO_ROOT / approvals.BASE_DESIGN_DOC_RELATIVE_PATH).read_bytes()
+    ).hexdigest()
+
+
 #: PR レビュー第 5 巡: gate1/gate2 は同一 authorization_nonce を要求する。
 #: テストの既定値は両者一致させておく（不一致ケースは個別テストで上書きする）。
 _TEST_NONCE = "test-nonce-0000000000000000"
@@ -666,7 +676,7 @@ def test_repo_gate1_record_copy_document_hashes_match_tree_at_head() -> None:
     と一致することを確認する regression guard（round 23 ADOPT (1):
     `memo_sha256` が stale だった finding の再発防止）。
 
-    期待値は `_design_sha()`/`_memo_sha()` が現在の working tree から都度
+    期待値は `_base_design_sha()`/`_memo_sha()` が現在の working tree から都度
     実測する値であり、本テスト内にハッシュを一切ハードコードしない —
     DESIGN/メモを将来編集し、その都度 `refresh_document_hashes()` で参照用
     コピーを追随させる正当な変更では失敗しない。比較対象は「committed record
@@ -674,8 +684,178 @@ def test_repo_gate1_record_copy_document_hashes_match_tree_at_head() -> None:
     `repo.dirty_tree` チェック（未コミット差分の有無）とは無関係 — 本テストが
     dirty tree で意味を変えることはない（GATE1_DECISION_RECORD.md 冒頭の
     注記どおり、承認ファイルの正本自体は git 管理外）。
+
+    v1.1 統治文書切替（§V6, 2026-09-04）後の注記: このレコードは切替前
+    （2026-09-02/03）に発行され、承認時点で pin していたのは v1.0 のため、
+    比較対象は `approvals.DESIGN_DOC_RELATIVE_PATH`（切替後は v1.1）ではなく
+    `approvals.BASE_DESIGN_DOC_RELATIVE_PATH`（v1.0、常に不変の read-only
+    基底文書）である — `_design_sha()` ではなく `_base_design_sha()` を使う。
     """
     record_path = _REPO_ROOT / _GATE1_RECORD_COPY_RELATIVE_PATH
     payload = json.loads(record_path.read_text(encoding="utf-8"))
-    assert payload["design_doc_sha256"] == _design_sha()
+    assert payload["design_doc_sha256"] == _base_design_sha()
     assert payload["memo_sha256"] == _memo_sha()
+
+
+# ---------------------------------------------------------------------------
+# §V6「統治文書の切替 + 基底文書の実行時 pin」(DESIGN_VG_METER_CAL_DEBT_v1.1.md):
+# `load_approval()` は承認ファイル自体の design_doc_sha256（= v1.1 の実測
+# sha256）照合に加え、v1.1 front matter の `base_document_sha256` と checkout
+# 上の v1.0 の実測 sha256 が一致することを検証する（信頼の連鎖: 承認 →
+# v1.1 バイト列 → v1.0 バイト列）。実リポジトリの v1.0/v1.1 を書き換えずに
+# 検証するため、各テストは独立した tmp repo_root へ両ドキュメント（+ memo）
+# を複製し、そこだけを改変する。
+# ---------------------------------------------------------------------------
+
+
+def _write_base_pin_fixture_repo(
+    tmp_path: Path, *, corrupt_base_doc: bool = False, corrupt_front_matter: bool = False
+) -> Path:
+    """`tmp_path` 配下に `DESIGN_DOC_RELATIVE_PATH`/`BASE_DESIGN_DOC_RELATIVE_PATH`/
+    `MEMO_RELATIVE_PATH` と同じ相対 path で実ドキュメントのコピーを作り、
+    そのルート（= 使うべき `repo_root`）を返す。`corrupt_base_doc=True` は
+    v1.0 コピーを 1 バイト改変（front matter の base_document_sha256 と実測が
+    食い違う状態を作る）。`corrupt_front_matter=True` は v1.1 コピーの front
+    matter を壊れた YAML に置換する（パース不能ケース）。"""
+    real_v11 = _REPO_ROOT / approvals.DESIGN_DOC_RELATIVE_PATH
+    real_v10 = _REPO_ROOT / approvals.BASE_DESIGN_DOC_RELATIVE_PATH
+    real_memo = _REPO_ROOT / approvals.MEMO_RELATIVE_PATH
+
+    v11_dst = tmp_path / approvals.DESIGN_DOC_RELATIVE_PATH
+    v10_dst = tmp_path / approvals.BASE_DESIGN_DOC_RELATIVE_PATH
+    memo_dst = tmp_path / approvals.MEMO_RELATIVE_PATH
+    v11_dst.parent.mkdir(parents=True, exist_ok=True)
+    memo_dst.parent.mkdir(parents=True, exist_ok=True)
+
+    v11_text = real_v11.read_text(encoding="utf-8")
+    if corrupt_front_matter:
+        # 先頭の `---` を落として front matter 自体を消す — `yaml.safe_load`
+        # 云々ではなく、そもそも `_FRONT_MATTER_RE` にマッチしなくなるケース。
+        v11_text = v11_text.replace("---\n", "***\n", 1)
+    v11_dst.write_text(v11_text, encoding="utf-8")
+
+    v10_bytes = real_v10.read_bytes()
+    if corrupt_base_doc:
+        v10_bytes = v10_bytes + b"\n<!-- tampered for test -->\n"
+    v10_dst.write_bytes(v10_bytes)
+
+    memo_dst.write_bytes(real_memo.read_bytes())
+    return tmp_path
+
+
+def _write_gate1_for_repo_root(approval_dir: Path, repo_root: Path, **overrides: object) -> None:
+    """`_write_gate1()` 相当だが、design_doc_sha256/memo_sha256 を `_REPO_ROOT`
+    ではなく `repo_root`（V6 fixture の tmp コピー）の実測値でスタンプする。"""
+    design_sha = hashlib.sha256(
+        (repo_root / approvals.DESIGN_DOC_RELATIVE_PATH).read_bytes()
+    ).hexdigest()
+    memo_sha = hashlib.sha256((repo_root / approvals.MEMO_RELATIVE_PATH).read_bytes()).hexdigest()
+    payload = {
+        "gate": "GATE1_CAMPAIGN_EXECUTION",
+        "approver": "tester",
+        "approved_at_utc": "2026-09-04T00:00:00Z",
+        "design_doc_sha256": design_sha,
+        "memo_sha256": memo_sha,
+        "authorization_nonce": _TEST_NONCE,
+        "cost_caps": {
+            "compute": 3600.0,
+            "storage": 1_000_000,
+            "budget": 10.0,
+            "budget_accounting_mode": "local_zero_cost",
+        },
+        "e_use_bound_accepted": True,
+        "max_claim_scope": ["formant_frequency"],
+    }
+    payload.update(overrides)
+    (approval_dir / approvals.APPROVAL_FILENAMES[approvals.Gate.GATE1_CAMPAIGN_EXECUTION]).write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+
+
+def test_base_document_pin_holds_with_unmodified_v10_and_v11(tmp_path: Path) -> None:
+    """(a) 正しい v1.1 front matter（実物そのまま）+ 無改変 v1.0 コピー ->
+    base_document_sha256 検証は pin 成立し、通常どおり approved になる。"""
+    repo_root = _write_base_pin_fixture_repo(tmp_path / "repo")
+    approval_dir = tmp_path / "approvals"
+    approval_dir.mkdir()
+    _write_gate1_for_repo_root(approval_dir, repo_root)
+
+    result = approvals.load_approval(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, approval_dir, repo_root=repo_root
+    )
+    assert result.approved is True, result.reasons
+    assert result.record is not None
+
+
+def test_base_document_pin_rejects_modified_v10(tmp_path: Path) -> None:
+    """(b) v1.0 を 1 バイト改変すると、front matter が pin する
+    base_document_sha256 と実測 sha256 が食い違い、未承認 + 理由列挙になる
+    （承認ファイル自体は正しくても、というのが要点: base pin は承認ファイル
+    の内容と独立に検証される）。"""
+    repo_root = _write_base_pin_fixture_repo(tmp_path / "repo", corrupt_base_doc=True)
+    approval_dir = tmp_path / "approvals"
+    approval_dir.mkdir()
+    _write_gate1_for_repo_root(approval_dir, repo_root)
+
+    result = approvals.load_approval(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, approval_dir, repo_root=repo_root
+    )
+    assert result.approved is False
+    assert any(
+        "base_document_sha256 mismatch" in r for r in result.reasons
+    ), result.reasons
+
+
+def test_base_document_pin_rejects_missing_front_matter(tmp_path: Path) -> None:
+    """(c) v1.1 の front matter が読めない（先頭の `---` 区切りが壊れている）
+    場合は base_document_sha256 自体を検証できず、fail-closed で未承認になる。"""
+    repo_root = _write_base_pin_fixture_repo(tmp_path / "repo", corrupt_front_matter=True)
+    approval_dir = tmp_path / "approvals"
+    approval_dir.mkdir()
+    _write_gate1_for_repo_root(approval_dir, repo_root)
+
+    result = approvals.load_approval(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, approval_dir, repo_root=repo_root
+    )
+    assert result.approved is False
+    assert any(
+        "base_document_sha256" in r and ("missing" in r or "unparsable" in r)
+        for r in result.reasons
+    ), result.reasons
+
+
+def test_base_document_pin_rejects_missing_base_document_sha_field(tmp_path: Path) -> None:
+    """front matter は存在するが `base_document_sha256` フィールド自体が
+    欠落/不正な形式（sha256 hex でない）ケース。"""
+    repo_root = tmp_path / "repo"
+    v11_dst = repo_root / approvals.DESIGN_DOC_RELATIVE_PATH
+    v10_dst = repo_root / approvals.BASE_DESIGN_DOC_RELATIVE_PATH
+    memo_dst = repo_root / approvals.MEMO_RELATIVE_PATH
+    v11_dst.parent.mkdir(parents=True, exist_ok=True)
+    memo_dst.parent.mkdir(parents=True, exist_ok=True)
+
+    v11_dst.write_text(
+        "---\ndocument_id: TEST\nbase_document_path: irrelevant.md\n---\n# body\n",
+        encoding="utf-8",
+    )
+    v10_dst.write_bytes((_REPO_ROOT / approvals.BASE_DESIGN_DOC_RELATIVE_PATH).read_bytes())
+    memo_dst.write_bytes((_REPO_ROOT / approvals.MEMO_RELATIVE_PATH).read_bytes())
+
+    approval_dir = tmp_path / "approvals"
+    approval_dir.mkdir()
+    _write_gate1_for_repo_root(approval_dir, repo_root)
+
+    result = approvals.load_approval(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, approval_dir, repo_root=repo_root
+    )
+    assert result.approved is False
+    assert any(
+        "base_document_sha256" in r and "missing/invalid" in r for r in result.reasons
+    ), result.reasons
+
+
+def test_verify_base_document_pin_directly_ok(tmp_path: Path) -> None:
+    """`_verify_base_document_pin()` 単体呼び出しでも、無改変コピーなら空
+    reasons（pin 成立）を返す。"""
+    repo_root = _write_base_pin_fixture_repo(tmp_path / "repo")
+    assert approvals._verify_base_document_pin(repo_root) == []
