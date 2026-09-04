@@ -41,10 +41,13 @@ campaign `RUN10-CAL-20260904-862dec28`（2026-09-04 close、`debt_discharged = f
 上記以外の全て（D1–D3 裁定・語彙・C0 manifest・independence tier・456 セル行列・
 repeat 構造・selection rule・誤差式・終端 status cascade・provenance schema の欄構成・
 費用上限・RUN11 Gate・§16 対象外事項・§18 承認 Gate）は v1.0 のまま不変。
-§15（RUN11 Hard Claim-Dependency Gate）の**文言と凍結は不変**だが、§V2 の claim
-縮小により「preregistered RUN11 claim-critical meter がその claim に十分な final
-status を持つか」（§15 条件 (3)）の判定材料は縮小後の claim 範囲となる — 縮小 claim
-で足りるか否かの判断は §15 (4) の User レビューに属し、本書は先取りしない。
+§15（RUN11 Hard Claim-Dependency Gate）の**文言と凍結は不変**であり、§V2 の claim
+縮小はそれを緩めない（Codex レビュー第 6 巡 P1 採用で明確化、2026-09-04）: §15 は
+「claim 削除・縮小は新 preregistration + ユーザー承認」を明文で要求するため、
+**縮小後の claim を RUN11 で用いるには、その縮小 claim 自体の新 preregistration と
+User 承認が別途必要**である。本 campaign の終端 status だけで §15 条件 (3) を充足
+したとは扱わず、RUN11 は引き続き凍結を維持する。本書はその preregistration を
+授権しない。
 
 ## V1. F0_CONTROL C3a の negative control fail filter 分割（v1.0 §8 の部分改訂）
 
@@ -153,17 +156,31 @@ secret 依存で充足不能になる条件付き実行不能、(b) IDENTITY_CAU
   は該当なし、§16-1 で DIAGNOSTIC_ONLY 固定の RESONANCE_GT は claim を持たない）を
   C0 で宣言・凍結し、c0_validate が matrix 実体からの機械導出値と照合する。pin 選抜
   は claim-relevant field の値多様性を最大化する決定論的ラウンドロビン（値組を
-  HMAC 昇順に巡回し、各値組グループ内は HMAC 昇順）で行い、**cap 内で全値被覆が
-  不能な family は V2.4 の IDENTITY と同一の機構で claim を縮小する**: DIRECTIONAL
-  終端 status の claim text に評価済み値組を機械可読で列挙し、prohibited
-  interpretations に非評価値への directional 外挿の禁止を必須化する（456 セルでの
-  帰結: TRANSITION_GT は k=2 で join_type 4 値中 2 値のみ評価 → claim 縮小適用。
-  APERIODICITY_GT も k=2 で評価済み band 組へ縮小。FORMANT_GT / IDENTITY は被覆成立）。
+  HMAC 昇順に巡回し、各値組グループ内は HMAC 昇順）で行う（456 セルでの帰結:
+  TRANSITION_GT は k=2 で join_type 4 値中 2 値のみ評価。APERIODICITY_GT も k=2 で
+  band の一部のみ評価。FORMANT_GT / IDENTITY は stratum-key field の全値被覆が成立）。
+- **claim の評価済み文脈への一律縮小**（Codex レビュー第 6 巡 P1 採用で一般化、
+  2026-09-04 — claim-relevant 次元に限らず、nuisance 設定のみが sweep 間で変動する
+  family（例: TILT_GT の f0_hz × sr_hz 文脈 6 sweep 中 k=2）でも、評価されなかった
+  文脈への無宣言外挿は承継 §10.4 の「全 declared sweep」要求より弱い主張を黙って
+  通すことになる）: **全 family の DIRECTIONAL 終端 status について**、claim text
+  には holdout 評価済み sweep（その held-fixed 文脈の値組）を機械可読で列挙し、
+  prohibited interpretations に「非評価 sweep 文脈への directional 外挿」の禁止を
+  必ず含める。claim-relevant field の全値被覆が成立する family（FORMANT / IDENTITY
+  の周辺被覆）でも、列挙義務は同様に課される（被覆成立は claim の広さではなく
+  選抜の質の保証にすぎない）。
 
 ```
-k_hold(family) = min( max(1, floor(0.25 * S + 0.5)),   # 25% 目標の half-up 丸め、最低 1
+k_hold(family) = min( max( floor(0.25 * S + 0.5),      # 25% 目標の half-up 丸め
+                           1,                          # 最低 1
+                           max_field_cardinality ),    # 被覆要件（下記）: stratum-key
+                                                       # field の値数の最大
                       floor((N_hold - 1) / r) )        # 非 sweep 行 ≥ 1 の枠を保証
 ```
+
+（被覆要件が cap 項 `floor((N_hold - 1) / r)` を超える場合は C0 fail-closed。
+IDENTITY_CAUSAL_SWEEP は S=12, N_hold=24, r=5, max_field_cardinality=founder 4 値
+→ k_hold = min(max(3, 1, 4), 4) = 4。）
 
 （N_hold = §5.2 の family holdout 目標行数。式の完全形は下記「被覆要件」の
 max_field_cardinality 項を含む。456 セル canonical matrix での値:
