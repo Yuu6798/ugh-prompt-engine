@@ -182,6 +182,25 @@ k_hold(family) = min( max( floor(0.25 * S + 0.5),      # 25% 目標の half-up �
 IDENTITY_CAUSAL_SWEEP は S=12, N_hold=24, r=5, max_field_cardinality=founder 4 値
 → k_hold = min(max(3, 1, 4), 4) = 4。）
 
+**縮退規則**（2026-09-04 追補 — CI 実測: pin 機構を縮小合成 matrix に適用すると
+secret の引きに依存して C0 freeze が確率的に失敗する欠陥が露呈した。正典 456 セル
+では顕在化しないが、割当は任意の有効 matrix に対して決定論的に全域で定義されて
+いなければならない）:
+
+- `cap < 1`（holdout が sweep 1 本 + 非 sweep 行 1 行を収容できない family）は
+  **pin 免除**: k_hold = 0、当該 family は段 2 の行単位割当のみ（v1.0 挙動）。
+  DIRECTIONAL holdout 評価は「宣言 sweep なし → 防御的 fail-closed」の既存意味論
+  （D74）に従い正直に評価不能へ倒れる。
+- 段 2（既存 coverage 制約の修復）が pin 選抜の結果として修復不能になった場合は、
+  **k_hold を 1 ずつ決定論的に縮退**して段 1 を再選抜し、段 2 を再試行する。縮退の
+  下限は claim 被覆 family（max_field_cardinality > 1）では max_field_cardinality
+  （これ未満へは縮退せず C0 fail-closed — R2/R4 巡で採用した被覆保証を静かに
+  弱めない）、それ以外の family では 0（= pin 免除）。実現された k は manifest の
+  `holdout_sweeps` の宣言数として自動的に記録され、c0_validate の再導出照合は
+  同一の縮退規則を再実行して一致を検査する。
+- 正典 456 セル matrix では全 family が満額 k_hold で feasible（§V2.2 の表の
+  とおり）であり、本縮退規則は挙動を変えない。
+
 （N_hold = §5.2 の family holdout 目標行数。式の完全形は下記「被覆要件」の
 max_field_cardinality 項を含む。456 セル canonical matrix での値:
 F0_CONTROL k=1 / FORMANT_GT k=3 / TILT_GT k=2 / APERIODICITY_GT k=2 /
