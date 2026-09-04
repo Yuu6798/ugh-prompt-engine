@@ -99,47 +99,70 @@ probe repeat 数・456 セル・2,280 instance の会計も不変。HKDF stream 
   holdout に必要になり（例: FORMANT_GT 12 sweep × 3 行 = 36 行 > holdout 全 24 行）、
   25% split と算術的に矛盾する。
 
-### V2.2 ruling — 割当単位の変更
+### V2.2 ruling — holdout sweep pinning（2 段割当）
 
-TRUTH_CORE ∧ PRIMARY の行（= declared sweep の member。`fixtures.matrix.
-declared_sweeps_by_family()` が正本）は、**行単位ではなく declared sweep 単位の
-クラスタで split へ割当てる**:
+**改訂履歴**: 本節の初版は TRUTH_CORE∧PRIMARY 行を 3 split すべてへ sweep クラスタ
+単位で配分する案だったが、Codex レビュー第 1 巡（P1、2026-09-04）が
+APERIODICITY_GT での厳密実行不能を指摘し（60 truth 行 = 6 行量子 × 10 クラスタ、
+family 厳密枠 36/18/18 と「各 split ≥ 1 BOUNDARY 行」coverage の下で
+k1 ≤ 5, k2 ≤ 2, k3 ≤ 2 → Σ ≤ 9 < 10）、検算の結果採用。欠陥の実体は holdout の
+sweep 薄まりのみであるため、クラスタ化を **HOLDOUT だけ**に縮小した 2 段割当へ
+差し替えた。
 
-- family ごとに sweep クラスタを `HMAC-SHA256(split_secret, sweep_id の canonical
-  表現)` 昇順に並べ、largest-remainder で 50/25/25 へ配分（端数は v1.0 §7 の既存規約
-  どおり HMAC 順位の偶奇で selection/holdout へ交互配分）。
-- sweep 非所属行（confound / boundary / negative control / TRUTH_CORE∧BOUNDARY）は
-  従来どおり行単位（v1.0 §7 不変）。
-- 新 coverage 制約: **各 split は family ごとに declared sweep を最低 1 個持つ**。
-  違反は sweep クラスタ単位の決定的最小 swap で修復し manifest に記録、修復不能は
-  fail-closed（v1.0 §7 の swap 規約の cluster 版）。
-- family 合計 50/25/25 の厳密一致は sweep 非所属行の再配分のみで補正する（クラスタを
-  分断する片道移動は禁止）。
+**段 1 — holdout sweep pinning**: family ごとに、declared sweep（`fixtures.matrix.
+declared_sweeps_by_family()` が正本、member 行数 r・sweep 数 S）から
+`HMAC-SHA256(split_secret, sweep_id の canonical 表現)` 昇順の先頭 `k_hold` 個を
+**HOLDOUT 専属 sweep** として pin し、その member 全行を HOLDOUT へ割当てる。
+
+```
+k_hold(family) = min( max(1, floor(0.25 * S + 0.5)),   # 25% 目標の half-up 丸め、最低 1
+                      floor((N_hold - 1) / r) )        # 非 sweep 行 ≥ 1 の枠を保証
+```
+
+（N_hold = §5.2 の family holdout 目標行数。456 セル canonical matrix での値:
+F0_CONTROL k=1 / FORMANT_GT k=3 / TILT_GT k=2 / APERIODICITY_GT k=2 /
+RESONANCE_GT k=2 / TRANSITION_GT k=2 / IDENTITY_CAUSAL_SWEEP k=3。
+各 family とも `N_hold - k*r >= 1` で boundary/negative 行の holdout 枠が残る。）
+
+**段 2 — 残余の行単位割当（v1.0 §7 の既存機構）**: pin されなかった全行
+（残りの truth-core 行・confound・boundary・negative control）は従来どおり行単位の
+層別 largest-remainder + coverage 制約 + 決定的最小 swap で割当てる。ただし:
+
+- TRUTH_CORE stratum の HOLDOUT 枠は段 1 の pin 行で**全量を構成**する（pin 外の
+  truth-core 行の holdout 割当は 0。部分 sweep が holdout に混入しない）。
+- family 合計 50/25/25 の厳密一致（v1.0 §7）は不変 — 段 2 の largest-remainder が
+  pin 済み行数を既割当として控除した目標で走る。
+- swap 修復は pin 行を不動とする（pin 行を動かす修復は禁止、修復不能は fail-closed）。
 - 既存 coverage 制約（truth_level / generator_impl / boundary_class、TRUTH_CORE
-  最低 2 行）は行数ベースのまま維持（各 sweep ≥ 3 行のため自動充足）。
-- realized split map の正本形式（C0 manifest の row→split 表 + 検証器の機械照合）は
-  不変。照合対象のアルゴリズムが本節の cluster 版になる。
+  最低 2 行）は不変。HOLDOUT の TRUTH_CORE 最低 2 行は pin sweep（r ≥ 3）で自動充足。
+
+realized split map の正本形式（C0 manifest の row→split 表 + 検証器の機械照合）は
+不変。pin された sweep_id 一覧は `frozen_design.fixture_spec.<FAMILY>.holdout_sweeps`
+として manifest に凍結する（`manifest_core_sha` に含める）。
 
 ### V2.3 ruling — holdout 上の DIRECTIONAL gate の評価対象 sweep
 
-§10.4 の「resolvable pair は各 sweep で >= 3」の holdout 評価は、**member 全行が
-HOLDOUT に属する declared sweep**（= V2.2 により必ず sweep 全体が単一 split に完結
-する）を対象として行う。C4 の DIRECTIONAL 容量検査の expected sweep 集合も同じ定義
-に従う（従来の「全 declared sweep」は V2.2 の下では holdout 非常駐 sweep を含み
-評価不能を強制するため）。member が split を跨ぐ declared sweep は V2.2 の割当では
-発生し得ず、検出した場合は割当実装の欠陥として fail-closed する。
+§10.4 の「resolvable pair は各 sweep で >= 3」の holdout 評価は、**段 1 で pin した
+HOLDOUT 専属 sweep**（= manifest の `holdout_sweeps`）を対象として行う。C4 の
+DIRECTIONAL 容量検査の expected sweep 集合も同じ定義に従う（従来の「全 declared
+sweep」は holdout 非常駐 sweep を含み評価不能を強制するため）。realized split 上で
+`holdout_sweeps` の member に HOLDOUT 非所属行が 1 行でもあれば、割当実装の欠陥として
+fail-closed する。
 
-selection 側（C3b の DIRECTIONAL 順位基準）も selection 常駐 sweep を full truth
-level で持つことになるが、selection rule（v1.0 §9）の式・順序は不変。
+selection 側（C3b）の行構成と selection rule（v1.0 §9）の式・順序は不変（前 campaign
+で selection は sweep 薄化の下でも成立しており、欠陥は holdout 側にのみ実測された）。
 
 ### V2.4 帰結の宣言
 
-- 456 セル・2,280 instance・render/meter call 会計は不変（割当の単位だけが変わる）。
-- F0_CONTROL は 3 sweep のため calibration/selection/holdout に各 1 sweep（truth-core
-  4 行ずつ）となる。positive control instance は split あたり 4 行 × 5 probe = 20
-  ≥ 10（§10.1 最小数）で充足。
-- holdout 常駐 sweep の resolvable 性は依然 `Delta_truth > R_ij` の実測に従う。本改訂は
-  「構造的に評価不能」を除去するだけで、評価結果を保証しない。
+- 456 セル・2,280 instance・render/meter call 会計・family 合計 50/25/25 は不変
+  （変わるのは holdout 内の truth-core 行の選ばれ方だけ）。
+- holdout の pin sweep は各 family とも truth level 3–6 水準を全保持し、
+  `C(r_truth, 2) >= 3` の構造条件を満たす。resolvable 性は依然
+  `Delta_truth > R_ij` の実測に従う — 本改訂は「構造的に評価不能」を除去するだけで、
+  評価結果を保証しない。
+- positive control instance の最小数（§10.1 の N_pos >= 10）は、HOLDOUT が pin sweep
+  の r × 5 probe（最小 F0_CONTROL の 4 × 5 = 20）、SELECTION は従来どおり行単位割当
+  + TRUTH_CORE 最低 2 行 coverage で充足。
 
 ## V3. c4 実 gate 組み立ての配線（D17 の閉塞。campaign 成立要件への昇格）
 
@@ -208,6 +231,15 @@ campaign 成立要件とする:
 （`DESIGN_VG_METER_CAL_DEBT_v1.1.md`）とする（`approvals.py` の
 `DESIGN_DOC_RELATIVE_PATH` を本書へ更新）。v1.0 は read-only の基底文書として保存し、
 本書に明記のない全ての節の正であり続ける。
+
+**基底文書の実行時 pin（Codex レビュー第 1 巡 P2 採用、2026-09-04）**: 本書だけを
+pin すると、承継元 v1.0 が承認後・freeze 後に改変されても `check_armed()` が
+無効化されない穴が残る。よって承認ローダは、承認ファイルの `design_doc_sha256`
+（= 本書の sha）照合に加えて、**本書 front-matter の `base_document_sha256` と
+checkout 上の `DESIGN_VG_METER_CAL_DEBT_v1.0.md` の実測 sha256 の一致**を実行時に
+検証し、不一致は未承認扱い（fail-closed）とする（信頼の連鎖: 承認 → v1.1 バイト列
+→ v1.0 バイト列）。あわせて v1.0 / v1.1 の両ファイルを C0 の path inventory
+（`c0_path_inventory.json`）の検査対象に含める。
 
 ## V7. 裁定
 
