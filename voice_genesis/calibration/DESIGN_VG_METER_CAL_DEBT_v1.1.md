@@ -202,8 +202,19 @@ holdout 枠が残る — IDENTITY は 24 - 20 = 4。）
   最低 2 行）は不変。HOLDOUT の TRUTH_CORE 最低 2 行は pin sweep（r ≥ 3）で自動充足。
 
 realized split map の正本形式（C0 manifest の row→split 表 + 検証器の機械照合）は
-不変。pin された sweep_id 一覧は `frozen_design.fixture_spec.<FAMILY>.holdout_sweeps`
-として manifest に凍結する（`manifest_core_sha` に含める）。
+不変。pin された sweep_id 一覧は manifest の**トップレベル非 core キー**
+`holdout_sweeps` として凍結する（**実装時訂正、2026-09-04**: 本節の初版は
+`frozen_design.fixture_spec.<FAMILY>.holdout_sweeps`（core 節 = `manifest_core_sha`
+対象）と規定したが、pin 選抜は `split_secret` に依存し、secret は Gate 2 の
+`manifest_core_sha` 束縛検証を通した armed freeze 後にのみ生成されるため、core 節
+への格納は「承認対象の core に承認後にしか存在しない値を含める」ハッシュ循環で
+構造的に不能。`realized_split`/`realized_split_sha` と同格の非 core キーとし、
+`manifest_sha`（full manifest、`c0_freeze` event に記録）には含める。整合性は
+(i) armed freeze と staging 読み戻しの 2 箇所での secret 依存完全再導出照合、
+(ii) secret 非依存の構造検査（宣言 sweep の declared_sweeps 実在・member 一致・
+k_hold 一致）を validate が常時実行、(iii) §V2.3 の realized membership 検査、の
+3 層で担保する。secret 非依存の `claim_relevant_fields` は当初どおり
+`frozen_design.fixture_spec.<FAMILY>` = core 節に置く）。
 
 ### V2.3 ruling — holdout 上の DIRECTIONAL gate の評価対象 sweep
 
