@@ -1,0 +1,8 @@
+{
+  "approved_at_utc": "2026-09-04T00:01:43Z",
+  "approver": "Yuu6798 (delegated to Claude Fable 5.1 — renewed approval 2026-09-03; original delegation 2026-09-02T01:46:11Z; session 011x6MhCwdZWgxsnkXDVBrdx)",
+  "design_doc_sha256": "48e15e485301e5e686dfa96870d190ad08d2bc0a57e39d1971f13c9cf8426508",
+  "gate": "GATE3_SEAL_ACCEPTANCE",
+  "memo_sha256": "1dcbb6a5c762f2d6c884d59ff1cc67a722e3b0b5e65d04d59d951472af16da6f",
+  "seal_protection_level_accepted": true
+}

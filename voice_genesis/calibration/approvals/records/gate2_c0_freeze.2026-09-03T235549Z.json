@@ -1,21 +1,9 @@
 {
-  "approved_at_utc": "2026-09-03T03:30:13Z",
+  "approved_at_utc": "2026-09-03T23:55:49Z",
   "approver": "Yuu6798 (delegated to Claude Fable 5.1 — renewed approval 2026-09-03; original delegation 2026-09-02T01:46:11Z; session 011x6MhCwdZWgxsnkXDVBrdx)",
   "authorization_nonce": "4260cb528089cb3738eb0f568596c7c7",
-  "cost_caps": {
-    "budget": 20,
-    "budget_accounting_mode": "local_zero_cost",
-    "compute": 172800,
-    "storage": 4294967296
-  },
   "design_doc_sha256": "48e15e485301e5e686dfa96870d190ad08d2bc0a57e39d1971f13c9cf8426508",
-  "e_use_bound_accepted": true,
-  "gate": "GATE1_CAMPAIGN_EXECUTION",
-  "max_claim_scope": [
-    "formant_frequency",
-    "source_spectral_tilt",
-    "injected_noise_fraction",
-    "fundamental_frequency"
-  ],
+  "gate": "GATE2_C0_FREEZE",
+  "manifest_core_sha": "591cadcd24fbf71f2104ab9519e3b8fe480ad67050c6a60713f72b5478c74f94",
   "memo_sha256": "1dcbb6a5c762f2d6c884d59ff1cc67a722e3b0b5e65d04d59d951472af16da6f"
 }
