@@ -197,6 +197,20 @@ selection 側（C3b）の行構成と selection rule（v1.0 §9）の式・順�
   IDENTITY_CAUSAL_SWEEP の全 3 trait・全 4 founder の sweep を必ず 1 個以上持つ
   （M6 の claim 構成次元のいずれかに holdout 証拠が存在しない状態での directional
   主張は構造的に発生しない）。
+- **IDENTITY の交互作用被覆の正直な限定**（Codex レビュー第 4 巡 P1 採用、
+  2026-09-04）: 12 の founder × trait cell（各 5 行）を 24 行の holdout に全て
+  収めることは §5.2 の枠組み上不可能であり、pin される 4 cell は founder・trait を
+  **周辺被覆**するが**交互作用は被覆しない**。よって IDENTITY_CAUSAL_SWEEP /
+  M6 の holdout directional 証拠の適用範囲は **pin された (founder, trait) cell に
+  限定**して主張する: 終端 status の claim text は評価済み cell を機械可読で列挙し、
+  prohibited interpretations に「非評価 (founder, trait) 組合せへの directional
+  外挿」を必ず含める（v1.0 §13 の claim text / prohibited interpretations 欄を使用。
+  §12 の distinctness 前提「事前 causal sweep の全 resolvable pair での directional
+  gate 成立」における「causal sweep」は、本改訂下では holdout 評価済み cell の
+  sweep を指し、claim もその範囲に縮小される）。この限定は v1.0 実現状態
+  （holdout 常駐 sweep が構造的に 0 個 = directional 証拠ゼロ）に対する厳密な改善
+  であり、24 行 holdout という凍結枠の帰結として正直に記録する。被覆拡大
+  （§5.2 の holdout 枠拡張）は次期改訂の設計候補であり本 campaign では行わない。
 
 ## V3. c4 実 gate 組み立ての配線（D17 の閉塞。campaign 成立要件への昇格）
 
