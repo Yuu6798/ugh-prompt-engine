@@ -120,7 +120,9 @@ from voice_genesis.calibration.cost_caps import (
 from voice_genesis.calibration.cost_caps import check as cost_caps_check
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
 from voice_genesis.calibration.fixtures.controls import (
+    ControlClass,
     negative_control_row_ids,
+    negative_controls_by_class,
     non_boundary_selection_instances,
     positive_detection_instances,
 )
@@ -956,7 +958,8 @@ def _criteria_with_fail_filters(
     positive_control_ids: frozenset[str],
     expected_coverage_instances: frozenset[tuple[str, int]] = frozenset(),
     max_claim_scope: frozenset[str],
-) -> tuple[Any, dict[str, bool], dict[str, object]]:
+    noise_only_negative_control_ids: frozenset[str] = frozenset(),
+) -> tuple[Any, dict[str, object], dict[str, object]]:
     """finding #8: `build_candidate_criteria()`（有限値の有無のみ）に加えて
     `candidates.adapter` 共通 5 fail filter を適用し、いずれか 1 つでも
     発火していれば `eligible=False` へ落とす。finding #11: さらに
@@ -970,7 +973,29 @@ def _criteria_with_fail_filters(
     `coverage_incomplete` filter を通す。`(criteria, fail_filter_report,
     claim_scope_report)` を返す — 呼び出し元はこれらを
     `run_c3a_f0_selection`/`run_c3b_selection` の対応する `*_reports*` へ
-    積み上げて SELECTION_FROZEN payload に記録する。"""
+    積み上げて SELECTION_FROZEN payload に記録する。
+
+    v1.1 §V1（F0_CONTROL の C3a に限る negative control fail filter 分割）:
+    `noise_only_negative_control_ids`（既定は空——C3b の呼び出し元はこの
+    引数を一切渡さず、`candidate_fail_filter_report()` 側の既定動作
+    （単一 `negative_control_row_ids` 集合が any-fire/completeness の両方を
+    兼ねる）がそのまま保たれる）が非空のとき、`report` の
+    `noise_only_false_detection_rate` が有限値として得られる。この値を
+    `CandidateCriteria.nuisance_sensitivity_max`
+    （`build_candidate_criteria()` は本 D2 infra で常に `0.0` 固定とする
+    未配線 placeholder——`selection_stage.build_candidate_criteria` の
+    docstring 参照）へ差し替え、`selection.py` の既存 ranking vector
+    （error 項の直後・`missing_failure_rate` の直前という v1.0 §8 の
+    "voiced false detection rate" の宣言位置に最も近い既存スロット）を
+    通じて lexicographic 選択基準へ配線する（`voice_genesis/calibration/
+    selection.py` は本 WP の対象外のため新規フィールドを追加しない —
+    既存フィールドの再利用が本 WP の設計判断）。rate が `None`
+    （NOISE_ONLY 母集団が空、または該当 candidate の record が 1 件も
+    無い）なら `nuisance_sensitivity_max` は `build_candidate_criteria()`
+    の既定 `0.0` のまま変更しない（`negative_controls_incomplete` が
+    NOISE_ONLY 行の record 欠落を別途 fail-closed で捕捉するため、この
+    フォールバックが実質的に発生するのは NOISE_ONLY 母集団自体が空の
+    C3b 呼び出しのみ）。"""
     base = selection_stage.build_candidate_criteria(candidate, records, truth_by_instance)
     report = selection_stage.candidate_fail_filter_report(
         candidate,
@@ -978,10 +1003,21 @@ def _criteria_with_fail_filters(
         negative_control_row_ids=negative_control_ids,
         positive_control_row_ids=positive_control_ids,
         expected_coverage_instances=expected_coverage_instances,
+        noise_only_control_row_ids=noise_only_negative_control_ids,
     )
     eligible = base.eligible and selection_stage.eligible_after_fail_filters(report)
     capped, scope_report = selection_stage.claim_scope_report(candidate, max_claim_scope)
-    criteria = dataclasses.replace(base, eligible=eligible, ceiling=capped)
+    noise_only_rate = report.get("noise_only_false_detection_rate")
+    criteria = dataclasses.replace(
+        base,
+        eligible=eligible,
+        ceiling=capped,
+        nuisance_sensitivity_max=(
+            noise_only_rate
+            if isinstance(noise_only_rate, float)
+            else base.nuisance_sensitivity_max
+        ),
+    )
     return criteria, report, scope_report
 
 
@@ -1284,7 +1320,23 @@ def _run_c3a(
     # fail (F0_CONTROL's C3a instance set never includes other families'
     # control rows).
     f0_rows = [mr for mr in matrix_rows if mr.row.family == FixtureFamily.F0_CONTROL.value]
-    neg_ids = negative_control_row_ids(f0_rows)
+    # v1.1 §V1 (F0_CONTROL の C3a に限る negative control fail filter 分割):
+    # `negative_controls_by_class()` で control_class 別に row_id を分け、
+    # NOISE_ONLY（噪音実現に対する pyin 系の偽発火が確率事象——campaign 間で
+    # 実際に反転した唯一の class）のみを any-fire ゼロ許容フィルタの母集団
+    # から切り出す。決定論的縮退 class（SILENCE/TOO_SHORT、および本 campaign
+    # では非採用の INVALID_SR）は `zero_tolerance_neg_ids` に残り、従来どおり
+    # any-fire ゼロ許容で判定する。他 family（C3b, `negative_control_row_ids`
+    # を単一集合のまま渡す下の `_compute_family_criteria`）はこの分割の対象
+    # 外で不変。
+    neg_ids_by_class = negative_controls_by_class(f0_rows)
+    noise_only_neg_ids = frozenset(neg_ids_by_class.get(ControlClass.NOISE_ONLY.value, ()))
+    zero_tolerance_neg_ids = frozenset(
+        row_id
+        for control_class, row_ids in neg_ids_by_class.items()
+        if control_class != ControlClass.NOISE_ONLY.value
+        for row_id in row_ids
+    )
     pos_instances = _positive_instances_for_selection(
         matrix_rows, assignment, FixtureFamily.F0_CONTROL.value
     )
@@ -1297,17 +1349,18 @@ def _run_c3a(
     )
     known_truth_by_instance = {k: v for k, v in truth_by_instance.items() if v is not None}
     criteria: list[Any] = []
-    fail_filter_reports: dict[str, dict[str, bool]] = {}
+    fail_filter_reports: dict[str, dict[str, object]] = {}
     claim_scope_reports: dict[str, dict[str, object]] = {}
     for c in candidates:
         candidate_criteria, report, scope_report = _criteria_with_fail_filters(
             c,
             records,
             known_truth_by_instance,
-            negative_control_ids=neg_ids,
+            negative_control_ids=zero_tolerance_neg_ids,
             positive_control_ids=pos_ids,
             expected_coverage_instances=coverage_instances,
             max_claim_scope=max_claim_scope,
+            noise_only_negative_control_ids=noise_only_neg_ids,
         )
         criteria.append(candidate_criteria)
         fail_filter_reports[c.candidate_id] = report

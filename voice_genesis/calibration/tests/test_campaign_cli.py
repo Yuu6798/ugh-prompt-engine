@@ -322,6 +322,165 @@ def test_c3a_f0_selection_passes_with_candidate_that_correctly_non_detects_on_si
 
 
 # ---------------------------------------------------------------------------
+# v1.1 §V1 (Design Memo AC5): F0_CONTROL's C3a `negative_control_row_ids`
+# construction in `cli._run_c3a` splits by `FixtureRow.control_class` —
+# deterministic-degenerate classes (SILENCE/TOO_SHORT here) keep the any-fire
+# zero-tolerance filter, NOISE_ONLY is excluded from it and its detection
+# rate is wired into the ranking criteria instead (`selection_stage.
+# candidate_fail_filter_report`'s new `noise_only_control_row_ids` param).
+# `measure_stage.run_measure_stage` is monkeypatched to fabricate records
+# deterministically (no real audio/pyin) so the fixed 2/5 NOISE_ONLY
+# false-detection rate below is exact, not flaky.
+# ---------------------------------------------------------------------------
+
+
+def _f0_v11_campaign(tmp_path: Path):
+    """Full canonical matrix (no `subset` override — the splitter's v1.1 §V2
+    holdout sweep pinning needs the real population to satisfy coverage; a
+    small hand-picked F0_CONTROL-only subset starves it). `measure_stage.
+    run_measure_stage` is monkeypatched by the caller, so the extra
+    non-F0_CONTROL rows never trigger a real render/measure and this test
+    stays fast despite the full 456-row matrix."""
+    from voice_genesis.calibration.fixtures.matrix import build_matrix
+
+    all_rows = build_matrix()
+    control_rows = [
+        mr for mr in all_rows if mr.row.family == "F0_CONTROL" and mr.row.control_class is not None
+    ]
+    assert {mr.row.control_class for mr in control_rows} == {"SILENCE", "NOISE_ONLY", "TOO_SHORT"}
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    return campaign, all_rows
+
+
+def _fabricate_f0_v11_records(subset, instances, candidates_arg, *, silence_and_too_short_fire: bool):
+    row_by_id = {mr.row_id: mr.row for mr in subset}
+    # 2 of 5 NOISE_ONLY probes false-fire -> a fixed 0.4 detection rate.
+    noise_only_detected_probes = {0, 1}
+    records: list[measure_stage.MeasurementRecord] = []
+    for row_id, probe_index in instances:
+        row = row_by_id[row_id]
+        for candidate in candidates_arg:
+            field = measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY[
+                candidate.algorithm_family
+            ]
+            if row.control_class in ("SILENCE", "TOO_SHORT"):
+                detected = silence_and_too_short_fire
+            elif row.control_class == "NOISE_ONLY":
+                detected = probe_index in noise_only_detected_probes
+            else:
+                detected = True  # TRUTH_CORE rows: correctly detect at truth
+            value = row.f0_hz if detected else None
+            for repeat_kind, process_id in (("within", "within-p0"), ("fresh", "fresh-p0")):
+                output = (
+                    MeterOutput(values={field: value})
+                    if detected
+                    else MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
+                )
+                records.append(
+                    measure_stage.MeasurementRecord(
+                        row_id=row_id,
+                        probe_index=probe_index,
+                        candidate_id=candidate.candidate_id,
+                        repeat_kind=repeat_kind,
+                        repeat_index=0,
+                        process_id=process_id,
+                        output=output,
+                    )
+                )
+    return records
+
+
+def test_v11_c3a_noise_only_false_fire_stays_eligible_and_rate_is_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC5(b)/(e): a candidate that false-fires on 2/5 NOISE_ONLY instances
+    but never fires on SILENCE/TOO_SHORT must still be `SELECTED` (NOISE_ONLY
+    is excluded from `negative_control_false_fire`'s any-fire population),
+    and the `f0_selection_frozen` ledger payload must record the exact
+    NOISE_ONLY breakdown."""
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+
+    campaign, subset = _f0_v11_campaign(tmp_path)
+
+    only_b0 = (candidate_by_id("F0-B0-CURRENT"),)
+    monkeypatch.setattr(
+        cli,
+        "candidates_for_meter",
+        lambda meter, _orig=cli.candidates_for_meter: (
+            only_b0 if meter is MeterId.F0_CONTROL else _orig(meter)
+        ),
+    )
+    monkeypatch.setattr(
+        measure_stage,
+        "run_measure_stage",
+        lambda campaign_arg, instances, candidates_arg, **kwargs: _fabricate_f0_v11_records(
+            subset, instances, candidates_arg, silence_and_too_short_fire=False
+        ),
+    )
+
+    result = cli._run_c3a(campaign, subset, 1)
+    assert result["result"] == "OK", result
+    assert result["outcome"] == "SELECTED", result
+    assert result["selected_candidate_id"] == "F0-B0-CURRENT"
+
+    f0_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "f0_selection_frozen"
+    ]
+    fail_filters = f0_events[-1]["fail_filters_by_candidate"]["F0-B0-CURRENT"]
+    assert fail_filters["negative_control_false_fire"] is False
+    assert fail_filters["negative_controls_incomplete"] is False
+    assert fail_filters["noise_only_instances_total"] == 5
+    assert fail_filters["noise_only_instances_detected"] == 2
+    assert fail_filters["noise_only_false_detection_rate"] == pytest.approx(0.4)
+
+    # the rate feeds `nuisance_sensitivity_max`, the existing ranking-vector
+    # slot immediately after the error terms (v1.0 §8's declared "voiced
+    # false detection rate" position) — confirm it is actually wired into
+    # the frozen rounded ranking vector, not just recorded as an audit key.
+    rounded_vector = f0_events[-1]["rounded_vectors"]["F0-B0-CURRENT"]
+    assert rounded_vector[3] == pytest.approx(0.4)
+
+
+def test_v11_c3a_silence_false_fire_still_rejects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC5(a): a candidate that false-fires on the deterministic-degenerate
+    SILENCE/TOO_SHORT rows must still be zero-tolerance rejected, ending in
+    `SELECTION_FAILED_CLOSED` when it is the only candidate."""
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+
+    campaign, subset = _f0_v11_campaign(tmp_path)
+
+    only_b0 = (candidate_by_id("F0-B0-CURRENT"),)
+    monkeypatch.setattr(
+        cli,
+        "candidates_for_meter",
+        lambda meter, _orig=cli.candidates_for_meter: (
+            only_b0 if meter is MeterId.F0_CONTROL else _orig(meter)
+        ),
+    )
+    monkeypatch.setattr(
+        measure_stage,
+        "run_measure_stage",
+        lambda campaign_arg, instances, candidates_arg, **kwargs: _fabricate_f0_v11_records(
+            subset, instances, candidates_arg, silence_and_too_short_fire=True
+        ),
+    )
+
+    result = cli._run_c3a(campaign, subset, 1)
+    assert result["result"] == "OK", result
+    assert result["outcome"] == "SELECTION_FAILED_CLOSED", result
+    assert result["selected_candidate_id"] is None
+
+    f0_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "f0_selection_frozen"
+    ]
+    fail_filters = f0_events[-1]["fail_filters_by_candidate"]["F0-B0-CURRENT"]
+    assert fail_filters["negative_control_false_fire"] is True
+
+
+# ---------------------------------------------------------------------------
 # finding #5 (第 8 巡採用): Gate 1 承認の凍結 manifest への束縛
 # ---------------------------------------------------------------------------
 
