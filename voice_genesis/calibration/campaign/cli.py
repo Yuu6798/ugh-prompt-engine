@@ -1711,6 +1711,18 @@ def _run_c4(
     # instance の distinct truth level 数」（ruling (3)）の両方がこの宣言を
     # 単一の入口として共有する（fabricated `"default"` sweep は経由しない）。
     declared_sweeps_by_family_map = declared_sweeps_by_family(matrix_rows)
+    # v1.1 §V2.3: the DIRECTIONAL capacity check's expected sweep set now
+    # sources from the manifest's `holdout_sweeps` (= the sweeps pinned to
+    # HOLDOUT at C0 freeze, `fixtures.matrix.pin_holdout_sweeps_by_family()`)
+    # rather than the full declared sweep set — a declared sweep that is not
+    # HOLDOUT-resident can never accumulate usable holdout instances, so
+    # requiring it structurally forced `DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_
+    # HOLDOUT` (§V2.1 observation). `holdout_sweeps` is a non-core,
+    # split_secret-dependent manifest key that only exists on campaigns
+    # frozen under v1.1+ (`c0_freeze._attach_freeze_extras()`); a campaign
+    # frozen before v1.1 (or a test fixture that never populates it) falls
+    # back to the pre-v1.1 "all declared sweeps" behavior unchanged.
+    holdout_sweeps_section = campaign.manifest.get("holdout_sweeps")
     row_id_to_sweep_id: dict[str, dict[str, str]] = {}
     for family_value, family_sweeps in declared_sweeps_by_family_map.items():
         for sweep_id, member_row_ids in family_sweeps.items():
@@ -2081,7 +2093,16 @@ def _run_c4(
                 sweep_id: len({truth_identity_for_row(row_by_id[rid]) for rid in row_ids})
                 for sweep_id, row_ids in usable_row_ids_by_sweep.items()
             }
-            expected_sweep_ids = set(declared_sweeps_by_family_map.get(family.value, {}))
+            family_holdout_sweeps = (
+                holdout_sweeps_section.get(family.value)
+                if isinstance(holdout_sweeps_section, Mapping)
+                else None
+            )
+            expected_sweep_ids = (
+                set(family_holdout_sweeps)
+                if isinstance(family_holdout_sweeps, Mapping)
+                else set(declared_sweeps_by_family_map.get(family.value, {}))
+            )
             directional_minimum_not_met = not resolvable_pairs_possible(
                 usable_truth_level_counts_by_sweep, expected_sweep_ids
             )

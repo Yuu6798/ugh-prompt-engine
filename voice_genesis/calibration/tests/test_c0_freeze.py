@@ -171,6 +171,25 @@ def test_fixture_spec_declared_sweeps_matches_declared_sweeps_by_family() -> Non
         assert len(recorded) >= 1, f"{family.value} declares no sweeps"
 
 
+def test_fixture_spec_claim_relevant_fields_matches_machine_derivation() -> None:
+    """v1.1 §V2.2 5th bullet: `frozen_design.fixture_spec.<FAMILY>.
+    claim_relevant_fields` must be exactly `fixtures.matrix.
+    claim_relevant_fields_by_family(build_matrix())[FAMILY]` — same
+    "declared value == machine-derived value" invariant as
+    `declared_sweeps` above.
+    """
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily
+    from voice_genesis.calibration.fixtures.matrix import build_matrix, claim_relevant_fields_by_family
+
+    manifest = c0_freeze.build_manifest(_REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02")
+    derived = claim_relevant_fields_by_family(build_matrix())
+    fixture_spec = manifest["frozen_design"]["fixture_spec"]
+    for family in FixtureFamily:
+        assert fixture_spec[family.value]["claim_relevant_fields"] == list(
+            derived[family.value]
+        )
+
+
 def test_dry_run_gate1_approved_reduces_blocking(tmp_path: Path) -> None:
     approval_dir = tmp_path / "approvals"
     approval_dir.mkdir()
@@ -380,6 +399,57 @@ def test_manifest_core_sha_round_trips_from_full_manifest(
     assert c0_freeze.manifest_core_sha(full_manifest) == dry_report.manifest_core_sha
     stripped = c0_freeze.core_payload(full_manifest)
     assert set(stripped) & c0_freeze._CORE_ONLY_EXCLUDED_KEYS == set()
+
+
+def test_armed_freeze_holdout_sweeps_is_non_core_and_matches_k_hold(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """v1.1 §V2.2: `holdout_sweeps` is a split_secret-dependent, non-core
+    top-level key (same placement rationale as `realized_split` — see the
+    `_CORE_ONLY_EXCLUDED_KEYS` docstring) attached only at `armed_freeze()`
+    time. It must (a) be absent from `dry_run()`'s manifest (no secret
+    exists yet there), (b) be stripped by `core_payload()`/excluded from
+    `manifest_core_sha`, (c) declare exactly `k_hold` pinned sweeps per
+    family (§V2.2 frozen table), and (d) have every member row_id assigned
+    to HOLDOUT in the same manifest's `realized_split.assignment` (§V2.3).
+    """
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily
+    from voice_genesis.calibration.fixtures.matrix import build_matrix, holdout_pin_params_by_family
+
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+    dry_report = c0_freeze.dry_run(_REPO_ROOT, approval_dir, env)
+    assert "holdout_sweeps" not in dry_report.manifest
+
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.PUBLISHED
+    full_manifest = json.loads((result.campaign_dir / "c0_manifest.json").read_text(encoding="utf-8"))
+
+    holdout_sweeps = full_manifest["holdout_sweeps"]
+    assert "holdout_sweeps" not in c0_freeze.core_payload(full_manifest)
+
+    params = holdout_pin_params_by_family(build_matrix())
+    assignment = full_manifest["realized_split"]["assignment"]
+    for family in FixtureFamily:
+        family_sweeps = holdout_sweeps[family.value]
+        assert len(family_sweeps) == params[family.value].k_hold, family.value
+        for member_row_ids in family_sweeps.values():
+            for rid in member_row_ids:
+                assert assignment[rid] == "HOLDOUT", (family.value, rid)
+
+    # end-to-end: the secret-independent structural checks (matched against
+    # `declared_sweeps`/k_hold) and the realized-membership check both pass
+    # against this real, production-shaped manifest.
+    validation = c0_validate.validate_c0_manifest(full_manifest)
+    assert validation.holdout_pin_declaration_violations == ()
+    assert validation.holdout_pin_membership_violations == ()
+    assert validation.holdout_pin_feasibility_violations == ()
 
 
 def test_armed_freeze_manifest_core_sha_mismatch_refused(tmp_path: Path, clean_checkout: None) -> None:
@@ -941,7 +1011,7 @@ def test_readback_verify_detects_corrupted_render_root_secret(
     monkeypatch.setattr(
         c0_freeze.c0_validate,
         "validate_c0_manifest",
-        lambda manifest: c0_validate.C0ValidationResult(),
+        lambda manifest, **kwargs: c0_validate.C0ValidationResult(),
     )
 
     campaign_staging = tmp_path / "campaign"
@@ -1638,7 +1708,7 @@ def test_readback_verify_detects_e_use_table_sha256_mismatch(
     monkeypatch.setattr(
         c0_freeze.c0_validate,
         "validate_c0_manifest",
-        lambda manifest: c0_validate.C0ValidationResult(),
+        lambda manifest, **kwargs: c0_validate.C0ValidationResult(),
     )
 
     campaign_staging = tmp_path / "campaign"

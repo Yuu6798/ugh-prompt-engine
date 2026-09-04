@@ -58,10 +58,13 @@ from voice_genesis.calibration.canonical import manifest_sha as _full_manifest_s
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
 from voice_genesis.calibration.fixtures.controls import ControlClass
 from voice_genesis.calibration.fixtures.matrix import (
+    HoldoutPinInfeasible,
     MatrixRow,
     _negative_applicable,
     build_matrix,
+    claim_relevant_fields_by_family,
     declared_sweeps_by_family,
+    pin_holdout_sweeps_by_family,
 )
 from voice_genesis.calibration.fixtures.matrix import build_matrix as _canonical_build_matrix
 from voice_genesis.calibration.provenance import Ledger
@@ -335,7 +338,15 @@ def _fixture_specs(root: Path) -> dict[str, object]:
     #: （`dry_run()`/E2E テストが `build_matrix` を monkeypatch する経路）から
     #: 意図的に独立させた `_canonical_build_matrix` から導出する。member
     #: row_id も含めて記録する（`manifest_core_sha` に含まれる）。
-    declared_sweeps = declared_sweeps_by_family(_canonical_build_matrix())
+    canonical_rows = _canonical_build_matrix()
+    declared_sweeps = declared_sweeps_by_family(canonical_rows)
+    #: v1.1 §V2.2 5th bullet: claim-relevant field（machine-derived, secret
+    #: 非依存）を declared_sweeps と同じ理由（`build_matrix` の test-only
+    #: 差し替えから独立させる）で `_canonical_build_matrix()` から導出する。
+    #: `holdout_sweeps`（pin 結果）は split_secret 依存のためここには含めない
+    #: ——`armed_freeze()` が secret 生成後に full manifest 側（`realized_
+    #: split` と同じ非-core 節）へ別途添付する（下記 `armed_freeze()` 参照）。
+    claim_relevant = claim_relevant_fields_by_family(canonical_rows)
     specs: dict[str, object] = {}
     for family in FixtureFamily:
         rel_path = _GENERATOR_MODULE_RELATIVE_PATH[family.value]
@@ -355,6 +366,7 @@ def _fixture_specs(root: Path) -> dict[str, object]:
                 sweep_id: list(member_row_ids)
                 for sweep_id, member_row_ids in sorted(family_sweeps.items())
             },
+            "claim_relevant_fields": list(claim_relevant.get(family.value, ())),
         }
     return specs
 
@@ -508,12 +520,25 @@ def build_manifest(
 #: core_sha が不一致になり Gate 2 の束縛が無効化される（`campaign_id`/
 #: `authorization_nonce` とは異なり、`frozen_inputs` はこの意味で `cost_caps`/
 #: `max_claim_scope` などの他の frozen-design 入力と同じ扱いになった）。
+#: v1.1 §V2.2: `holdout_sweeps`（段 1 の pin 結果）は `split_secret` 依存
+#: （HMAC(split_secret, ...) で選抜する）ため、`realized_split` と全く同じ
+#: 理由で non-core 節に置く——`build_manifest()`/`dry_run()` は secret を
+#: 一切生成しない設計不変（v1.0 以来）であり、`armed_freeze()` が Gate 2 の
+#: `manifest_core_sha` 束縛検証を終えて secret を生成した**後**にしか計算
+#: できない。設計文書 §V2.2 の文言は `frozen_design.fixture_spec.<FAMILY>.
+#: holdout_sweeps`（= core 節内）を挙げるが、それは secret 生成が dry_run()
+#: より前に必要という前提と両立しない（`build_manifest()` に secret を
+#: 渡す設計変更は v1.0 の dry-run/armed 分離という、より基本的な不変条件を
+#: 破る）。よって本実装は `realized_split` と同じ**トップレベルの非-core
+#: キー**（`holdout_sweeps`）へ意図的に配置を変更する——設計文書の記述との
+#: この乖離とその理由を、実装報告（v1.1 §V2 実装 WP）に明記する。
 _CORE_ONLY_EXCLUDED_KEYS: frozenset[str] = frozenset(
     {
         "approvals",
         "commitments",
         "realized_split",
         "realized_split_sha",
+        "holdout_sweeps",
         "campaign_id",
         "authorization_nonce",
     }
@@ -557,6 +582,7 @@ def _attach_freeze_extras(
     commitments: Mapping[str, str],
     realized_split: Mapping[str, object],
     realized_split_sha: str,
+    holdout_sweeps: Mapping[str, Mapping[str, Sequence[str]]],
 ) -> dict[str, object]:
     """core manifest から frozen/full manifest を組み立てる。設計正本 §7
     「正本は C0 manifest に列挙した実現済み row→split 表」に従い、
@@ -581,6 +607,15 @@ def _attach_freeze_extras(
     full["commitments"] = dict(commitments)
     full["realized_split"] = dict(realized_split)
     full["realized_split_sha"] = realized_split_sha
+    #: v1.1 §V2.2 段 1: pin された holdout sweep（family -> {sweep_id:
+    #: [member row_id, ...]}）。`realized_split` と同じ non-core 節
+    #: （`_CORE_ONLY_EXCLUDED_KEYS` 参照）。
+    full["holdout_sweeps"] = {
+        family: {
+            sweep_id: list(member_row_ids) for sweep_id, member_row_ids in sorted(sweeps.items())
+        }
+        for family, sweeps in holdout_sweeps.items()
+    }
     return full
 
 
@@ -877,6 +912,13 @@ def _realized_split_to_dict(realized: RealizedSplitMap) -> dict[str, object]:
             }
             for s in realized.swaps
         ],
+        #: v1.1 §V2.2 段 1 の pin 行集合（`RealizedSplitMap.
+        #: pinned_holdout_row_ids`）。`realized_sha` のハッシュ対象には
+        #: 含まれない（同クラスの docstring 参照）ため、ここでの往復は純粋に
+        #: `verify_split()` が再実行時に正しい pin 集合を読み戻すための
+        #: 補助情報。v1.0 由来の古い `realized_split.json`（このキーを
+        #: 持たない）は `_realized_split_from_dict()` 側で空集合へ既定化する。
+        "pinned_holdout_row_ids": sorted(realized.pinned_holdout_row_ids),
         "realized_sha": realized.realized_sha,
     }
 
@@ -898,6 +940,7 @@ def _realized_split_from_dict(d: Mapping[str, Any]) -> RealizedSplitMap:
         stratum_factor_names=tuple(d["stratum_factor_names"]),
         assignment=assignment,
         swaps=swaps,
+        pinned_holdout_row_ids=frozenset(d.get("pinned_holdout_row_ids", ())),
         realized_sha=d["realized_sha"],
     )
 
@@ -1011,7 +1054,11 @@ def _readback_verify(
         )
     except (OSError, json.JSONDecodeError) as exc:
         return False, f"cannot read back c0_manifest.json: {exc}"
-    validation = c0_validate.validate_c0_manifest(manifest_readback)
+    # v1.1: re-derive `holdout_sweeps` with the actual (just-generated)
+    # split_secret too, not only the secret-independent structural checks.
+    validation = c0_validate.validate_c0_manifest(
+        manifest_readback, split_secret=split_secret_expected
+    )
     if validation.is_blocked:
         return False, f"read-back manifest failed validation: {validation.blocked_codes}"
 
@@ -1370,7 +1417,41 @@ def armed_freeze(
     # review round 4), so `full_manifest` cannot be built until this exists.
     matrix_rows = build_matrix()
     row_inputs = _row_inputs_for_split(matrix_rows, STRATUM_FACTOR_NAMES)
-    realized = realize_split(row_inputs, split_secret, STRATUM_FACTOR_NAMES)
+
+    # v1.1 §V2.2 段 1: holdout sweep pinning は split_secret 依存
+    # （HMAC(split_secret, ...)）のため、split_secret が確定した直後・
+    # realize_split() の直前でここで初めて計算できる。被覆要件が cap 内で
+    # 充足不能な family 構成（456 セルでは発生しない、防御的経路）は
+    # `HoldoutPinInfeasible` を fail-closed な `VALIDATION_BLOCKED` へ変換
+    # する（`c0_validate._check_holdout_pin_feasibility()` が manifest 非
+    # 依存に同じ構造をあらかじめ検査するため、実運用ではこの except 節へ
+    # 到達する前に上流の `validate_c0_manifest()`/Gate 2 レビューで発見
+    # される想定だが、二重の防御として残す）。
+    try:
+        holdout_sweeps = pin_holdout_sweeps_by_family(matrix_rows, split_secret)
+    except HoldoutPinInfeasible as exc:
+        return ArmedFreezeResult(
+            outcome=FreezeOutcome.VALIDATION_BLOCKED,
+            campaign_id=campaign_id,
+            manifest_core_sha=core_sha,
+            manifest_sha=None,
+            campaign_dir=None,
+            secret_dir=None,
+            detail=f"holdout sweep pin coverage requirement infeasible: {exc}",
+            gate2_arming=gate2_arming,
+        )
+    pinned_holdout_row_ids = frozenset(
+        rid
+        for family_sweeps in holdout_sweeps.values()
+        for member_row_ids in family_sweeps.values()
+        for rid in member_row_ids
+    )
+    realized = realize_split(
+        row_inputs,
+        split_secret,
+        STRATUM_FACTOR_NAMES,
+        pinned_holdout_row_ids=pinned_holdout_row_ids,
+    )
     realized_split_dict = _realized_split_to_dict(realized)
 
     full_manifest = _attach_freeze_extras(
@@ -1381,10 +1462,15 @@ def armed_freeze(
         commitments=commitments,
         realized_split=realized_split_dict,
         realized_split_sha=realized.realized_sha,
+        holdout_sweeps=holdout_sweeps,
     )
     full_sha = _full_manifest_sha(full_manifest)
 
-    validation = c0_validate.validate_c0_manifest(full_manifest)
+    # v1.1: `split_secret` is passed through so `validate_c0_manifest()` can
+    # fully re-derive and match `holdout_sweeps` against the pin algorithm
+    # (D77-equivalent declaration check) — the only point in the freeze flow
+    # where the plaintext secret is still in scope.
+    validation = c0_validate.validate_c0_manifest(full_manifest, split_secret=split_secret)
     validation = _merge_e_use_table_violations(validation, e_use_violations)
     frozen_design = core_manifest.get("frozen_design")
     max_claim_scope_value = (

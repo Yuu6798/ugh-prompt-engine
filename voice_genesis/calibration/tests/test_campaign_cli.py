@@ -1886,6 +1886,7 @@ def _c4_setup_selected_candidate_coverage_test(
     *,
     select_directional: bool = False,
     subset_override: list[Any] | None = None,
+    holdout_sweeps: dict[str, dict[str, list[str]]] | None = None,
 ) -> tuple[Any, Any, Any, frozenset[tuple[str, int]]]:
     """Shared scaffolding for the coverage tests below: a tiny campaign with
     `APERIODICITY_GT`'s HARMONIC_RESIDUAL candidate (F0-dependent, but F0
@@ -1905,6 +1906,12 @@ def _c4_setup_selected_candidate_coverage_test(
     two `select_directional=True` DIRECTIONAL coverage tests below, since
     the minimum-count check now partitions usable instances by the real
     declared sweep set of whatever `matrix_rows` is passed to `_run_c4`.
+    `holdout_sweeps` (v1.1 §V2.2/§V2.3) is forwarded verbatim to
+    `build_tiny_campaign()` — when given, it both pins those member rows
+    into HOLDOUT in the fixture's realized split and populates the
+    manifest's top-level `holdout_sweeps` key, letting `_run_c4`'s
+    DIRECTIONAL capacity check narrow `expected_sweep_ids` to it (default
+    `None` leaves the pre-v1.1 "all declared sweeps" behavior untouched).
     Returns `(campaign, subset, selected_candidate, expected_instances)`."""
     from voice_genesis.calibration.campaign import workunits
     from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
@@ -1913,7 +1920,9 @@ def _c4_setup_selected_candidate_coverage_test(
     subset = subset_override if subset_override is not None else small_matrix_subset(
         4, family="APERIODICITY_GT"
     )
-    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, subset=subset, holdout_sweeps=holdout_sweeps
+    )
     campaign = load_frozen_campaign(campaign_dir, secret_root)
 
     campaign.ledger.append(
@@ -2393,6 +2402,102 @@ def test_c4_directional_sweep_with_repeated_truth_level_still_unresolvable(
     # >=3 usable probe *instances*, but only 1 distinct truth level (row).
     assert gate_detail["seen_instance_count"] == len(usable_instances)
     assert gate_detail["usable_truth_level_counts_by_sweep"].get(_sweep_id) == 1
+
+
+def test_c4_directional_holdout_sweeps_manifest_narrows_expected_sweep_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.1 §V2.3 (AC7): the DIRECTIONAL capacity check's `expected_sweep_ids`
+    now sources from the manifest's `holdout_sweeps` (= the sweep(s) pinned
+    to HOLDOUT at C0 freeze, `fixtures.matrix.pin_holdout_sweeps_by_family()`)
+    instead of the full declared-sweep set. Use the **full** `APERIODICITY_GT`
+    family (10 declared sweeps, `k_hold=2` per §V2.2's table) and pin exactly
+    the real production algorithm's output for the fixture's `SPLIT_SECRET`.
+    `build_tiny_campaign()` forces those 2 sweeps' rows into HOLDOUT and
+    (v1.1 §V2.2 "pin 外の truth-core 行の holdout 割当は 0") the splitter
+    forbids every *other* declared sweep's non-pinned TRUTH_CORE rows from
+    ever landing in HOLDOUT — so the other 8 sweeps structurally contribute
+    0 usable holdout instances each, which would trip
+    `DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT` under the pre-v1.1 "all
+    declared sweeps are expected" rule (10 expected, 8 starved). With
+    `expected_sweep_ids` narrowed to just the 2 pinned sweeps (both fully
+    covered), the check must instead fall through to the existing D17
+    placeholder (`DIAGNOSTIC_ONLY`) — proving the false unresolvable-on-
+    holdout terminal no longer fires for properly pinned holdout sweeps.
+    """
+    from voice_genesis.calibration.fixtures.matrix import pin_holdout_sweeps_by_family
+
+    from ._campaign_fixture import SPLIT_SECRET
+
+    family_rows = [mr for mr in build_matrix() if mr.row.family == "APERIODICITY_GT"]
+    declared = declared_sweeps_by_family(family_rows)["APERIODICITY_GT"]
+    assert len(declared) == 10
+    pinned = pin_holdout_sweeps_by_family(family_rows, SPLIT_SECRET)["APERIODICITY_GT"]
+    assert len(pinned) == 2, "k_hold=2 for APERIODICITY_GT (§V2.2 table)"
+    pinned_row_ids = {rid for members in pinned.values() for rid in members}
+
+    campaign, subset, independent_candidate, expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(
+            tmp_path,
+            monkeypatch,
+            select_directional=True,
+            subset_override=family_rows,
+            holdout_sweeps={"APERIODICITY_GT": pinned},
+        )
+    )
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+
+    # v1.1 §V2.2 sanity check on the fixture itself: the pinned sweeps' rows
+    # are HOLDOUT (the pin held), and every *other* declared sweep's
+    # TRUTH_CORE rows are forbidden from HOLDOUT (0 usable instances each).
+    assert all(
+        campaign.realized_split.assignment[rid] == Split.HOLDOUT for rid in pinned_row_ids
+    )
+    other_truth_core_ids = {
+        rid
+        for sid, members in declared.items()
+        if sid not in pinned
+        for rid in members
+    }
+    assert not any(
+        campaign.realized_split.assignment[rid] == Split.HOLDOUT for rid in other_truth_core_ids
+    )
+
+    ordered_instances = sorted(expected_instances)
+    records = [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in ordered_instances
+    ] + [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in ordered_instances
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    # not the false NOT_EVALUABLE/DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT
+    # terminal the pre-v1.1 "all declared sweeps" rule would have forced here.
+    assert m2a_result["terminal_status"] == "DIAGNOSTIC_ONLY"
+    assert m2a_result["selected_candidate_id"] == independent_candidate.candidate_id
+    gate_detail = m2a_result["gate_detail"]
+    assert "gate_detail_reason_code" not in gate_detail
+    assert gate_detail["note"].startswith("[UNDERSPEC-CAL-D17]")
 
 
 def test_c4_directional_partial_coverage_at_minimum_count_closes_diagnostic_only(

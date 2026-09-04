@@ -153,7 +153,14 @@ from pathlib import Path
 from . import streams, vocab
 from .candidates import registry as candidate_registry
 from .fixtures import axes as fixture_axes
-from .fixtures.matrix import build_matrix, declared_sweeps_by_family, truth_identity_for_row
+from .fixtures.matrix import (
+    build_matrix,
+    claim_relevant_fields_by_family,
+    declared_sweeps_by_family,
+    holdout_pin_params_by_family,
+    pin_holdout_sweeps_by_family,
+    truth_identity_for_row,
+)
 from .gates import MIN_RESOLVABLE_PAIRS_PER_SWEEP
 
 # ---------------------------------------------------------------------------
@@ -694,6 +701,21 @@ class SweepManifestViolationDetail:
       `frozen_design.fixture_spec.<FAMILY>.declared_sweeps` 宣言値が、凍結
       matrix からの導出値と完全一致しない
       （`_check_declared_sweep_declaration_match()`）。
+    - ``"claim_relevant_field_mismatch"``: v1.1 §V2.2 5th bullet。manifest の
+      `frozen_design.fixture_spec.<FAMILY>.claim_relevant_fields` 宣言値が、
+      凍結 matrix からの機械導出値と一致しない
+      （`_check_claim_relevant_fields_match()`）。
+    - ``"holdout_pin_infeasible"``: v1.1 §V2.2。凍結 matrix 自体が k_hold の
+      被覆要件を cap `floor((N_hold-1)/r)` 内で満たせない構造
+      （`_check_holdout_pin_feasibility()`。456 セルでは発生しない）。
+    - ``"holdout_pin_declaration_mismatch"``: v1.1 §V2.2/§V2.3。manifest の
+      `frozen_design.fixture_spec.<FAMILY>.holdout_sweeps` 宣言値が、
+      split_secret からの再導出（渡された場合）または凍結 matrix の
+      declared_sweeps/k_hold との構造整合（渡されない場合）と一致しない
+      （`_check_holdout_sweeps_declaration_match()`）。
+    - ``"holdout_pin_not_in_holdout_split"``: v1.1 §V2.3。`holdout_sweeps`
+      の member 行が `realized_split.assignment` 上で HOLDOUT に割当てられて
+      いない（`_check_holdout_sweeps_realized_membership()`）。
     """
 
     violation: str
@@ -731,6 +753,27 @@ class C0ValidationResult:
     #: INCOMPLETE` が `blocked_codes` に入る（UNDERSPEC-CAL-D78 ruling: 旧
     #: `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` を SUPERSEDE）。
     sweep_declaration_mismatch_violations: tuple[SweepManifestViolationDetail, ...] = field(
+        default_factory=tuple
+    )
+    #: v1.1 §V2.2 5th bullet: `_check_claim_relevant_fields_match()` の
+    #: violation 列（`violation="claim_relevant_field_mismatch"`）。
+    claim_relevant_field_violations: tuple[SweepManifestViolationDetail, ...] = field(
+        default_factory=tuple
+    )
+    #: v1.1 §V2.2: `_check_holdout_pin_feasibility()` の violation 列
+    #: （`violation="holdout_pin_infeasible"`）。manifest 非依存の構造検査
+    #: （456 セルでは常に空）。
+    holdout_pin_feasibility_violations: tuple[SweepManifestViolationDetail, ...] = field(
+        default_factory=tuple
+    )
+    #: v1.1 §V2.2/§V2.3: `_check_holdout_sweeps_declaration_match()` の
+    #: violation 列（`violation="holdout_pin_declaration_mismatch"`）。
+    holdout_pin_declaration_violations: tuple[SweepManifestViolationDetail, ...] = field(
+        default_factory=tuple
+    )
+    #: v1.1 §V2.3: `_check_holdout_sweeps_realized_membership()` の
+    #: violation 列（`violation="holdout_pin_not_in_holdout_split"`）。
+    holdout_pin_membership_violations: tuple[SweepManifestViolationDetail, ...] = field(
         default_factory=tuple
     )
 
@@ -1515,7 +1558,259 @@ def _check_declared_sweep_declaration_match(
     return tuple(violations)
 
 
-def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
+# ---------------------------------------------------------------------------
+# v1.1 §V2.2/§V2.3 — holdout sweep pinning validation (D77 同型)
+# ---------------------------------------------------------------------------
+
+
+def _check_claim_relevant_fields_match(
+    manifest: Mapping[str, object],
+) -> tuple[SweepManifestViolationDetail, ...]:
+    """v1.1 §V2.2 5th bullet（Codex レビュー第 5 巡 P1 採用）:
+    `frozen_design.fixture_spec.<FAMILY>.claim_relevant_fields` の宣言値が、
+    凍結 matrix から `fixtures.matrix.claim_relevant_fields_by_family()` で
+    機械導出される値と完全一致することを検査する
+    （`_check_declared_sweep_declaration_match()` と同じ「宣言でなく実体
+    との一致を検査する」規約）。
+
+    `claim_relevant_fields` は v1.1 で新設したキーであり
+    `FIXTURE_SPEC_REQUIRED_KEYS` には加えない——v1.1 以前に構築された
+    manifest fixture（本テストスイートに大量に存在する）へ強制的に追加
+    させる破壊的変更を避けるため。欠落/hollow/非 mapping な
+    `frozen_design.fixture_spec.<FAMILY>` はここでは扱わない（他の checker
+    が別途捕捉する）。宣言されていれば実体と一致しなければならない、という
+    任意フィールドとして扱う。
+    """
+    rows = build_matrix()
+    derived = claim_relevant_fields_by_family(rows)
+    violations: list[SweepManifestViolationDetail] = []
+    for family in fixture_axes.FixtureFamily:
+        fam = family.value
+        found, entry = _resolve(manifest, f"frozen_design.fixture_spec.{fam}")
+        if not found or not isinstance(entry, Mapping):
+            continue
+        declared_raw = entry.get("claim_relevant_fields")
+        if declared_raw is None:
+            continue
+        expected = tuple(sorted(derived.get(fam, ())))
+        if not isinstance(declared_raw, (list, tuple)) or isinstance(declared_raw, (str, bytes)):
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="claim_relevant_field_mismatch",
+                    family=fam,
+                    sweep_id="",
+                    expected_count=len(expected),
+                    actual_count=0,
+                    detail=(
+                        f"frozen_design.fixture_spec.{fam}.claim_relevant_fields must be a "
+                        "list of field names"
+                    ),
+                )
+            )
+            continue
+        actual = tuple(sorted(str(v) for v in declared_raw))
+        if actual != expected:
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="claim_relevant_field_mismatch",
+                    family=fam,
+                    sweep_id="",
+                    expected_count=len(expected),
+                    actual_count=len(actual),
+                    detail=(
+                        f"frozen_design.fixture_spec.{fam}.claim_relevant_fields declares "
+                        f"{list(actual)!r}, expected {list(expected)!r} (machine-derived "
+                        "from the frozen matrix)"
+                    ),
+                )
+            )
+    return tuple(violations)
+
+
+def _check_holdout_pin_feasibility(
+    manifest: Mapping[str, object],
+) -> tuple[SweepManifestViolationDetail, ...]:
+    """v1.1 §V2.2 の k_hold 被覆要件検査: cap `floor((N_hold-1)/r)` 内で
+    `max_field_cardinality` 個の pin を確保できるか。
+    `_check_declared_sweep_truth_levels()` と同じ「manifest 非依存に凍結
+    matrix 自体の構造を検査する」規約（`manifest` は呼び出し規約を揃える
+    ためだけの未使用引数）。456 セル canonical matrix では発生しない。
+    """
+    del manifest
+    rows = build_matrix()
+    params = holdout_pin_params_by_family(rows)
+    violations: list[SweepManifestViolationDetail] = []
+    for fam in sorted(params):
+        p = params[fam]
+        if p.feasible:
+            continue
+        violations.append(
+            SweepManifestViolationDetail(
+                violation="holdout_pin_infeasible",
+                family=fam,
+                sweep_id="",
+                expected_count=p.max_field_cardinality,
+                actual_count=p.cap,
+                detail=(
+                    f"family {fam!r}: holdout pin coverage requires "
+                    f"max_field_cardinality={p.max_field_cardinality} pinned sweep(s) but "
+                    f"cap floor((N_hold-1)/r)={p.cap} (N_hold={p.n_hold}, "
+                    f"r={p.member_rows_per_sweep})"
+                ),
+            )
+        )
+    return tuple(violations)
+
+
+def _check_holdout_sweeps_declaration_match(
+    manifest: Mapping[str, object], split_secret: bytes | None = None
+) -> tuple[SweepManifestViolationDetail, ...]:
+    """v1.1 §V2.2/§V2.3 holdout sweep pin の宣言一致検査（D77 同型）。
+
+    `holdout_sweeps`（manifest トップレベルの non-core キー、
+    `c0_freeze._attach_freeze_extras()` 参照）は `split_secret` 依存
+    （`fixtures.matrix.pin_holdout_sweeps_by_family()` が
+    HMAC(split_secret, ...) で選抜する）ため、secret 非依存の
+    `declared_sweeps` とは異なり、本関数は `split_secret` が渡された場合に
+    限り完全再導出照合を行う。`split_secret=None`（`dry_run()` — secret が
+    まだ存在しない、または `holdout_sweeps` を持たない v1.1 以前の manifest
+    を読む場合）では、secret 非依存の構造検査のみ行う: 宣言 pin 数が
+    `holdout_pin_params_by_family()` の `k_hold` と一致し、各宣言 sweep_id が
+    `declared_sweeps_by_family()` に実在しその member row_id が完全一致する
+    こと。secret 依存の「どの sweep が選ばれたか」まではこの経路では検査
+    できない。
+    """
+    found_holdout, holdout_section = _resolve(manifest, "holdout_sweeps")
+    rows = build_matrix()
+    declared = declared_sweeps_by_family(rows)
+    params = holdout_pin_params_by_family(rows)
+    full_pin = pin_holdout_sweeps_by_family(rows, split_secret) if split_secret is not None else None
+    violations: list[SweepManifestViolationDetail] = []
+    for family in fixture_axes.FixtureFamily:
+        fam = family.value
+        declared_raw: object = None
+        if found_holdout and isinstance(holdout_section, Mapping):
+            declared_raw = holdout_section.get(fam)
+        else:
+            found, entry = _resolve(manifest, f"frozen_design.fixture_spec.{fam}")
+            if found and isinstance(entry, Mapping):
+                declared_raw = entry.get("holdout_sweeps")
+        if declared_raw is None or _is_hollow(declared_raw) or not isinstance(declared_raw, Mapping):
+            continue
+
+        actual = _normalize_declared_sweeps(declared_raw)
+        if actual is None:
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="holdout_pin_declaration_mismatch",
+                    family=fam,
+                    sweep_id="",
+                    expected_count=0,
+                    actual_count=len(declared_raw),
+                    detail=f"holdout_sweeps.{fam} (inner shape malformed)",
+                )
+            )
+            continue
+
+        expected = full_pin.get(fam, {}) if full_pin is not None else None
+        family_declared = declared.get(fam, {})
+        k_hold = params[fam].k_hold if fam in params else None
+
+        if expected is None and k_hold is not None and len(actual) != k_hold:
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="holdout_pin_declaration_mismatch",
+                    family=fam,
+                    sweep_id="",
+                    expected_count=k_hold,
+                    actual_count=len(actual),
+                    detail=(
+                        f"holdout_sweeps.{fam} declares {len(actual)} pinned sweep(s), "
+                        f"expected k_hold={k_hold}"
+                    ),
+                )
+            )
+
+        candidate_sweep_ids = set(actual) | (set(expected) if expected is not None else set())
+        for sweep_id in sorted(candidate_sweep_ids):
+            actual_members = actual.get(sweep_id)
+            if expected is not None:
+                expected_members = expected.get(sweep_id)
+                mismatch = actual_members != expected_members
+                detail_suffix = "does not match the split_secret re-derivation"
+            else:
+                if actual_members is None:
+                    continue
+                expected_members = family_declared.get(sweep_id)
+                mismatch = expected_members is None or actual_members != expected_members
+                detail_suffix = (
+                    "is not a declared sweep of the frozen matrix (or its member row_id "
+                    "set does not match declared_sweeps)"
+                )
+            if not mismatch:
+                continue
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="holdout_pin_declaration_mismatch",
+                    family=fam,
+                    sweep_id=sweep_id,
+                    expected_count=len(expected_members or ()),
+                    actual_count=len(actual_members or ()),
+                    detail=f"holdout_sweeps.{fam}[{sweep_id!r}] {detail_suffix}",
+                )
+            )
+    return tuple(violations)
+
+
+def _check_holdout_sweeps_realized_membership(
+    manifest: Mapping[str, object],
+) -> tuple[SweepManifestViolationDetail, ...]:
+    """v1.1 §V2.3: 実現済み split (`realized_split.assignment`) 上で
+    `holdout_sweeps` の member 行が 1 行でも HOLDOUT 以外に割当てられて
+    いれば fail-closed する（割当実装の欠陥）。`realized_split`/
+    `holdout_sweeps` が共に存在する full manifest（armed freeze 後）でのみ
+    意味を持つ——いずれかが欠落する manifest（dry-run 等）は対象外。
+    """
+    found_split, split_section = _resolve(manifest, "realized_split.assignment")
+    found_holdout, holdout_section = _resolve(manifest, "holdout_sweeps")
+    if not found_split or not isinstance(split_section, Mapping):
+        return ()
+    if not found_holdout or not isinstance(holdout_section, Mapping):
+        return ()
+    violations: list[SweepManifestViolationDetail] = []
+    for family in fixture_axes.FixtureFamily:
+        fam = family.value
+        declared_raw = holdout_section.get(fam)
+        if declared_raw is None or _is_hollow(declared_raw) or not isinstance(declared_raw, Mapping):
+            continue
+        normalized = _normalize_declared_sweeps(declared_raw)
+        if normalized is None:
+            continue
+        for sweep_id, member_ids in normalized.items():
+            offending = tuple(
+                rid for rid in member_ids if split_section.get(rid) != vocab.Split.HOLDOUT.value
+            )
+            if offending:
+                violations.append(
+                    SweepManifestViolationDetail(
+                        violation="holdout_pin_not_in_holdout_split",
+                        family=fam,
+                        sweep_id=sweep_id,
+                        expected_count=len(member_ids),
+                        actual_count=len(member_ids) - len(offending),
+                        detail=(
+                            f"holdout_sweeps.{fam}[{sweep_id!r}] has member row_id(s) not "
+                            f"assigned to HOLDOUT in realized_split.assignment: "
+                            f"{list(offending)!r}"
+                        ),
+                    )
+                )
+    return tuple(violations)
+
+
+def validate_c0_manifest(
+    manifest: Mapping[str, object], *, split_secret: bytes | None = None
+) -> C0ValidationResult:
     """C0 freeze manifest を dry-run 検証する（書込・secret 生成・freeze event なし）。"""
     missing_required = _check_required_blocking(manifest)
     missing_required += _check_claim_critical_set(manifest)
@@ -1540,6 +1835,12 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
     unseeded_streams = _check_rng_ledger_unseeded(manifest)
     sweep_violations = _check_declared_sweep_truth_levels(manifest)
     sweep_mismatch_violations = _check_declared_sweep_declaration_match(manifest)
+    claim_relevant_violations = _check_claim_relevant_fields_match(manifest)
+    holdout_pin_feasibility_violations = _check_holdout_pin_feasibility(manifest)
+    holdout_pin_declaration_violations = _check_holdout_sweeps_declaration_match(
+        manifest, split_secret
+    )
+    holdout_pin_membership_violations = _check_holdout_sweeps_realized_membership(manifest)
 
     # UNDERSPEC-CAL-D78 ruling（#344 round 9 ADOPT, 分類②）: sweep 関連の
     # fail-closed 事由（D76 ruling (2) の truth-level 不足 / D77 ruling (1)
@@ -1547,9 +1848,20 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
     # 既存の `BLOCKED_C0_MANIFEST_INCOMPLETE` で表現する（`all_missing` 経由
     # で既に発行済みなら二重追加しない）。診断詳細は
     # `sweep_declaration_violations`/`sweep_declaration_mismatch_violations`
-    # の `SweepManifestViolationDetail` に残る。
+    # の `SweepManifestViolationDetail` に残る。v1.1 §V2.2/§V2.3 の holdout
+    # sweep pinning 関連 4 検査（claim-relevant field 照合・k_hold 被覆可能性・
+    # holdout_sweeps 宣言一致・realized split 上の member 所属）も同じ規約で
+    # 合流させる（新規 vocab code は発行しない）。
     blocked: list[vocab.BlockedCode] = []
-    if all_missing or sweep_violations or sweep_mismatch_violations:
+    if (
+        all_missing
+        or sweep_violations
+        or sweep_mismatch_violations
+        or claim_relevant_violations
+        or holdout_pin_feasibility_violations
+        or holdout_pin_declaration_violations
+        or holdout_pin_membership_violations
+    ):
         blocked.append(vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE)
     if unseeded_streams:
         blocked.append(vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG)
@@ -1563,4 +1875,8 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
         unseeded_rng_streams=unseeded_streams,
         sweep_declaration_violations=sweep_violations,
         sweep_declaration_mismatch_violations=sweep_mismatch_violations,
+        claim_relevant_field_violations=claim_relevant_violations,
+        holdout_pin_feasibility_violations=holdout_pin_feasibility_violations,
+        holdout_pin_declaration_violations=holdout_pin_declaration_violations,
+        holdout_pin_membership_violations=holdout_pin_membership_violations,
     )

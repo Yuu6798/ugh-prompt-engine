@@ -146,6 +146,7 @@ def build_tiny_campaign(
     dependencies: Mapping[str, str] | None = None,
     frozen_inputs: Mapping[str, object] | None = None,
     freeze_event_time_utc: str | None = "2026-09-02T00:00:00+00:00",
+    holdout_sweeps: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
 ) -> tuple[Path, Path]:
     """`(campaign_dir, secret_dir_root)` を組み立てて返す。
 
@@ -176,7 +177,15 @@ def build_tiny_campaign(
     （round 20 採用 (2), `[UNDERSPEC-CAL-D47]`: `holdout_stage.load_e_use_rows()`
     の sha256 pin 検証のテスト専用。既定 `None` は manifest に
     `frozen_inputs` キー自体を持たせない）は manifest `frozen_inputs` へ
-    そのまま埋め込まれる。"""
+    そのまま埋め込まれる。`holdout_sweeps`（v1.1 §V2.2/§V2.3 新設、既定
+    `None` は manifest にトップレベル `holdout_sweeps` キー自体を持たせず、
+    `campaign.cli._run_c4` を legacy「全 declared sweep が expected」経路の
+    ままにする——既存の D77 系テストはこの既定を使い、影響を受けない）を
+    渡すと、その member row_id 全てを `realize_split()` の
+    `pinned_holdout_row_ids` として強制的に HOLDOUT へ確定してから
+    manifest のトップレベル non-core `holdout_sweeps` 節へそのまま埋め込む
+    （§V2.3「realized split 上で holdout_sweeps の member に HOLDOUT 非所属
+    行があれば fail-closed」を fixture 側でも満たすため）。"""
     subset = subset if subset is not None else small_matrix_subset()
     row_inputs = [
         RowInput(
@@ -189,7 +198,18 @@ def build_tiny_campaign(
         )
         for mr in subset
     ]
-    realized = realize_split(row_inputs, split_secret, STRATUM_FACTOR_NAMES)
+    pinned_holdout_row_ids = frozenset(
+        rid
+        for family_sweeps in (holdout_sweeps or {}).values()
+        for member_row_ids in family_sweeps.values()
+        for rid in member_row_ids
+    )
+    realized = realize_split(
+        row_inputs,
+        split_secret,
+        STRATUM_FACTOR_NAMES,
+        pinned_holdout_row_ids=pinned_holdout_row_ids,
+    )
 
     manifest: dict[str, object] = {
         "campaign_meta": {"campaign_date_utc": "2026-09-02"},
@@ -241,6 +261,11 @@ def build_tiny_campaign(
         manifest["dependencies"] = dict(dependencies)
     if frozen_inputs is not None:
         manifest["frozen_inputs"] = dict(frozen_inputs)
+    if holdout_sweeps is not None:
+        manifest["holdout_sweeps"] = {
+            family: {sid: list(rids) for sid, rids in sweeps.items()}
+            for family, sweeps in holdout_sweeps.items()
+        }
 
     campaigns_dir = tmp_path / "campaigns"
     secret_root = tmp_path / "secrets"

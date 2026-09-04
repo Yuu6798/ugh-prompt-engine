@@ -17,7 +17,10 @@ nuisance 系列・正準 boundary/negative 系列・per-family targeted interact
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import hashlib
+import hmac as hmac_module
+import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -914,6 +917,42 @@ def _varying_fixed_field_names(rows: Sequence[FixtureRow]) -> tuple[str, ...]:
     return tuple(sorted(k for k, values in seen.items() if len(values) > 1))
 
 
+def _sweep_groups(rows: Sequence[MatrixRow]) -> dict[str, dict[str, list[MatrixRow]]]:
+    """`declared_sweeps_by_family()` と v1.1 pin 関数群が共有する内部
+    グルーピング（family -> {sweep_id: [member MatrixRow, ...]}）。sweep_id
+    の導出規則は `declared_sweeps_by_family()` の docstring と同一。member
+    を `MatrixRow`（row_id だけでなく held-fixed field の実値も）のまま保持
+    する点だけが `declared_sweeps_by_family()` の公開出力（row_id のみの
+    tuple）と異なる——pin 選抜が member の `generator_impl`/`founder_id`/
+    `trait`/claim-relevant field の値を読む必要があるため。
+    """
+    by_family: dict[str, list[MatrixRow]] = {family.value: [] for family in axes.FAMILY_ORDER}
+    for mr in rows:
+        if mr.row.block != "TRUTH_CORE" or mr.domain is not Domain.PRIMARY:
+            continue
+        by_family.setdefault(mr.row.family, []).append(mr)
+
+    result: dict[str, dict[str, list[MatrixRow]]] = {}
+    for family, family_matrix_rows in by_family.items():
+        id_fields = _varying_fixed_field_names([mr.row for mr in family_matrix_rows])
+        groups: dict[tuple[tuple[str, Any], ...], list[MatrixRow]] = {}
+        for mr in family_matrix_rows:
+            fixed = _sweep_fixed_fields(mr.row)
+            key = tuple(sorted(fixed.items(), key=lambda kv: kv[0]))
+            groups.setdefault(key, []).append(mr)
+        family_sweeps: dict[str, list[MatrixRow]] = {}
+        for key, members in groups.items():
+            fixed = dict(key)
+            sweep_id = (
+                "|".join(f"{field}={fixed[field]!r}" for field in id_fields)
+                if id_fields
+                else "anchor"
+            )
+            family_sweeps[sweep_id] = members
+        result[family] = family_sweeps
+    return result
+
+
 def declared_sweeps_by_family(rows: Sequence[MatrixRow]) -> dict[str, dict[str, tuple[str, ...]]]:
     """UNDERSPEC-CAL-D76 def A（sweep_truth_investigation.md）: family の
     declared sweep 集合は、PRIMARY domain の TRUTH_CORE 行のうち
@@ -933,31 +972,14 @@ def declared_sweeps_by_family(rows: Sequence[MatrixRow]) -> dict[str, dict[str, 
     sweep 宣言とは独立——旧 D18/D75 の「confound_axes を sweep_id として
     再利用する」写像は誤りとして本関数へ一本化した）。
     """
-    by_family: dict[str, list[MatrixRow]] = {family.value: [] for family in axes.FAMILY_ORDER}
-    for mr in rows:
-        if mr.row.block != "TRUTH_CORE" or mr.domain is not Domain.PRIMARY:
-            continue
-        by_family.setdefault(mr.row.family, []).append(mr)
-
-    result: dict[str, dict[str, tuple[str, ...]]] = {}
-    for family, family_matrix_rows in by_family.items():
-        id_fields = _varying_fixed_field_names([mr.row for mr in family_matrix_rows])
-        groups: dict[tuple[tuple[str, Any], ...], list[str]] = {}
-        for mr in family_matrix_rows:
-            fixed = _sweep_fixed_fields(mr.row)
-            key = tuple(sorted(fixed.items(), key=lambda kv: kv[0]))
-            groups.setdefault(key, []).append(mr.row_id)
-        family_sweeps: dict[str, tuple[str, ...]] = {}
-        for key, member_row_ids in groups.items():
-            fixed = dict(key)
-            sweep_id = (
-                "|".join(f"{field}={fixed[field]!r}" for field in id_fields)
-                if id_fields
-                else "anchor"
-            )
-            family_sweeps[sweep_id] = tuple(sorted(member_row_ids))
-        result[family] = family_sweeps
-    return result
+    groups = _sweep_groups(rows)
+    return {
+        family: {
+            sweep_id: tuple(sorted(mr.row_id for mr in members))
+            for sweep_id, members in family_sweeps.items()
+        }
+        for family, family_sweeps in groups.items()
+    }
 
 
 def declared_sweep_ids_by_family(rows: Sequence[MatrixRow]) -> dict[str, tuple[str, ...]]:
@@ -968,3 +990,318 @@ def declared_sweep_ids_by_family(rows: Sequence[MatrixRow]) -> dict[str, tuple[s
         family: tuple(sorted(sweeps))
         for family, sweeps in declared_sweeps_by_family(rows).items()
     }
+
+
+# ---------------------------------------------------------------------------
+# v1.1 §V2.2 — holdout sweep pinning（2 段割当の段 1）
+#
+# `DESIGN_VG_METER_CAL_DEBT_v1.1.md` §V2.2 正本: family ごとに declared
+# sweep（上記 `declared_sweeps_by_family()`）から `k_hold` 個を HOLDOUT
+# 専属 sweep として pin し、その member 全行を HOLDOUT へ割当てる。選抜は
+# secret 依存の HMAC-SHA256 のみを秘匿源とする決定論アルゴリズム。
+# ---------------------------------------------------------------------------
+
+
+def _pin_hmac_hex(secret: bytes, message: str) -> str:
+    """段 1 pin 選抜専用の HMAC ヘルパー。`splitter._hmac_hex` と同一実装だが、
+    `splitter.py` へは依存しない（本モジュールは fixture/matrix domain 知識
+    のみを持つ独立モジュールという既存規約——`_SWEEP_TRUTH_FIELDS_BY_FAMILY`
+    docstring の「他 module には依存せず本モジュールで独立に宣言する」と
+    同じ理由）。"""
+    return hmac_module.new(secret, message.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+#: sweep stratum key 用の held-fixed field（§V2.2 3rd bullet）。(a) coverage
+#: 軸該当（`generator_impl`、FORMANT_GT のみ）と (b) claim 構成次元
+#: （IDENTITY_CAUSAL_SWEEP の `founder_id`/`trait`）の 2 例のみが 456 セル
+#: canonical matrix に存在する。対応する field が無い family は単一
+#: stratum（空 tuple）。
+_SWEEP_STRATUM_KEY_FIELDS_BY_FAMILY: dict[str, tuple[str, ...]] = {
+    FixtureFamily.F0_CONTROL.value: (),
+    FixtureFamily.FORMANT_GT.value: ("generator_impl",),
+    FixtureFamily.TILT_GT.value: (),
+    FixtureFamily.APERIODICITY_GT.value: (),
+    FixtureFamily.RESONANCE_GT.value: (),
+    FixtureFamily.TRANSITION_GT.value: (),
+    FixtureFamily.IDENTITY_CAUSAL_SWEEP.value: ("founder_id", "trait"),
+}
+
+#: claim-relevant field（§V2.2 5th bullet: 「construct の適用範囲を分割する」
+#: held-fixed field）の機械導出許可語彙——本 tuple に列挙された field 名の
+#: うち、family 内で実際に held-fixed field として変動するもの
+#: （`_varying_fixed_field_names()`）だけが claim-relevant field になる
+#: （`claim_relevant_fields_by_family()`）。この allow-list 自体は設計文書が
+#: 明示する 5 field（TRANSITION_GT の join_type/duration_class、
+#: APERIODICITY_GT の bandwise_band、IDENTITY_CAUSAL_SWEEP の
+#: founder_id/trait）を凍結したもの——nuisance のみが変動する field
+#: （f0_hz/sr_hz/gain_dbfs/duration_s/noise_snr_db/context/bandwidth_hz/
+#: generator_impl 等）は意図的に含めない。
+_CLAIM_DIVIDING_FIELD_NAMES: frozenset[str] = frozenset(
+    {"join_type", "duration_class", "bandwise_band", "founder_id", "trait"}
+)
+
+
+def claim_relevant_fields_by_family(rows: Sequence[MatrixRow]) -> dict[str, tuple[str, ...]]:
+    """family ごとの claim-relevant field を matrix 実体から機械導出する
+    （§V2.2 5th bullet）。`_varying_fixed_field_names()`（family 内で実際に
+    複数値を取る held-fixed field）と `_CLAIM_DIVIDING_FIELD_NAMES` の
+    積集合——nuisance のみが変動する family は空 tuple（該当なし）。
+
+    456 セル canonical matrix での帰結: TRANSITION_GT ->
+    `("duration_class", "join_type")`、APERIODICITY_GT ->
+    `("bandwise_band",)`、IDENTITY_CAUSAL_SWEEP ->
+    `("founder_id", "trait")`、他 4 family -> `()`。
+    """
+    groups = _sweep_groups(rows)
+    result: dict[str, tuple[str, ...]] = {}
+    for family in axes.FAMILY_ORDER:
+        fam = family.value
+        family_sweeps = groups.get(fam, {})
+        member_rows = [mr.row for members in family_sweeps.values() for mr in members]
+        varying = set(_varying_fixed_field_names(member_rows))
+        result[fam] = tuple(sorted(varying & _CLAIM_DIVIDING_FIELD_NAMES))
+    return result
+
+
+class HoldoutPinInfeasible(RuntimeError):
+    """§V2.2 の被覆要件が cap `floor((N_hold-1)/r)` 内で充足不能な family
+    構成（C0 fail-closed。456 セル canonical matrix では発生しない —
+    `holdout_pin_params_by_family()` の実測値表を参照）。"""
+
+    def __init__(self, family: str, *, max_field_cardinality: int, cap: int) -> None:
+        self.family = family
+        self.max_field_cardinality = max_field_cardinality
+        self.cap = cap
+        super().__init__(
+            f"matrix: holdout sweep pin coverage requirement for family {family!r} "
+            f"needs max_field_cardinality={max_field_cardinality} pinned sweep(s) but "
+            f"cap floor((N_hold-1)/r)={cap} is smaller — infeasible, refusing to pin "
+            "(fail-closed, §V2.2)"
+        )
+
+
+@dataclass(frozen=True)
+class HoldoutPinParams:
+    """family ごとの §V2.2 k_hold 導出に使う構造値（secret 非依存。matrix
+    実体のみから決まるため、C0 validation は split_secret なしにこの値を
+    再導出して feasibility を検査できる）。"""
+
+    family: str
+    sweep_count: int  # S
+    member_rows_per_sweep: int  # r（family 内で一様。456 セルでは常に一様）
+    n_hold: int  # N_hold = family total の 25%（§5.2。456 セルでは常に整数）
+    max_field_cardinality: int  # stratum-key field の値数の最大（無ければ 1）
+    cap: int  # floor((N_hold - 1) / r)
+    feasible: bool  # max_field_cardinality <= cap
+    k_hold: int  # min(max(floor(0.25*S+0.5), 1, max_field_cardinality), cap)
+
+
+def holdout_pin_params_by_family(rows: Sequence[MatrixRow]) -> dict[str, HoldoutPinParams]:
+    """§V2.2 の k_hold 完全形を family ごとに算出する（secret 非依存）。
+    宣言 sweep を持たない family は結果から除外する（456 セルでは発生しない
+    が、汎用性のため防御的に扱う）。"""
+    groups = _sweep_groups(rows)
+    result: dict[str, HoldoutPinParams] = {}
+    for family in axes.FAMILY_ORDER:
+        fam = family.value
+        family_sweeps = groups.get(fam, {})
+        if not family_sweeps:
+            continue
+        sweep_count = len(family_sweeps)
+        member_lists = list(family_sweeps.values())
+        member_rows_per_sweep = len(member_lists[0])
+        stratum_fields = _SWEEP_STRATUM_KEY_FIELDS_BY_FAMILY.get(fam, ())
+        if stratum_fields:
+            max_field_cardinality = max(
+                len({getattr(mr.row, f) for members in member_lists for mr in members})
+                for f in stratum_fields
+            )
+        else:
+            max_field_cardinality = 1
+        total = axes.FAMILY_COUNTS[family][3]
+        n_hold = total // 4
+        cap = (n_hold - 1) // member_rows_per_sweep
+        feasible = max_field_cardinality <= cap
+        ideal = math.floor(0.25 * sweep_count + 0.5)
+        k_hold = min(max(ideal, 1, max_field_cardinality), cap)
+        result[fam] = HoldoutPinParams(
+            family=fam,
+            sweep_count=sweep_count,
+            member_rows_per_sweep=member_rows_per_sweep,
+            n_hold=n_hold,
+            max_field_cardinality=max_field_cardinality,
+            cap=cap,
+            feasible=feasible,
+            k_hold=k_hold,
+        )
+    return result
+
+
+def _pin_single_field_stratum(
+    family_sweeps: Mapping[str, Sequence[MatrixRow]],
+    secret: bytes,
+    field_name: str,
+    k_hold: int,
+) -> tuple[str, ...]:
+    """単一 field family（456 セルでは FORMANT_GT の `generator_impl`）の
+    選抜（§V2.2 4th bullet 前段）: 値ごとに 1 件を先取りしてから残余を
+    largest-remainder で配分する（全値 >= 1 を保証、同点は値の字句順）+
+    stratum 内 HMAC-SHA256(secret, sweep_id) 昇順。"""
+    value_of: dict[str, Any] = {
+        sid: getattr(members[0].row, field_name) for sid, members in family_sweeps.items()
+    }
+    by_value: dict[Any, list[str]] = {}
+    for sid, v in value_of.items():
+        by_value.setdefault(v, []).append(sid)
+    values = sorted(by_value, key=lambda v: str(v))
+    n_values = len(values)
+    if k_hold < n_values:
+        raise HoldoutPinInfeasible(
+            "<single-field-stratum>", max_field_cardinality=n_values, cap=k_hold
+        )
+    counts = {v: len(by_value[v]) for v in values}
+    total_sweeps = sum(counts.values())
+    extra_budget = k_hold - n_values
+    quotas = {v: extra_budget * counts[v] / total_sweeps for v in values}
+    floors = {v: math.floor(quotas[v]) for v in values}
+    remainder = extra_budget - sum(floors.values())
+    ranked_by_fraction = sorted(values, key=lambda v: (-(quotas[v] - floors[v]), str(v)))
+    bumped = set(ranked_by_fraction[:remainder])
+    per_value_target = {
+        v: 1 + floors[v] + (1 if v in bumped else 0) for v in values
+    }
+    selected: list[str] = []
+    for v in values:
+        ordered = sorted(by_value[v], key=lambda sid: _pin_hmac_hex(secret, sid))
+        selected.extend(ordered[: per_value_target[v]])
+    return tuple(selected)
+
+
+def _pin_identity_founder_trait(
+    family_sweeps: Mapping[str, Sequence[MatrixRow]], secret: bytes, k_hold: int
+) -> tuple[str, ...]:
+    """IDENTITY_CAUSAL_SWEEP 型（stratum key = founder_id x trait, 各 cell
+    sweep 1 個）の選抜（§V2.2 4th bullet 後段）: founder を
+    HMAC-SHA256(secret, founder_id) 昇順、trait を HMAC-SHA256(secret,
+    trait) 昇順に並べ、i 番目 (i=0..k_hold-1) の founder に trait
+    `i mod len(traits)` の sweep を割当てる。"""
+    sweep_by_cell: dict[tuple[str, str], str] = {}
+    for sid, members in family_sweeps.items():
+        row = members[0].row
+        sweep_by_cell[(row.founder_id, row.trait)] = sid
+    founders_sorted = sorted(axes.IDENTITY_FOUNDER_IDS, key=lambda f: _pin_hmac_hex(secret, f))
+    traits_sorted = sorted(axes.IDENTITY_TRAITS, key=lambda t: _pin_hmac_hex(secret, t))
+    if k_hold > len(founders_sorted):
+        raise HoldoutPinInfeasible(
+            FixtureFamily.IDENTITY_CAUSAL_SWEEP.value,
+            max_field_cardinality=len(founders_sorted),
+            cap=k_hold,
+        )
+    selected: list[str] = []
+    for i in range(k_hold):
+        founder = founders_sorted[i]
+        trait = traits_sorted[i % len(traits_sorted)]
+        selected.append(sweep_by_cell[(founder, trait)])
+    return tuple(selected)
+
+
+def _pin_claim_round_robin(
+    family_sweeps: Mapping[str, Sequence[MatrixRow]],
+    secret: bytes,
+    claim_fields: tuple[str, ...],
+    k_hold: int,
+) -> tuple[str, ...]:
+    """claim-relevant field を持つ単一 stratum family（456 セルでは
+    TRANSITION_GT / APERIODICITY_GT）の選抜（§V2.2 5th bullet）: claim-
+    relevant field の値組を HMAC-SHA256(secret, canonical 表現) 昇順に巡回し
+    （ラウンドロビン）、各値組グループ内は HMAC-SHA256(secret, sweep_id)
+    昇順で消費する。"""
+
+    def value_tuple(sid: str) -> tuple[Any, ...]:
+        row = family_sweeps[sid][0].row
+        return tuple(getattr(row, f) for f in claim_fields)
+
+    def canon(value_tup: tuple[Any, ...]) -> str:
+        return "|".join(f"{field}={value!r}" for field, value in zip(claim_fields, value_tup))
+
+    by_value: dict[tuple[Any, ...], list[str]] = {}
+    for sid in family_sweeps:
+        by_value.setdefault(value_tuple(sid), []).append(sid)
+
+    ordered_values = sorted(by_value, key=lambda vt: _pin_hmac_hex(secret, canon(vt)))
+    queues = [
+        sorted(by_value[vt], key=lambda sid: _pin_hmac_hex(secret, sid))
+        for vt in ordered_values
+    ]
+    n_groups = len(queues)
+    total_available = sum(len(q) for q in queues)
+    target = min(k_hold, total_available)
+    cursor = [0] * n_groups
+    selected: list[str] = []
+    idx = 0
+    while len(selected) < target:
+        group = idx % n_groups
+        if cursor[group] < len(queues[group]):
+            selected.append(queues[group][cursor[group]])
+            cursor[group] += 1
+        idx += 1
+    return tuple(selected)
+
+
+def _pin_plain_topk(
+    family_sweeps: Mapping[str, Sequence[MatrixRow]], secret: bytes, k_hold: int
+) -> tuple[str, ...]:
+    """stratum key も claim-relevant field も持たない family（456 セルでは
+    F0_CONTROL / TILT_GT / RESONANCE_GT）の選抜（§V2.2 4th bullet: 「claim-
+    relevant field が無い family は sweep_id HMAC 昇順の先頭 k」）。"""
+    ordered = sorted(family_sweeps, key=lambda sid: _pin_hmac_hex(secret, sid))
+    return tuple(ordered[:k_hold])
+
+
+def pin_holdout_sweeps_by_family(
+    rows: Sequence[MatrixRow], split_secret: bytes
+) -> dict[str, dict[str, tuple[str, ...]]]:
+    """§V2.2 段 1: family ごとに declared sweep から `k_hold` 個を HOLDOUT
+    専属 sweep として pin する。戻り値は `declared_sweeps_by_family()` と
+    同型（`family -> {sweep_id: (member row_id, ...)}`）だが、各 family は
+    pin された sweep のみを含む部分集合を持つ（宣言 sweep が無い family は
+    空 dict）。
+
+    被覆要件が cap `floor((N_hold-1)/r)` 内で充足不能な family 構成は
+    `HoldoutPinInfeasible` で fail-closed する（456 セル canonical matrix
+    では発生しない）。
+    """
+    groups = _sweep_groups(rows)
+    params = holdout_pin_params_by_family(rows)
+    claim_fields_by_family = claim_relevant_fields_by_family(rows)
+    result: dict[str, dict[str, tuple[str, ...]]] = {}
+    for family in axes.FAMILY_ORDER:
+        fam = family.value
+        family_sweeps = groups.get(fam, {})
+        if not family_sweeps:
+            result[fam] = {}
+            continue
+        p = params[fam]
+        if not p.feasible:
+            raise HoldoutPinInfeasible(
+                fam, max_field_cardinality=p.max_field_cardinality, cap=p.cap
+            )
+        stratum_fields = _SWEEP_STRATUM_KEY_FIELDS_BY_FAMILY.get(fam, ())
+        if stratum_fields == ("generator_impl",):
+            pinned_ids = _pin_single_field_stratum(
+                family_sweeps, split_secret, "generator_impl", p.k_hold
+            )
+        elif stratum_fields == ("founder_id", "trait"):
+            pinned_ids = _pin_identity_founder_trait(family_sweeps, split_secret, p.k_hold)
+        else:
+            claim_fields = claim_fields_by_family.get(fam, ())
+            if claim_fields:
+                pinned_ids = _pin_claim_round_robin(
+                    family_sweeps, split_secret, claim_fields, p.k_hold
+                )
+            else:
+                pinned_ids = _pin_plain_topk(family_sweeps, split_secret, p.k_hold)
+        result[fam] = {
+            sid: tuple(sorted(mr.row_id for mr in family_sweeps[sid])) for sid in pinned_ids
+        }
+    return result
