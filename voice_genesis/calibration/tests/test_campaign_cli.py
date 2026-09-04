@@ -3047,7 +3047,12 @@ def test_c4_f0_reuse_builds_and_reuses_single_meter_call_index(
     real render/measure path needs the campaign through unseal — orthogonal
     to this test, which isolates C4's F0-by-instance construction, mirroring
     how `test_c4_never_calls_f0_dependent_candidate_when_selection_failed_
-    closed` above isolates C4's other F0 guard)."""
+    closed` above isolates C4's other F0 guard). `[UNDERSPEC-CAL-D86]`:
+    `_run_c4` no longer calls `_build_f0_by_instance()` itself — it hands
+    `render_and_measure_holdout()` a closure (`f0_prepass`) that function
+    invokes after its own render sub-phase, so the stub below must invoke
+    that closure itself to still exercise the real F0-by-instance
+    construction path this test isolates."""
     subset = small_matrix_subset(4, family="APERIODICITY_GT")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
@@ -3080,10 +3085,18 @@ def test_c4_f0_reuse_builds_and_reuses_single_meter_call_index(
     monkeypatch.setattr(render_stage, "_refuse_if_pre_unseal_holdout", lambda *a, **kw: None)
     render_stage.run_render_stage(campaign, subset, stage="c4")
 
+    def _stub_render_and_measure_holdout(campaign_arg, matrix_rows_arg, **kwargs):
+        # `[UNDERSPEC-CAL-D86]`: the real function calls `f0_prepass()` (when
+        # given) after its own render sub-phase — this stub skips the render
+        # (already done above) but must still invoke the closure so the
+        # F0-by-instance construction under test actually runs.
+        f0_prepass = kwargs.get("f0_prepass")
+        if f0_prepass is not None:
+            f0_prepass()
+        return {}
+
     monkeypatch.setattr(
-        cli.holdout_stage,
-        "render_and_measure_holdout",
-        lambda campaign_arg, matrix_rows_arg, **kwargs: {},
+        cli.holdout_stage, "render_and_measure_holdout", _stub_render_and_measure_holdout
     )
 
     naive_rescan_calls = 0
@@ -3112,6 +3125,159 @@ def test_c4_f0_reuse_builds_and_reuses_single_meter_call_index(
     assert all(idx is not None for idx in seen_indexes)
     assert len({id(idx) for idx in seen_indexes}) == 1
     assert naive_rescan_calls == 0
+
+
+# ---------------------------------------------------------------------------
+# `[UNDERSPEC-CAL-D86]` production E2E: real `c1-fixtures` -> `c2-baseline`
+# -> `c3a-f0-selection` -> `c3b-selection` -> `unseal` -> `c4-holdout`
+# (time-budget-sliced across several invocations) -> `close`, driven through
+# `cli._run_c1`/`_run_c2`/.../`_run_close` directly (no `main()` argv/gate1
+# plumbing needed for this in-process shape). Unlike every other real-path
+# C4 test above (and the pre-fix state of this very file), NOTHING renders
+# any HOLDOUT-split PCM before `_run_c4` itself runs — the exact production
+# precondition that made `cli._run_c4`'s (pre-fix) eager `_build_f0_by_
+# instance()` call raise `FileNotFoundError` on RUN10-CAL-20260903-591cadcd's
+# very first c4 invocation (`measure_stage._verify_and_load_rendered_pcm()`
+# -> `render_stage._verify_pcm_sidecar()`).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_c4_holdout_render_precedes_f0_prepass_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """3 F0_CONTROL TRUTH_CORE rows (F0 selection, trimmed to the single
+    `F0-B0-CURRENT` candidate, mirroring `test_c3a_f0_selection_passes_
+    with_candidate_that_correctly_non_detects_on_silence` above) + 12
+    APERIODICITY_GT TRUTH_CORE rows (n=12 lands 3 in HOLDOUT under the
+    default test split secret, mirroring `test_c4_render_phase_valid_
+    marker_skips_rehash_on_measure_only_slices` above), trimmed to the
+    family's independent (non-F0-dependent) `-B0-` candidate to keep real
+    measurement volume small — `_run_c4`'s F0 pre-pass still measures the
+    selected F0 candidate on every C4 HOLDOUT instance regardless of which
+    candidates are in `candidates_by_family` (`all_instances` is built from
+    the family's *row* set, `workunits.c4_holdout_instances()`, not from the
+    candidate pool), so this still fully exercises the pre-fix crash site.
+
+    Real `c1-fixtures` renders only CALIBRATION+SELECTION rows (asserted
+    below before c4 ever runs — `enumerate_c1_render_units()`'s actual,
+    unmocked production behavior) and real `c4-holdout` (sliced with a small
+    `--time-budget-seconds` across several invocations, asserting at least
+    one genuine `PARTIAL_SLICE`) is what renders the HOLDOUT PCM this test's
+    F0 pre-pass then reads — proving the fix's ordering holds not just on a
+    single completing call but across a resumed render sub-phase too."""
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+
+    from ._campaign_fixture import write_gate3_approval
+
+    f0_rows = small_matrix_subset(3, family="F0_CONTROL")
+    apio_rows = small_matrix_subset(12, family="APERIODICITY_GT")
+    subset = f0_rows + apio_rows
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    f0_only_b0 = (candidate_by_id("F0-B0-CURRENT"),)
+    orig_candidates_for_meter = cli.candidates_for_meter
+
+    def _trimmed_candidates_for_meter(meter):
+        if meter is MeterId.F0_CONTROL:
+            return f0_only_b0
+        return orig_candidates_for_meter(meter)
+
+    monkeypatch.setattr(cli, "candidates_for_meter", _trimmed_candidates_for_meter)
+
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+    trimmed_pool = (independent_candidate,)
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.APERIODICITY_GT:
+            return trimmed_pool
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+    # pre-unseal leakage guard hard-requires the full canonical matrix row-id
+    # set (orthogonal to what this test isolates -- same stub every other
+    # tiny-fixture C4 test in this file uses).
+    monkeypatch.setattr(render_stage, "_refuse_if_pre_unseal_holdout", lambda *a, **kw: None)
+
+    holdout_instances = frozenset(
+        workunits.c4_holdout_instances(
+            subset, campaign.realized_split.assignment, family="APERIODICITY_GT"
+        )
+    )
+    assert len(holdout_instances) >= 3, (
+        "test setup must realize >=3 HOLDOUT APERIODICITY_GT instances"
+    )
+
+    c1_out = cli._run_c1(campaign, subset)
+    assert c1_out["result"] == "OK", c1_out
+    # the real production precondition this test exists to exercise: c1
+    # never rendered any HOLDOUT row's PCM.
+    for row_id, probe_index in holdout_instances:
+        assert not render_stage._pcm_path(campaign, row_id, probe_index).exists()
+
+    c2_out = cli._run_c2(campaign, subset, 1)
+    assert c2_out["result"] == "OK", c2_out
+
+    c3a_out = cli._run_c3a(campaign, subset, 1)
+    assert c3a_out["result"] == "OK", c3a_out
+    assert any(
+        e.payload.get("kind") == "f0_selection_frozen" and e.payload.get("outcome") == "SELECTED"
+        for e in campaign.ledger.entries
+    ), "test setup must realize a real F0 selection winner"
+
+    c3b_out = cli._run_c3b(campaign, subset, 1)
+    assert c3b_out["result"] == "OK", c3b_out
+
+    approval_dir = tmp_path / "approvals"
+    write_gate3_approval(approval_dir)
+    unseal_out = cli._run_unseal(campaign, approval_dir)
+    assert unseal_out["result"] == "OK", unseal_out
+
+    # c4: sliced across several invocations with a deliberately small time
+    # budget -- the pre-fix bug crashed deterministically on the very FIRST
+    # invocation here (`_build_f0_by_instance()` ran before any render at
+    # all), so simply reaching a second invocation without a
+    # `FileNotFoundError` is itself part of the regression proof.
+    partial_seen = False
+    c4_out: dict[str, object] = {}
+    for _ in range(30):
+        c4_out = cli._run_c4(campaign, subset, 1, time_budget_seconds=4.0)
+        if c4_out["result"] == "PARTIAL_SLICE":
+            partial_seen = True
+            continue
+        assert c4_out["result"] == "OK", c4_out
+        break
+    else:
+        pytest.fail(f"c4-holdout did not complete within the slice budget: {c4_out}")
+    assert partial_seen, "test setup must exercise at least one real PARTIAL_SLICE"
+    assert "holdout_executed_valid_entry_sha" in c4_out, c4_out
+
+    # the renders really happened, driven by c4 itself.
+    for row_id, probe_index in holdout_instances:
+        assert render_stage._pcm_path(campaign, row_id, probe_index).exists()
+
+    render_phase_valid_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == render_stage.RENDER_PHASE_VALID_KIND
+    ]
+    assert len(render_phase_valid_events) == 1
+    assert render_phase_valid_events[0]["stage"] == "c4"
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    assert len(holdout_events) == 1
+
+    close_out = cli._run_close(campaign, reveal=True)
+    assert close_out["result"] == "OK", close_out
+    assert any(e.payload.get("kind") == "campaign_closed" for e in campaign.ledger.entries)
 
 
 # ---------------------------------------------------------------------------

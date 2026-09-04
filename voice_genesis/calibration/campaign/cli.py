@@ -82,7 +82,7 @@ import resource
 import sys
 import uuid
 from importlib import metadata as importlib_metadata
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -1543,6 +1543,7 @@ def _run_c4(
     f0_by_instance: dict[tuple[str, int], float] = {}
     f0_unusable_instances: frozenset[tuple[str, int]] = frozenset()
     f0_missing_reason = "F0_UNUSABLE"
+    f0_prepass: Callable[[], tuple[Any, ...]] | None = None
     if f0_selected_id is not None:
         # Codex PR #345 finding #1 (adopted, category ③): same fix as
         # `_run_c3b` above — build the `MeterCallIndex` once on entry and
@@ -1550,10 +1551,49 @@ def _run_c4(
         # `_reusable_f0_values_by_process()` fall back to a full ledger
         # rescan per instance.
         meter_call_index = measure_stage.MeterCallIndex.build(campaign.ledger.entries)
-        if time_budget is not None:
-            f0_by_instance, f0_unusable_instances, f0_slice_status = _build_f0_by_instance(
+
+        # `[UNDERSPEC-CAL-D86]`: `_build_f0_by_instance()` below measures the
+        # selected F0 candidate's own output on each C4 HOLDOUT instance's
+        # *rendered audio* — PCM that does not exist until the c4 render
+        # sub-phase (inside `holdout_stage.render_and_measure_holdout()`
+        # below, the only caller of `render_stage.run_render_stage(stage=
+        # "c4")`) has produced it (production `c1` renders only CALIBRATION/
+        # SELECTION rows; HOLDOUT rows are rendered here, by c4 — unlike this
+        # tiny-fixture-shaped module's own tests before this fix, which
+        # happened to render holdout rows in c1 too and so never observed
+        # this). Calling `_build_f0_by_instance()` here, eagerly, before
+        # `render_and_measure_holdout()` ever runs its render sub-phase,
+        # deterministically raised `FileNotFoundError` on every campaign's
+        # very first c4 invocation (`measure_stage.
+        # _verify_and_load_rendered_pcm()` -> `render_stage.
+        # _verify_pcm_sidecar()`). Fix: defer this call into a closure and
+        # hand it to `render_and_measure_holdout()` as `f0_prepass` — it
+        # invokes the closure itself, strictly after its own render
+        # sub-phase completes and strictly before its per-family measure
+        # sub-phase (see that function's docstring for the full contract).
+        def _f0_prepass(
+            _all_instances: Sequence[tuple[str, int]] = all_instances,
+            _meter_call_index: measure_stage.MeterCallIndex = meter_call_index,
+        ) -> tuple[Any, ...]:
+            if time_budget is not None:
+                f0_result, f0_unusable, f0_status = _build_f0_by_instance(
+                    campaign,
+                    _all_instances,
+                    f0_selected_id,
+                    sr_by_row,
+                    max_workers=workers,
+                    cap_counters=cap_counters,
+                    cost_caps=cost_caps,
+                    stage="c4",
+                    discard_partial_groups=discard_partial_groups,
+                    time_budget=time_budget,
+                    meter_call_index=_meter_call_index,
+                    invocation_id=invocation_id,
+                )
+                return f0_result, f0_unusable, f0_missing_reason, f0_status
+            f0_result, f0_unusable = _build_f0_by_instance(
                 campaign,
-                all_instances,
+                _all_instances,
                 f0_selected_id,
                 sr_by_row,
                 max_workers=workers,
@@ -1561,25 +1601,12 @@ def _run_c4(
                 cost_caps=cost_caps,
                 stage="c4",
                 discard_partial_groups=discard_partial_groups,
-                time_budget=time_budget,
-                meter_call_index=meter_call_index,
+                meter_call_index=_meter_call_index,
                 invocation_id=invocation_id,
             )
-            slice_statuses.append(f0_slice_status)
-        else:
-            f0_by_instance, f0_unusable_instances = _build_f0_by_instance(
-                campaign,
-                all_instances,
-                f0_selected_id,
-                sr_by_row,
-                max_workers=workers,
-                cap_counters=cap_counters,
-                cost_caps=cost_caps,
-                stage="c4",
-                discard_partial_groups=discard_partial_groups,
-                meter_call_index=meter_call_index,
-                invocation_id=invocation_id,
-            )
+            return f0_result, f0_unusable, f0_missing_reason
+
+        f0_prepass = _f0_prepass
     else:
         # round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): mirrors `_run_c3b`'s else
         # branch — C3a recorded SELECTION_FAILED_CLOSED, so every C4
@@ -1608,6 +1635,7 @@ def _run_c4(
             f0_by_instance=f0_by_instance,
             f0_unusable_instances=f0_unusable_instances,
             f0_missing_reason=f0_missing_reason,
+            f0_prepass=f0_prepass,
             cap_counters=cap_counters,
             cost_caps=cost_caps,
             discard_partial_groups=discard_partial_groups,
@@ -1624,6 +1652,7 @@ def _run_c4(
             f0_by_instance=f0_by_instance,
             f0_unusable_instances=f0_unusable_instances,
             f0_missing_reason=f0_missing_reason,
+            f0_prepass=f0_prepass,
             cap_counters=cap_counters,
             cost_caps=cost_caps,
             discard_partial_groups=discard_partial_groups,

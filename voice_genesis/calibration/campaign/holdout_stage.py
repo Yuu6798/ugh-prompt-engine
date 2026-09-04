@@ -31,9 +31,10 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from voice_genesis.calibration.campaign import measure_stage, workunits
 from voice_genesis.calibration.campaign.render_stage import run_render_stage
@@ -492,6 +493,7 @@ def render_and_measure_holdout(
     f0_by_instance: Mapping[tuple[str, int], float] | None = None,
     f0_unusable_instances: frozenset[tuple[str, int]] = frozenset(),
     f0_missing_reason: str = "F0_UNUSABLE",
+    f0_prepass: Callable[[], tuple[Any, ...]] | None = None,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
     discard_partial_groups: bool = False,
@@ -517,21 +519,47 @@ def render_and_measure_holdout(
     caller passes `"F0_SELECTION_FAILED"` when `f0_unusable_instances` is
     every C4 instance because C3a itself has no F0 winner.
 
+    `[UNDERSPEC-CAL-D86]` `f0_prepass` (optional, default `None`): a zero-arg
+    callable that, when given, is invoked **after** the render sub-phase
+    below and **before** the per-family measure sub-phase, and its return
+    value overrides the static `f0_by_instance`/`f0_unusable_instances`/
+    `f0_missing_reason` arguments above. This exists because the selected F0
+    candidate's own C4 measurement (what builds `f0_by_instance`) reads the
+    *rendered* PCM of each C4 HOLDOUT instance — audio that does not exist
+    until the render sub-phase immediately below has produced it (production
+    `c1` renders only CALIBRATION/SELECTION rows; HOLDOUT rows are rendered
+    here, by `c4`). `cli._run_c4` passes a closure over its own
+    `_build_f0_by_instance()` call here instead of calling it beforehand, so
+    that call — and its `measure_stage.run_measurement_for_instance()` PCM
+    reads — cannot run before this function's own render sub-phase does
+    (previously it always could, on every campaign's very first `c4`
+    invocation, deterministically: `FileNotFoundError`). Every other caller
+    (direct tests, and `cli._run_c4`'s own F0_SELECTION_FAILED branch, which
+    never touches PCM at all) keeps passing the static three arguments and
+    omits `f0_prepass`, unaffected by this parameter's default. The callable
+    itself must switch on the same `time_budget is None` rule the static
+    arguments' producer (`cli._build_f0_by_instance`) already uses: return
+    `(f0_by_instance, f0_unusable_instances, f0_missing_reason)` when this
+    call's own `time_budget` is `None`, or additionally append its own
+    `SliceStatus` as a fourth element when it is not.
+
     R1 の `discard_partial_groups`（design memo `design_runner_robustness.md`,
     `[UNDERSPEC-CAL-D79]`）は素通しで `measure_stage.run_measure_stage` へ
     渡す（`stage="c4"`）。
 
-    R2: `time_budget` が渡されれば、render サブフェーズと family ごとの
-    measure サブフェーズすべてが**同一の** `time_budget` を共有する — 予算
-    切れ以降に呼ばれるサブフェーズは自分の instance を 1 件も dispatch せず
-    自分の総数をそのまま `instances_remaining` として返すので、
-    `SliceStatus.aggregate()` で単純合算するだけで stage 全体の完走可否・
-    進捗が正しく合成される（render を打ち切った場合、後続の family measure
-    はまだ 1 件も dispatch されていない — leakage 検査は最初の
-    `run_render_stage` 呼び出しの中で完走済みの前提で毎回安全に呼べる）。
-    この場合、戻り値は `(results, SliceStatus)` の 2-tuple になる。
-    `time_budget` が `None`（既定）のときは従来どおり `results` 単体を
-    返す（呼び出し元の挙動・シグネチャは不変）。"""
+    R2: `time_budget` が渡されれば、render サブフェーズ・（あれば）
+    `f0_prepass` サブフェーズ・family ごとの measure サブフェーズすべてが
+    **同一の** `time_budget` を共有する — 予算切れ以降に呼ばれるサブフェーズ
+    は自分の instance を 1 件も dispatch せず自分の総数をそのまま
+    `instances_remaining` として返すので、`SliceStatus.aggregate()` で単純
+    合算するだけで stage 全体の完走可否・進捗が正しく合成される（render を
+    打ち切った場合、`time_budget` は既に expired 済みのため、後続の
+    `f0_prepass`/family measure はいずれも自分の最初の pending instance で
+    即座に打ち切り、1 件も新規 dispatch しない — PCM 未 render の instance に
+    触れない。leakage 検査は最初の `run_render_stage` 呼び出しの中で完走済み
+    の前提で毎回安全に呼べる）。この場合、戻り値は `(results, SliceStatus)`
+    の 2-tuple になる。`time_budget` が `None`（既定）のときは従来どおり
+    `results` 単体を返す（呼び出し元の挙動・シグネチャは不変）。"""
     if time_budget is not None:
         _outcomes, render_slice_status = run_render_stage(
             campaign,
@@ -553,6 +581,23 @@ def render_and_measure_holdout(
             invocation_id=invocation_id,
         )
         slice_statuses = []
+
+    # `[UNDERSPEC-CAL-D86]`: `f0_prepass`, when given, runs strictly here —
+    # after the render sub-phase above (its own measurement needs this
+    # invocation's C4 HOLDOUT rows actually rendered) and strictly before
+    # the per-family measure sub-phase below (which consumes its output).
+    # See the docstring above for the full rationale and the callable's
+    # contract. Callers that don't need this (a static `f0_by_instance`, or
+    # none at all) simply never pass it — the parameters they did pass stay
+    # untouched.
+    if f0_prepass is not None:
+        if time_budget is not None:
+            f0_by_instance, f0_unusable_instances, f0_missing_reason, f0_slice_status = (
+                f0_prepass()
+            )
+            slice_statuses.append(f0_slice_status)
+        else:
+            f0_by_instance, f0_unusable_instances, f0_missing_reason = f0_prepass()
 
     assignment = campaign.realized_split.assignment
     sr_by_row = {mr.row_id: mr.row.sr_hz for mr in matrix_rows}
