@@ -1034,6 +1034,156 @@ def test_cap_counters_from_ledger_parent_cpu_checkpoint_no_invocation_id_always_
     assert derived.compute_used == pytest.approx(2.0 + 2.0)
 
 
+# ---------------------------------------------------------------------------
+# R9 fix (PR #346 round 9): overlap between the `meter_group_within_cpu`
+# deferred pass and the `parent_cpu_checkpoint` deferred pass above -- both
+# can fire for the SAME unsummarized invocation, and the checkpoint's own
+# cumulative `parent_cpu_seconds` (a `RUSAGE_SELF` delta on that SAME
+# process) already includes any within-process meter CPU spent by that
+# invocation strictly BEFORE the checkpoint was recorded (ledger order ==
+# chronological order for one invocation's own writes). The fix compares
+# each COMPLETE group's own last `meter_call` record's `entry.seq` against
+# its invocation's checkpoint `entry.seq`: skip the deferred within-CPU
+# charge iff the group finished writing before the checkpoint (already
+# covered); still charge it if the group finished writing after (the
+# checkpoint could not have captured work that had not happened yet).
+# ---------------------------------------------------------------------------
+
+
+def test_cap_counters_from_ledger_r9_checkpoint_after_group_skips_double_charge(
+    tmp_path: Path,
+) -> None:
+    """Scenario (a): a COMPLETE, unsummarized group finishes writing BEFORE
+    its invocation's own checkpoint -- the checkpoint's cumulative CPU
+    already covers the group's within CPU, so the deferred meter-group pass
+    must not add it again."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    for repeat_kind in ("within", "fresh"):
+        for i in range(3):
+            payload = _fake_meter_call_event(
+                "r1", 0, "F0-B0-CURRENT", repeat_kind, i, cpu_seconds=6.0, storage_bytes=100
+            )
+            payload["within_cpu_seconds"] = 4.0
+            payload["invocation_id"] = "invA"
+            ledger.append(payload)
+    # the group is fully written (all 6 records) BEFORE the checkpoint.
+    ledger.append(
+        {
+            "kind": "parent_cpu_checkpoint",
+            "stage": "c3a",
+            "parent_cpu_seconds": 9.0,
+            "invocation_id": "invA",
+        }
+    )
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # fresh remainder (2.0) + the checkpoint's own cumulative CPU (9.0) --
+    # NOT + the group's within CPU (4.0) a second time (would total 15.0).
+    assert derived.compute_used == pytest.approx(2.0 + 9.0)
+
+
+def test_cap_counters_from_ledger_r9_checkpoint_before_group_still_charges_within(
+    tmp_path: Path,
+) -> None:
+    """Scenario (b): the opposite ordering -- a checkpoint recorded BEFORE a
+    COMPLETE, unsummarized group finishes writing cannot possibly have
+    captured that group's within CPU yet, so the deferred pass must still
+    charge it in full; skipping it here would silently undercount (a false
+    pass through the frozen compute cap)."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        {
+            "kind": "parent_cpu_checkpoint",
+            "stage": "c3a",
+            "parent_cpu_seconds": 1.0,
+            "invocation_id": "invA",
+        }
+    )
+    for repeat_kind in ("within", "fresh"):
+        for i in range(3):
+            payload = _fake_meter_call_event(
+                "r1", 0, "F0-B0-CURRENT", repeat_kind, i, cpu_seconds=6.0, storage_bytes=100
+            )
+            payload["within_cpu_seconds"] = 4.0
+            payload["invocation_id"] = "invA"
+            ledger.append(payload)
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # fresh remainder (2.0) + the checkpoint (1.0) + the group's within CPU
+    # (4.0, not covered by the earlier checkpoint) = 7.0.
+    assert derived.compute_used == pytest.approx(2.0 + 1.0 + 4.0)
+
+
+def test_cap_counters_from_ledger_r9_summarized_invocation_ignores_checkpoint_and_group(
+    tmp_path: Path,
+) -> None:
+    """Scenario (c): an invocation carrying BOTH a checkpoint AND a
+    COMPLETE meter-call group, but also eventually summarized, is covered
+    exclusively by its own `stage_summary` -- neither the checkpoint nor the
+    deferred meter-group pass contributes anything (pre-existing rule,
+    unaffected by the R9 ordering check, which only ever applies when the
+    invocation is NOT summarized)."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    for repeat_kind in ("within", "fresh"):
+        for i in range(3):
+            payload = _fake_meter_call_event(
+                "r1", 0, "F0-B0-CURRENT", repeat_kind, i, cpu_seconds=6.0, storage_bytes=100
+            )
+            payload["within_cpu_seconds"] = 4.0
+            payload["invocation_id"] = "invA"
+            ledger.append(payload)
+    ledger.append(
+        {
+            "kind": "parent_cpu_checkpoint",
+            "stage": "c3a",
+            "parent_cpu_seconds": 5.0,
+            "invocation_id": "invA",
+        }
+    )
+    ledger.append(
+        {"kind": "stage_summary", "stage": "c3a", "parent_cpu_seconds": 8.0, "invocation_id": "invA"}
+    )
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # fresh remainder (2.0) + the summary's own parent CPU (8.0) only.
+    assert derived.compute_used == pytest.approx(2.0 + 8.0)
+
+
+def test_cap_counters_from_ledger_r9_mixed_groups_before_and_after_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """The skip is per-GROUP by ledger position, not per-invocation -- an
+    invocation with two COMPLETE unsummarized groups, one finishing before
+    its checkpoint and one after, must skip only the former."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    for repeat_kind in ("within", "fresh"):
+        for i in range(3):
+            payload = _fake_meter_call_event(
+                "r1", 0, "F0-B0-CURRENT", repeat_kind, i, cpu_seconds=6.0, storage_bytes=100
+            )
+            payload["within_cpu_seconds"] = 4.0
+            payload["invocation_id"] = "invA"
+            ledger.append(payload)
+    ledger.append(
+        {
+            "kind": "parent_cpu_checkpoint",
+            "stage": "c3a",
+            "parent_cpu_seconds": 9.0,
+            "invocation_id": "invA",
+        }
+    )
+    for repeat_kind in ("within", "fresh"):
+        for i in range(3):
+            payload = _fake_meter_call_event(
+                "r2", 0, "F0-B1-CURRENT", repeat_kind, i, cpu_seconds=3.0, storage_bytes=50
+            )
+            payload["within_cpu_seconds"] = 1.0
+            payload["invocation_id"] = "invA"
+            ledger.append(payload)
+    derived = cap_counters_from_ledger(ledger.entries, None)
+    # r1: fresh (2.0), within (4.0) skipped (covered by the checkpoint's
+    # 9.0). checkpoint: 9.0. r2: fresh (3.0 - 1.0 = 2.0), within (1.0)
+    # charged (recorded AFTER the checkpoint, not covered by it).
+    assert derived.compute_used == pytest.approx(2.0 + 9.0 + 2.0 + 1.0)
+
+
 def test_cap_counters_from_ledger_budget_uses_frozen_accounting_mode(tmp_path: Path) -> None:
     ledger = Ledger(tmp_path / "ledger.jsonl")
     ledger.append(_fake_render_event("r1", 0, cpu_seconds=1.0, pcm_bytes=10))

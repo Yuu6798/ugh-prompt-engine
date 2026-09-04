@@ -255,6 +255,114 @@ def test_nothing_present_at_all_raises(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# R9 fix (PR #346 round 9 採用): CLOSED (`campaign_closed`) campaigns are the
+# immutable canonical record (module docstring) and must never be archived —
+# `ensure_archived()` now enforces this itself, fail-closed, rather than
+# leaning on caller discipline alone.
+# ---------------------------------------------------------------------------
+
+
+def _build_closed_ledger(campaign_dir: Path, n: int = 3) -> bytes:
+    """有効な chain を持つ小さな ledger.jsonl に `campaign_closed` event を
+    追加して返す（生バイト列）。"""
+    campaign_dir.mkdir(parents=True, exist_ok=True)
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    ledger = Ledger(ledger_path)
+    for i in range(n):
+        ledger.append({"kind": "test_event", "i": i})
+    ledger.append({"kind": "campaign_closed"})
+    return ledger_path.read_bytes()
+
+
+def test_ensure_archived_refuses_campaign_closed_original_and_leaves_files_untouched(
+    tmp_path: Path,
+) -> None:
+    """(a) closed campaign を含む合成 ledger — `ArchiveError` を送出し、
+    ディレクトリの中身が一切変化しない（staging すら作られない）ことを
+    固定する。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-closed"
+    original_bytes = _build_closed_ledger(campaign_dir)
+    before = sorted(p.name for p in campaign_dir.iterdir())
+
+    with pytest.raises(archive.ArchiveError, match="campaign_closed"):
+        archive.ensure_archived(campaign_dir)
+
+    after = sorted(p.name for p in campaign_dir.iterdir())
+    assert after == before
+    assert (campaign_dir / archive.LEDGER_FILENAME).read_bytes() == original_bytes
+
+
+def test_ensure_archived_refuses_and_restores_original_when_archived_copy_is_closed(
+    tmp_path: Path,
+) -> None:
+    """回復経路: 本ガード追加前に閉鎖 campaign が誤って archive 済み
+    （`ledger.jsonl` は既に無く、検証済み `ledger.jsonl.gz` + sidecar のみ
+    存在する）状態を直接構成する。`ensure_archived()` は `ArchiveError` を
+    送出しつつ、検証済み gz から原本を復元し、公開物には触れない。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-closed"
+    original_bytes = _build_closed_ledger(campaign_dir)
+    expected_sha = hashlib.sha256(original_bytes).hexdigest()
+
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    sidecar_path = campaign_dir / archive.SIDECAR_FILENAME
+    gz_path.write_bytes(archive._write_gzip_bytes(original_bytes))
+    sidecar_path.write_text(archive._sidecar_text(expected_sha), encoding="utf-8")
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    ledger_path.unlink()  # 本ガード追加前に完了していた archive を模す。
+
+    gz_bytes_before = gz_path.read_bytes()
+    sidecar_text_before = sidecar_path.read_text(encoding="utf-8")
+
+    with pytest.raises(archive.ArchiveError, match="campaign_closed"):
+        archive.ensure_archived(campaign_dir)
+
+    # 原本が復元され、公開物には一切手を付けていない。
+    assert ledger_path.is_file()
+    assert ledger_path.read_bytes() == original_bytes
+    assert gz_path.read_bytes() == gz_bytes_before
+    assert sidecar_path.read_text(encoding="utf-8") == sidecar_text_before
+
+
+def test_ensure_archived_refuses_closed_original_even_with_valid_archived_copy_present(
+    tmp_path: Path,
+) -> None:
+    """原本 (`ledger.jsonl`) が closed campaign のまま残っている限り、
+    たとえ検証済みの公開物一式が既に揃っていても — 通常なら
+    `already_archived` として原本を消して完了する状況 — 先頭の原本ガードが
+    先に発火し、原本の削除も staging への書き込みも一切行わない。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-closed"
+    original_bytes = _build_closed_ledger(campaign_dir)
+    expected_sha = hashlib.sha256(original_bytes).hexdigest()
+
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    sidecar_path = campaign_dir / archive.SIDECAR_FILENAME
+    gz_path.write_bytes(archive._write_gzip_bytes(original_bytes))
+    sidecar_path.write_text(archive._sidecar_text(expected_sha), encoding="utf-8")
+
+    with pytest.raises(archive.ArchiveError, match="campaign_closed"):
+        archive.ensure_archived(campaign_dir)
+
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    assert ledger_path.is_file()
+    assert ledger_path.read_bytes() == original_bytes
+
+
+def test_cli_main_reports_failure_for_campaign_closed_ledger(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """(b) CLI `main()` 経由でも同様に拒否され、非 0 exit code + `FAILED` を
+    stderr へ出す。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-closed"
+    _build_closed_ledger(campaign_dir)
+
+    rc = archive.main([str(campaign_dir)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "FAILED" in err
+    assert "campaign_closed" in err
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 

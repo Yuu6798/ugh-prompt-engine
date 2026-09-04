@@ -23,8 +23,18 @@ gz を実際に伸長して sidecar sha256・原本バイト列・ledger chain �
   ないため、正しい手順に従う限り到達しない）。
 
 **閉鎖（CAMPAIGN_CLOSED）campaign には絶対に適用しない**（§V4「閉鎖 campaign
-の凍結ディレクトリは不変のまま」。本モジュールは対象を選ばないため、
-呼び出し側が対象 campaign を限定する責務を負う）。
+の凍結ディレクトリは不変のまま」）。
+
+R9 fix（PR #346 round 9、`[UNDERSPEC-CAL-D79]` 系）: 上記は従来「呼び出し側が
+対象 campaign を限定する責務を負う」という運用契約のみで、本モジュール自体は
+対象を選ばなかった。誤って closed campaign に対して呼ばれた場合の
+fail-closed を実装で保証するため、`ensure_archived()` は原本
+（`ledger.jsonl`。存在する場合は常にこの分岐が最初に走る）または既に検証済みの
+公開物（`ledger.jsonl.gz`。原本が既に無い場合のみ）のどちらかに
+`kind == "campaign_closed"` の event を見つけた時点で、**一切の書き込み・
+削除を行う前に** `ArchiveError` を送出する（後者の分岐で原本が既に無い場合は、
+検証済み gz から原本を復元してから停止する — closed campaign の「凍結
+ディレクトリは不変のまま」という前提を能動的に回復する）。
 """
 
 from __future__ import annotations
@@ -32,6 +42,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
+import json
 import os
 import sys
 import tempfile
@@ -192,6 +203,57 @@ def _discard_if_exists(path: Path) -> None:
         path.unlink()
 
 
+def _ledger_bytes_contain_campaign_closed(data: bytes) -> bool:
+    """R9 fix (PR #346 round 9): does decompressed/raw `ledger.jsonl`
+    content `data` contain a `kind == "campaign_closed"` event anywhere?
+
+    A closed campaign's ledger is the immutable canonical record (module
+    docstring) and must never be archived. This is a lightweight,
+    line-by-line JSON scan — not a full `Ledger`/chain load — because it
+    must run before any staging write even exists yet (see the call site at
+    the top of `ensure_archived()`), and because a malformed/unparseable
+    line here is not this function's concern (every other consumer of this
+    same content — `_verify_gz_sidecar_pair()`'s `Ledger.load_with_
+    verification()` call, or a subsequent normal archive run — already
+    fail-closes on structural corruption independently; silently skipping
+    an unparseable line here can only ever miss a `campaign_closed` marker
+    that a later, stricter parse would also choke on, never accept one that
+    should have been rejected).
+    """
+    for line in data.decode("utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        payload = raw.get("payload")
+        if isinstance(payload, dict) and payload.get("kind") == "campaign_closed":
+            return True
+    return False
+
+
+def _restore_original_from_verified_gz(
+    ledger_path: Path, gz_path: Path, campaign_dir: Path
+) -> None:
+    """R9 fix: `ledger_path` no longer exists (a prior, already-completed
+    archive — from before this closed-campaign guard existed, or a manual
+    deletion) but the verified public `gz_path` turns out to hold a
+    `campaign_closed` ledger. Restore the original from the gz's own
+    decompressed bytes (already sidecar-sha256-verified by the caller) so
+    the directory returns to having its canonical, unarchived original
+    present — the closed-campaign invariant this module must never violate
+    — before the caller raises `ArchiveError` and stops.
+    """
+    decompressed = gzip.decompress(gz_path.read_bytes())
+    ledger_path.write_bytes(decompressed)
+    _fsync_file(ledger_path)
+    _fsync_dir(campaign_dir)
+
+
 def ensure_archived(campaign_dir: Path) -> ArchiveResult:
     """§V4 の原子的置換を、中断からの回復を含めて `campaign_dir` へ適用する。
 
@@ -204,6 +266,22 @@ def ensure_archived(campaign_dir: Path) -> ArchiveResult:
     sidecar_path = campaign_dir / SIDECAR_FILENAME
     staging_gz_path = campaign_dir / _STAGING_GZ_FILENAME
     staging_sidecar_path = campaign_dir / _STAGING_SIDECAR_FILENAME
+
+    # R9 fix (PR #346 round 9 採用): a CLOSED campaign's ledger is the
+    # immutable canonical record (module docstring) and must never be
+    # archived. Checked here, first, before any of the recovery-branch
+    # logic below runs and before any write/staging/delete this function
+    # could otherwise perform — a caller mistake (pointing this tool at a
+    # still-canonical closed campaign whose original is still present)
+    # fails closed with the directory completely untouched.
+    if ledger_path.is_file() and _ledger_bytes_contain_campaign_closed(
+        ledger_path.read_bytes()
+    ):
+        raise ArchiveError(
+            f"{campaign_dir}: ledger.jsonl contains a campaign_closed event — "
+            "closed campaigns are immutable canonical records and must never "
+            "be archived"
+        )
 
     has_gz = gz_path.is_file()
     has_sidecar = sidecar_path.is_file()
@@ -222,6 +300,24 @@ def ensure_archived(campaign_dir: Path) -> ArchiveResult:
             _discard_if_exists(gz_path)
             _discard_if_exists(sidecar_path)
         else:
+            # R9 fix: defense-in-depth against a verified public gz/sidecar
+            # pair whose ledger is actually a CLOSED campaign's. Only
+            # reachable here when `ledger_path` no longer exists — the
+            # top-of-function guard above already caught every case where
+            # it does. `gz_path`'s bytes are already sidecar-sha256- and
+            # chain-verified by `_verify_gz_sidecar_pair()` above, so
+            # decompressing them again here is safe to trust.
+            if _ledger_bytes_contain_campaign_closed(gzip.decompress(gz_path.read_bytes())):
+                restored = not ledger_path.is_file()
+                if restored:
+                    _restore_original_from_verified_gz(ledger_path, gz_path, campaign_dir)
+                raise ArchiveError(
+                    f"{campaign_dir}: archived ledger.jsonl.gz contains a "
+                    "campaign_closed event — closed campaigns are immutable "
+                    "canonical records and must never be archived; refusing "
+                    "to remove anything further"
+                    + (" (original restored from the verified archive)" if restored else "")
+                )
             # 公開物は検証済み。staging の残骸と、残存していれば原本を除去
             # して完了とする（原本を消す前に必ずここで検証を通している）。
             _discard_if_exists(staging_gz_path)

@@ -747,6 +747,33 @@ def cap_counters_from_ledger(
       is always charged (fail-closed default, matching every other
       identity-keyed fallback in this module). `storage`/`budget` are
       unaffected — a checkpoint is not a completed work unit.
+
+      **R9 fix (PR #346 round 9, overlap with the `meter_group_within_cpu`
+      deferred pass above)**: `parent_cpu_checkpoint.parent_cpu_seconds` is a
+      `RUSAGE_SELF` delta on the SAME process/invocation as its own
+      within-process `meter_call` work — so for an unsummarized invocation
+      that both wrote a checkpoint AND completed a `meter_call` group, the
+      checkpoint's cumulative value already includes that group's
+      `within_cpu_seconds` whenever the group finished writing (in ledger
+      order) BEFORE the checkpoint was recorded; the source-(2) deferred
+      pass above must then skip that group, or the same within CPU is
+      charged twice (checkpoint sum + `meter_group_within_cpu`) — a false
+      `COST_CAP_EXCEEDED`. A group that finishes writing AFTER the
+      checkpoint's `entry.seq`, however, cannot possibly be reflected in
+      that earlier checkpoint's snapshot, so it must still be charged (the
+      opposite bug — silently dropping it — would be a false pass through
+      the frozen cap). The rule is therefore ledger-order, not presence:
+      compare the completing group's own last `meter_call` record's
+      `entry.seq` (`_meter_group_last_seq`, tracked alongside
+      `meter_group_repeat_keys`/`meter_group_within_cpu`, reset on the same
+      discard-time pop) against that invocation's checkpoint `entry.seq`
+      (`_checkpoint_seq_by_invocation`, tracked alongside
+      `checkpoint_cpu_by_invocation`'s own max-value update, since CPU is
+      monotonic non-decreasing within one invocation so the max-value
+      checkpoint is also the chronologically-latest one) — skip iff the
+      group's seq is strictly less than the checkpoint's seq, charge
+      otherwise. An invocation with no checkpoint at all is unaffected
+      (falls through to the pre-R9 behaviour unchanged).
     - `worker_failed` events (round 24 ADOPT (1), `[UNDERSPEC-CAL-D55]`,
       `caps.charge_worker_failure()`): each event is 1 charged *attempt* at
       a fresh-process worker call (measure or render) that failed post-spawn
@@ -845,11 +872,29 @@ def cap_counters_from_ledger(
     # `last_meter_invocation`/`meter_group_within_cpu` so a remeasurement
     # after a discard starts its own fresh count.
     meter_group_repeat_keys: dict[tuple[object, object, object], set[tuple[object, object]]] = {}
+    # R9 fix: the `entry.seq` of the most recent `meter_call` record seen for
+    # each key (every record, not just the first — mirrors
+    # `meter_group_repeat_keys`'s own per-record tracking) — used by the
+    # deferred pass below to tell whether a COMPLETE group finished writing
+    # before or after that group's writer invocation's own
+    # `parent_cpu_checkpoint` (see the docstring's R9 paragraph). Reset
+    # alongside the same discard-time pop as `meter_group_within_cpu`/
+    # `meter_group_repeat_keys` so a remeasurement after a discard starts its
+    # own fresh count.
+    meter_group_last_seq: dict[tuple[object, object, object], int] = {}
     # R7 P1 fix: per-`invocation_id` maximum `parent_cpu_checkpoint.
     # parent_cpu_seconds` seen so far — see the docstring paragraph above.
     # Charged in a deferred pass (mirrors `meter_group_within_cpu`) once the
     # full scan has determined which invocations ever got summarized.
     checkpoint_cpu_by_invocation: dict[object, float] = {}
+    # R9 fix: the `entry.seq` of the checkpoint event holding each
+    # invocation's charged (max-value) `parent_cpu_seconds` — updated
+    # alongside `checkpoint_cpu_by_invocation` itself (same update
+    # condition), since CPU is monotonic non-decreasing within one
+    # invocation's own dispatch, so the max-value checkpoint is also the
+    # chronologically-latest one and its `entry.seq` is the correct
+    # "everything before this ledger position is already covered" boundary.
+    checkpoint_seq_by_invocation: dict[object, int] = {}
     for entry in ledger_entries:
         payload = entry.payload
         if not isinstance(payload, Mapping):
@@ -891,6 +936,11 @@ def cap_counters_from_ledger(
             # reset below, so a remeasurement after this discard starts its
             # own fresh count of distinct repeat keys.
             meter_group_repeat_keys.pop(key, None)
+            # R9 fix: reset this key's last-seen seq too — mirrors the resets
+            # above so a remeasurement after this discard starts its own
+            # fresh tracking (the discarded attempt's seq must never leak
+            # into the remeasurement's completeness/seq comparison).
+            meter_group_last_seq.pop(key, None)
             # round 8 finding #2 (R8-2, `[UNDERSPEC-CAL-D79]`, supersedes
             # round 7 finding #1): `discarded_within_cpu_seconds` is charged
             # iff no `stage_summary`/`slice_summary` carrying the SAME
@@ -927,6 +977,15 @@ def cap_counters_from_ledger(
             meter_group_repeat_keys.setdefault(key, set()).add(
                 (payload.get("repeat_kind"), payload.get("repeat_index"))
             )
+            # R9 fix: track this key's most-recent record position too, for
+            # every record (not just the first) — same reasoning as
+            # `meter_group_repeat_keys` just above: the group's completion
+            # point in ledger order is whichever record is seen last, which
+            # is only known once the scan has passed it. `entry.seq` is a
+            # `LedgerEntry` dataclass field (always an `int`), unlike the
+            # loosely-typed `payload` fields this module otherwise guards
+            # with `isinstance`.
+            meter_group_last_seq[key] = entry.seq
             if key in seen_meter_keys:
                 continue
             seen_meter_keys.add(key)
@@ -986,6 +1045,10 @@ def cap_counters_from_ledger(
             existing = checkpoint_cpu_by_invocation.get(checkpoint_invocation_id)
             if existing is None or checkpoint_value > existing:
                 checkpoint_cpu_by_invocation[checkpoint_invocation_id] = checkpoint_value
+                # R9 fix: record this checkpoint's own ledger position
+                # alongside its value — see `checkpoint_seq_by_invocation`'s
+                # declaration-site docstring above.
+                checkpoint_seq_by_invocation[checkpoint_invocation_id] = entry.seq
         elif kind == "worker_failed":
             # round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): compute — no dedup,
             # every event is its own charged attempt.
@@ -1044,6 +1107,26 @@ def cap_counters_from_ledger(
     for key, invocation_id in last_meter_invocation.items():
         if invocation_id is None or invocation_id not in invocation_ids_with_summary:
             if len(meter_group_repeat_keys.get(key, ())) < _METER_REPEAT_KEY_COUNT:
+                continue
+            # R9 fix: skip iff this group's writer invocation also recorded a
+            # `parent_cpu_checkpoint` whose ledger position comes AFTER this
+            # group finished writing — that checkpoint's own cumulative
+            # `parent_cpu_seconds` (charged below) already includes this
+            # group's within-process CPU, so charging it again here would
+            # double count. A group that finished writing AFTER its
+            # invocation's checkpoint (or an invocation with no checkpoint at
+            # all) is unaffected and still charged here — see the
+            # docstring's R9 paragraph for the full ledger-order rule. A
+            # `None` `invocation_id` means "unidentified writer", not "same
+            # writer as some other `None`-tagged checkpoint" — never treated
+            # as a match, so two distinct unidentified legacy writers can
+            # never be cross-matched into a false skip here.
+            checkpoint_seq = (
+                checkpoint_seq_by_invocation.get(invocation_id)
+                if invocation_id is not None
+                else None
+            )
+            if checkpoint_seq is not None and meter_group_last_seq.get(key, -1) < checkpoint_seq:
                 continue
             compute += meter_group_within_cpu.get(key, 0.0)
     # R7 P1 fix: charge each invocation's own `parent_cpu_checkpoint` maximum
