@@ -77,6 +77,7 @@ def close_campaign(
     m6_components_b: Mapping[MeterId, float] | None = None,
     m6_e_use: Mapping[MeterId, float] | None = None,
     m6_norm: Norm = "L1",
+    invocation_id: str | None = None,
 ) -> CloseResult:
     """`holdout_stage.run_holdout_stage()` が記帳した `holdout_executed_valid`
     event の payload（`{"per_meter": {...}}`）から `CAMPAIGN_CLOSED` 判定を
@@ -115,6 +116,7 @@ def close_campaign(
             "m6_status": m6_result.status.value if m6_result is not None else None,
             "m6_distance": m6_result.distance if m6_result is not None else None,
         },
+        "invocation_id": invocation_id,
     }
     entry = campaign.ledger.append(payload)
     return CloseResult(
@@ -130,7 +132,9 @@ def _campaign_closed_entry_exists(campaign: FrozenCampaign) -> bool:
     return False
 
 
-def reveal_split_secret(campaign: FrozenCampaign) -> LedgerEntry:
+def reveal_split_secret(
+    campaign: FrozenCampaign, *, invocation_id: str | None = None
+) -> LedgerEntry:
     """`[UNDERSPEC-CAL-D09]`: `split_secret` の commit-reveal（`--reveal-split
     -secret` フラグでのみ CLI から発火する任意操作。設計正本 §7 は commit
     (sha256) のみを義務付け、reveal 手続きは規定しない）。CAMPAIGN_CLOSED
@@ -148,6 +152,7 @@ def reveal_split_secret(campaign: FrozenCampaign) -> LedgerEntry:
             "kind": "split_secret_revealed",
             "split_secret_hex": campaign.split_secret.hex(),
             "split_secret_sha256": sha,
+            "invocation_id": invocation_id,
         }
     )
 

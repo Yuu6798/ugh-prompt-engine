@@ -21,9 +21,12 @@ from voice_genesis.calibration.campaign.caps import (
     cap_counters_from_ledger,
     cost_caps_from_manifest,
     counters_path,
+    load_cap_counters,
+    reconcile_cap_counters,
     save_cap_counters,
 )
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
+from voice_genesis.calibration.campaign.time_budget import TimeBudget
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import candidates_for_meter
 from voice_genesis.calibration.fixtures.matrix import build_matrix, declared_sweeps_by_family
@@ -924,6 +927,620 @@ def test_c3b_selection_blocks_f0_dependent_candidate_when_selection_failed_close
     assert fail_filters[harmonic_residual.candidate_id]["coverage_incomplete"] is True
 
     assert result["selected_by_family"]["APERIODICITY_GT"] != harmonic_residual.candidate_id
+
+
+# ---------------------------------------------------------------------------
+# Codex PR #345 round 9 finding ③ (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
+# a family already fully measured before a sliced `_run_c3b()` invocation must
+# not have `measure_stage.run_measure_stage()` called on it at all in a
+# nonterminal invocation (some other family still pending) — the old
+# unconditional per-family loop paid that already-complete family's
+# `_rebuild_skipped_records()` reconstruction cost on EVERY resumed
+# invocation, which could by itself exhaust the shared `time_budget` before a
+# genuinely pending family was ever reached: a concrete stall.
+# ---------------------------------------------------------------------------
+
+
+def test_c3b_skips_run_measure_stage_for_already_complete_family_when_another_is_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FORMANT_GT (family A) is fully measured before `_run_c3b()` is ever
+    called (a prior invocation's ledger state); TILT_GT (family B) has no
+    `meter_call` events yet. A sliced `_run_c3b()` invocation whose
+    `TimeBudget` reads as already-expired (monkeypatched, deterministic —
+    real wall-clock timing would make this flaky) must: (1) never call
+    `run_measure_stage()` for FORMANT_GT's instances at all (count == 0 —
+    round 9's fix target: the O(1) `family_has_pending_work()` pre-check
+    skips it entirely instead of dispatching-nothing-but-still-
+    reconstructing); (2) still call `run_measure_stage()` for TILT_GT's
+    instances (count == 1 — genuinely pending work is still attempted,
+    budget-gated inside that call); (3) leave FORMANT_GT's ledger `meter_call`
+    count exactly unchanged (no reconstruction, no re-measurement)."""
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+
+    # n=3/n=2 (not 1): with the default split secret, too few rows per
+    # family can land entirely outside SELECTION and never reach C3b's
+    # instance set at all (see `test_c3b_selection_feeds_selected_f0_to_f0_
+    # dependent_candidate`'s analogous n=2 rationale above — empirically,
+    # FORMANT_GT specifically needs n=3 here to realize a SELECTION row).
+    formant_rows = small_matrix_subset(3, family="FORMANT_GT")
+    tilt_rows = small_matrix_subset(2, family="TILT_GT")
+    subset = [*formant_rows, *tilt_rows]
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    baseline_entry = campaign.ledger.append(
+        {"kind": "baseline_audit", "artifact_sha": "7" * 64, "payload": {}}
+    )
+    campaign.ledger.append(
+        {"kind": "baseline_audited", "baseline_audit_sha": baseline_entry.entry_sha}
+    )
+    # SELECTION_FAILED_CLOSED: sidesteps `_build_f0_by_instance()`'s own
+    # budget-consuming F0 measurement pass entirely — this test isolates the
+    # per-family measure loop, not the F0 sub-phase (already covered by round
+    # 5 finding S1's tests).
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": None,
+            "outcome": "SELECTION_FAILED_CLOSED",
+        }
+    )
+
+    # trim both families to a single non-F0-dependent B0 candidate each —
+    # fast, deterministic, and irrelevant to F0-unusable skip logic.
+    formant_candidate = candidate_by_id("M3-B0-CURRENT-CENTROID")
+    tilt_candidate = candidate_by_id("M2T-B0-CURRENT-HYBRID")
+    assert formant_candidate.algorithm_family not in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+    assert tilt_candidate.algorithm_family not in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.FORMANT_GT:
+            return (formant_candidate,)
+        if family is _FixtureFamily.TILT_GT:
+            return (tilt_candidate,)
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+
+    # Pre-populate FORMANT_GT's `meter_call` ledger state directly via
+    # `measure_stage.run_measure_stage()` — bypassing `_run_c3b()`/
+    # `selection_stage.run_c3b_selection()` entirely, so no `selection_frozen`
+    # event exists yet (this fixture must look like "mid per-family-loop
+    # resume", never "already selected").
+    assignment = campaign.realized_split.assignment
+    sr_by_row = {mr.row_id: mr.row.sr_hz for mr in subset}
+    formant_instances = workunits.c3b_family_selection_instances(
+        subset, assignment, _FixtureFamily.FORMANT_GT.value
+    )
+    assert formant_instances
+    measure_stage.run_measure_stage(
+        campaign,
+        formant_instances,
+        (formant_candidate,),
+        sr_by_row=sr_by_row,
+        f0_by_instance={},
+        f0_unusable_instances=frozenset(),
+        max_workers=1,
+        missing_reason="F0_SELECTION_FAILED",
+        discard_partial_groups=False,
+        stage="c3b",
+        invocation_id="pre-populate",
+    )
+    formant_calls_before = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "meter_call"
+        and e.payload.get("candidate_id") == formant_candidate.candidate_id
+    ]
+    assert formant_calls_before
+
+    seen_instances: list[tuple[tuple, ...]] = []
+    orig_run_measure_stage = measure_stage.run_measure_stage
+
+    def _counting_run_measure_stage(campaign_arg, instances, candidates, **kwargs):
+        seen_instances.append(tuple(sorted(instances)))
+        return orig_run_measure_stage(campaign_arg, instances, candidates, **kwargs)
+
+    monkeypatch.setattr(measure_stage, "run_measure_stage", _counting_run_measure_stage)
+    # deterministic stand-in for "budget already exhausted by the time a
+    # genuinely pending instance is reached" — avoids real wall-clock timing
+    # flakiness while still exercising the exact `has_pending and
+    # time_budget.expired()` branch the fix must not trip for FORMANT_GT.
+    monkeypatch.setattr(TimeBudget, "expired", lambda self: True)
+
+    result = cli._run_c3b(campaign, subset, 1, time_budget_seconds=0.001)
+    assert result["result"] == "PARTIAL_SLICE", result
+
+    formant_calls_seen = [inst for inst in seen_instances if inst == tuple(sorted(formant_instances))]
+    tilt_instances = workunits.c3b_family_selection_instances(
+        subset, assignment, _FixtureFamily.TILT_GT.value
+    )
+    assert tilt_instances
+    tilt_calls_seen = [inst for inst in seen_instances if inst == tuple(sorted(tilt_instances))]
+
+    # (1)/(3): FORMANT_GT (already complete) must never reach
+    # `run_measure_stage()` in this nonterminal invocation — no dispatch
+    # attempt, no reconstruction.
+    assert formant_calls_seen == []
+    formant_calls_after = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "meter_call"
+        and e.payload.get("candidate_id") == formant_candidate.candidate_id
+    ]
+    assert len(formant_calls_after) == len(formant_calls_before)
+
+    # (2): TILT_GT (genuinely pending) is still attempted exactly once,
+    # budget-gated inside `run_measure_stage()` itself.
+    assert len(tilt_calls_seen) == 1
+
+
+def test_c4_holdout_skips_run_measure_stage_for_already_complete_family_when_another_is_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C4 analogue of the C3b regression test above (round 9 finding ③, same
+    fix applied to `holdout_stage.render_and_measure_holdout()`'s per-family
+    loop). FORMANT_GT (family A) is fully measured (C4 holdout instances)
+    before `render_and_measure_holdout()` is ever called; TILT_GT (family B)
+    has no `meter_call` events yet. A sliced call whose `TimeBudget` reads as
+    already-expired (monkeypatched, deterministic) must: (1) never call
+    `run_measure_stage()` for FORMANT_GT's instances at all; (2) still call
+    `run_measure_stage()` for TILT_GT's instances once; (3) leave FORMANT_GT's
+    ledger `meter_call` count unchanged."""
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+
+    # n=2/n=3: the combination empirically realizes a non-empty HOLDOUT-split
+    # instance set for both families under the default split secret (see the
+    # C3b sibling test's identical n-tuning rationale).
+    formant_rows = small_matrix_subset(2, family="FORMANT_GT")
+    tilt_rows = small_matrix_subset(3, family="TILT_GT")
+    subset = [*formant_rows, *tilt_rows]
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    # pre-unseal leakage guard hard-requires the full canonical matrix row-id
+    # set (orthogonal to what this test isolates — see
+    # `test_c4_f0_unusable_selected_candidate_through_real_holdout_path_
+    # closes_not_evaluable`'s identical stub above).
+    monkeypatch.setattr(render_stage, "_refuse_if_pre_unseal_holdout", lambda *a, **kw: None)
+    render_stage.run_render_stage(campaign, subset, stage="c4")
+
+    formant_candidate = candidate_by_id("M3-B0-CURRENT-CENTROID")
+    tilt_candidate = candidate_by_id("M2T-B0-CURRENT-HYBRID")
+    assert formant_candidate.algorithm_family not in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+    assert tilt_candidate.algorithm_family not in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+
+    assignment = campaign.realized_split.assignment
+    sr_by_row = {mr.row_id: mr.row.sr_hz for mr in subset}
+    formant_instances = workunits.c4_holdout_instances(
+        subset, assignment, family=_FixtureFamily.FORMANT_GT.value
+    )
+    tilt_instances = workunits.c4_holdout_instances(
+        subset, assignment, family=_FixtureFamily.TILT_GT.value
+    )
+    assert formant_instances
+    assert tilt_instances
+
+    # Pre-populate FORMANT_GT's `meter_call` ledger state directly — bypassing
+    # `render_and_measure_holdout()` entirely, so this fixture looks like
+    # "mid per-family-loop resume", not "already selected"/"holdout closed".
+    measure_stage.run_measure_stage(
+        campaign,
+        formant_instances,
+        (formant_candidate,),
+        sr_by_row=sr_by_row,
+        f0_by_instance={},
+        f0_unusable_instances=frozenset(),
+        max_workers=1,
+        missing_reason="F0_SELECTION_FAILED",
+        discard_partial_groups=False,
+        stage="c4",
+        invocation_id="pre-populate",
+    )
+    formant_calls_before = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "meter_call"
+        and e.payload.get("candidate_id") == formant_candidate.candidate_id
+    ]
+    assert formant_calls_before
+
+    seen_instances: list[tuple[tuple, ...]] = []
+    orig_run_measure_stage = measure_stage.run_measure_stage
+
+    def _counting_run_measure_stage(campaign_arg, instances, candidates, **kwargs):
+        seen_instances.append(tuple(sorted(instances)))
+        return orig_run_measure_stage(campaign_arg, instances, candidates, **kwargs)
+
+    monkeypatch.setattr(measure_stage, "run_measure_stage", _counting_run_measure_stage)
+    # deterministic stand-in for "budget already exhausted by the time a
+    # genuinely pending instance is reached" (same rationale as the C3b
+    # sibling test — avoids real wall-clock timing flakiness).
+    monkeypatch.setattr(TimeBudget, "expired", lambda self: True)
+
+    time_budget = TimeBudget.start_now(0.001)
+    results, overall_slice_status = holdout_stage.render_and_measure_holdout(
+        campaign,
+        subset,
+        candidates_by_family={
+            "FORMANT_GT": (formant_candidate,),
+            "TILT_GT": (tilt_candidate,),
+        },
+        max_workers=1,
+        f0_by_instance={},
+        f0_unusable_instances=frozenset(),
+        f0_missing_reason="F0_SELECTION_FAILED",
+        time_budget=time_budget,
+        invocation_id="resume",
+    )
+    assert overall_slice_status.completed_all is False
+    # round 9b fix: `results` reflects real per-family progress for every
+    # family this invocation actually dispatched (TILT_GT — genuinely
+    # pending, dispatched below, budget already expired so 0 records) —
+    # `render_and_measure_holdout()` is a public function other direct
+    # callers rely on for partial data on every slice, not only `cli.
+    # _run_c4` (which discards `results` wholesale on `not completed_all`
+    # regardless of its contents). FORMANT_GT (already complete before this
+    # invocation, never dispatched here — see (1)/(3) below) stays absent.
+    assert results == {"TILT_GT": []}
+
+    formant_calls_seen = [inst for inst in seen_instances if inst == tuple(sorted(formant_instances))]
+    tilt_calls_seen = [inst for inst in seen_instances if inst == tuple(sorted(tilt_instances))]
+
+    # (1)/(3): FORMANT_GT (already complete) must never reach
+    # `run_measure_stage()` in this nonterminal invocation — no dispatch
+    # attempt, no reconstruction.
+    assert formant_calls_seen == []
+    formant_calls_after = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "meter_call"
+        and e.payload.get("candidate_id") == formant_candidate.candidate_id
+    ]
+    assert len(formant_calls_after) == len(formant_calls_before)
+
+    # (2): TILT_GT (genuinely pending) is still attempted exactly once,
+    # budget-gated inside `run_measure_stage()` itself.
+    assert len(tilt_calls_seen) == 1
+
+
+# ---------------------------------------------------------------------------
+# Codex PR #345 round 10 finding ② (adopted, category ②, `[UNDERSPEC-CAL-
+# D79]`): round 9's `family_has_pending_work()` O(1) precheck (see the two
+# tests directly above) raises `StaleMeasurementError` itself for a
+# duplicate-key cell -- before any of `run_measure_stage()`'s own logging
+# wrappers ever run for that family. Both precheck call sites
+# (`cli._run_c3b()`, `holdout_stage.render_and_measure_holdout()`) must catch
+# it, append the same `STALE_MEASUREMENT_STATE` stop_event `run_measure_
+# stage()` itself would, then re-raise -- otherwise the failed invocation
+# leaves no ledger record explaining why it stopped.
+# ---------------------------------------------------------------------------
+
+
+def test_c3b_family_precheck_duplicate_key_emits_stale_stop_event_before_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A duplicate `meter_call` repeat key for FORMANT_GT's sole instance is
+    present in the ledger before `_run_c3b()` is ever called (sliced branch,
+    `time_budget_seconds` set, so `family_has_pending_work()`'s precheck
+    runs). The precheck itself must raise `StaleMeasurementError(kind=
+    "duplicate")` -- reached via `MeterCallIndex.is_complete()` -- and the
+    round 10 fix must append exactly one `STALE_MEASUREMENT_STATE` stop_event
+    before it propagates, mirroring `run_measure_stage()`'s own `is_complete()`
+    call sites (`_append_stale_measurement_stop_event()`)."""
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+
+    subset = small_matrix_subset(3, family="FORMANT_GT")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    baseline_entry = campaign.ledger.append(
+        {"kind": "baseline_audit", "artifact_sha": "b" * 64, "payload": {}}
+    )
+    campaign.ledger.append(
+        {"kind": "baseline_audited", "baseline_audit_sha": baseline_entry.entry_sha}
+    )
+    # SELECTION_FAILED_CLOSED: sidesteps `_build_f0_by_instance()`'s own F0
+    # measurement pass entirely -- this test isolates the per-family precheck,
+    # not the F0 sub-phase.
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": None,
+            "outcome": "SELECTION_FAILED_CLOSED",
+        }
+    )
+
+    formant_candidate = candidate_by_id("M3-B0-CURRENT-CENTROID")
+    assert formant_candidate.algorithm_family not in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.FORMANT_GT:
+            return (formant_candidate,)
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+
+    assignment = campaign.realized_split.assignment
+    formant_instances = workunits.c3b_family_selection_instances(
+        subset, assignment, _FixtureFamily.FORMANT_GT.value
+    )
+    assert formant_instances
+    row_id, probe_index = sorted(formant_instances)[0]
+
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(
+            _fake_meter_call(formant_candidate.candidate_id, row_id, probe_index, "within", i, 100.0 + i)
+        )
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(
+            _fake_meter_call(formant_candidate.candidate_id, row_id, probe_index, "fresh", i, 200.0 + i)
+        )
+    # duplicate write to the same (repeat_kind, repeat_index) key.
+    campaign.ledger.append(
+        _fake_meter_call(formant_candidate.candidate_id, row_id, probe_index, "within", 0, 999.0)
+    )
+
+    entries_before = len(campaign.ledger.entries)
+
+    with pytest.raises(measure_stage.StaleMeasurementError) as excinfo:
+        cli._run_c3b(campaign, subset, 1, time_budget_seconds=60.0)
+    assert excinfo.value.kind == "duplicate"
+
+    # SELECTION_FAILED_CLOSED unconditionally appends its own
+    # `f0_dependent_selection_blocked` event before the per-family precheck
+    # loop runs at all (pre-existing, unrelated to this fix) -- filter to
+    # `stop_event`-kind entries so this assertion isolates the round 10 fix's
+    # own append, exactly once.
+    new_stop_events = [
+        e.payload
+        for e in campaign.ledger.entries[entries_before:]
+        if e.payload.get("kind") == "stop_event"
+    ]
+    assert len(new_stop_events) == 1
+    stop_event = new_stop_events[0]
+    assert stop_event["reason"] == "STALE_MEASUREMENT_STATE"
+    assert stop_event["row_id"] == row_id
+    assert stop_event["probe_index"] == probe_index
+    assert stop_event["candidate_id"] == formant_candidate.candidate_id
+
+
+def test_c4_holdout_family_precheck_duplicate_key_emits_stale_stop_event_before_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C4 analogue of the C3b precheck test above: a duplicate `meter_call`
+    repeat key for FORMANT_GT's sole holdout instance makes `holdout_stage.
+    render_and_measure_holdout()`'s `family_has_pending_work()` precheck
+    itself raise `StaleMeasurementError(kind="duplicate")` -- the round 10
+    fix must append exactly one `STALE_MEASUREMENT_STATE` stop_event before
+    it propagates."""
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+
+    subset = small_matrix_subset(2, family="FORMANT_GT")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    # pre-unseal leakage guard hard-requires the full canonical matrix row-id
+    # set (orthogonal to what this test isolates -- see the round 9 C4
+    # sibling test's identical stub above).
+    monkeypatch.setattr(render_stage, "_refuse_if_pre_unseal_holdout", lambda *a, **kw: None)
+    render_stage.run_render_stage(campaign, subset, stage="c4")
+
+    formant_candidate = candidate_by_id("M3-B0-CURRENT-CENTROID")
+    assert formant_candidate.algorithm_family not in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+
+    assignment = campaign.realized_split.assignment
+    formant_instances = workunits.c4_holdout_instances(
+        subset, assignment, family=_FixtureFamily.FORMANT_GT.value
+    )
+    assert formant_instances
+    row_id, probe_index = sorted(formant_instances)[0]
+
+    for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+        campaign.ledger.append(
+            _fake_meter_call(formant_candidate.candidate_id, row_id, probe_index, "within", i, 100.0 + i)
+        )
+    for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+        campaign.ledger.append(
+            _fake_meter_call(formant_candidate.candidate_id, row_id, probe_index, "fresh", i, 200.0 + i)
+        )
+    # duplicate write to the same (repeat_kind, repeat_index) key.
+    campaign.ledger.append(
+        _fake_meter_call(formant_candidate.candidate_id, row_id, probe_index, "within", 0, 999.0)
+    )
+
+    entries_before = len(campaign.ledger.entries)
+    time_budget = TimeBudget.start_now(60.0)
+
+    with pytest.raises(measure_stage.StaleMeasurementError) as excinfo:
+        holdout_stage.render_and_measure_holdout(
+            campaign,
+            subset,
+            candidates_by_family={"FORMANT_GT": (formant_candidate,)},
+            max_workers=1,
+            f0_by_instance={},
+            f0_unusable_instances=frozenset(),
+            f0_missing_reason="F0_SELECTION_FAILED",
+            time_budget=time_budget,
+            invocation_id="resume",
+        )
+    assert excinfo.value.kind == "duplicate"
+
+    new_stop_events = [
+        e.payload
+        for e in campaign.ledger.entries[entries_before:]
+        if e.payload.get("kind") == "stop_event"
+    ]
+    assert len(new_stop_events) == 1
+    stop_event = new_stop_events[0]
+    assert stop_event["reason"] == "STALE_MEASUREMENT_STATE"
+    assert stop_event["row_id"] == row_id
+    assert stop_event["probe_index"] == probe_index
+    assert stop_event["candidate_id"] == formant_candidate.candidate_id
+
+
+# ---------------------------------------------------------------------------
+# rehearsal 5 finding ② (adopted, `[UNDERSPEC-CAL-D79]`): memo §6.5.5 requires
+# every event a process appends to carry `invocation_id` (the one `cli.py`
+# `main()` generates once per OS process and threads through every stage
+# dispatch it makes — see `main()`'s own `invocation_id = uuid.uuid4().hex`
+# comment). `fixture_valid` (`render_stage.py`), `baseline_audit`/
+# `baseline_audited` (`baseline_stage.py`), and `f0_selection_frozen`
+# (`selection_stage.py`) were missing it; the audit this finding triggered
+# also caught `f0_injection_rejected`/`f0_dependent_selection_blocked`/
+# `counters_reconstructed` (`cli.py`), `campaign_closed`/
+# `split_secret_revealed` (`close.py`), `candidate_space`/`selection_rule`/
+# `selected_candidate`/`selection_frozen` (`selection_stage.py`),
+# `gate3_accepted`/`holdout_unseal` (`unseal.py`), `holdout_executed_valid`/
+# `E_USE_TABLE_STALE_OR_MUTATED` stop_event (`holdout_stage.py`), `stale`/
+# `measurement_missing` (`measure_stage.py`), and `render_phase_valid`
+# (`render_stage.py`).
+# ---------------------------------------------------------------------------
+
+
+def test_campaign_time_events_carry_invocation_id_end_to_end(tmp_path: Path) -> None:
+    """Drives one shared `invocation_id` through render (C1) -> baseline
+    (C2) -> F0 selection (C3a) -> selection (C3b) -> unseal -> holdout ->
+    close -> reveal, exactly as `cli.py` `main()` would thread its own
+    per-process `invocation_id` through the same stage entrypoints, then
+    asserts every campaign-time ledger event (i.e. every event after the
+    pre-campaign `c0_freeze`/`split_frozen` pair `build_tiny_campaign()`
+    seeds — those two predate any `invocation_id` because no process
+    invocation produced them, per the `[UNDERSPEC-CAL-D79]` boundary
+    declaration in the task brief) carries it.
+
+    C3a/C3b use fabricated `CandidateCriteria` (same rationale
+    `test_unseal_and_close_dispatch_through_cli` above uses: the ledger
+    event under test does not depend on real measured values) and the
+    holdout stage uses fabricated `diagnostic_only_close` terminal results
+    (same pattern as `_seed_closable_holdout` above) — this keeps the run
+    genuinely tiny (a single F0_CONTROL row, no C4 render/measure, no
+    approval-gated CLI dispatch) while still exercising every one of the
+    real production append sites this finding fixed."""
+    from voice_genesis.calibration.campaign import baseline_stage
+    from voice_genesis.calibration.campaign import close as close_module
+    from voice_genesis.calibration.campaign import selection_stage
+    from voice_genesis.calibration.campaign import unseal as unseal_module
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+    from voice_genesis.calibration.selection import CandidateCriteria
+    from voice_genesis.calibration.vocab import ClaimCeiling
+
+    from ._campaign_fixture import write_gate3_approval
+
+    invocation_id = "test-inv-e2e"
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    # C1: real render dispatch (renders whatever `subset`'s realized split
+    # actually assigns to CALIBRATION/SELECTION — possibly zero units; either
+    # way `fixture_valid` is appended once dispatch completes, see
+    # `render_stage.run_render_stage`'s `completed_all` default).
+    render_stage.run_render_stage(campaign, subset, stage="c1", invocation_id=invocation_id)
+
+    # C2: real baseline measurement dispatch over the same subset.
+    baseline_stage.run_baseline_stage(campaign, subset, invocation_id=invocation_id)
+
+    # C3a: F0 selection — fabricated criteria.
+    f0_candidate = candidate_by_id("F0-B0-CURRENT")
+    selection_stage.run_c3a_f0_selection(
+        campaign,
+        [
+            CandidateCriteria(
+                candidate_id=f0_candidate.candidate_id,
+                ceiling=ClaimCeiling.ABSOLUTE,
+                primary_normalized_mae=0.05,
+                signed_bias=0.01,
+                primary_q95_ae=0.1,
+            )
+        ],
+        invocation_id=invocation_id,
+    )
+
+    baseline_audit_entry_sha = next(
+        e.entry_sha for e in campaign.ledger.entries if e.payload.get("kind") == "baseline_audit"
+    )
+    # C3b: selection for a family unrelated to `subset` — same fabricated-
+    # criteria pattern `test_unseal_and_close_dispatch_through_cli` above
+    # uses (`run_c3b_selection` never reads `matrix_rows`/`subset` itself).
+    selection_stage.run_c3b_selection(
+        campaign,
+        {
+            "TILT_GT": [
+                CandidateCriteria(
+                    candidate_id="M2T-HARMONIC-OLS-K4-WINhann",
+                    ceiling=ClaimCeiling.ABSOLUTE,
+                    primary_normalized_mae=0.05,
+                    signed_bias=0.01,
+                    primary_q95_ae=0.1,
+                )
+            ]
+        },
+        baseline_audit_entry_sha=baseline_audit_entry_sha,
+        invocation_id=invocation_id,
+    )
+
+    approval_dir = tmp_path / "approvals"
+    write_gate3_approval(approval_dir)
+    unseal_module.unseal_campaign(
+        campaign, approval_dir=approval_dir, invocation_id=invocation_id
+    )
+
+    # C4/holdout: fabricated diagnostic-only terminal results (same pattern
+    # `_seed_closable_holdout` above uses).
+    results = [holdout_stage.diagnostic_only_close(m.value) for m in MeterId]
+    holdout_stage.run_holdout_stage(campaign, results, invocation_id=invocation_id)
+
+    holdout_payload = next(
+        e.payload
+        for e in reversed(campaign.ledger.entries)
+        if e.payload.get("kind") == "holdout_executed_valid"
+    )
+    close_module.close_campaign(campaign, holdout_payload, invocation_id=invocation_id)
+    close_module.reveal_split_secret(campaign, invocation_id=invocation_id)
+
+    # `c0_freeze`/`split_frozen` are pre-campaign (no process invocation
+    # produced them — `build_tiny_campaign()` fabricates them directly) and
+    # stay exempt; every other kind must carry this run's `invocation_id`.
+    pre_campaign_kinds = {"c0_freeze", "split_frozen"}
+    checked_kinds: set[str] = set()
+    for entry in campaign.ledger.entries:
+        kind = entry.payload.get("kind")
+        if kind in pre_campaign_kinds:
+            continue
+        assert entry.payload.get("invocation_id") == invocation_id, (kind, entry.payload)
+        checked_kinds.add(kind)
+
+    # Sanity: the run actually exercised every append site this finding
+    # fixed, not merely the ones common to every campaign run.
+    assert {
+        "fixture_valid",
+        "baseline_audit",
+        "baseline_audited",
+        "f0_selection_frozen",
+        "candidate_space",
+        "selection_rule",
+        "selected_candidate",
+        "selection_frozen",
+        "gate3_accepted",
+        "holdout_unseal",
+        "holdout_executed_valid",
+        "campaign_closed",
+        "split_secret_revealed",
+    } <= checked_kinds
 
 
 def test_c4_never_calls_f0_dependent_candidate_when_selection_failed_closed(
@@ -2264,6 +2881,405 @@ def test_f0_reuse_accepts_exactly_complete_non_duplicated_coverage(tmp_path: Pat
     assert len(campaign.ledger.entries) == entries_before
 
 
+def test_build_f0_by_instance_all_recorded_ignores_expired_budget(tmp_path: Path) -> None:
+    """Codex PR #345 round 5 finding S1 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`, terminal sweep of the slice/resume family — same
+    rule as round 3/4's `render_stage.run_render_stage()`/`measure_stage.
+    run_measure_stage()` fixes applied to the F0 loop): pre-fix,
+    `_build_f0_by_instance()` checked `time_budget.expired()` BEFORE
+    consulting `meter_call_index` at all. If every selected-F0 instance is
+    already fully recorded in the ledger (`meter_call_index.is_complete()`
+    true for all of them) but the caller passes an already-expired budget
+    (e.g. because building `meter_call_index` itself consumed it), the loop
+    tripped the budget check on the very first instance and returned
+    `completed_all=False` forever — no dispatch was ever pending, yet the
+    aggregate stayed `PARTIAL_SLICE` on every resume, unable to reach the
+    C3b/C4 measurement it gates.
+
+    Fix: the budget boundary is now checked only for a genuinely pending
+    instance (`meter_call_index.is_complete()` consulted first, mirroring
+    `render_stage`'s `completed_units.get(...)` / `measure_stage`'s
+    `_instance_has_pending_candidate()`). With both instances already
+    complete, this call must reach `completed_all=True` even with an
+    already-expired budget, and must report 0 new progress (same round 5
+    finding S2 counting rule, applied here too)."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    candidate_id = "F0-B0-CURRENT"
+    instances = [("r1", 0), ("r2", 0)]
+    for row_id, probe_index in instances:
+        for i in range(measure_stage.WITHIN_PROCESS_REPEATS):
+            campaign.ledger.append(_fake_meter_call(candidate_id, row_id, probe_index, "within", i, 100.0))
+        for i in range(measure_stage.FRESH_PROCESS_REPEATS):
+            campaign.ledger.append(_fake_meter_call(candidate_id, row_id, probe_index, "fresh", i, 100.0))
+    meter_call_index = measure_stage.MeterCallIndex.build(campaign.ledger.entries)
+    entries_before = len(campaign.ledger.entries)
+
+    result, unusable, slice_status = cli._build_f0_by_instance(
+        campaign,
+        instances,
+        candidate_id,
+        {"r1": 48000, "r2": 48000},
+        max_workers=1,
+        cap_counters=None,
+        cost_caps=None,
+        stage="c3b",
+        meter_call_index=meter_call_index,
+        # already-expired-before-the-first-check budget, same contract as
+        # `render_stage`/`measure_stage`'s equivalent regression tests.
+        time_budget=TimeBudget.start_now(0.0001),
+    )
+
+    assert slice_status.completed_all is True
+    assert result == {
+        ("r1", 0): pytest.approx(100.0),
+        ("r2", 0): pytest.approx(100.0),
+    }
+    assert unusable == frozenset()
+    # round 5 finding S2 rule applied to this loop too: no NEW dispatch
+    # happened (every instance was already recorded), so 0 -- not 2.
+    assert slice_status.instances_completed_this_run == 0
+    assert slice_status.instances_remaining == 0
+    # purely a reuse/reconstruction pass: no new ledger entries.
+    assert len(campaign.ledger.entries) == entries_before
+
+
+# ---------------------------------------------------------------------------
+# Codex PR #345 finding #1 (adopted, category ③, `[UNDERSPEC-CAL-D79]`): R3's
+# `MeterCallIndex` docstring claims "1 ledger scan per stage-call", but
+# `_run_c3b`/`_run_c4` never actually built one before calling
+# `_build_f0_by_instance` — the F0-reuse path
+# (`_reusable_f0_values_by_process`) fell back to
+# `measure_stage._completed_meter_call_records()` (a full ledger rescan) once
+# per instance instead, exactly on the production resume paths R3 was meant
+# to fix. The fix builds a single `MeterCallIndex` on `_run_c3b`/`_run_c4`
+# entry and passes it through every `_build_f0_by_instance` call.
+# ---------------------------------------------------------------------------
+
+
+def test_c3b_f0_reuse_builds_and_reuses_single_meter_call_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_run_c3b`'s F0-reuse path must never fall back to
+    `measure_stage._completed_meter_call_records()`'s full-ledger rescan —
+    every `_reusable_f0_values_by_process()` call it makes must receive the
+    *same* non-`None` `MeterCallIndex` object (built once on entry, not
+    rebuilt per instance)."""
+    subset = small_matrix_subset(2, family="APERIODICITY_GT")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    baseline_entry = campaign.ledger.append(
+        {"kind": "baseline_audit", "artifact_sha": "3" * 64, "payload": {}}
+    )
+    campaign.ledger.append(
+        {"kind": "baseline_audited", "baseline_audit_sha": baseline_entry.entry_sha}
+    )
+    candidate_id = "F0-B0-CURRENT"
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": candidate_id,
+            "outcome": "SELECTED",
+        }
+    )
+
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+
+    harmonic_residual_ids = {
+        c.candidate_id
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    }
+    assert harmonic_residual_ids
+    trimmed_pool = tuple(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if c.candidate_id in harmonic_residual_ids
+    )[:1]
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.APERIODICITY_GT:
+            return trimmed_pool
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+
+    naive_rescan_calls = 0
+    orig_naive_rescan = measure_stage._completed_meter_call_records
+
+    def _counting_naive_rescan(*args, **kwargs):
+        nonlocal naive_rescan_calls
+        naive_rescan_calls += 1
+        return orig_naive_rescan(*args, **kwargs)
+
+    monkeypatch.setattr(measure_stage, "_completed_meter_call_records", _counting_naive_rescan)
+
+    seen_indexes: list[object] = []
+    orig_reusable = cli._reusable_f0_values_by_process
+
+    def _capturing_reusable(*args, **kwargs):
+        seen_indexes.append(kwargs.get("meter_call_index"))
+        return orig_reusable(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "_reusable_f0_values_by_process", _capturing_reusable)
+
+    result = cli._run_c3b(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    # >=1 instance actually went through the F0-reuse lookup, and every one
+    # of them received the *same* non-`None` index object — built once,
+    # reused, not rebuilt per instance.
+    assert seen_indexes
+    assert all(idx is not None for idx in seen_indexes)
+    assert len({id(idx) for idx in seen_indexes}) == 1
+
+    # The naive per-instance full-ledger-rescan fallback (the
+    # `meter_call_index is None` branch) must never fire.
+    assert naive_rescan_calls == 0
+
+
+def test_c4_f0_reuse_builds_and_reuses_single_meter_call_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same regression as above, for `_run_c4`'s F0-reuse path. The downstream
+    `holdout_stage.render_and_measure_holdout()` call is stubbed out (its own
+    real render/measure path needs the campaign through unseal — orthogonal
+    to this test, which isolates C4's F0-by-instance construction, mirroring
+    how `test_c4_never_calls_f0_dependent_candidate_when_selection_failed_
+    closed` above isolates C4's other F0 guard). `[UNDERSPEC-CAL-D86]`:
+    `_run_c4` no longer calls `_build_f0_by_instance()` itself — it hands
+    `render_and_measure_holdout()` a closure (`f0_prepass`) that function
+    invokes after its own render sub-phase, so the stub below must invoke
+    that closure itself to still exercise the real F0-by-instance
+    construction path this test isolates."""
+    subset = small_matrix_subset(4, family="APERIODICITY_GT")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    candidate_id = "F0-B0-CURRENT"
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": candidate_id,
+            "outcome": "SELECTED",
+        }
+    )
+
+    from voice_genesis.calibration.campaign import workunits
+
+    expected_instances = frozenset(
+        workunits.c4_holdout_instances(
+            subset, campaign.realized_split.assignment, family="APERIODICITY_GT"
+        )
+    )
+    assert expected_instances, "test setup must realize a HOLDOUT-split APERIODICITY_GT instance"
+
+    # C4's F0-by-instance construction (`_run_c4` -> `_build_f0_by_instance`)
+    # measures the selected F0 candidate on the HOLDOUT-split instances
+    # themselves — render those (not C1's CAL/SEL-only render) before
+    # `_run_c4` reaches it. The pre-unseal leakage guard is stubbed (same
+    # justification as `test_c4_f0_unusable_selected_candidate_through_real_
+    # holdout_path_closes_not_evaluable` above: it hard-requires the full
+    # canonical matrix row-id set, orthogonal to what this test isolates).
+    monkeypatch.setattr(render_stage, "_refuse_if_pre_unseal_holdout", lambda *a, **kw: None)
+    render_stage.run_render_stage(campaign, subset, stage="c4")
+
+    def _stub_render_and_measure_holdout(campaign_arg, matrix_rows_arg, **kwargs):
+        # `[UNDERSPEC-CAL-D86]`: the real function calls `f0_prepass()` (when
+        # given) after its own render sub-phase — this stub skips the render
+        # (already done above) but must still invoke the closure so the
+        # F0-by-instance construction under test actually runs.
+        f0_prepass = kwargs.get("f0_prepass")
+        if f0_prepass is not None:
+            f0_prepass()
+        return {}
+
+    monkeypatch.setattr(
+        cli.holdout_stage, "render_and_measure_holdout", _stub_render_and_measure_holdout
+    )
+
+    naive_rescan_calls = 0
+    orig_naive_rescan = measure_stage._completed_meter_call_records
+
+    def _counting_naive_rescan(*args, **kwargs):
+        nonlocal naive_rescan_calls
+        naive_rescan_calls += 1
+        return orig_naive_rescan(*args, **kwargs)
+
+    monkeypatch.setattr(measure_stage, "_completed_meter_call_records", _counting_naive_rescan)
+
+    seen_indexes: list[object] = []
+    orig_reusable = cli._reusable_f0_values_by_process
+
+    def _capturing_reusable(*args, **kwargs):
+        seen_indexes.append(kwargs.get("meter_call_index"))
+        return orig_reusable(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "_reusable_f0_values_by_process", _capturing_reusable)
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    assert seen_indexes
+    assert all(idx is not None for idx in seen_indexes)
+    assert len({id(idx) for idx in seen_indexes}) == 1
+    assert naive_rescan_calls == 0
+
+
+# ---------------------------------------------------------------------------
+# `[UNDERSPEC-CAL-D86]` production E2E: real `c1-fixtures` -> `c2-baseline`
+# -> `c3a-f0-selection` -> `c3b-selection` -> `unseal` -> `c4-holdout`
+# (time-budget-sliced across several invocations) -> `close`, driven through
+# `cli._run_c1`/`_run_c2`/.../`_run_close` directly (no `main()` argv/gate1
+# plumbing needed for this in-process shape). Unlike every other real-path
+# C4 test above (and the pre-fix state of this very file), NOTHING renders
+# any HOLDOUT-split PCM before `_run_c4` itself runs — the exact production
+# precondition that made `cli._run_c4`'s (pre-fix) eager `_build_f0_by_
+# instance()` call raise `FileNotFoundError` on RUN10-CAL-20260903-591cadcd's
+# very first c4 invocation (`measure_stage._verify_and_load_rendered_pcm()`
+# -> `render_stage._verify_pcm_sidecar()`).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_c4_holdout_render_precedes_f0_prepass_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """3 F0_CONTROL TRUTH_CORE rows (F0 selection, trimmed to the single
+    `F0-B0-CURRENT` candidate, mirroring `test_c3a_f0_selection_passes_
+    with_candidate_that_correctly_non_detects_on_silence` above) + 12
+    APERIODICITY_GT TRUTH_CORE rows (n=12 lands 3 in HOLDOUT under the
+    default test split secret, mirroring `test_c4_render_phase_valid_
+    marker_skips_rehash_on_measure_only_slices` above), trimmed to the
+    family's independent (non-F0-dependent) `-B0-` candidate to keep real
+    measurement volume small — `_run_c4`'s F0 pre-pass still measures the
+    selected F0 candidate on every C4 HOLDOUT instance regardless of which
+    candidates are in `candidates_by_family` (`all_instances` is built from
+    the family's *row* set, `workunits.c4_holdout_instances()`, not from the
+    candidate pool), so this still fully exercises the pre-fix crash site.
+
+    Real `c1-fixtures` renders only CALIBRATION+SELECTION rows (asserted
+    below before c4 ever runs — `enumerate_c1_render_units()`'s actual,
+    unmocked production behavior) and real `c4-holdout` (sliced with a small
+    `--time-budget-seconds` across several invocations, asserting at least
+    one genuine `PARTIAL_SLICE`) is what renders the HOLDOUT PCM this test's
+    F0 pre-pass then reads — proving the fix's ordering holds not just on a
+    single completing call but across a resumed render sub-phase too."""
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+
+    from ._campaign_fixture import write_gate3_approval
+
+    f0_rows = small_matrix_subset(3, family="F0_CONTROL")
+    apio_rows = small_matrix_subset(12, family="APERIODICITY_GT")
+    subset = f0_rows + apio_rows
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    f0_only_b0 = (candidate_by_id("F0-B0-CURRENT"),)
+    orig_candidates_for_meter = cli.candidates_for_meter
+
+    def _trimmed_candidates_for_meter(meter):
+        if meter is MeterId.F0_CONTROL:
+            return f0_only_b0
+        return orig_candidates_for_meter(meter)
+
+    monkeypatch.setattr(cli, "candidates_for_meter", _trimmed_candidates_for_meter)
+
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+    trimmed_pool = (independent_candidate,)
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.APERIODICITY_GT:
+            return trimmed_pool
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+    # pre-unseal leakage guard hard-requires the full canonical matrix row-id
+    # set (orthogonal to what this test isolates -- same stub every other
+    # tiny-fixture C4 test in this file uses).
+    monkeypatch.setattr(render_stage, "_refuse_if_pre_unseal_holdout", lambda *a, **kw: None)
+
+    holdout_instances = frozenset(
+        workunits.c4_holdout_instances(
+            subset, campaign.realized_split.assignment, family="APERIODICITY_GT"
+        )
+    )
+    assert len(holdout_instances) >= 3, (
+        "test setup must realize >=3 HOLDOUT APERIODICITY_GT instances"
+    )
+
+    c1_out = cli._run_c1(campaign, subset)
+    assert c1_out["result"] == "OK", c1_out
+    # the real production precondition this test exists to exercise: c1
+    # never rendered any HOLDOUT row's PCM.
+    for row_id, probe_index in holdout_instances:
+        assert not render_stage._pcm_path(campaign, row_id, probe_index).exists()
+
+    c2_out = cli._run_c2(campaign, subset, 1)
+    assert c2_out["result"] == "OK", c2_out
+
+    c3a_out = cli._run_c3a(campaign, subset, 1)
+    assert c3a_out["result"] == "OK", c3a_out
+    assert any(
+        e.payload.get("kind") == "f0_selection_frozen" and e.payload.get("outcome") == "SELECTED"
+        for e in campaign.ledger.entries
+    ), "test setup must realize a real F0 selection winner"
+
+    c3b_out = cli._run_c3b(campaign, subset, 1)
+    assert c3b_out["result"] == "OK", c3b_out
+
+    approval_dir = tmp_path / "approvals"
+    write_gate3_approval(approval_dir)
+    unseal_out = cli._run_unseal(campaign, approval_dir)
+    assert unseal_out["result"] == "OK", unseal_out
+
+    # c4: sliced across several invocations with a deliberately small time
+    # budget -- the pre-fix bug crashed deterministically on the very FIRST
+    # invocation here (`_build_f0_by_instance()` ran before any render at
+    # all), so simply reaching a second invocation without a
+    # `FileNotFoundError` is itself part of the regression proof.
+    partial_seen = False
+    c4_out: dict[str, object] = {}
+    for _ in range(30):
+        c4_out = cli._run_c4(campaign, subset, 1, time_budget_seconds=4.0)
+        if c4_out["result"] == "PARTIAL_SLICE":
+            partial_seen = True
+            continue
+        assert c4_out["result"] == "OK", c4_out
+        break
+    else:
+        pytest.fail(f"c4-holdout did not complete within the slice budget: {c4_out}")
+    assert partial_seen, "test setup must exercise at least one real PARTIAL_SLICE"
+    assert "holdout_executed_valid_entry_sha" in c4_out, c4_out
+
+    # the renders really happened, driven by c4 itself.
+    for row_id, probe_index in holdout_instances:
+        assert render_stage._pcm_path(campaign, row_id, probe_index).exists()
+
+    render_phase_valid_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == render_stage.RENDER_PHASE_VALID_KIND
+    ]
+    assert len(render_phase_valid_events) == 1
+    assert render_phase_valid_events[0]["stage"] == "c4"
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    assert len(holdout_events) == 1
+
+    close_out = cli._run_close(campaign, reveal=True)
+    assert close_out["result"] == "OK", close_out
+    assert any(e.payload.get("kind") == "campaign_closed" for e in campaign.ledger.entries)
+
+
 # ---------------------------------------------------------------------------
 # round 27 ADOPT (1) (`[UNDERSPEC-CAL-D61]`) "Reject unusable F0 values
 # before downstream injection": a non-finite/non-positive f0_hz repeat
@@ -2616,6 +3632,136 @@ def test_canonical_path_match_is_not_blocked(
     assert exit_code == 0, out
 
 
+@pytest.mark.slow
+def test_c1_fixtures_time_budget_partial_slice_then_resume_via_cli(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R2（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）
+    end-to-end via the CLI: `--time-budget-seconds` (an essentially-zero
+    budget) together with `--workers 3` (harmless for c1 — render has no
+    worker-pool wiring — the memo's acceptance test just confirms the two
+    flags coexist without error) exits 0 with a `PARTIAL_SLICE` report and
+    NO `stage_summary`/`fixture_valid` ledger events; re-running the exact
+    same command (no budget change needed — the flag can simply be dropped,
+    but this test keeps it to also exercise "0 remaining still transitions")
+    resumes and completes."""
+    subset = small_matrix_subset(2, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    base_args = [
+        "c1-fixtures",
+        "--campaign-dir",
+        str(campaign_dir),
+        "--secret-dir",
+        str(secret_root),
+        "--approval-dir",
+        str(approval_dir),
+        "--armed",
+        "--workers",
+        "3",
+    ]
+
+    exit_code = cli.main([*base_args, "--time-budget-seconds", "0.01"])
+    out = json.loads(capsys.readouterr().out)
+    assert exit_code == 0, out
+    assert out["result"] == "PARTIAL_SLICE"
+    assert out["stage"] == "c1-fixtures"
+    assert out["slice"]["instances_completed_this_run"] >= 1
+    assert out["slice"]["instances_remaining"] > 0
+    assert out["slice"]["time_budget_seconds"] == pytest.approx(0.01)
+
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    assert not any(e.payload.get("kind") == "stage_summary" for e in campaign.ledger.entries)
+    assert not any(e.payload.get("kind") == "fixture_valid" for e in campaign.ledger.entries)
+    # R2: parent CPU is still charged to counters.json even on a
+    # PARTIAL_SLICE exit, so caps stay honest across slices.
+    counters_after_slice = load_cap_counters(campaign_dir)
+    assert counters_after_slice.compute_used >= 0.0
+
+    # re-run: resumes and completes (the generous budget here is irrelevant
+    # once every remaining unit finishes inside it — "0 remaining still
+    # transitions" per the memo).
+    exit_code2 = cli.main([*base_args, "--time-budget-seconds", "3600"])
+    out2 = json.loads(capsys.readouterr().out)
+    assert exit_code2 == 0, out2
+    assert out2["result"] == "OK"
+
+    campaign2 = load_frozen_campaign(campaign_dir, secret_root)
+    stage_summary_events = [
+        e.payload for e in campaign2.ledger.entries if e.payload.get("kind") == "stage_summary"
+    ]
+    fixture_valid_events = [
+        e.payload for e in campaign2.ledger.entries if e.payload.get("kind") == "fixture_valid"
+    ]
+    # exactly 1 stage_summary (the completing run — PARTIAL_SLICE skipped
+    # its own) and exactly 1 fixture_valid (the phase transition, once).
+    assert len(stage_summary_events) == 1
+    assert len(fixture_valid_events) == 1
+
+    counters_after_completion = load_cap_counters(campaign_dir)
+    assert counters_after_completion.compute_used >= counters_after_slice.compute_used
+
+
+def test_c1_fixtures_partial_slice_counters_reconstructable_from_ledger_after_counters_json_loss(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex PR #345 finding #2 (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
+    a `PARTIAL_SLICE` dispatch's parent CPU must be recoverable purely from
+    the ledger, not only from `counters.json` — via the new `slice_summary`
+    ledger event. Delete `counters.json` after a `PARTIAL_SLICE` dispatch and
+    confirm `reconcile_cap_counters()` reconstructs the exact same
+    `compute_used` from the ledger alone."""
+    subset = small_matrix_subset(2, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    base_args = [
+        "c1-fixtures",
+        "--campaign-dir",
+        str(campaign_dir),
+        "--secret-dir",
+        str(secret_root),
+        "--approval-dir",
+        str(approval_dir),
+        "--armed",
+    ]
+
+    exit_code = cli.main([*base_args, "--time-budget-seconds", "0.01"])
+    out = json.loads(capsys.readouterr().out)
+    assert exit_code == 0, out
+    assert out["result"] == "PARTIAL_SLICE"
+
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    slice_summary_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "slice_summary"
+    ]
+    assert len(slice_summary_events) == 1
+    assert slice_summary_events[0]["stage"] == "c1-fixtures"
+    assert slice_summary_events[0]["parent_cpu_seconds"] >= 0.0
+    assert slice_summary_events[0]["time_budget_seconds"] == pytest.approx(0.01)
+    assert "elapsed_seconds" in slice_summary_events[0]
+    assert "instances_completed_this_run" in slice_summary_events[0]
+    assert "instances_remaining" in slice_summary_events[0]
+    # no phase transition happened — no stage_summary/fixture_valid either.
+    assert not any(e.payload.get("kind") == "stage_summary" for e in campaign.ledger.entries)
+    assert not any(e.payload.get("kind") == "fixture_valid" for e in campaign.ledger.entries)
+
+    counters_before_deletion = load_cap_counters(campaign_dir)
+    counters_path(campaign_dir).unlink()
+
+    derived, reconstructed = reconcile_cap_counters(campaign_dir, campaign.ledger.entries, None)
+    # `counters.json` is gone, so this can only reconstruct from the ledger.
+    assert derived.compute_used == pytest.approx(counters_before_deletion.compute_used)
+    assert derived.storage_used == counters_before_deletion.storage_used
+    if counters_before_deletion.compute_used > 0.0 or counters_before_deletion.storage_used > 0:
+        assert reconstructed is True
+
+
 # ---------------------------------------------------------------------------
 # round 15 findings #1/#3/#5 (`[UNDERSPEC-CAL-D31]`): cap-counter path —
 # corrupt-counters refusal, ledger-derived reconstruction/reconciliation,
@@ -2770,6 +3916,70 @@ def test_deleted_counters_json_with_ledger_work_is_reconstructed_and_precheck_us
     assert reconstructed_events[0]["counters"]["compute_used"] == pytest.approx(10.0)
 
 
+def test_deleted_counters_json_with_unsummarized_complete_meter_group_blocks_on_precheck(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex PR #345 round 12 finding (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): a process killed right after appending the
+    SIXTH (final) `meter_call` record of a group — but before `cli.py`
+    `main()`'s `finally` ever writes a `stage_summary` — leaves a COMPLETE
+    group with no discard event and no summary anywhere in the ledger. A
+    lost/rolled-back `counters.json` must not silently reconstruct a total
+    that omits that group's within-process CPU: the round 13 finding #2
+    pre-dispatch breach check on the NEXT dispatch must see it and refuse
+    with `COST_CAP_EXCEEDED`, exactly like the analogous `render`-event
+    scenario above."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, gate1_cost_caps=_TINY_COST_CAPS)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+    # a COMPLETE (within3 + fresh3), never-discarded, never-summarized
+    # group whose within-process CPU alone already exceeds the tiny 5.0s
+    # compute cap above.
+    for repeat_kind in ("within", "fresh"):
+        for i in range(3):
+            campaign.ledger.append(
+                {
+                    "kind": "meter_call",
+                    "row_id": "r1",
+                    "probe_index": 0,
+                    "candidate_id": "F0-B0-CURRENT",
+                    "repeat_kind": repeat_kind,
+                    "repeat_index": i,
+                    "cpu_seconds": 10.0,
+                    "within_cpu_seconds": 10.0,
+                    "storage_bytes": 100,
+                    "invocation_id": "invA",
+                }
+            )
+    # no `meter_call_group_discarded`, no `stage_summary`/`slice_summary`
+    # anywhere — the writer ("invA") never reached `finally`.
+    assert not counters_path(campaign_dir).is_file()
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir, cost_caps=_TINY_COST_CAPS)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    called = {"n": 0}
+
+    def _fake_run_baseline_stage(*_args, **_kwargs):
+        called["n"] += 1
+        return {"baseline_audit_sha": "0" * 64}
+
+    monkeypatch.setattr(cli.baseline_stage, "run_baseline_stage", _fake_run_baseline_stage)
+
+    exit_code = cli.main(_armed_c2_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 1, out
+    assert '"result": "COST_CAP_EXCEEDED"' in out
+    assert called["n"] == 0  # pre-dispatch refusal: no stage work performed
+
+    persisted = json.loads(counters_path(campaign_dir).read_text(encoding="utf-8"))
+    # the group's own fresh remainder (0.0, cpu_seconds == within_cpu_seconds
+    # here) plus the recovered within-process CPU (10.0, "invA" never
+    # summarized) — the group's full CPU, not silently dropped.
+    assert persisted["compute_used"] == pytest.approx(10.0)
+
+
 def test_stale_lower_persisted_counters_ledger_derived_max_wins(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2897,6 +4107,208 @@ def test_parent_cpu_charged_and_persisted_on_breach_exception_exit(
     ]
     assert len(stage_summaries) == 1
     assert stage_summaries[0]["parent_cpu_seconds"] > 0.0
+
+
+def test_stage_summary_ledger_append_precedes_counters_cache_save_on_completion(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex PR #345 finding ③ (adopted, category ③): on the completing
+    dispatch path, `main()`'s `finally` block must append the authoritative
+    `stage_summary` ledger event BEFORE persisting the derived `counters.
+    json` cache — not after, as before this fix — so a hard kill between the
+    two never leaves a summary recorded only in the (rebuildable) cache.
+    Records the actual call order (real `Ledger.append`/`save_cap_counters`
+    still run underneath, only the order is observed) and asserts the
+    finally-block's own `stage_summary` append is immediately followed by
+    its own `save_cap_counters` call, with nothing else in between."""
+    from voice_genesis.calibration.provenance import Ledger
+
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    def _fake_run_baseline_stage(*_args, **_kwargs):
+        return {"baseline_audit_sha": "0" * 64}
+
+    monkeypatch.setattr(cli.baseline_stage, "run_baseline_stage", _fake_run_baseline_stage)
+
+    call_order: list[str] = []
+    real_append = Ledger.append
+    real_save = cli.save_cap_counters
+
+    def _recording_append(self: Any, payload: Any) -> Any:
+        if isinstance(payload, dict) and payload.get("kind") in ("stage_summary", "slice_summary"):
+            call_order.append(f"ledger_append:{payload['kind']}")
+        return real_append(self, payload)
+
+    def _recording_save(campaign_dir_arg: Path, counters_arg: Any) -> None:
+        call_order.append("save_cap_counters")
+        return real_save(campaign_dir_arg, counters_arg)
+
+    monkeypatch.setattr(Ledger, "append", _recording_append)
+    monkeypatch.setattr(cli, "save_cap_counters", _recording_save)
+
+    exit_code = cli.main(_armed_c2_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+
+    # Two `save_cap_counters` calls happen for this dispatch: the round 15
+    # finding #3 pre-dispatch reconciliation save (before any stage runs,
+    # trivially before the stage_summary append) and the finally-block save
+    # this fix reorders. Only the LAST two recorded events matter here: the
+    # finally block's own `stage_summary` append must be immediately
+    # followed by its own `save_cap_counters` call.
+    assert call_order.count("save_cap_counters") == 2
+    assert call_order.count("ledger_append:stage_summary") == 1
+    assert call_order[-2:] == ["ledger_append:stage_summary", "save_cap_counters"]
+
+
+@pytest.mark.slow
+def test_slice_summary_ledger_append_precedes_counters_cache_save_on_partial_slice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex PR #345 finding ③ (adopted, category ③): same ordering
+    guarantee as the completion-path test above, but for the bounded-stage
+    (`PARTIAL_SLICE`) path — the `slice_summary` ledger append must precede
+    the `finally` block's `save_cap_counters` call."""
+    from voice_genesis.calibration.provenance import Ledger
+
+    subset = small_matrix_subset(2, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    call_order: list[str] = []
+    real_append = Ledger.append
+    real_save = cli.save_cap_counters
+
+    def _recording_append(self: Any, payload: Any) -> Any:
+        if isinstance(payload, dict) and payload.get("kind") in ("stage_summary", "slice_summary"):
+            call_order.append(f"ledger_append:{payload['kind']}")
+        return real_append(self, payload)
+
+    def _recording_save(campaign_dir_arg: Path, counters_arg: Any) -> None:
+        call_order.append("save_cap_counters")
+        return real_save(campaign_dir_arg, counters_arg)
+
+    monkeypatch.setattr(Ledger, "append", _recording_append)
+    monkeypatch.setattr(cli, "save_cap_counters", _recording_save)
+
+    exit_code = cli.main(
+        [
+            "c1-fixtures",
+            "--campaign-dir",
+            str(campaign_dir),
+            "--secret-dir",
+            str(secret_root),
+            "--approval-dir",
+            str(approval_dir),
+            "--armed",
+            "--time-budget-seconds",
+            "0.01",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert exit_code == 0, out
+    assert out["result"] == "PARTIAL_SLICE"
+
+    assert call_order.count("save_cap_counters") == 2
+    assert call_order.count("ledger_append:slice_summary") == 1
+    assert call_order[-2:] == ["ledger_append:slice_summary", "save_cap_counters"]
+
+
+def test_hard_kill_between_summary_ledger_append_and_counters_cache_save_reconstructs_from_ledger(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex PR #345 finding ③ (adopted, category ③): simulate a hard kill
+    exactly between the finally block's `stage_summary` ledger append and
+    its `save_cap_counters` call (the cache write raises, standing in for a
+    process kill before that write lands on disk) and confirm the ledger
+    alone — reloaded fresh, with `counters.json` left at its stale
+    pre-dispatch value — already carries this dispatch's parent CPU, so
+    `reconcile_cap_counters()` rebuilding from the ledger does not
+    under-count the compute cap. Before this fix (cache save ran BEFORE the
+    ledger append), the same simulated kill would have persisted the cache
+    write and then died before the ledger append ran at all, permanently
+    losing this dispatch's parent CPU from the append-only ledger."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    def _fake_run_baseline_stage(*_args, **_kwargs):
+        _burn_cpu()
+        return {"baseline_audit_sha": "0" * 64}
+
+    monkeypatch.setattr(cli.baseline_stage, "run_baseline_stage", _fake_run_baseline_stage)
+
+    class _SimulatedHardKill(RuntimeError):
+        pass
+
+    real_save = cli.save_cap_counters
+    call_count = {"n": 0}
+
+    def _kill_on_finally_block_save(campaign_dir_arg: Path, counters_arg: Any) -> None:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # round 15 finding #3 pre-dispatch reconciliation save — let it
+            # through untouched; it precedes any stage dispatch entirely.
+            real_save(campaign_dir_arg, counters_arg)
+            return
+        # The finally-block save (this fix's reordered call): the ledger
+        # append this fix moved earlier has already run by this point —
+        # simulate the process dying right here, before the cache write
+        # lands.
+        raise _SimulatedHardKill("simulated kill before counters cache save")
+
+    monkeypatch.setattr(cli, "save_cap_counters", _kill_on_finally_block_save)
+
+    with pytest.raises(_SimulatedHardKill):
+        cli.main(_armed_c2_args(campaign_dir, secret_root, approval_dir))
+    capsys.readouterr()  # drain stdout; no JSON report was printed
+
+    # The ledger already carries the completing dispatch's stage_summary —
+    # the append happened BEFORE the (killed) cache save.
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    stage_summaries = [
+        e.payload
+        for e in reloaded.ledger.entries
+        if isinstance(e.payload, dict) and e.payload.get("kind") == "stage_summary"
+    ]
+    assert len(stage_summaries) == 1
+    charged_cpu = stage_summaries[0]["parent_cpu_seconds"]
+    assert charged_cpu > 0.0
+
+    # counters.json was never touched by the killed second save, so it still
+    # holds only the pre-dispatch reconciled value — strictly less than the
+    # completing dispatch's own parent CPU, since that CPU was never
+    # persisted to the cache. `reconcile_cap_counters()` against the
+    # still-present (stale) cache already takes the per-dimension max, so it
+    # recovers the ledger value even without deleting the cache first...
+    stale_cache = load_cap_counters(campaign_dir)
+    assert stale_cache.compute_used < charged_cpu
+    reconciled_against_stale_cache, _ = reconcile_cap_counters(
+        campaign_dir, reloaded.ledger.entries, None
+    )
+    assert reconciled_against_stale_cache.compute_used == pytest.approx(charged_cpu)
+
+    # ...and the same holds — this time via the `(ledger-derived, True)`
+    # branch — for the harsher case of a full rollback that discards
+    # `counters.json` outright (e.g. a rollback to the last known-good
+    # cache snapshot, per the Codex finding): the ledger alone, with no
+    # cache at all, still reconstructs the full parent CPU.
+    counters_path(campaign_dir).unlink()
+    derived, reconstructed = reconcile_cap_counters(campaign_dir, reloaded.ledger.entries, None)
+    assert derived.compute_used == pytest.approx(charged_cpu)
+    assert reconstructed is True
 
 
 def test_counters_corrupt_error_is_subclass_of_cap_state_error() -> None:

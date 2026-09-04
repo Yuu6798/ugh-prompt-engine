@@ -490,3 +490,696 @@ checkout（凍結済み generator/candidate ファイル）も campaign dir 配�
   / c4 = holdout non-control ×2」として明確化し、control instances の c4 再 render を
   否定 = PR #343 第 5 巡採用） / meter calls 13,680 per impl / selection ≈10^5）と
   cap の照合表を出力
+
+### 6.5 D2 — runner のスライス/再開堅牢化（`[UNDERSPEC-CAL-D79]`。design memo
+`design_runner_robustness.md`, 2026-09-03 user-approved「推奨で続行」）
+
+rehearsal（`freeze_execution_13.txt`, 2026-09-02）: production stage は 8h+ 走るが
+実行環境が約 4 分ごとにプロセスを kill する。(1) meter_call group の途中で kill
+されると次回起動が `StaleMeasurementError`（fail-closed by design、round 9
+finding #9）で詰まり、手動 ledger 修復なしに再開できない。(2) instance 境界で
+stage を安全に止める手段が無い。(3) resume するたびに ledger 全体を再走査する
+（superlinear）。以下 R1〜R3 で対応する。**新規 BlockedCode なし。新フラグ不在時の
+挙動は不変**（無中断 run のledger 内容はバイト同一）。
+
+- **R1 — 部分 meter_call group の明示的 operator recovery**: 新規 CLI flag
+  `--discard-partial-groups`（`c2-baseline`/`c3a-f0-selection`/`c3b-selection`/
+  `c4-holdout` — measure する全 stage）。既定 OFF（従来どおり
+  `StaleMeasurementError`）。ON 時、`measure_stage._completed_meter_call_records`
+  （`MeterCallIndex.completed_records`）が PARTIAL（`StaleMeasurementError.kind ==
+  "partial"` — 一部 repeat key のみ記帳・重複なし）を検出したら、`run_
+  measurement_for_instance` は `stop_event`/re-raise の代わりに ledger event
+  `{"kind": "meter_call_group_discarded", "row_id", "probe_index",
+  "candidate_id", "discarded_repeat_keys": [[repeat_kind, repeat_index], ...]
+  (sorted), "discarded_count", "reason":
+  "operator_discard_partial_group_after_interrupt", "stage",
+  "discarded_within_cpu_seconds", "invocation_id"}`（`invocation_id` — round 8
+  finding #2 採用、`[UNDERSPEC-CAL-D79]` 追補、§6.5.5 参照: この discard
+  event を記帳した**この**プロセス自身の invocation_id。discard される部分
+  グループの WRITER 自身の invocation_id ではない——writer 側の識別子は
+  discard される各 `meter_call` record 自身が運ぶ同名フィールドから読む。
+  `discarded_within_cpu_seconds` — round 6
+  finding #3 採用、`[UNDERSPEC-CAL-D79]` 追補、§6.5.4 参照: discard される
+  部分グループが残した検証済み per-record `within_cpu_seconds` の最大値で、
+  hard-kill されたプロセスが `stage_summary`/`slice_summary` を一度も記帳
+  できず失われるはずだった within-process CPU を discard event 自身に載せて
+  救済する。`caps.cap_counters_from_ledger()` がこの event でのみ compute へ
+  1 回だけ加算する——他のどの箇所（`meter_call` 自身の compute 集計含む）にも
+  対応する減算/加算はなく、exactly-once）を 1 件記帳し、
+  フルグループ（within3+fresh3 全 6 call）を測定・記帳して継続する。
+  **reconstruction rule**（`meter_call` を読むあらゆる箇所に適用 —
+  `_completed_meter_call_records`/`MeterCallIndex`/selection・holdout・close・
+  `caps.cap_counters_from_ledger` 含む）: あるキー K への discard event は K の
+  累積をリセットする。K についてその event **以降**に記帳された `meter_call` の
+  みが完全性判定・重複判定・scoring の対象。discard 前の記録は ledger には残る
+  （append-only）が、以降の完全性判定からは除外される — ただし compute/storage
+  counter へは引き続き課金される（work は実際に行われた。round 25
+  `[UNDERSPEC-CAL-D57]` の per-attempt charging 方針と整合。`caps.
+  cap_counters_from_ledger` は discard event でその key の dedup 集計を
+  リセットし、discard 前の attempt と discard 後の remeasure の双方の
+  `cpu_seconds` を個別に課金する）。DUPLICATE（`kind == "duplicate"`）はフラグの
+  有無に関わらず常に `stop_event`+re-raise のまま（discard 対象は PARTIAL のみ）。
+- **R2 — instance 境界でのスライス実行**: 新規 CLI flag
+  `--time-budget-seconds N`（float > 0。`c1-fixtures`/`c2-baseline`/
+  `c3a-f0-selection`/`c3b-selection`/`c4-holdout`）。既定 `None`＝無制限
+  （従来どおり）。dispatch 開始（`campaign/time_budget.py` の `TimeBudget`、
+  `time.monotonic()` 基準）から N 秒経過したら新規 instance を dispatch しない
+  （既に dispatch 済みの instance——`--workers` の worker pool 分含む——は完走する）。
+  instance 境界は render では 1 `(row_id, probe_index)` render 単位、measure では
+  1 `(row_id, probe_index)` の全 candidate 測定単位（`run_measure_stage`/
+  `_build_f0_by_instance` の outer loop）。超過時、stage は phase transition も
+  `stage_summary` ledger event も一切記帳せず exit 0 で
+  `{"result": "PARTIAL_SLICE", "stage": <subcommand>, "slice": {
+  "time_budget_seconds", "elapsed_seconds", "instances_completed_this_run",
+  "instances_remaining"}}` を報告する（`cli._partial_slice_report`）。parent CPU
+  は通常の phase transition と同額だけ `cap_counters`/`counters.json` へ課金する
+  （`cli.main()` の `finally` 節は `stage_summary` event の記帳だけを PARTIAL_SLICE
+  時にスキップし、CPU 課金自体は常に実行——caps がスライスを跨いで正直であり
+  続ける）。同一コマンドの再実行は既存 resume 経路で継続し、残 instance が全て
+  完了すれば budget が 0 でも通常どおり phase transition + `stage_summary` を行う。
+  `c3b-selection`/`c4-holdout` は複数サブフェーズ（F0 測定・render・family 別
+  measure）を持つため、それら全てが**同一の** `TimeBudget` インスタンスを共有する
+  （`time_budget.SliceStatus.aggregate()` で単純合算するだけで stage 全体の完走
+  可否・進捗が正しく合成される——budget 切れ後に呼ばれるサブフェーズは自分の
+  instance を 1 件も dispatch せず自分の総数をそのまま `instances_remaining` として
+  返す）。
+- **R3 — stage 呼び出し 1 回につき ledger 走査 1 回**: `measure_stage.MeterCallIndex`
+  が `run_measure_stage`（および `cli._build_f0_by_instance`）の呼び出しごとに
+  ledger を 1 回だけ走査してメモリ上に索引化し（`campaign.ledger.entries` への
+  唯一のアクセス）、以降は `run_measurement_for_instance` が `Ledger.append()` の
+  戻り値を index へ直接反映する（`observe_entry()`、O(1) 増分更新——ledger の
+  再取得なし）。`_completed_meter_call_records`（1 回スキャン版）と
+  `MeterCallIndex.completed_records`（索引版）は同一の判定関数
+  （`_resolve_meter_group`）を共有するため構造的に等価——`test_campaign_measure.py`
+  の equivalence test が増分更新と 1 回スキャンの結果一致を complete/partial/
+  duplicate/discarded の全パターンで検証する。
+
+#### 6.5.1 追補（Codex PR #345 レビュー採用、2026-09-03）
+
+- **第 1 巡 finding #1（③、`cli.py` ~627）— R3 が実際には C3b/C4 の F0 再開 path
+  に効いていなかった**: R3 の docstring は「`_build_f0_by_instance` の呼び出し
+  ごとに `MeterCallIndex` を 1 回だけ構築する」と書いていたが、実装は index の
+  **構築**をこの関数の責務にしておらず、`meter_call_index` 引数を素通しする
+  だけだった。`_run_c3b`/`_run_c4`（`c3b-selection`/`c4-holdout` の CLI
+  dispatch）はこの引数を渡さないまま `_build_f0_by_instance` を呼んでいたため
+  既定 `None` のままとなり、`_reusable_f0_values_by_process` は instance ごとに
+  `measure_stage._completed_meter_call_records`（素朴な 1 回スキャン版）へ
+  フォールバックしていた——R3 が解消したはずの superlinear rescan が、resume の
+  主経路である C3b/C4 の F0 再利用 path でだけ温存されていたことになる。
+  修正: `_run_c3b`/`_run_c4` が F0 再利用ループへ入る直前に
+  `measure_stage.MeterCallIndex.build(campaign.ledger.entries)` を 1 回だけ構築し、
+  以降の `_build_f0_by_instance` 呼び出し（time-budget あり/なし双方の分岐）へ
+  素通しする。`c1-fixtures`/`c2-baseline`/`c3a-f0-selection` はこの F0 再利用
+  path を経由しない（c3a はまだ F0 選出前、c2 は `run_measure_stage` を直接
+  呼ぶ——`run_measure_stage` 自身は既に呼び出しごとに 1 回だけ index を構築
+  しており対象外）ため、監査の結果このパターンは c3b/c4 の 4 箇所（time-budget
+  あり/なしの各 2 呼び出し）のみだった。
+- **第 1 巡 finding #2（③、`cli.py` ~2376）— `PARTIAL_SLICE` の parent CPU が
+  ledger に記帳されず `cap_counters_from_ledger()` が undercount する**:
+  `PARTIAL_SLICE` exit は R2 の設計どおり `cap_counters`/`counters.json` へ
+  この dispatch の parent CPU を無条件で課金する一方、`stage_summary` ledger
+  event は（意図どおり）記帳しない——ゆえに、この CPU 分は ledger のどこにも
+  現れなかった。`caps.cap_counters_from_ledger()`/`reconcile_cap_counters()`
+  は ledger のみを正本として compute を再構成するため、`counters.json` が
+  失われた（あるいは意図的に削除された）状態でのreconciliationは、スライスで
+  課金済みだった compute を一切拾えず永続的に undercount する——compute cap を
+  実際より低く見せる false-success 経路になり得る。修正: 新規の
+  **non-transition** ledger event kind **`slice_summary`**
+  （`{"kind": "slice_summary", "stage": <subcommand>, "parent_cpu_seconds":
+  <このdispatchのparent CPU全量>, "time_budget_seconds", "elapsed_seconds",
+  "instances_completed_this_run", "instances_remaining"}`——後者 4 フィールドは
+  CLI report の `slice` dict とフィールド名が一致する）を `PARTIAL_SLICE` exit
+  ごとに 1 件記帳する（`stage_summary` とは意図的に別 kind——phase transition が
+  一切起きていないことを ledger 自身が表明する）。`caps.
+  cap_counters_from_ledger()`/`reconcile_cap_counters()` は `slice_summary.
+  parent_cpu_seconds` を `stage_summary.parent_cpu_seconds` と全く同じ規則
+  （1 event = 1 dispatch = 1:1 で加算、dedup なし）で合算する。**二重計上なし**の
+  根拠: 1 回の CLI dispatch（1 OS process）は必ずどちらか一方のみを記帳する——
+  `PARTIAL_SLICE` で終わる dispatch は `slice_summary` を 1 件だけ記帳し
+  `stage_summary` は記帳しない、stage を完走させる dispatch は
+  `stage_summary` を 1 件だけ記帳し（自分自身の parent CPU 全量のみ——他の
+  dispatch の分は含まない）`slice_summary` は記帳しない。ゆえに同一 stage の
+  全 dispatch にわたる `slice_summary` の総和 + 最終 `stage_summary` の値は、
+  互いに重複なく合算されて `counters.json` が累積してきた総量と一致する。
+- **第 2 巡 finding #3（③、`render_stage.py` ~542）— 再開 slice で完了済み
+  render unit が毎回フル ledger 再走査 + PCM 再ハッシュされる**: `c1-fixtures`/
+  `c4-holdout` の再開 slice では `run_render_stage()` のループが常に先頭の
+  unit から再開し、既に完了した unit も 1 件ずつ `render_instance()` へ入る——
+  そこで `_recorded_render_sha()` が ledger 全体を再走査し、さらに resume 判定の
+  ために PCM ファイルを読んで sha256 を再計算する。完了済み prefix が育つほど、
+  固定長の `--time-budget-seconds` slice はその再走査・再ハッシュだけで budget を
+  使い果たし、未完了の unit に到達する前に `PARTIAL_SLICE` で終わってしまう
+  （繰り返し再開しても実質的な進捗がない）。修正: `run_render_stage()` の
+  呼び出しの先頭で ledger を 1 回だけ走査し `{(row_id, probe_index): sha256}`
+  の render index（`_render_index_from_ledger`——`MeterCallIndex` と同じ「stage
+  呼び出しあたり ledger 走査 1 回」の考え方を render loop 側にも適用したもの）を
+  構築する。ループはこの index に載っている unit を `render_instance()` に一切
+  渡さず（ledger 再走査も PCM 読み込み/再ハッシュも発生しない）
+  `status="skipped_resume"` の `RenderOutcome` を直接組み立てて進む——測定時の
+  PCM 整合性検査（`measure_stage._verify_and_load_rendered_pcm`、render された
+  unit は必ずこの後段の検査を通る）はそのまま残るため、stale な PCM を fail-open
+  で見逃す経路は増えない。`render_instance()` 自身の resume 判定
+  （`_recorded_render_sha` + PCM sha 照合）は変更していない——直接呼ぶ他の呼び
+  出し元・既存テストの契約は不変。
+- **第 3 巡 finding F5（③、`render_stage.py` ~579）— 上記 index skip は
+  completing invocation でも一切検証を行わず、削除・破損した PCM の上に
+  falsely advance した状態を許してしまう**: 第 2 巡の index skip は「measure
+  時に必ず fail-closed する」と述べたが、その fail-closed には前提が要る——
+  `c1-fixtures` が一度 FIXTURE_VALID（`fixture_valid` event）へ到達すると、
+  `cli._stage_already_complete()` により以降の `c1-fixtures` 再実行は
+  `run_render_stage()` を一切呼ばない真の no-op（`NOOP_ALREADY_COMPLETE`）に
+  なる（§6.3 系の round 19 finding #3 仕様）。よって、index に載っている unit の
+  PCM が render 完了後に削除・破損しても、それを検出するのは後段の C2/measure
+  だけになり、しかもその時点では render へ戻る resumable path が既に失われて
+  いる——falsely advanced campaign。修正: `run_render_stage()` はループ完走後
+  （`completed_all` — `PARTIAL_SLICE` 終了時は対象外、index skip は O(1) のまま）
+  かつ stage 遷移（c1 の `fixture_valid` 記帳、または c4-holdout の render
+  サブフェーズから measure サブフェーズへの引き渡し）の**直前**に一度だけ、
+  この呼び出しが `skipped_resume` にした unit を全数検証する
+  （`_validate_skipped_resume_outcomes` — ファイル存在 + sha256 が index の
+  記録値と一致するかのみ。`_recorded_render_sha` の再呼び出しなし、ledger
+  再走査なし、O(1) 特性は保つ）。不一致があれば遷移させず `stop_event`
+  （`reason="RENDER_RESUME_INDEX_INTEGRITY_MISMATCH"`、失敗 unit 全件を
+  `units` に列挙）を記帳し `RenderResumeIndexIntegrityError` で fail-closed
+  する（`raise` 前に append 済みなので non-zero exit でも記録は残る）。**回復
+  経路**: render は `render_root_secret` + row + campaign_id + family +
+  split + row_id + probe_index の純粋関数（決定論。モジュール docstring）
+  なので、同一 instance を外部から再 render すれば byte-identical な PCM を
+  再現できる——これを ledger に触れず `renders/<row_id>/<probe_index>.pcm`
+  （+ `.sha256` sidecar）へ書き戻すだけで、次回呼び出しの検証と
+  `measure_stage._verify_and_load_rendered_pcm` の両方が再び通り、stage は
+  通常どおり遷移する。ledger へ 2 件目の `render` event を追記する経路は
+  **不採用**——`_recorded_render_sha()`/`_render_index_from_ledger()` は共に
+  同一キーの**最初**の `render` event を採用する実装（ledger 順走査で最初の
+  一致を返す）ため、2 件目を足しても既存の全 reader（measure 時の pin 照合含む）
+  から無視される。ファイル書き戻しのみが契約を壊さない回復経路。
+- **第 3 巡 finding F6（②、`render_stage.py` ~674）— `SliceStatus.
+  instances_completed_this_run` が index skip 分まで含めて過大計上する**:
+  `len(outcomes)` は新規 render された unit と `skipped_resume` unit の両方を
+  含むため、再開 slice は毎回自分の実際の進捗より多く報告し、極端な場合
+  「完了済み prefix しか辿らず新規 render が 0 件」の slice でも 0 でない
+  progress を報告してしまう。修正: `sum(1 for o in outcomes if o.status ==
+  "rendered")` に変更——`instances_remaining` は `len(units) - len(outcomes)`
+  のまま不変（未処理 unit の総数という定義自体は正しかったため）。
+
+#### 6.5.2 リハーサル 4 追補（2026-09-03、`freeze_execution_15.txt` +
+`rehearsal4/slice_table.out`。D/G 採用、C は運用ルールの明文化のみ）
+
+- **finding D（③、`measure_stage.py` `run_measure_stage`/`_instance_has_
+  pending_candidate` 新設）— 測定 stage（c2-baseline/c3a-f0-selection/
+  c3b-selection/c4-holdout の measure サブフェーズ、いずれも
+  `measure_stage.run_measure_stage()` を共有）は R3 の index 化後も、完了済み
+  instance を毎回フル `MeasurementRecord` へ再構成していた**: c3b 実測
+  （`rehearsal4/slice_table.out`）で parent CPU が 71.7s→78.9s→84.3s→88.3s と
+  スライスごとに増加した一方、pre-loop（`MeterCallIndex.build()` 単体）の
+  コストは 0.38s（budget=0.001 probe）で頭打ち——各スライスの新規 render は
+  一定 2 instance のみ。原因は R3 の `MeterCallIndex` 導入後も
+  `run_measure_stage()` の内側ループが完了済み instance × candidate ごとに
+  `run_measurement_for_instance()` を無条件に呼び続けていたこと:
+  `meter_call_index.completed_records()`（`_resolve_meter_group` 経由で
+  `meter_output_from_dict()` を repeat 数分呼ぶ）が O(1) の index lookup では
+  なく、完了済みセルであっても毎回 `MeasurementRecord` を再構成していた——
+  `cli._run_c3b`/`_run_c4` は `slice_status.completed_all is False` の
+  `records` を丸ごと破棄する（`_partial_slice_report()`）ため、この再構成は
+  PARTIAL_SLICE では純粋な浪費だった。同型の `cli._build_f0_by_instance()`
+  （F0 再利用ループ）は 1 candidate のみの再構成でありコスト寄与は小さい
+  ため対象外——本 finding は `run_measure_stage()` 一本化で c2/c3a/c3b/c4 の
+  measure サブフェーズ全てを同時に是正する。修正: 新設
+  `MeterCallIndex.is_complete()`（`meter_output_from_dict()` を一切呼ばない
+  O(1) presence 判定——PCM 読み込みなし・record 再構成なし）で完了済み
+  セルを `run_measurement_for_instance()` を呼ばずに skip する
+  （`skipped_complete_cells` へ記録するのみ）。完全な `records` が要る呼び
+  出し（`time_budget=None` の単発実行、または slice が完走した completing
+  invocation）だけ、ループ後の 1 パス（`_rebuild_skipped_records`）で
+  skip したセルをまとめて再構成する——**PARTIAL_SLICE では一切再構成しない**
+  （`records` は本来から呼び出し元が破棄するため、空でも契約は変わらない）。
+  テスト: 完了済み prefix を歩く PARTIAL_SLICE で `MeterCallIndex.
+  completed_records()` の呼び出し回数が 0 であることを直接カウントする
+  regression（`test_run_measure_stage_partial_slice_skips_completed_prefix_
+  without_reconstruction`）と、大きな完了済み prefix + 極小 budget でも
+  budget+1 instance 分の時間で完走する regression
+  （`test_run_measure_stage_large_completed_prefix_partial_slice_stays_fast`）
+  を追加。
+- **finding G（②、`render_stage.py`/`measure_stage.py` の `SliceStatus.
+  instances_remaining` 算出）— budget が最初の instance の dispatch 前に
+  尽きた invocation は `instances_remaining` を過大報告し、非増加が
+  保証されない**: `rehearsal4/slice_table.out` の c3b、budget=0.001 行:
+  `instances_remaining` が直前の 77 から 85 へ後退（8 件の完了済み instance
+  を無視した過大報告）。原因は両モジュールとも「この呼び出しが実際に歩いた
+  instance 数」ベースの引き算だったこと——`render_stage.run_render_stage()`
+  は `len(units) - len(outcomes)`（`outcomes` は budget 切れ前に歩いた分のみ）、
+  `measure_stage.run_measure_stage()` は `total_instances -
+  instances_completed_this_run`。どちらも budget 切れが 1 instance 目の
+  境界検査より前に来ると `outcomes`/`instances_completed_this_run` が空/0の
+  まま確定し、`instances_remaining` が「このスライスで新たに歩いた分」を
+  真の残数と取り違えて全 instance 数まで跳ね上がる。修正: 両モジュールとも
+  「この呼び出し後に完了しているか」を index から直接数え直す——
+  `render_stage`: 呼び出し先頭で構築した `completed_units`（ledger 由来、
+  この呼び出しの新規分は含まない）+ このスライスの新規 render 数
+  （`newly_rendered_count`）を `len(units)` から引く。`measure_stage`: 新設
+  `_instance_has_pending_candidate()` で `sorted_instances` 全件を
+  `MeterCallIndex.is_complete()`（PCM 読み込みなし、O(1)）だけで 1 パス
+  再判定する——この呼び出しがループ中に**歩かなかった** instance も含めて
+  真の未完了数を数える（budget が最初の境界検査で尽きても、この pass 自体は
+  必ず実行される。O(1) presence 判定のみのため、既に完了しているとの判定に
+  必要な reconstruction コストは発生しない = finding D の是正と両立）。
+  `instances_completed_this_run` は変更なし（finding G は `remaining` のみが
+  対象——`completed_this_run` の意味論は既に「このスライスが歩いた instance
+  数」で一貫しており、rehearsal4 でもこの値自体の誤りは観測されていない）。
+  テスト: 0.001s budget を折り返し済みの半完了キャンペーンへ与え、
+  `instances_remaining == true_remaining` かつ `instances_completed_this_run
+  == 0`（非増加）であることを固定する regression を render_stage/
+  measure_stage 双方に追加
+  （`test_c1_render_time_budget_remaining_matches_true_completed_state`/
+  `test_run_measure_stage_time_budget_remaining_matches_true_completed_state`）。
+- **finding C（境界宣言、docs のみ。コード変更なし）— `--time-budget-
+  seconds` は dispatch 開始境界のみを縛るため、wall time は「残り budget +
+  in-flight instance の最長所要時間」に達し得る**: `rehearsal4/
+  slice_table.out` の c3b、budget=150 の 4 スライスで wall time 208.8〜225.1s
+  （budget に対し 39〜50% 超過）。`--workers 3` 時 c3b の 1 instance は
+  約 70s（`--workers 1` では約 105s）——R2 の契約どおり in-flight instance は
+  budget 切れ後も完走するため（本 memo 上記 R2「instance の途中では止めない」）
+  これは design 上の正しい振る舞いであり finding D/G のような bug ではない。
+  **operator rule**（このリポジトリの実行環境が課す外部プロセス寿命制限
+  ── 例: 本セッションの Bash ツール 240s ── の下で `--time-budget-seconds`
+  を選ぶ運用者向け）: `--time-budget-seconds` は
+  `外部プロセス寿命制限 - その stage の最長 in-flight instance 所要時間`
+  以下に設定する。c3b の実測値（`--workers 3` で約 70s/instance、
+  `--workers 1` で約 105s/instance）を用いる場合、240s 制限下では
+  `--workers 3 --time-budget-seconds <=170` または
+  `--workers 1 --time-budget-seconds <=135` が安全側の上限（rehearsal4 は
+  budget=150 かつ `--workers 1` 相当の設定で実際に 240s 制限を超過し
+  SIGTERM された——`slice_table.out` c3b_s5 行）。
+- **completing invocation の ledger event（本 memo 上記 R2/finding G 補足
+  ── コード変更なし、意味論の確認のみ）**: stage が完走する（budget 切れず
+  完走、または budget 自体を渡さない）invocation は phase transition と
+  同時に **`stage_summary`**（その invocation 自身の parent CPU 全量）を
+  記帳し **`slice_summary`** は一切記帳しない——`slice_summary` は
+  §6.5.1 finding #2 のとおり `PARTIAL_SLICE` exit（phase transition なし）
+  専用の non-transition event であり、両者は 1 dispatch につきどちらか
+  一方のみが記帳される（本 memo 上記「二重計上なしの根拠」参照）。
+
+#### 6.5.3 第 5 巡追補（Codex PR #345 レビュー採用、2026-09-03。slice/resume
+ファミリーの終端宣言 — ordering/progress counting/validate-once/検証項目の
+loader 同値の 4 パターンを c1/c2/c3a/c3b/c4 の render/measure/F0 各ループで
+監査し、該当する全箇所を是正）
+
+- **S1（③、`cli.py` ~623、`_build_f0_by_instance`）— budget 境界検査が F0
+  再開状態の参照より先に走る**: §6.5.1 finding #1 は `_run_c3b`/`_run_c4` に
+  `MeterCallIndex` を渡すところまでは直したが、`_build_f0_by_instance()`
+  自身のループ内での budget 検査順序は §6.5.1 finding #3（render_stage）/
+  §6.5.2 finding D（measure_stage）と同じ「index 参照を budget 検査より
+  先に行う」規則の適用対象から漏れていた——`time_budget.expired()` を
+  `meter_call_index.is_complete()` より先に見ていたため、選択済み F0
+  candidate が全 instance で既に記帳済み（かつ `meter_call_index` の構築
+  自体が budget を使い切っていた）場合でも、resume 呼び出しのたびに集約
+  すら到達できず、C3b/C4 側の `f0_slice_status` が永久に
+  `completed_all=False` を返し続け、これが `SliceStatus.aggregate()` 経由で
+  stage 全体を `PARTIAL_SLICE` に固定してしまう（新規 dispatch が 1 件も
+  無いにも関わらず）。修正: `render_stage.run_render_stage()`/
+  `measure_stage.run_measure_stage()` と同一規則——`meter_call_index` が
+  渡されていれば（実運用の唯一の経路）`is_complete()` を budget 検査より
+  先に参照し、真に pending な instance のみ budget 境界を課す。同じ
+  index 参照は `instances_completed_this_run` の計上（下記 S2 と同一規則）
+  にも流用する。**副次的な発見**: この修正で `instances_completed_this_run`
+  の意味が「歩いた instance 数」から「新規 dispatch した instance 数」へ
+  変わった結果、`instances_remaining = len(sorted_instances) -
+  instances_completed_this_run` という既存の引き算式が、全 instance
+  既知済みのケースで残数を過大報告する潜在バグとして露呈した（§6.5.2
+  finding G と同型——このケースはこれまで `instances_completed_this_run`
+  自体が過大計上されていたため式全体としては偶然正しい値を返しており、
+  finding G の監査でも発見されなかった）。finding G と同じ是正——index を
+  独立に 1 パス再走査（`meter_call_index.is_complete()` のみ、O(1)、PCM
+  読込・record 再構成なし）して真の残数を数え直す——を本関数にも適用した。
+  テスト: 選択済み F0 candidate が全 instance で記帳済み + budget=0.0001 で
+  `completed_all=True`・`instances_completed_this_run=0`・
+  `instances_remaining=0` を固定する regression
+  （`test_build_f0_by_instance_all_recorded_ignores_expired_budget`）。
+- **S2（②、`measure_stage.py` ~1470、`run_measure_stage`）—
+  `instances_completed_this_run` が「全 candidate が `is_complete()` fast
+  path を通っただけの instance」も計上する**: §6.5.2 finding D は完了済み
+  candidate を `run_measurement_for_instance()` を呼ばずに skip する
+  O(1) 経路を追加したが、ループ末尾の `instances_completed_this_run += 1`
+  はその skip 経路を通っただけの instance にも無条件で発火しており、
+  §6.5.1 finding F6（render_stage）が是正したのと同型の過大計上が
+  measure_stage 側に残っていた——完了済み prefix しか歩かない
+  `PARTIAL_SLICE` でも 0 でない progress を報告し得る。修正: 既にループ先頭で
+  budget 境界検査用に計算している `has_pending`（`_instance_has_pending_
+  candidate()` の戻り値 — 「この instance の candidate のうち
+  `is_complete()` でないものが少なくとも 1 つある」の意）をそのまま流用し、
+  `has_pending` が真の instance のみ加算する（`has_pending` が真なら、その
+  instance の `for candidate` ループは少なくとも 1 回
+  `run_measurement_for_instance()` を実際に呼ぶことが保証されるため、
+  この流用は正確）。テスト: 完了済み prefix を歩く resumed slice で
+  `instances_completed_this_run == 0` を固定する regression 2 件
+  （既存 `test_run_measure_stage_partial_slice_skips_completed_prefix_
+  without_reconstruction`/`test_run_measure_stage_time_budget_remaining_
+  matches_true_completed_state` を、§6.5.2 策定時点ではまだこの過大計上が
+  残っていたために `len(completed_prefix)`/`len(half)` を期待値としていた
+  ものから `0` へ改訂）。
+- **S3（③、`render_stage.py` ~790、`run_render_stage`）— C4 render 完了後、
+  measure サブフェーズが複数 slice に渡ると、毎 slice が §6.5.1 finding F5
+  の完了時整合検証を再実行し PCM を再読込・再ハッシュする**:
+  finding F5 の検証（`_validate_skipped_resume_outcomes`）は
+  `completed_all` ブロックの中で毎回無条件に走る。`c1-fixtures` はこの
+  ブロックに 2 度と入れない（`cli._stage_already_complete()` が
+  `FIXTURE_VALID` 到達後の再実行を `run_render_stage()` 呼び出しごと
+  NOOP にする）ため実質「1 度きり」だったが、c4-holdout は render
+  サブフェーズと measure サブフェーズを 1 つの `holdout_stage.
+  render_and_measure_holdout()` が束ねており、stage 全体の完了マーカー
+  （`holdout_executed_valid`）は measure まで終わらないと記帳されない
+  ——render だけが先に終わっても `_stage_already_complete()` の NOOP 判定は
+  効かず、measure に残り slice がある限り `render_and_measure_holdout()`
+  は毎回 `run_render_stage(stage="c4", ...)` を再度呼ぶ。render すべき
+  unit が既に無いため `completed_all=True` に**毎回**到達し、`skipped_
+  resume` にした全 unit（campaign 全体の render 済み PCM）を毎 slice
+  フルスキャン・再ハッシュしてから measure へ進む——この検証コストが
+  measure 用の `time_budget` を消費し、measure の実質進捗を奪う。
+  修正: 新設ノンゲート ledger event kind **`RENDER_PHASE_VALID_KIND`
+  （`"holdout_render_valid"`。`{"kind": "holdout_render_valid", "stage":
+  "c4", "instance_count": ...}`）**を、`stage="c4"` の completing
+  invocation が検証に成功した直後（不一致があれば従来どおり
+  `RenderResumeIndexIntegrityError` で fail-closed し、このマーカーは
+  記帳しない）に一度だけ記帳する。以降の `stage="c4"` completing
+  invocation は、まずこのマーカーの有無を ledger から O(1)-per-entry で
+  確認し（PCM I/O なし）、既に存在すれば `_validate_skipped_resume_
+  outcomes()` を丸ごとスキップする。**`stage="c1"` は対象外**——上記のとおり
+  `c1-fixtures` はそもそも 2 度目の completing invocation に到達しない
+  ため、マーカーを記帳・参照する意味が無いばかりか、`render_instance()`
+  を経由しない直接呼び出しで意図的に破損を注入する既存の resume regression
+  テスト群（`test_c1_render_resume_stale_fails_closed_on_*`）が repeated
+  な直接呼び出しに依存しており、c1 でもマーカーを効かせると 2 回目以降の
+  呼び出しで検証自体がスキップされ、これらのテストが検出すべき破損を
+  見逃してしまう。本マーカーは `state.CampaignPhase`/`vocab.ProcedureGate`
+  の 8/5 値 gate 語彙とは無関係の別レイヤ（`stop_event`/`stale`/
+  `f0_injection_rejected` と同じノンゲート tier）——`state.py` の
+  `LEDGER_KIND_FOR_PHASE`/`gate_monotonicity_ok` は変更していない。
+  テスト: c4 render 完了後の 2 回の measure-only slice で、検証関数
+  （`_validate_skipped_resume_outcomes`）の呼び出し回数が最初の
+  completing invocation（render→measure 遷移そのもの）でのみ非ゼロになり
+  以降は 0 のまま、かつ 2 slice 目が実際に新規測定 progress を報告する
+  regression（`test_c4_render_phase_valid_marker_skips_rehash_on_measure_
+  only_slices`）。
+- **S4（③、`render_stage.py` ~311、`_validate_skipped_resume_outcomes`）—
+  completing invocation の検証が `.sha256` sidecar を一度も読まない**:
+  finding F5 の検証はファイル存在 + 「PCM の実 sha256 == ledger 記録値」
+  のみを見ており、`measure_stage._verify_and_load_rendered_pcm()`
+  （finding #4、§6.4）が要求する 3 点照合（sidecar 存在・sidecar 内容 ==
+  実 sha256・実 sha256 == ledger 記録値）のうち sidecar の 2 点を一切
+  検査していなかった——`.sha256` sidecar が削除/改竄されても F5 の検証は
+  素通りし、`fixture_valid`/c4 render→measure 遷移は false advance する。
+  実際に破損を検出するのは後段の測定時 `_verify_and_load_rendered_pcm()`
+  だけになり、その時点では（c1 なら）render へ戻る resumable path は既に
+  失われている——F5 が閉じたはずの exact な穴が sidecar 経由で再開通する。
+  修正: 両関数が共有する新設ヘルパー `render_stage._verify_pcm_sidecar()`
+  へ「PCM 読込 + sidecar 存在/内容照合」の部分を集約し
+  （`measure_stage._verify_and_load_rendered_pcm()` はこのヘルパーの結果に
+  自前の ledger-sha 照合を重ねる形へ書き換え）、`_validate_skipped_resume_
+  outcomes()` もこの同じヘルパーを呼んでから ledger-pinned sha
+  （`outcome.sha256`）との一致を確認する——2 つの検証が同じチェック集合を
+  個別に再実装する経路を構造的に閉じ、以後の乖離を防ぐ。テスト:
+  sidecar 欠損・sidecar 内容不一致の 2 パターンそれぞれで、intact な PCM
+  でも completing invocation が `RenderResumeIndexIntegrityError`
+  + `stop_event`(`RENDER_RESUME_INDEX_INTEGRITY_MISMATCH`) で fail-closed
+  する regression 2 件（`test_c1_render_resume_stale_fails_closed_on_
+  missing_sidecar`/`_on_wrong_sidecar`）を追加。既存の corrupted-PCM
+  regression（`test_c1_render_resume_stale_fails_closed_on_corrupted_
+  file`）も、PCM のみ破損させ sidecar は元のまま残す構成のため、この
+  是正後は「sidecar 不一致」検査で先に捕捉されるようになった（旧
+  `"current file sha256=" != ...` 文言から `"does not match sidecar"`
+  文言へ改訂——F5 導入時より一段厳格な検査で捕捉される、意味論的な改善）。
+
+#### 6.5.4 第 6 巡追補（Codex PR #345 レビュー採用、2026-09-03。discard event
+への within CPU 計上）
+
+- **（③、`campaign/measure_stage.py`/`campaign/caps.py`）— discard された
+  部分 meter_call group の within-process CPU が、hard-kill された
+  writer プロセスでは永久に回収不能だった**: round 16 finding #3 は
+  `meter_call` ごとの compute 課金から `within_cpu_seconds` を意図的に
+  除外している——その CPU は同じ dispatch の `stage_summary`/
+  `slice_summary` event（parent 側）が別途カバーする前提だった。しかし
+  R1 の discard 対象（PARTIAL group）はまさに「writer プロセスが
+  `cli.py` `main()` の `finally` に到達する前に SIGKILL/OOM で死んだ」
+  ケースであり、その dispatch は `stage_summary`/`slice_summary` を
+  一切記帳しない——round 16 の前提が成立せず、discard された部分
+  グループの within CPU は `compute_used` から静かに欠落し得た
+  （frozen compute cap を実質すり抜ける false-success 経路）。修正:
+  `StaleMeasurementError`（`kind == "partial"`）が新規フィールド
+  `discarded_within_cpu_seconds` を運ぶ——`_partial_group_within_cpu_
+  seconds()` が、PARTIAL 時点で present な各記録（key ごとに 1 件）の
+  検証済み `within_cpu_seconds` の **max**（同一 work unit の全記録は
+  本来同一値のはずだが、型不正/欠落レコードが混じっても過大側に振れる
+  fail-closed 選択——sum ではなく max。sum だと同じ共有値を present
+  レコード数だけ多重計上してしまう）を計算する。`run_measurement_for_
+  instance` はこの値をそのまま `meter_call_group_discarded` event の
+  `discarded_within_cpu_seconds`（§6.5 の payload 一覧に追記済み）へ
+  転記し、`caps.cap_counters_from_ledger()` がこの event でのみ
+  compute へ 1 回だけ加算する。**exactly-once の根拠**: `meter_call`
+  自身の compute 集計は discard の有無に関わらず常に `within_cpu_
+  seconds` を除外し続けるため対応する減算は無く、二重計上の余地が
+  ない。かつ通常の（hard-kill でない）Python 例外は `cli.py` `main()`
+  の `try`/`finally` を必ず通過し、その dispatch 自身の `stage_summary`/
+  `slice_summary` を記帳してから終了する——PARTIAL のまま ledger に
+  残り後続の別 invocation が discard できる状態になるのは、Python が
+  介入できない kill のときだけであり、discard event での課金はこの
+  条件によって構造的に exactly-once となる（偶然の一致ではない）。
+  テスト: `test_campaign_caps.py`/`test_campaign_measure.py` に
+  discard event の `discarded_within_cpu_seconds` 加算・複数 present
+  レコードでの max 選択・欠落/非数値/負値レコード混在時の fail-closed
+  な 0.0 寄与を固定する regression を追加（commit `1365806`）。**同時に
+  1 件境界宣言（`[UNDERSPEC-CAL-D80]`、docs only・コード変更なし）**:
+  `render_stage.py` の C4 render を最終 holdout 遷移時に再検証する案は
+  不採用——測定値は測定時に入力検証済み（`_verify_and_load_rendered_
+  pcm`）・ledger の sha が正本であり、測定後に消失/破損した PCM
+  成果物ストアの完全性は campaign 正当性契約の外（測定後の消失は
+  どの測定結果も改変しない）。再入条件 = 測定前の破損経路が新たに
+  示された場合のみ。詳細は README.md の `UNDERSPEC-CAL-D80` 行を参照。
+
+
+#### 6.5.5 第 8 巡追補（Codex PR #345 レビュー採用、2026-09-03。invocation_id
+による明示的 invocation 識別への置換、discard 時の live counter 課金、discard
+の budget 検査への先行処理）
+
+- **（③、`campaign/cli.py`/`campaign/caps.py`/`campaign/measure_stage.py`/
+  `campaign/render_stage.py`/`campaign/baseline_stage.py`/
+  `campaign/holdout_stage.py`）— round 7 finding #1 の `dispatch_epoch`/
+  `last_meter_epoch` ledger 順序ヒューリスティックは、SIGKILL された writer
+  と、discard フラグ無しで再試行した別 invocation の `stage_summary` を取り違え
+  得た**: 設計判定（R8-2）— `dispatch_epoch` は「ledger 上で discard より前に
+  何個の `stage_summary`/`slice_summary` が現れたか」を数えるだけで、その
+  summary が discard される group の**同じ writer**のものかは見ていない。
+  シナリオ: SIGKILL された invocation A が部分 group を残す（`stage_summary`
+  なし）→ `--discard-partial-groups` 無しの operator retry（invocation B）が
+  `StaleMeasurementError` を送出しつつも `cli.py` `main()` の `finally` で
+  **自分自身の** `stage_summary` を記帳する（A とは無関係）→ 後続の
+  `--discard-partial-groups` retry（invocation C）が discard するとき、round 7
+  ルールは「B の summary がこの epoch を閉じた」と誤認し、A の within CPU を
+  0 として扱ってしまう（false-success — frozen compute cap をすり抜ける）。
+  修正: `cli.py` `main()` が process ごとに 1 個の `invocation_id`
+  （`uuid.uuid4().hex`）を生成し、この process が記帳する cap 会計対象の
+  event 全て（`meter_call`、`render`、`slice_summary`、`stage_summary`、
+  `meter_call_group_discarded`、`worker_attempts_discarded`/`worker_failed`、
+  `stop_event`）へ一貫して付与する（`_run_c1`〜`_run_close`/
+  `render_stage.run_render_stage`/`render_stage.render_instance`/
+  `measure_stage.run_measure_stage`/`measure_stage.run_measurement_for_
+  instance`/`baseline_stage.run_baseline_stage`/`holdout_stage.render_and_
+  measure_holdout`/`cli._build_f0_by_instance`/`caps.charge_worker_attempts_
+  before_raising` の各シグネチャへ素通し）。**pairing rule 改訂**:
+  `caps.cap_counters_from_ledger()` は discard される group の
+  `meter_call` record が運ぶ `invocation_id`（= WRITER 自身の識別子）を
+  `last_meter_invocation[key]` として追跡し、`stage_summary`/`slice_summary`
+  が現れるたびその `invocation_id` を `invocation_ids_with_summary` へ集める
+  ——discard 時、その WRITER の `invocation_id` が `invocation_ids_with_
+  summary` に**存在しなければ**課金し、存在すれば（＝その writer 自身の
+  summary が既にその within CPU をカバー済み）課金しない。この判定は
+  ledger 上の位置（順序）ではなく識別子の**同一性**で行うため、上記シナリオ
+  の B（無関係な invocation）の summary は A の within CPU を誤ってカバー
+  しない。テスト: `test_campaign_caps.py`
+  `test_cap_counters_from_ledger_retry_without_discard_then_discard_charges_
+  writers_cpu_once`（新シナリオ固定）+
+  `test_cap_counters_from_ledger_catchable_interruption_same_invocation_
+  discard_charges_zero`/`test_cap_counters_from_ledger_hard_kill_no_
+  invocation_id_discard_charges_once`/`test_cap_counters_from_ledger_mixed_
+  covered_and_uncovered_invocations`（round 7 の 3 test を invocation_id
+  ベースへ改訂、シナリオの意図は保持）。round 6 finding #3 の pre-round-7
+  event（`invocation_id` 欠落）は「本番 ledger が未だ存在しないため懸念なし」
+  （既存 fail-closed 方向どおり、writer 側 `invocation_id` が無ければ常に
+  課金——過大側に振れる）。
+- **（③、`campaign/measure_stage.py` `run_measurement_for_instance`）—
+  discard 時に live な `cap_counters` へ課金しないまま cap 検査もせず
+  remeasure してしまい、既に凍結 compute cap を超過した状態のまま phase
+  transition まで進み得た**: 修正（R8-1）— discard の記帳・（新設）
+  `caps.is_invocation_id_summarized()` によるチャージ対象判定の直後、
+  `discarded_within_cpu_seconds > 0` かつ非カバーなら
+  `cap_counters.add(compute=...)` → `save_cap_counters()` →
+  `cost_caps_check()` の順で **remeasure 開始前に** 課金・persist・cap 再検査
+  する（他の全 charge-then-check 呼び出し箇所と同じ既存 pattern —
+  `charge_worker_attempts_before_raising`/`_checkpoint_parent_cpu_before_
+  transition` を流用）。超過していれば他の breach 経路と同一の
+  `COST_CAP_EXCEEDED` stop event を記帳し `CostCapExceededError` を送出、
+  remeasure は一切試みない。discard 実行本体は
+  `measure_stage._discard_partial_group()` へ一本化し、
+  `run_measurement_for_instance` 自身の except ハンドラと、次項 R8-3 の
+  budget 検査前 discard 経路の両方がこの単一実装を共有する（意味論の分岐
+  リスクを構造的に排除）。テスト: `test_campaign_measure.py`
+  `test_discard_partial_group_over_cap_stops_before_remeasuring`（cap 超過
+  → stop event・remeasure 無し・transition 無し）/
+  `test_discard_partial_group_below_cap_charges_live_counters_and_continues`
+  （cap 未超過 → live counter へ即座に課金の上で継続、`@pytest.mark.slow`）。
+- **（③、`campaign/measure_stage.py` `run_measure_stage`/`campaign/cli.py`
+  `_build_f0_by_instance`）— `--discard-partial-groups` 指定時、index 構築
+  自体が budget を使い切ると partial group が `is_complete() == False`
+  （＝ pending 扱い）のまま budget 境界検査で `PARTIAL_SLICE` 終了し、
+  discard に到達できず同じ短い budget での再実行が永久に回復しない**:
+  修正（R8-3）— discard は dispatch ではない（PCM 読込・subprocess 起動を
+  伴わない）ため、budget に関わらず先に処理してよい/すべき。`run_measure_
+  stage`/`_build_f0_by_instance` の instance ループ先頭で、
+  `MeterCallIndex.partial_group()`（新設・非破壊 probe — `is_complete()`/
+  `completed_records()` と同じ判定 `_resolve_meter_group` を共有しつつ
+  partial 時は `StaleMeasurementError` を raise せず返す）を全 candidate に
+  対し呼び、非 `None` なら `_discard_partial_group()` を実行してから、従来
+  どおり budget 境界検査へ進む——**remeasure の dispatch のみ**が引き続き
+  budget-gated（discard 後もそのキーは pending のまま残り、budget が
+  尽きていれば通常どおり `PARTIAL_SLICE` で戻る）。テスト:
+  `test_campaign_measure.py`
+  `test_run_measure_stage_discards_partial_group_before_budget_check`
+  （budget 0.0001（exhausted）+ flag → discard event 記帳・remeasure 無し）/
+  `test_run_measure_stage_recovers_after_discard_under_exhausted_budget`
+  （同一 exhausted budget での再試行は discard のみ・無制限 budget の
+  後続呼び出しで remeasure 完了、`@pytest.mark.slow`）。
+- **ファミリー終端宣言**: 割込み invocation を跨ぐ cap 会計ファミリー
+  （round 6 finding #3・round 7 finding #1・round 8 finding #1/#2/#3）は
+  第 8 巡で終端。以降は新規の具体的な偽成功/偽失敗経路を示す指摘のみ採用。
+
+#### 6.5.6 第 12 巡追補（Codex PR #345 レビュー採用、2026-09-03。COMPLETE かつ
+never-discarded な meter_call group の within CPU 未回収——第 8 巡の
+ファミリー終端宣言後、新規の具体的な偽成功経路として採用）
+
+- **（③、`campaign/caps.py` `cap_counters_from_ledger()`）— プロセスが
+  group の 6 件目（最後）の `meter_call` record を追記した直後に kill され、
+  `cli.py` `main()` の `finally` に一度も到達しなかった場合、COMPLETE
+  （6 record 揃っている）かつ discard event の無い group が残る**: これは
+  round 6〜8 が扱った「discard される partial group」ファミリーとは別の
+  経路——discard すべき欠損が無い（6 件とも揃っている）ため
+  `meter_call_group_discarded` は一切記帳されず、再開時はこの group を
+  「済」として扱い remeasure も discard も一切走らない。round 16 finding
+  #3 の `within_cpu_seconds` 除外（§6.4 systematic subtraction、`stage_
+  summary`/`slice_summary` が回収する前提）はこの writer について永久に
+  成立しない——within CPU が静かに失われ、`counters.json` の削除/rollback
+  から `cap_counters_from_ledger()` で再構成すると凍結 compute cap を
+  falsely 下回り得る（false-success）。設計判定: pairing rule を discard
+  event 限定から**全 `meter_call` group**へ一般化する——「writer の
+  `invocation_id` に `stage_summary`/`slice_summary` が一件も無い group」
+  は、discard されたか否かに関わらず within CPU を回収対象とする。
+  **exactly-once 不変条件**（採用: discard 経路は現状維持、COMPLETE
+  かつ未 discard の group のみ新規に直接計上——discard 経由と
+  per-record 経由を単一ルールへ統合する案は見送り、両者の分岐を
+  シンプルに保った）: (1) discard される group は従来どおり
+  `meter_call_group_discarded` 自身の `discarded_within_cpu_seconds` から
+  1 回だけ課金（§6.5.4/§6.5.5、変更なし）。(2) discard されなかった
+  group（COMPLETE か否かを問わない——`--discard-partial-groups` 無しで
+  resume され得る未解決 partial も同型のため）は、forward scan 完了後の
+  deferred pass で `last_meter_invocation`（discard で pop されなかった
+  key のみが scan 終端まで残る）を走査し、writer `invocation_id` が
+  `invocation_ids_with_summary` に無ければ、その key の最初の
+  `meter_call` record が運ぶ `within_cpu_seconds`（discard 経路が読む
+  のと同じ「group 共有の 1 値」）を 1 回だけ加算する。deferred にする
+  理由: 実運用では writer 自身の `stage_summary`/`slice_summary` は
+  その writer の `meter_call` record 群より**後**に ledger へ現れるため、
+  forward scan 中には pairing を確定できない。discard された key は
+  scan 中に `last_meter_invocation`/`seen_meter_keys` から pop 済みで
+  deferred pass に現れず、deferred pass で課金される key は定義上一度も
+  discard されていない——2 経路は排他的で二重計上しない。実装:
+  `caps.cap_counters_from_ledger()` に `meter_call_group_within_cpu`
+  （key ごとの最初の record の `within_cpu_seconds`）を追加し、forward
+  scan 後に上記 deferred pass を実行。`reconcile_cap_counters()`
+  （stage 起動時に呼ばれる pre-dispatch breach check の入力）は
+  `cap_counters_from_ledger()` を素通しするため、この一般化は
+  「未 summary の COMPLETE group の CPU も次回 dispatch 前に cap 検査
+  される」ことを追加コード無しで含意する。テスト:
+  `test_campaign_caps.py`
+  `test_cap_counters_from_ledger_complete_unsummarized_group_charged_once`
+  （シナリオ a: COMPLETE・未 summary → 1 回課金）/
+  `test_cap_counters_from_ledger_partial_group_discard_unsummarized_charged_once`
+  （シナリオ b: partial + discard・未 summary → 従来どおり 1 回・回帰）/
+  `test_cap_counters_from_ledger_complete_summarized_group_not_double_charged`
+  （シナリオ c: writer が summary 済み → summary のみでカバー、二重計上
+  なし）/
+  `test_cap_counters_from_ledger_normal_summarized_groups_totals_unchanged`
+  （シナリオ d: 通常の summary 済み group 群 → 総額不変の回帰）/
+  `test_reconcile_reproduces_live_total_for_unsummarized_complete_group`
+  （シナリオ e: `counters.json` rollback + `reconcile_cap_counters()` が
+  live 総額を再現）。`test_campaign_cli.py`
+  `test_deleted_counters_json_with_unsummarized_complete_meter_group_blocks_on_precheck`
+  （live counters: `counters.json` 消失 + 未 summary の COMPLETE group
+  → 次回 dispatch 前の pre-check が `COST_CAP_EXCEEDED` で fail-closed
+  することを CLI end-to-end で確認）。既存
+  `test_measure_ledger_derived_reconstruction_equals_persisted_compute`
+  は `run_measurement_for_instance()` を `cli.py` main() 経由せず単体で
+  呼ぶため `stage_summary` が一切記帳されず、本追補が意図どおり
+  「未 summary」経路を発火させて回帰した——同テストへ明示的
+  `invocation_id` と、それに対応する 0-cost の `stage_summary`
+  スタブを追加し、実運用で `main()` の `finally` が必ず 1 個の summary
+  を残す前提を模した（意味的な後退ではなく、単体テストが実運用の
+  ラッパー保証を暗黙に借りていた箇所を明示化）。
+
+#### 6.5.7 第 13 巡追補（Codex PR #345 レビュー採用、2026-09-03。回復
+経路上の偽 cap 超過——`--discard-partial-groups` recovery が deferred pass
+と discard event の双方から同一 group の within CPU を二重計上し得た欠落）
+
+- **（③、`campaign/caps.py` `cap_counters_from_ledger()`）— §6.5.6 の
+  deferred pass が COMPLETE/PARTIAL を区別せず、未 summary の writer を
+  持つ group を無条件に計上していた**: `--discard-partial-groups` による
+  復旧で `cli.py main()` はまず ledger から `cap_counters` を reconcile
+  する（この時点では discard event はまだ ledger に存在しない）。写っている
+  group が PARTIAL（hard kill 直後、6 record 未満）であっても、写者
+  invocation が未 summary であれば §6.5.6 の deferred pass はこの reconcile
+  の時点で既に within CPU を 1 回計上してしまう。続いて
+  `_discard_partial_group()` が `discarded_within_cpu_seconds` を live な
+  `cap_counters` へ同一 key 分もう一度課金・persist する——同じ within CPU
+  が 2 回計上され、`max(persisted, derived)` の reconcile 規則
+  （persisted 側が二重計上済みで derived 側より大きい）がその水増しを
+  そのまま実効値として残し、凍結 compute cap を偽に超過し得る
+  （false `COST_CAP_EXCEEDED`）。
+
+  **設計判定（pairing rule 追補）**: deferred pass は
+  **COMPLETE な group のみ**（当該 key の期待される全 repeat key——
+  `WITHIN_PROCESS_REPEATS + FRESH_PROCESS_REPEATS` = 6 件——が ledger 上に
+  揃っている group のみ）を計上対象とする。PARTIAL な group（揃っていない）
+  は、discard されるまで deferred pass からも discard event からも一切
+  計上されない——discard 前は「未使用のまま fail-closed で campaign を
+  止め続ける」状態そのものが安全装置であり、discard event こそが
+  PARTIAL group を唯一計上できる経路であり続ける。**exactly-once
+  不変条件（改訂）**: 未 summary な writer を持つ group の within CPU は
+  厳密に 1 回だけ計上される——COMPLETE な group は deferred pass 経由、
+  PARTIAL な group は discard event 経由。summary 済みの writer は
+  自身の summary（`parent_cpu_seconds`）でカバーされる（変更なし）。
+
+  実装: `caps.cap_counters_from_ledger()` に `meter_group_repeat_keys`
+  （key ごとに forward scan 中観測した distinct `(repeat_kind,
+  repeat_index)` の集合。discard event でのリセットも
+  `last_meter_invocation`/`meter_group_within_cpu` と同じタイミングで行う）
+  を追加し、deferred pass はこの集合が `_METER_REPEAT_KEY_COUNT`（= 6）
+  に達している key のみを計上する。`_discard_partial_group()`
+  （`campaign/measure_stage.py`）と `cap_counters_from_ledger()`
+  双方の docstring に「未 summary な writer の group の within CPU は
+  厳密に 1 回だけ計上される——COMPLETE group は deferred pass 経由、
+  PARTIAL group は discard event 経由；summary 済み writer は自身の
+  summary でカバーされる」という不変条件を明記。
+
+  テスト: `test_campaign_caps.py`
+  `test_cap_counters_from_ledger_partial_unsummarized_group_not_charged_by_deferred_pass`
+  （root cause: PARTIAL・未 discard・未 summary → deferred pass は 0 を
+  計上）/
+  `test_cap_counters_from_ledger_complete_group_killed_after_full_write_still_charged_once`
+  （§6.5.6 の round 12 シナリオが本改訂で回帰しないことの確認: COMPLETE・
+  未 summary → 従来どおり 1 回計上）/
+  `test_cap_counters_from_ledger_partial_summarized_group_discard_and_deferred_both_zero`
+  （PARTIAL・summary 済み writer → discard・deferred 双方とも 0）。
+  `test_campaign_measure.py`
+  `test_recovery_reconcile_then_discard_charges_within_cpu_exactly_once`
+  （Codex の指摘どおりの復旧シーケンス end-to-end: reconcile → discard の
+  後、live counters とその時点の ledger-derived counters が一致し、かつ
+  期待値どおり 1 回分のみ計上されていることを確認。続けて
+  `max(persisted, derived)` reconcile を再度呼び、水増しされないことも
+  確認）。

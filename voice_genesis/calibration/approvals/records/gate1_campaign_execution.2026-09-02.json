@@ -1,7 +1,7 @@
 {
-  "approved_at_utc": "2026-09-02T01:46:11Z",
-  "approver": "Yuu6798 (delegated to Claude Fable 5.1 — recommended values, session 011x6MhCwdZWgxsnkXDVBrdx)",
-  "authorization_nonce": "b88b3ed26feb9a0866ab223f979bf4da",
+  "approved_at_utc": "2026-09-03T03:30:13Z",
+  "approver": "Yuu6798 (delegated to Claude Fable 5.1 — renewed approval 2026-09-03; original delegation 2026-09-02T01:46:11Z; session 011x6MhCwdZWgxsnkXDVBrdx)",
+  "authorization_nonce": "8cb7abf4b4d81ace7eb5e5d3d8427333",
   "cost_caps": {
     "budget": 20,
     "budget_accounting_mode": "local_zero_cost",
@@ -17,5 +17,5 @@
     "injected_noise_fraction",
     "fundamental_frequency"
   ],
-  "memo_sha256": "c13a4009e865d3a1d27015afbd585b175d919f83ebd20754b421295906184178"
+  "memo_sha256": "1dcbb6a5c762f2d6c884d59ff1cc67a722e3b0b5e65d04d59d951472af16da6f"
 }

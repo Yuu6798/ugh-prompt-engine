@@ -22,6 +22,7 @@ from collections.abc import Mapping, Sequence
 
 from voice_genesis.calibration.campaign import measure_stage, workunits
 from voice_genesis.calibration.campaign.state import FrozenCampaign
+from voice_genesis.calibration.campaign.time_budget import TimeBudget
 from voice_genesis.calibration.candidates.registry import ALL_CANDIDATES, Candidate
 from voice_genesis.calibration.canonical import manifest_sha
 from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
@@ -60,27 +61,60 @@ def run_baseline_stage(
     max_workers: int = 1,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
+    discard_partial_groups: bool = False,
+    time_budget: TimeBudget | None = None,
+    invocation_id: str | None = None,
 ) -> dict[str, object]:
     """C2: B0 candidates × CALIBRATION split の実測 → pooled tolerance 導出
     → `baseline_audit` + `baseline_audited` ledger event。戻り値は
     `{"baseline_audit_sha": str, "tolerances": {candidate_id: {...}}}`。
     `cap_counters`/`cost_caps`（finding #1）は素通しで
     `measure_stage.run_measure_stage` へ渡す — cap 超過は
-    `measure_stage.CostCapExceededError` として fail-closed に伝播する。"""
+    `measure_stage.CostCapExceededError` として fail-closed に伝播する。
+
+    R1 の `discard_partial_groups` は素通しで `measure_stage.run_measure_
+    stage` へ渡す（design memo `design_runner_robustness.md`,
+    `[UNDERSPEC-CAL-D79]`）。
+
+    R2: `time_budget` が渡され、かつ measure stage が instance 境界で
+    予算超過して完走しなかった場合、tolerance 導出・`baseline_audit`/
+    `baseline_audited` event の記帳（= phase transition）を一切行わず
+    `{"slice_status": SliceStatus}` を返す（呼び出し元 `cli._run_c2` が
+    これを検出して `PARTIAL_SLICE` report を組み立てる）。"""
     assignment = campaign.realized_split.assignment
     instances = workunits.c2_baseline_instances(matrix_rows, assignment)
     sr_by_row = {mr.row_id: mr.row.sr_hz for mr in matrix_rows}
     candidates = b0_candidates()
 
-    records = measure_stage.run_measure_stage(
-        campaign,
-        instances,
-        candidates,
-        sr_by_row=sr_by_row,
-        max_workers=max_workers,
-        cap_counters=cap_counters,
-        cost_caps=cost_caps,
-    )
+    if time_budget is not None:
+        records, slice_status = measure_stage.run_measure_stage(
+            campaign,
+            instances,
+            candidates,
+            sr_by_row=sr_by_row,
+            max_workers=max_workers,
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            discard_partial_groups=discard_partial_groups,
+            stage="c2",
+            time_budget=time_budget,
+            invocation_id=invocation_id,
+        )
+        if not slice_status.completed_all:
+            return {"slice_status": slice_status}
+    else:
+        records = measure_stage.run_measure_stage(
+            campaign,
+            instances,
+            candidates,
+            sr_by_row=sr_by_row,
+            max_workers=max_workers,
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            discard_partial_groups=discard_partial_groups,
+            stage="c2",
+            invocation_id=invocation_id,
+        )
 
     values_by_cell: dict[tuple[str, str], list[float]] = {}
     for record in records:
@@ -115,7 +149,12 @@ def run_baseline_stage(
     baseline_audit_sha = manifest_sha(audit_payload)
 
     campaign.ledger.append(
-        {"kind": "baseline_audit", "artifact_sha": baseline_audit_sha, "payload": audit_payload}
+        {
+            "kind": "baseline_audit",
+            "artifact_sha": baseline_audit_sha,
+            "payload": audit_payload,
+            "invocation_id": invocation_id,
+        }
     )
     campaign.ledger.append(
         {
@@ -123,6 +162,7 @@ def run_baseline_stage(
             "baseline_audit_sha": baseline_audit_sha,
             "candidate_count": len(candidates),
             "instance_count": len(instances),
+            "invocation_id": invocation_id,
         }
     )
     return {"baseline_audit_sha": baseline_audit_sha, "tolerances": tolerances}

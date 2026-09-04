@@ -17,6 +17,7 @@
   "voice_genesis/calibration/campaign/render_stage.py",
   "voice_genesis/calibration/campaign/selection_stage.py",
   "voice_genesis/calibration/campaign/state.py",
+  "voice_genesis/calibration/campaign/time_budget.py",
   "voice_genesis/calibration/campaign/unseal.py",
   "voice_genesis/calibration/campaign/workunits.py",
   "voice_genesis/calibration/candidates/__init__.py",

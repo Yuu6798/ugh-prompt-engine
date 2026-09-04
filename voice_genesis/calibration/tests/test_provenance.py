@@ -454,6 +454,333 @@ def test_ledger_two_instances_interleaved_append_no_sibling_seq(tmp_path) -> Non
     assert result.tamper_at_seq is None
 
 
+def test_ledger_append_cost_independent_of_ledger_size(tmp_path, monkeypatch) -> None:
+    """[UNDERSPEC-CAL-D84] regression: `Ledger.append()` must cost O(1) in the
+    number of existing entries, not O(n). Before this fix, `append()`
+    re-verified the **entire** on-disk chain (`_verify_chain_prefix` over
+    every existing line) and re-parsed the whole file on every call — O(n)
+    per append, O(n^2) per campaign (production incident: RUN10-CAL-
+    20260903-9bcbbf86 c2-baseline, n=11,220 -> 912 ms/append, projected
+    ~112 h CPU to finish; see `UNDERSPEC-CAL-D84` in README.md).
+
+    This builds ledgers of two very different sizes purely via
+    `Ledger.append()` (itself only tractable at n=2000 if append() is
+    already O(1) — a regression back to O(n) would make *this test*
+    prohibitively slow) and asserts that the number of raw lines
+    `_verify_chain_prefix` is asked to re-verify for the *next* append does
+    not grow with the ledger's existing size — it must stay `0` (nothing
+    written since this instance's own watermark), regardless of `n_prior`.
+    """
+    import voice_genesis.calibration.provenance as provenance_mod
+
+    def suffix_len_for_next_append(n_prior: int) -> int:
+        path = tmp_path / f"ledger_{n_prior}.jsonl"
+        ledger = Ledger(path)
+        for i in range(n_prior):
+            ledger.append({"kind": "meter_call", "row_id": f"r{i}"})
+
+        seen_lengths: list[int] = []
+        real_verify_chain_prefix = provenance_mod._verify_chain_prefix
+
+        def counting_verify_chain_prefix(raw_lines, *args, **kwargs):
+            seen_lengths.append(len(raw_lines))
+            return real_verify_chain_prefix(raw_lines, *args, **kwargs)
+
+        monkeypatch.setattr(provenance_mod, "_verify_chain_prefix", counting_verify_chain_prefix)
+        ledger.append({"kind": "meter_call", "row_id": "final"})
+        monkeypatch.undo()
+
+        assert len(seen_lengths) == 1, "append() must call _verify_chain_prefix exactly once"
+        return seen_lengths[0]
+
+    small_n_suffix_len = suffix_len_for_next_append(5)
+    large_n_suffix_len = suffix_len_for_next_append(300)
+
+    assert small_n_suffix_len == 0
+    assert large_n_suffix_len == 0
+
+
+def test_ledger_append_refuses_when_rolled_back_to_valid_shorter_prefix(tmp_path) -> None:
+    """[#345 指摘③] 既に open 済みの `Ledger`（watermark = 3 エントリ分）が、
+    その後 disk 上でその watermark より短い、それ自体は chain-valid な
+    prefix（先頭 2 エントリのみ）へロールバックされた（restore/sync
+    rollback を模する）のを観測した場合、watermark を再同期せず
+    `LedgerChainInvalidError` で fail-closed する。旧実装は watermark を 0
+    にリセットしてロールバック後の内容を「フォールバック全体検証 OK」として
+    受理し、`append()` 末尾で `self._entries` にそれを単純 extend していた
+    ため、in-memory キャッシュが `[0,1,2,0,1]` のように disk（`[0,1]`）と
+    乖離する状態を作っていた（重複 seq を含む壊れたキャッシュ）。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+    ledger.append({"kind": "meter_call", "row_id": "r2"})
+    assert [e.seq for e in ledger.entries] == [0, 1, 2]
+
+    full_content = path.read_text(encoding="utf-8")
+    lines = [ln for ln in full_content.splitlines() if ln.strip()]
+    rolled_back_content = lines[0] + "\n" + lines[1] + "\n"
+    path.write_text(rolled_back_content, encoding="utf-8")
+
+    # sanity: the rolled-back file is a chain-valid 2-entry ledger on its own
+    # (this is the "VALID shorter prefix" case the finding describes — not a
+    # truncated/malformed tail).
+    fresh_view = Ledger(path)
+    assert fresh_view.verify_chain().ok is True
+    assert [e.seq for e in fresh_view.entries] == [0, 1]
+
+    with pytest.raises(LedgerChainInvalidError):
+        ledger.append({"kind": "meter_call", "row_id": "r3"})
+
+    # fail-closed: nothing written to disk, stale instance's in-memory state
+    # untouched (not silently re-synced onto the shortened chain).
+    assert path.read_text(encoding="utf-8") == rolled_back_content
+    assert [e.seq for e in ledger.entries] == [0, 1, 2]
+
+
+def test_ledger_append_refuses_when_watermark_entry_same_length_substituted(
+    tmp_path,
+) -> None:
+    """[#345 指摘③] watermark 末尾エントリ（size は不変）が、同じバイト長の
+    別内容へ差し替えられた場合も `LedgerChainInvalidError` で fail-closed
+    する。ファイルサイズが watermark と一致するため suffix は空文字列となり
+    `_verify_chain_prefix` は 0 行を検証して素通りしてしまう —
+    watermark 直下 1 行の sha256 再照合がこのケースを捕まえる。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+
+    full_content = path.read_text(encoding="utf-8")
+    lines = [ln for ln in full_content.splitlines() if ln.strip()]
+    tampered_line = lines[-1].replace('"r1"', '"rX"')
+    assert tampered_line != lines[-1]
+    assert len(tampered_line.encode("utf-8")) == len(lines[-1].encode("utf-8"))
+    lines[-1] = tampered_line
+    tampered_content = "\n".join(lines) + "\n"
+    assert len(tampered_content.encode("utf-8")) == len(full_content.encode("utf-8"))
+    path.write_text(tampered_content, encoding="utf-8")
+
+    with pytest.raises(LedgerChainInvalidError):
+        ledger.append({"kind": "meter_call", "row_id": "r2"})
+
+    # fail-closed: nothing written, file left exactly as tampered.
+    assert path.read_text(encoding="utf-8") == tampered_content
+    assert [e.seq for e in ledger.entries] == [0, 1]
+
+
+def test_ledger_append_succeeds_after_one_trailing_blank_line(tmp_path) -> None:
+    """[#345 指摘③ 追補] chain-valid な台帳の末尾に空行が 1 行追加されても、
+    `append()` は偽の `LedgerChainInvalidError` を送出せず成功し、
+    `verify_chain()` も `ok=True` のままである。旧実装は watermark の
+    バイト範囲を `_v_bytes`（ファイル全体長。末尾空行の分だけ実際の最終
+    エントリの終端より後ろにずれる）から逆算していたため、O(1) fingerprint
+    再照合が誤ったバイト範囲を読んで正当な台帳を tamper 扱いしていた。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+
+    full_content = path.read_text(encoding="utf-8")
+    assert full_content.endswith("\n")
+    path.write_text(full_content + "\n", encoding="utf-8")
+
+    pre_append_check = Ledger(path).verify_chain()
+    assert pre_append_check.ok is True
+    assert pre_append_check.entries_verified == 2
+
+    fresh = Ledger(path)
+    e2 = fresh.append({"kind": "meter_call", "row_id": "r2"})
+    assert e2.seq == 2
+    assert e2.prev_sha == json.loads(full_content.splitlines()[-1])["entry_sha"]
+
+    result = Ledger(path).verify_chain()
+    assert result.ok is True
+    assert result.entries_verified == 3
+    assert result.tamper_at_seq is None
+
+
+def test_ledger_append_succeeds_after_two_trailing_blank_lines(tmp_path) -> None:
+    """[#345 指摘③ 追補] 末尾空行が 2 行連続していても同様に `append()` が
+    成功し `verify_chain()` も `ok=True` のままであることを確認する
+    （1 行分の空行だけを特別扱いしていないことの回帰確認）。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+
+    full_content = path.read_text(encoding="utf-8")
+    assert full_content.endswith("\n")
+    path.write_text(full_content + "\n\n", encoding="utf-8")
+
+    pre_append_check = Ledger(path).verify_chain()
+    assert pre_append_check.ok is True
+    assert pre_append_check.entries_verified == 2
+
+    fresh = Ledger(path)
+    e2 = fresh.append({"kind": "meter_call", "row_id": "r2"})
+    assert e2.seq == 2
+
+    result = Ledger(path).verify_chain()
+    assert result.ok is True
+    assert result.entries_verified == 3
+    assert result.tamper_at_seq is None
+
+
+def test_ledger_append_g1_detects_early_entry_same_length_tamper(tmp_path) -> None:
+    """[#345 指摘③ G1, Codex finding P1] 既に open 済みの `Ledger`
+    （watermark = 3 エントリ分）に対し、watermark 末尾（seq=2）ではなく
+    **より前** の seq=0 エントリが同じバイト長の別内容へ差し替えられた場合。
+    旧実装（watermark 末尾 1 行だけの fingerprint 再照合 + suffix のみの
+    chain 検証）はサイズも末尾行も不変なため素通りしていた。stat の
+    `mtime_ns` は on-disk への書き込みで必ず変化するため、G1 の安価な変更
+    検出器がこれを捉え、次の `append()` は on-disk ledger 全体をフル
+    再検証してから `LedgerChainInvalidError` で fail-closed する（書き込み
+    なし・`self._entries` も不変）。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+    ledger.append({"kind": "meter_call", "row_id": "r2"})
+    assert [e.seq for e in ledger.entries] == [0, 1, 2]
+
+    full_content = path.read_text(encoding="utf-8")
+    lines = [ln for ln in full_content.splitlines() if ln.strip()]
+    tampered_line = lines[0].replace('"r0"', '"rX"')
+    assert tampered_line != lines[0]
+    assert len(tampered_line.encode("utf-8")) == len(lines[0].encode("utf-8"))
+    lines[0] = tampered_line
+    tampered_content = "\n".join(lines) + "\n"
+    assert len(tampered_content.encode("utf-8")) == len(full_content.encode("utf-8"))
+    path.write_text(tampered_content, encoding="utf-8")
+
+    with pytest.raises(LedgerChainInvalidError) as excinfo:
+        ledger.append({"kind": "meter_call", "row_id": "r3"})
+    assert excinfo.value.tamper_at_seq == 0
+
+    # fail-closed: nothing written, tampered content untouched, in-memory
+    # cache not extended with the bogus tail.
+    assert path.read_text(encoding="utf-8") == tampered_content
+    assert [e.seq for e in ledger.entries] == [0, 1, 2]
+
+
+def test_ledger_append_g2_catches_transition_kind_even_with_spoofed_stat(
+    tmp_path, monkeypatch
+) -> None:
+    """[#345 指摘③ G1/G2, Codex finding P1 test (b)] stat（ino/mtime_ns/
+    size）が（何らかの理由で）watermark 確立時と見分けが付かないよう
+    monkeypatch で偽装された状態で、watermark より前の seq=0 エントリが
+    同じバイト長で改ざんされている最悪ケースをシミュレートする。
+
+    - G2: 追記しようとしている payload の `kind` がフェーズ遷移/terminal
+      summary（`_TRANSITION_EVENT_KINDS`。ここでは `campaign_closed`）なら、
+      stat が unchanged に見えても無条件にフル再検証へ回るため、依然として
+      `LedgerChainInvalidError` で fail-closed する — G1 が欺かれていても
+      G2 は独立して機能する。
+    - 残余露出（意図された仕様）: 続けて `meter_call`（遷移 kind ではない）
+      を追記すると、stat が unchanged に見える限り G1 は発火せず、この
+      1 回の append は「成功」してしまう。ただし、プロセス再起動後の
+      `Ledger(path)`（構築時は常にフル検証）が改竄を確実に検出することを
+      末尾で確認し、露出が一時的・境界付きであることを示す。"""
+    import voice_genesis.calibration.provenance as provenance_mod
+
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+    ledger.append({"kind": "meter_call", "row_id": "r2"})
+
+    spoofed_ino = ledger._v_ino
+    spoofed_mtime_ns = ledger._v_mtime_ns
+    spoofed_size = ledger._v_stat_size
+
+    full_content = path.read_text(encoding="utf-8")
+    lines = [ln for ln in full_content.splitlines() if ln.strip()]
+    tampered_line = lines[0].replace('"r0"', '"rX"')
+    assert tampered_line != lines[0]
+    assert len(tampered_line.encode("utf-8")) == len(lines[0].encode("utf-8"))
+    lines[0] = tampered_line
+    tampered_content = "\n".join(lines) + "\n"
+    assert len(tampered_content.encode("utf-8")) == len(full_content.encode("utf-8"))
+    path.write_text(tampered_content, encoding="utf-8")
+
+    class _FakeStat:
+        st_ino = spoofed_ino
+        st_mtime_ns = spoofed_mtime_ns
+        st_size = spoofed_size
+
+    def fake_fstat(fd):
+        return _FakeStat()
+
+    with monkeypatch.context() as m:
+        m.setattr(provenance_mod.os, "fstat", fake_fstat)
+
+        # G2 still fires for a transition-kind event even though the cheap
+        # G1 stat check is defeated.
+        with pytest.raises(LedgerChainInvalidError) as excinfo:
+            ledger.append({"kind": "campaign_closed", "row_id": "closer"})
+        assert excinfo.value.tamper_at_seq == 0
+        assert path.read_text(encoding="utf-8") == tampered_content
+        assert [e.seq for e in ledger.entries] == [0, 1, 2]
+
+        # documented residual exposure: a non-transition append is NOT
+        # caught while the stat check is defeated (accepted per design
+        # ruling; bounded by the next transition/restart, see below).
+        entry = ledger.append({"kind": "meter_call", "row_id": "r3"})
+        assert entry.seq == 3
+
+    # the residual exposure is bounded, not permanent: a fresh instance
+    # (real fstat, full verification at construction) unconditionally
+    # detects the still-present tamper.
+    result = Ledger(path).verify_chain()
+    assert result.ok is False
+    assert result.tamper_at_seq == 0
+
+
+def test_ledger_append_updates_stat_bookkeeping_after_each_write(tmp_path) -> None:
+    """[#345 指摘③ G1] `append()` は write→flush→`fsync` の直後に再 `fstat`
+    し、`_v_ino`/`_v_mtime_ns`/`_v_stat_size` を実際の on-disk 値へ更新する
+    （次回 append() の安価な変更検出器 G1 の baseline）。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    st1 = path.stat()
+    assert ledger._v_ino == st1.st_ino
+    assert ledger._v_mtime_ns == st1.st_mtime_ns
+    assert ledger._v_stat_size == st1.st_size
+
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+    st2 = path.stat()
+    assert ledger._v_ino == st2.st_ino
+    assert ledger._v_mtime_ns == st2.st_mtime_ns
+    assert ledger._v_stat_size == st2.st_size
+
+
+def test_ledger_append_transition_kind_forces_full_verify_and_succeeds_when_valid(
+    tmp_path,
+) -> None:
+    """[#345 指摘③ G2] フェーズ遷移/terminal summary kind
+    （`_TRANSITION_EVENT_KINDS`）を追記する際は、stat が unchanged でも
+    無条件にフル chain 再検証を行う。台帳が正当であれば通常どおり成功する
+    （G2 が偽陽性で正当な遷移を拒否しないことの確認。Codex finding P1
+    test (d)）。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+
+    entry = ledger.append(
+        {"kind": "stage_summary", "stage": "c2", "parent_cpu_seconds": 1.0}
+    )
+    assert entry.seq == 2
+
+    result = Ledger(path).verify_chain()
+    assert result.ok is True
+    assert result.entries_verified == 3
+    assert result.tamper_at_seq is None
+
+
 def test_check_leakage_pre_unseal_access_is_blocked() -> None:
     entries = [
         LedgerEntry(

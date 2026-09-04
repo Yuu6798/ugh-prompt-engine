@@ -264,3 +264,221 @@ python -m voice_genesis.calibration.approvals refresh --gate gate1 \
 `authorization_nonce`/`cost_caps`/`e_use_bound_accepted`/`max_claim_scope`
 はいずれも無変更）。機械的な再スタンプであり、委任元（User）本人による
 変更内容の再確認は代替しない（本ファイル §9 冒頭の注記どおり）。
+
+## 10. 再承認（2026-09-03 第 2 回）
+
+1. 契機: #344 第 9 巡（memo hash のみの restamp は再承認ではない）。分類②で採用。
+2. 01:46Z 承認以降の memo 変更: D75 撤回（matrix 456 セル復元）、D76（declared
+   sweeps = truth-core 因子分解「nuisance 固定・truth 可変」、`frozen_design` へ
+   凍結）、D77（manifest `declared_sweeps` 必須・完全一致検証）、D78（`BlockedCode`
+   凍結 6 値復元、sweep 宣言不整合は `BLOCKED_C0_MANIFEST_INCOMPLETE` + 詳細
+   フィールド）、D79（runner のスライス/再開堅牢化: `--time-budget-seconds`、
+   `--discard-partial-groups` + `meter_call_group_discarded` ledger イベント、
+   memo §6.5。commit 4169526）。
+3. 設計事実の開示: 正本 matrix + holdout の (block, domain) 層化の下では、いずれの
+   declared sweep も holdout 側に §10.4 の resolvable pair ≥3 を持てず、
+   CALIBRATED_DIRECTIONAL は本 campaign で構造的に到達不能。DIRECTIONAL 天井の
+   候補は NOT_EVALUABLE (`DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT`) で閉じる。
+   ABSOLUTE 経路は影響なし。設計 v1.1 候補（sweep-aware 層化）として User へ
+   報告済み・本 campaign では変更しない。
+4. 承認内容の再確認: cost caps 3 値 / `budget_accounting_mode` / `max_claim_scope`
+   / E_use 境界受容は 01:46Z と同一。変更なし。
+5. nonce 取扱い: 本節時点の nonce は §6.1 の値のまま。Step 3 の Gate 2 dry-run が
+   発行する nonce へ live/record の両方を更新する（§6.2 の手順）。本ファイルは
+   E_use table により digest 固定されるため、freeze 後には編集しない。最終 nonce は
+   record copy JSON と `c0_manifest.json` が正。
+6. ファイル名日付と承認日時の関係（2026-09-03 追記）: 記録コピーのファイル名が
+   持つ日付（`gate1_campaign_execution.2026-09-02.json`、
+   `gate3_seal_acceptance.2026-09-03.json`）はそれぞれの承認記録の日付であり、
+   gate1 側は 01:46Z の元の委任、gate3 側は本節（第 2 回）の再承認を指す——
+   実際の承認日時は各 JSON の `approved_at_utc` が正。
+
+### 10.1 D79 追補（2026-09-03）
+
+Codex #345 第 1 巡の ③ 2 件（F0 再開 index 未使用 / PARTIAL_SLICE の parent CPU
+が ledger 非記録）を採用し memo §6.5 を追補、続けて第 2 巡の ③ 1 件（c1/c4 再開時に
+完了済み render を index で skip）も同じ memo 追補（§6.5.1）へ折り込んだ上で
+memo_sha256 を `2c805ae839d624a640ac8ea0d0d372d95d17d99a996fdcf219e50115108115e0` へ
+更新した。承認内容（cost caps /
+claim scope / E_use 境界）は §10 と同一。
+
+### 10.2 D79 追補 2（2026-09-03）
+
+Codex #345 第 3 巡の ③ 1 件（F5: `render_stage.run_render_stage()` の resume
+index skip が completing invocation でも一切検証を行わず、削除・破損した PCM の
+上に `fixture_valid`/c4-holdout render→measure 遷移が falsely advance し得た
+欠落——遷移直前 1 回のみの skip unit 全数検証 + `stop_event`/
+`RenderResumeIndexIntegrityError` fail-closed を追加）と ② 1 件（F6:
+`SliceStatus.instances_completed_this_run` が index skip 分まで含めて過大計上して
+いた欠落を新規 render 分のみの計上へ修正）を採用し、続けてリハーサル 4
+（`freeze_execution_15.txt`/`rehearsal4/slice_table.out`）の ③ 1 件（D:
+`measure_stage.run_measure_stage()` が c2/c3a/c3b/c4 の measure サブフェーズで
+完了済み instance を毎回フル `MeasurementRecord` へ再構成し続けていた欠落——
+新設 `MeterCallIndex.is_complete()` による O(1) skip + completing invocation
+時のみの 1 パス再構成へ修正）と ② 1 件（G: `instances_remaining` が「このスライスが
+実際に歩いた instance 数」ベースの引き算で、budget が最初の instance 前に尽きると
+完了済み分を無視し過大報告していた欠落——render_stage/measure_stage 双方を index
+からの直接算出へ修正）を採用した。memo §6.5/§6.5.1/§6.5.2 を追補し、memo_sha256 を
+`6f693a213881dfd8c6c5a213c969fc913ee5c6f6063d638eb5ae74c5d5232a0d` へ更新した。
+承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。
+
+### 10.3 D79 追補 3（2026-09-03）
+
+Codex #345 第 5 巡の 4 件（slice/resume ファミリーの終端掃討）を採用した。
+③ 1 件（S1: `cli._build_f0_by_instance()` の budget 境界検査が F0 再開状態の
+`meter_call_index.is_complete()` 参照より先に走っていたため、選択済み F0 が
+全 instance で記帳済みでも resume 呼び出しが永久に `PARTIAL_SLICE` を報告し
+続け得た欠落——index 参照を budget 検査より先に行う既存規則の未適用箇所を
+是正。副次的に露呈した `instances_remaining` の同型過大報告も index からの
+直接算出へ修正）。② 1 件（S2: `measure_stage.run_measure_stage()` の
+`instances_completed_this_run` が、全 candidate が `is_complete()` fast path
+を通っただけの instance も計上していた欠落——既存の `has_pending` 判定を
+流用し新規分のみ計上へ修正）。③ 2 件（S3: c4-holdout の render サブフェーズ
+完了後、measure サブフェーズが複数 slice に渡ると毎 slice が完了時整合検証
+（第 3 巡 F5）を再実行し PCM を再読込・再ハッシュしていた欠落——新設
+ノンゲート ledger event `holdout_render_valid`（`state.CampaignPhase`/
+`vocab.ProcedureGate` の gate 語彙とは無関係）で render→measure 遷移時の
+検証を 1 回だけ記録し、以降の completing invocation は O(1) のマーカー確認
+のみで検証本体をスキップする。S4: 上記完了時整合検証（`_validate_skipped_
+resume_outcomes`）が `.sha256` sidecar を一度も読まず、測定時検証
+（`measure_stage._verify_and_load_rendered_pcm`）と異なる（緩い）チェック
+集合になっていた欠落——両関数が共有する新設ヘルパー `render_stage.
+_verify_pcm_sidecar()` へ集約し検証項目を同値化）。memo §6.5.3 を追補し、
+memo_sha256 を
+`d23305cd3feea1fba7904c43524a97621d04177d8756132b93556b894efe4d45` へ更新した。
+承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。
+
+### 10.4 D79 追補 4（2026-09-03）
+
+Codex #345 第 6 巡の ③ 1 件（discard された部分 meter_call group の
+within-process CPU が、writer プロセスが hard-kill され `cli.py` `main()`
+の `finally` に一度も到達しなかった場合、対応する `stage_summary`/
+`slice_summary` が記帳されず永久に回収不能だった欠落——`meter_call_group_
+discarded` event に新規フィールド `discarded_within_cpu_seconds`（discard
+される部分グループの検証済み per-record `within_cpu_seconds` の最大値）を
+追加し、`caps.cap_counters_from_ledger()` がこの event でのみ compute へ
+1 回だけ加算する。他のどの箇所（`meter_call` 自身の compute 集計含む）にも
+対応する減算/加算はなく exactly-once）を採用した。同時に 1 件境界宣言
+（`[UNDERSPEC-CAL-D80]`、docs only・コード変更なし: C4 render の最終
+holdout 遷移時再検証は不採用——測定値は測定時に入力検証済み・ledger の sha
+が正本であり、測定後の render 成果物ストアの完全性は campaign 正当性契約の
+外）。memo §6.5（discard event の payload 一覧）/§6.5.4 を追補し、
+memo_sha256 を
+`cb5ee5bdbe712f6ea6a62de58881de0735d3c066f0c8307ef0ad4264a7cc4c15` へ更新した。
+承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。
+
+
+### 10.5 D79 追補 5（2026-09-03）
+
+Codex #345 第 8 巡の ③ 3 件（invocation_id による明示的 invocation 識別への
+置換、discard 時の live counter 課金 + remeasure 前 cap 検査、discard の
+budget 検査への先行処理）を採用した——(1) round 7 finding #1 の
+`dispatch_epoch`/`last_meter_epoch` ledger 順序ヒューリスティックは、SIGKILL
+された writer と、discard フラグ無しで再試行した別 invocation の
+`stage_summary` を取り違え得た（false-success）。`cli.py` `main()` が
+process ごとに 1 個の `invocation_id`（`uuid.uuid4().hex`）を生成し、cap 会計
+対象の全 event（`meter_call`/`render`/`slice_summary`/`stage_summary`/
+`meter_call_group_discarded`/`worker_attempts_discarded`・`worker_failed`/
+`stop_event`）へ一貫して付与する明示的識別へ置換し、
+`caps.cap_counters_from_ledger()` の pairing rule を「discard される
+group の WRITER 自身の `invocation_id` と同じ `invocation_id` を持つ
+`stage_summary`/`slice_summary` が ledger に存在するか」の同一性判定へ
+改めた。(2) `run_measurement_for_instance` が discard 時に live な
+`cap_counters` へ課金・cap 検査せずに remeasure してしまい、既に凍結
+compute cap を超過した状態のまま処理が進み得た欠落——discard の記帳直後、
+`caps.is_invocation_id_summarized()` が非カバーと判定した場合のみ
+`discarded_within_cpu_seconds` を live counter へ課金・persist・cap 再検査
+し、remeasure 開始前に breach なら `COST_CAP_EXCEEDED` で fail-closed する
+よう修正した。(3) `--discard-partial-groups` 指定時、budget を使い切った
+状態で partial group が pending 扱いのまま budget 境界検査に先に捕まり
+discard へ到達できず、短い budget での再実行が永久に回復しない欠落——
+discard（非 dispatch 操作）を budget 検査より先に処理するよう
+`run_measure_stage`/`_build_f0_by_instance` を修正した。**ファミリー終端
+宣言**: 割込み invocation を跨ぐ cap 会計ファミリー（round 6 finding #3・
+round 7 finding #1・round 8 finding #1/#2/#3）は第 8 巡で終端——以降は
+新規の具体的な偽成功/偽失敗経路を示す指摘のみ採用する。memo §6.5（discard
+event の payload 一覧に `invocation_id` を追記）/§6.5.5 を追補し、
+memo_sha256 を
+`144aa62beb8e72a3cb2d50fa5fcd28717a7864a5e23ac528500103ca960f7fab` へ更新した。
+承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。
+
+### 10.6 D79 追補 6（2026-09-03）
+
+Codex #345 第 12 巡の ③ 1 件（COMPLETE かつ never-discarded な meter_call
+group の within CPU 未回収——第 8 巡のファミリー終端宣言後、新規の具体的な
+偽成功経路として採用）を採用した。プロセスが group の 6 件目（最後）の
+`meter_call` record を追記した直後に kill され、`cli.py` `main()` の
+`finally` に一度も到達しなかった場合、discard すべき欠損が無い（6 件とも
+揃っている）ため `meter_call_group_discarded` は一切記帳されず、再開時は
+この group を「済」として扱い remeasure も discard も一切走らない——round
+16 finding #3 の `within_cpu_seconds` 除外（`stage_summary`/`slice_
+summary` が回収する前提）はこの writer について永久に成立せず、
+`counters.json` の削除/rollback から再構成すると凍結 compute cap を
+falsely 下回り得た（false-success）。修正: `caps.cap_counters_from_
+ledger()` の pairing rule を discard event 限定から全 `meter_call`
+group へ一般化——「writer の `invocation_id` に `stage_summary`/`slice_
+summary` が一件も無い group」は discard の有無に関わらず within CPU を
+回収対象とする。exactly-once 不変条件は discard 経路（現状維持）と、
+forward scan 完了後の deferred pass（discard で pop されなかった key の
+みを対象に、writer が非カバーなら最初の record の `within_cpu_seconds`
+を 1 回加算）の 2 経路排他で維持する（discard された key は deferred
+pass に現れず、deferred pass で課金される key は一度も discard されて
+いない）。`reconcile_cap_counters()`（stage 起動時の pre-dispatch breach
+check の入力）はこの関数を素通しするため、live counters への反映も
+追加コード無しで含意される。memo §6.5.6 を追補し、memo_sha256 を
+`bccab5978b12f4f6f36b2c9de25fd2b4d2abf87104a2a3f2861ce860a3473a70` へ
+更新した。承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。
+
+### 10.7 D79 追補 7（2026-09-03）
+
+Codex #345 第 13 巡の ③ 1 件（第 12 巡の deferred pass が回復経路で偽の
+cost cap 超過を引き起こし得た欠落——新規の具体的な偽成功経路として採用）
+を採用した。第 12 巡の deferred pass は COMPLETE/PARTIAL を区別せず、
+未 summary な writer を持つ group を無条件に計上していた。
+`--discard-partial-groups` による復旧では `cli.py main()` がまず ledger
+から `cap_counters` を reconcile する（discard event はまだ存在しない）
+ため、PARTIAL な group（hard kill 直後、6 record 未満）であっても未
+summary であれば deferred pass がこの時点で within CPU を計上してしまい、
+続く `_discard_partial_group()` が `discarded_within_cpu_seconds` を同じ
+key 分もう一度課金する——同一 within CPU の二重計上により、
+`max(persisted, derived)` の reconcile 規則がその水増しをそのまま実効値
+として残し、凍結 compute cap を偽に超過し得た（false
+`COST_CAP_EXCEEDED`）。修正: deferred pass を **COMPLETE な group のみ**
+（当該 key の期待される全 repeat key が ledger 上に揃っている group）に
+限定した。PARTIAL な group は discard されるまでいずれの経路からも
+計上されない——discard 前は fail-closed のまま campaign を止め続けることが
+安全装置そのものであり、discard event が PARTIAL group を唯一計上できる
+経路であり続ける。exactly-once 不変条件（改訂）: 未 summary な writer を
+持つ group の within CPU は厳密に 1 回だけ計上される——COMPLETE な group
+は deferred pass 経由、PARTIAL な group は discard event 経由。summary
+済みの writer は自身の summary でカバーされる（変更なし）。
+`caps.cap_counters_from_ledger()`/`measure_stage._discard_partial_group()`
+両方の docstring にこの不変条件を明記した。memo §6.5.7 を追補し、
+memo_sha256 を
+`1dcbb6a5c762f2d6c884d59ff1cc67a722e3b0b5e65d04d59d951472af16da6f` へ
+更新した。承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。
+
+### 10.8 D83 正誤表（2026-09-04、campaign close 後）
+
+(a) 誤: §10.7 の「偽成功経路」（第 13 巡の finding をこの語で 2 箇所ラベル）。
+正: 「偽失敗経路（偽 `COST_CAP_EXCEEDED`）」——第 13 巡の finding は第 12 巡
+deferred pass の within CPU 二重計上により凍結 compute cap を偽に超過させ
+`COST_CAP_EXCEEDED` を誤って発生させ得た欠落であり、campaign を誤って
+falsely advance させる偽成功経路ではなく、campaign を誤って falsely 停止
+させる偽失敗経路である。§10.7 本文（432–459 行）はこの正誤表を付す形で
+訂正し、原文そのものは書き換えない。
+
+(b) 指摘元 = PR #345 第 14 巡（`GATE1_DECISION_RECORD.md` ~435 行
+「Label the round-13 correction as a false failure」）。採否 = ②
+将来汚染（記録の誤記が下流の記録を汚す）。
+
+(c) 適用が campaign close 後になった理由: 本記録は E_use table により
+digest 固定され、その E_use table は campaign RUN10-CAL-20260904-862dec28
+の凍結入力の一つだった（holdout stage が `E_USE_TABLE_STALE_OR_MUTATED`
+を検査する）ため、§10.7 本文への訂正は `campaign_closed`（ledger seq
+70627、commit 25be66d）の後にのみ適用可能だった。
+
+(d) campaign dir（`voice_genesis/calibration/campaigns/
+RUN10-CAL-20260904-862dec28/`）は正誤表適用前の E_use table の凍結コピーを
+別途保持しているため、閉じた campaign の記録はこの restamp の影響を受けない。
+本 restamp は今後の campaign にのみ適用される。

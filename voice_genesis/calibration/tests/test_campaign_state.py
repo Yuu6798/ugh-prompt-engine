@@ -98,19 +98,28 @@ def test_load_frozen_campaign_reads_ledger_exactly_once(
     """finding #12 regression: `load_frozen_campaign()` reads `ledger.jsonl`
     exactly once (`Ledger.load_with_verification` builds entries + runs
     chain verification from the same buffer), rather than once via
-    `Ledger(path)` and a second time via `ledger.verify_chain()`."""
+    `Ledger(path)` and a second time via `ledger.verify_chain()`.
+
+    Read-counting hook (`#345` 指摘③ 追補): `_read_and_verify()` used to read
+    the ledger via `Path.read_text()`; it now opens the file itself
+    (`path.open("rb")`) so it can `os.fstat()` the same file descriptor the
+    content was read from (needed for the G1 stat-based change detector —
+    `read_text()` doesn't expose the underlying fd). This test therefore
+    counts `Path.open()` calls on `ledger_path` rather than `read_text()`
+    calls; the invariant under test (the ledger bytes are read from disk
+    exactly once) is unchanged, only the API used to do the read changed."""
     campaign_dir, secret_root = build_tiny_campaign(tmp_path)
     ledger_path = campaign_dir / "ledger.jsonl"
 
     read_count = {"n": 0}
-    original_read_text = Path.read_text
+    original_open = Path.open
 
-    def _counting_read_text(self: Path, *args: object, **kwargs: object) -> str:
+    def _counting_open(self: Path, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
         if self == ledger_path:
             read_count["n"] += 1
-        return original_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+        return original_open(self, *args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(Path, "read_text", _counting_read_text)
+    monkeypatch.setattr(Path, "open", _counting_open)
 
     campaign = load_frozen_campaign(campaign_dir, secret_root)
     assert campaign.ledger.entries  # sanity: the ledger still loaded correctly

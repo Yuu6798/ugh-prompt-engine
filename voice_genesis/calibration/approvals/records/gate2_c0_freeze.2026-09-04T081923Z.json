@@ -1,0 +1,9 @@
+{
+  "approved_at_utc": "2026-09-04T08:19:23Z",
+  "approver": "Yuu6798 (delegated to Claude Fable 5.1 — renewed approval 2026-09-03; original delegation 2026-09-02T01:46:11Z; session 011x6MhCwdZWgxsnkXDVBrdx)",
+  "authorization_nonce": "8cb7abf4b4d81ace7eb5e5d3d8427333",
+  "design_doc_sha256": "48e15e485301e5e686dfa96870d190ad08d2bc0a57e39d1971f13c9cf8426508",
+  "gate": "GATE2_C0_FREEZE",
+  "manifest_core_sha": "862dec28ec2bfe7d16bac844eabf6a78dbece38800bdae232489586cee06ead1",
+  "memo_sha256": "1dcbb6a5c762f2d6c884d59ff1cc67a722e3b0b5e65d04d59d951472af16da6f"
+}

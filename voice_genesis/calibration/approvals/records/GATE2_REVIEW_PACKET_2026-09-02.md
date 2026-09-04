@@ -225,7 +225,10 @@ HMAC 順位付けを行うため、これは意図された挙動）。
 `README.md` 本文の「UNDERSPEC 台帳」表（`01`–`08`, `B01`–`B12`, `C01`–`C18`,
 `D01`–`D11`）に加えて、Phase D2 (`campaign/`) モジュール表の本文中にのみ
 インラインでタグ付けされ、台帳の表そのものには再掲されていない `D12`–`D20`
-（`campaign/*.py` の設計判断）も、完全性のため本節に含める。
+（`campaign/*.py` の設計判断）も、完全性のため本節に含める。**さらに
+`D18` の写像を取り消した `D76`–`D78`（#344 round 6–9、README.md 本体の
+台帳表に verbatim 記載済み）を Gate 2 関連の境界エントリとして追補する
+（本節末尾に追加、2026-09-02 追補）。**
 
 凡例（review question 列）: **A**=このまま受容 / **C**=変更を要求（意見を
 記入）。空欄は「未検討」。
@@ -283,7 +286,7 @@ HMAC 順位付けを行うため、これは意図された挙動）。
 | `UNDERSPEC-CAL-C17` | `c0_validate.py` | `frozen_design` 各セクションの完全なネスト鍵集合を module-level frozen 定数として定義した（`*_SPEC_REQUIRED_KEYS` 群） | |
 | `UNDERSPEC-CAL-C18` | `c0_validate.py` | `frozen_design` ネスト鍵/`stop_rules` に BOUNDED shape validation（sha256/非空list/非空mapping/非空白str）を追加した。**値の意味論的相互検証（registry/matrix との突合）は armed producer 実装時の別 PR の責務**と明記 | |
 
-### Dシリーズ（`D01`–`D20`, Phase D1/D2 の freeze producer / campaign runner）
+### Dシリーズ（`D01`–`D20`, `D76`–`D78`, Phase D1/D2 の freeze producer / campaign runner）
 
 | tag | module | 内容 | review question (A/C) |
 |---|---|---|---|
@@ -304,9 +307,12 @@ HMAC 順位付けを行うため、これは意図された挙動）。
 | `UNDERSPEC-CAL-D15` | `campaign/baseline_stage.py` | `tolerance.pooled_dispersion()` のプール粒度を candidate_id 単位とした | |
 | `UNDERSPEC-CAL-D16` | `campaign/selection_stage.py` | `build_candidate_criteria()` は実測 record から normalized MAE/bias/q95(AE)（ABSOLUTE）・Kendall tau/隣接反転率（DIRECTIONAL）を集計する | |
 | `UNDERSPEC-CAL-D17` | `campaign/cli.py` | `c4-holdout` の E_use 拘束 absolute/directional gate 組立の完全な CLI 配線は D2 infra の範囲外とした（`holdout_stage` の building block はテストで直接検証） | |
-| `UNDERSPEC-CAL-D18` | `campaign/holdout_stage.py` | `declared_axes_for_family()` は凍結 `frozen_design.fixture_spec.<FAMILY>.confound_axes` を gate4' invariance 軸/DIRECTIONAL sweep_id 宣言として再利用する | |
+| `UNDERSPEC-CAL-D18` | `campaign/holdout_stage.py` | **(UNDERSPEC-CAL-D76/D77 により写像を取り消し・訂正済み。旧記述は下記に取り消し線で保存)** `declared_axes_for_family()` が凍結 `frozen_design.fixture_spec.<FAMILY>.confound_axes` を gate4' invariance 軸**と** DIRECTIONAL sweep_id 宣言の**両方**に再利用するとした当初の写像は誤りと判明した。現行実装では `confound_axes` は gate4' invariance 軸宣言専用のまま維持し（`declared_axes_for_family()` 自体は無変更）、DIRECTIONAL sweep_id 宣言は `frozen_design.fixture_spec.<FAMILY>.declared_sweeps`（`fixtures.matrix.declared_sweeps_by_family()` が truth-core block（nuisance 固定・truth 可変の行集合、def A）から独立導出）という別 key へ分離された。旧写像（confound_axes で group 化すると全 pair `delta_truth == 0` になり resolvable pair が構造的に 0 件になる欠陥）の詳細は `UNDERSPEC-CAL-D76`/`D77` 行と `campaign/holdout_stage.py` の D18 note を参照。<br>~~`declared_axes_for_family()` は凍結 `frozen_design.fixture_spec.<FAMILY>.confound_axes` を gate4' invariance 軸/DIRECTIONAL sweep_id 宣言として再利用する~~（取り消し） | |
 | `UNDERSPEC-CAL-D19` | `campaign/state.py` | D2 runner 固有の拡張手続フェーズ `CampaignPhase` を ledger event の `kind` から導出する | |
 | `UNDERSPEC-CAL-D20` | `campaign/selection_stage.py` | C3b は全 non-F0 family の選択結果を 1 event（`candidate_space`/`selection_rule`/`selected_candidate`）へ集約する | |
+| `UNDERSPEC-CAL-D76` | `fixtures/axes.py`, `fixtures/matrix.py`, `c0_freeze.py`, `c0_validate.py`, `vocab.py`, `campaign/cli.py`, `campaign/measure_stage.py`, `campaign/holdout_stage.py` | #344 round 6–7 ADOPT 4 件（**D75 を SUPERSEDE**）: (1) D75 が誤診断で 456→462 セル化した matrix/axes 変更を 728ef60 相当へ revert。(2) declared sweep を「nuisance/covariate 固定・truth 水準のみ可変の truth-core block」（def A）として `fixtures.matrix.declared_sweeps_by_family()` で独立導出するよう再定義し `frozen_design.fixture_spec.<FAMILY>.declared_sweeps` を新設（**D18/D75 の「confound_axes を sweep_id としても再利用する」写像は誤りとして取り消し**、`confound_axes` は gate4' 専用のまま無変更）。(3) C4 の sweep 容量下界を usable instance の raw 件数から declared sweep ごとの distinct truth level 数へ改めた。(4) instance usability 判定を「全 repeat が有限・整合」の全称判定に強化（existential collapse 是正） | |
+| `UNDERSPEC-CAL-D77` | `c0_validate.py`, `vocab.py`, `campaign/cli.py` | #344 round 8 ADOPT 2 件: (1) manifest の `declared_sweeps` を required key 化し、宣言値が凍結 matrix からの導出値と完全一致するか検証する `_check_declared_sweep_declaration_match()` を新設（不一致は fail-closed）。(2) C4 の sweep 容量検査（distinct truth level 下限）を被覆完全時にも実施するよう配線を修正（false terminal 是正） | |
+| `UNDERSPEC-CAL-D78` | `vocab.py`, `c0_validate.py` | #344 round 9 ADOPT + audit 同型 1 件: D76/D77 が事後追加した `BLOCKED_C0_SWEEP_DECLARATION_INVALID`/`_MISMATCH` の 2 メンバーが設計正本 §3.3 の凍結 6 値語彙を超過していたため削除し `BlockedCode` を凍結 6 値へ復元。診断詳細は新設 `SweepManifestViolationDetail` へ移し、いずれも `BLOCKED_C0_MANIFEST_INCOMPLETE` へ集約する | |
 
 **R シリーズ: リポジトリ内に `UNDERSPEC-CAL-R*` タグは存在しない**
 （`README.md`/`IMPLEMENTATION_MAP_v1.md`/`GATE_REVIEW_BRIEF_v1.md` を

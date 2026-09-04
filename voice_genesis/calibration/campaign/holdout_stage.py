@@ -31,13 +31,15 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from voice_genesis.calibration.campaign import measure_stage, workunits
 from voice_genesis.calibration.campaign.render_stage import run_render_stage
 from voice_genesis.calibration.campaign.state import FrozenCampaign
+from voice_genesis.calibration.campaign.time_budget import SliceStatus, TimeBudget
 from voice_genesis.calibration.candidates.registry import Candidate, candidate_by_id
 from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
 from voice_genesis.calibration.e_use_table import row_from_dict
@@ -160,7 +162,9 @@ def _parse_e_use_table_bytes(path: Path, data: bytes) -> list[EUseEvidenceRow]:
     return rows
 
 
-def load_e_use_rows(campaign: FrozenCampaign) -> tuple[EUseEvidenceRow, ...]:
+def load_e_use_rows(
+    campaign: FrozenCampaign, *, invocation_id: str | None = None
+) -> tuple[EUseEvidenceRow, ...]:
     """凍結 campaign dir 直下の `e_use_table.json`（`e_use_table.load_e_use_table`
     が読む 14 列 JSON 配列。armed `c0_freeze.armed_freeze()` がここへ配置する）
     を読む。
@@ -187,6 +191,7 @@ def load_e_use_rows(campaign: FrozenCampaign) -> tuple[EUseEvidenceRow, ...]:
                 "kind": "stop_event",
                 "reason": "E_USE_TABLE_STALE_OR_MUTATED",
                 "detail": str(exc),
+                "invocation_id": invocation_id,
             }
         )
         raise
@@ -488,9 +493,16 @@ def render_and_measure_holdout(
     f0_by_instance: Mapping[tuple[str, int], float] | None = None,
     f0_unusable_instances: frozenset[tuple[str, int]] = frozenset(),
     f0_missing_reason: str = "F0_UNUSABLE",
+    f0_prepass: Callable[[], tuple[Any, ...]] | None = None,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
-) -> dict[str, list[measure_stage.MeasurementRecord]]:
+    discard_partial_groups: bool = False,
+    time_budget: TimeBudget | None = None,
+    invocation_id: str | None = None,
+) -> (
+    dict[str, list[measure_stage.MeasurementRecord]]
+    | tuple[dict[str, list[measure_stage.MeasurementRecord]], SliceStatus]
+):
     """C4: holdout 非 control 行を render（determinism 検査つき。§7 leakage
     検査は `render_stage.run_render_stage` が行う）→ family ごとに指定
     candidate（選択済み候補 + B0）で測定する。戻り値は
@@ -505,17 +517,157 @@ def render_and_measure_holdout(
     round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): `f0_missing_reason` is forwarded
     unchanged to `measure_stage.run_measure_stage()`'s `missing_reason` — the
     caller passes `"F0_SELECTION_FAILED"` when `f0_unusable_instances` is
-    every C4 instance because C3a itself has no F0 winner."""
-    run_render_stage(campaign, matrix_rows, stage="c4", cap_counters=cap_counters, cost_caps=cost_caps)
+    every C4 instance because C3a itself has no F0 winner.
+
+    `[UNDERSPEC-CAL-D86]` `f0_prepass` (optional, default `None`): a zero-arg
+    callable that, when given, is invoked **after** the render sub-phase
+    below and **before** the per-family measure sub-phase, and its return
+    value overrides the static `f0_by_instance`/`f0_unusable_instances`/
+    `f0_missing_reason` arguments above. This exists because the selected F0
+    candidate's own C4 measurement (what builds `f0_by_instance`) reads the
+    *rendered* PCM of each C4 HOLDOUT instance — audio that does not exist
+    until the render sub-phase immediately below has produced it (production
+    `c1` renders only CALIBRATION/SELECTION rows; HOLDOUT rows are rendered
+    here, by `c4`). `cli._run_c4` passes a closure over its own
+    `_build_f0_by_instance()` call here instead of calling it beforehand, so
+    that call — and its `measure_stage.run_measurement_for_instance()` PCM
+    reads — cannot run before this function's own render sub-phase does
+    (previously it always could, on every campaign's very first `c4`
+    invocation, deterministically: `FileNotFoundError`). Every other caller
+    (direct tests, and `cli._run_c4`'s own F0_SELECTION_FAILED branch, which
+    never touches PCM at all) keeps passing the static three arguments and
+    omits `f0_prepass`, unaffected by this parameter's default. The callable
+    itself must switch on the same `time_budget is None` rule the static
+    arguments' producer (`cli._build_f0_by_instance`) already uses: return
+    `(f0_by_instance, f0_unusable_instances, f0_missing_reason)` when this
+    call's own `time_budget` is `None`, or additionally append its own
+    `SliceStatus` as a fourth element when it is not.
+
+    R1 の `discard_partial_groups`（design memo `design_runner_robustness.md`,
+    `[UNDERSPEC-CAL-D79]`）は素通しで `measure_stage.run_measure_stage` へ
+    渡す（`stage="c4"`）。
+
+    R2: `time_budget` が渡されれば、render サブフェーズ・（あれば）
+    `f0_prepass` サブフェーズ・family ごとの measure サブフェーズすべてが
+    **同一の** `time_budget` を共有する — 予算切れ以降に呼ばれるサブフェーズ
+    は自分の instance を 1 件も dispatch せず自分の総数をそのまま
+    `instances_remaining` として返すので、`SliceStatus.aggregate()` で単純
+    合算するだけで stage 全体の完走可否・進捗が正しく合成される（render を
+    打ち切った場合、`time_budget` は既に expired 済みのため、後続の
+    `f0_prepass`/family measure はいずれも自分の最初の pending instance で
+    即座に打ち切り、1 件も新規 dispatch しない — PCM 未 render の instance に
+    触れない。leakage 検査は最初の `run_render_stage` 呼び出しの中で完走済み
+    の前提で毎回安全に呼べる）。この場合、戻り値は `(results, SliceStatus)`
+    の 2-tuple になる。`time_budget` が `None`（既定）のときは従来どおり
+    `results` 単体を返す（呼び出し元の挙動・シグネチャは不変）。"""
+    if time_budget is not None:
+        _outcomes, render_slice_status = run_render_stage(
+            campaign,
+            matrix_rows,
+            stage="c4",
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            time_budget=time_budget,
+            invocation_id=invocation_id,
+        )
+        slice_statuses = [render_slice_status]
+    else:
+        run_render_stage(
+            campaign,
+            matrix_rows,
+            stage="c4",
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            invocation_id=invocation_id,
+        )
+        slice_statuses = []
+
+    # `[UNDERSPEC-CAL-D86]`: `f0_prepass`, when given, runs strictly here —
+    # after the render sub-phase above (its own measurement needs this
+    # invocation's C4 HOLDOUT rows actually rendered) and strictly before
+    # the per-family measure sub-phase below (which consumes its output).
+    # See the docstring above for the full rationale and the callable's
+    # contract. Callers that don't need this (a static `f0_by_instance`, or
+    # none at all) simply never pass it — the parameters they did pass stay
+    # untouched.
+    if f0_prepass is not None:
+        if time_budget is not None:
+            f0_by_instance, f0_unusable_instances, f0_missing_reason, f0_slice_status = (
+                f0_prepass()
+            )
+            slice_statuses.append(f0_slice_status)
+        else:
+            f0_by_instance, f0_unusable_instances, f0_missing_reason = f0_prepass()
 
     assignment = campaign.realized_split.assignment
     sr_by_row = {mr.row_id: mr.row.sr_hz for mr in matrix_rows}
     results: dict[str, list[measure_stage.MeasurementRecord]] = {}
-    for family, candidates in sorted(candidates_by_family.items()):
-        instances = workunits.c4_holdout_instances(matrix_rows, assignment, family=family)
-        results[family] = measure_stage.run_measure_stage(
+    family_order = sorted(candidates_by_family.items())
+    instances_by_family = {
+        family: workunits.c4_holdout_instances(matrix_rows, assignment, family=family)
+        for family, _candidates in family_order
+    }
+
+    if time_budget is None:
+        for family, candidates in family_order:
+            results[family] = measure_stage.run_measure_stage(
+                campaign,
+                instances_by_family[family],
+                candidates,
+                sr_by_row=sr_by_row,
+                f0_by_instance=f0_by_instance,
+                f0_unusable_instances=f0_unusable_instances,
+                max_workers=max_workers,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+                missing_reason=f0_missing_reason,
+                discard_partial_groups=discard_partial_groups,
+                stage="c4",
+                invocation_id=invocation_id,
+            )
+        return results
+
+    # Codex PR #345 round 9 finding ③ (adopted, category ③,
+    # `[UNDERSPEC-CAL-D79]`, mirrors `cli._run_c3b()`'s identical fix for
+    # C3b's per-family loop): a family already fully measured before this
+    # invocation must not have `run_measure_stage()` called on it at all
+    # here — that call's own trivial `completed_all=True` unconditionally
+    # pays `_rebuild_skipped_records()`'s reconstruction cost on EVERY
+    # resumed invocation for as long as some OTHER family (or the render
+    # sub-phase above) stays pending, which can by itself exhaust the
+    # slice's `time_budget` before a genuinely pending family is ever
+    # dispatched (see `measure_stage.family_has_pending_work()`'s
+    # docstring). Dispatch is attempted only for families this O(1)
+    # pre-check finds genuinely pending; every family's full record set
+    # (including families skipped here because they were already complete)
+    # is reconstructed only in the completing pass below.
+    precheck_index = measure_stage.MeterCallIndex.build(campaign.ledger.entries)
+    # Codex PR #345 round 10 finding ② (adopted, category ②,
+    # `[UNDERSPEC-CAL-D79]`, mirrors `cli._run_c3b()`'s identical fix): a
+    # duplicate-key cell makes this precheck itself raise
+    # `StaleMeasurementError` — before any of `run_measure_stage()`'s own
+    # logging wrappers ever run — so without this `try`/`except` the ledger
+    # would lack the `STALE_MEASUREMENT_STATE` stop_event explaining the
+    # failed invocation. Explicit loop (not a list/generator comprehension)
+    # so the raise is caught per family, same shared helper
+    # `run_measure_stage()` itself uses.
+    pending_families = []
+    for family, candidates in family_order:
+        try:
+            has_pending = measure_stage.family_has_pending_work(
+                instances_by_family[family], candidates, precheck_index, f0_unusable_instances
+            )
+        except measure_stage.StaleMeasurementError as exc:
+            measure_stage._append_stale_measurement_stop_event(
+                campaign, exc, invocation_id=invocation_id
+            )
+            raise
+        if has_pending:
+            pending_families.append((family, candidates))
+    for family, candidates in pending_families:
+        family_records, family_slice_status = measure_stage.run_measure_stage(
             campaign,
-            instances,
+            instances_by_family[family],
             candidates,
             sr_by_row=sr_by_row,
             f0_by_instance=f0_by_instance,
@@ -524,8 +676,55 @@ def render_and_measure_holdout(
             cap_counters=cap_counters,
             cost_caps=cost_caps,
             missing_reason=f0_missing_reason,
+            discard_partial_groups=discard_partial_groups,
+            stage="c4",
+            time_budget=time_budget,
+            invocation_id=invocation_id,
         )
-    return results
+        # round 9b fix (this call's own records are already computed above
+        # at no extra cost — capture them rather than discarding, so a
+        # PARTIAL_SLICE return still reflects real per-family progress for
+        # every family this invocation actually dispatched. `cli._run_c4`
+        # still discards `results` wholesale on `not completed_all` (its own
+        # `overall_slice_status.completed_all` check runs first), so this
+        # costs that caller nothing — but `render_and_measure_holdout()` is
+        # a public function other direct callers (e.g.
+        # `test_c4_render_phase_valid_marker_skips_rehash_on_measure_only_
+        # slices`) rely on for real partial data on every slice, not only
+        # the completing one. Families skipped above because they had zero
+        # pending work before this invocation are deliberately NOT
+        # reconstructed here (that is the cost this fix exists to skip) and
+        # so stay absent from `results` on a PARTIAL_SLICE.
+        results[family] = family_records
+        slice_statuses.append(family_slice_status)
+
+    overall_slice_status = SliceStatus.aggregate(slice_statuses)
+    if not overall_slice_status.completed_all:
+        return results, overall_slice_status
+
+    # Completing invocation: every family's cells are now complete (already
+    # complete before this call, or just completed by the dispatch loop
+    # above) — reconstruct full records for EVERY family exactly once here.
+    # Each call below is unsliced (no `time_budget`) and therefore
+    # guaranteed cheap: every cell is already `is_complete()`, so it takes
+    # the pure O(1) skip path with no new dispatch.
+    for family, candidates in family_order:
+        results[family] = measure_stage.run_measure_stage(
+            campaign,
+            instances_by_family[family],
+            candidates,
+            sr_by_row=sr_by_row,
+            f0_by_instance=f0_by_instance,
+            f0_unusable_instances=f0_unusable_instances,
+            max_workers=max_workers,
+            cap_counters=cap_counters,
+            cost_caps=cost_caps,
+            missing_reason=f0_missing_reason,
+            discard_partial_groups=discard_partial_groups,
+            stage="c4",
+            invocation_id=invocation_id,
+        )
+    return results, overall_slice_status
 
 
 def resolve_candidates(candidate_ids: Sequence[str]) -> tuple[Candidate, ...]:
@@ -559,7 +758,10 @@ def _validate_meter_coverage(results: Sequence[MeterHoldoutResult]) -> None:
 
 
 def run_holdout_stage(
-    campaign: FrozenCampaign, results: Sequence[MeterHoldoutResult]
+    campaign: FrozenCampaign,
+    results: Sequence[MeterHoldoutResult],
+    *,
+    invocation_id: str | None = None,
 ) -> LedgerEntry:
     """全 meter の評価結果を単一 `holdout_executed_valid` event として記帳
     する（設計正本 §1: 手続 Gate は meter status とは別軸だが、本 event 自体
@@ -581,7 +783,13 @@ def run_holdout_stage(
         }
         for r in results
     }
-    return campaign.ledger.append({"kind": "holdout_executed_valid", "per_meter": per_meter})
+    return campaign.ledger.append(
+        {
+            "kind": "holdout_executed_valid",
+            "per_meter": per_meter,
+            "invocation_id": invocation_id,
+        }
+    )
 
 
 __all__ = [

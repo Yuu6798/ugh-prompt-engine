@@ -14,7 +14,20 @@
 - **resume**: 既に `render` event が記帳済みの instance は、現在の pcm
   ファイルの sha256 が ledger 記録値と一致する場合のみスキップする。ファイル
   欠損または sha 不一致は stale として fail-closed（`RenderStaleError`。
-  無言スキップ・無言再 render のいずれも禁止 — memo §6.4）。
+  無言スキップ・無言再 render のいずれも禁止 — memo §6.4）。`run_render_stage`
+  自体は resume 済み unit を `_render_index_from_ledger` の O(1) index で
+  skip する（`render_instance` を再度呼ばない）が、そのまま stage 遷移
+  （c1 の `fixture_valid` / c4-holdout の render サブフェーズ→measure
+  サブフェーズ引き渡し）に進む**completing invocation**でのみ、index が
+  skip した unit を一度だけ検証する（`RenderResumeIndexIntegrityError`。
+  round 3 ADOPT ③ `[UNDERSPEC-CAL-D79]`。検証自体は `.sha256` sidecar と
+  ledger 側 pin の両方を要求する `_verify_pcm_sidecar` 共有 helper に委譲し、
+  `measure_stage._verify_and_load_rendered_pcm` と判定を一本化する —
+  round 5 finding S4）——`PARTIAL_SLICE` 終了時はこの検証を行わない
+  （index skip は O(1) のまま）。`stage="c4"` はこの検証が通ったことを
+  `RENDER_PHASE_VALID_KIND`（`"holdout_render_valid"`）ledger event として
+  記帳し、以降 render サブフェーズが完了した状態で measure サブフェーズが
+  続く呼び出しは検証を再実行しない（round 5 finding S3）。
 - **leakage 検査**: holdout 非 control instance の render を試みる **前**に
   `provenance.Ledger.check_leakage()` を呼び、unseal 前なら
   `BLOCKED_LEAKAGE` で拒否する（§7）。C1 は holdout instance を対象にしない
@@ -43,6 +56,7 @@ from voice_genesis.calibration.campaign.caps import (
     validate_worker_cpu_seconds,
 )
 from voice_genesis.calibration.campaign.state import FrozenCampaign
+from voice_genesis.calibration.campaign.time_budget import SliceStatus, TimeBudget
 from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
 from voice_genesis.calibration.cost_caps import check as cost_caps_check
 from voice_genesis.calibration.fixtures.controls import control_row_ids
@@ -155,6 +169,60 @@ class RenderLeakageBlockedError(RuntimeError):
         super().__init__(f"render_stage: BLOCKED_LEAKAGE: {detail}")
 
 
+class RenderResumeIndexIntegrityError(RuntimeError):
+    """Codex PR #345 round 3 finding F5 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): the O(1) index-based resume-skip fast path
+    (`_render_index_from_ledger`) trusts the ledger sha alone and never
+    re-reads a `skipped_resume` unit's PCM bytes. Left unguarded, a deleted
+    or corrupted PCM under an already-recorded `render` event would let the
+    completing invocation still append `fixture_valid` (c1) / let the
+    render sub-phase hand off to the measure sub-phase (c4-holdout) — a
+    falsely advanced campaign: `c1-fixtures` becomes `NOOP_ALREADY_COMPLETE`
+    once FIXTURE_VALID is reached (`cli._stage_already_complete()`), so a
+    later C2/measure `StaleRenderError` for that instance would have no
+    resumable path back to render.
+
+    Fix: in the completing invocation (`completed_all` — i.e. not a
+    `PARTIAL_SLICE` exit), every `skipped_resume` outcome produced by THIS
+    call is validated once (file exists + sha256 matches the recorded
+    render sha) before the stage transition. A mismatch blocks the
+    transition, appends a `stop_event` (existing kind, reason
+    `RENDER_RESUME_INDEX_INTEGRITY_MISMATCH`) listing every failing unit,
+    and raises this error instead — the `PARTIAL_SLICE` skip path itself is
+    unchanged (still O(1) per already-completed unit; this validation only
+    runs once, in the invocation that would otherwise transition).
+
+    Recovery: render is a pure deterministic function of
+    `render_root_secret` + row + campaign_id + family + split + row_id +
+    probe_index (module docstring) — the exact original PCM bytes can
+    always be regenerated externally (re-invoke `_render_worker` for the
+    same instance, or replay `render_instance()`'s worker call) and written
+    back to `renders/<row_id>/<probe_index>.pcm` (+ `.sha256` sidecar)
+    WITHOUT touching the ledger. Once the on-disk bytes match the already-
+    pinned `render` event's sha256 again, the next invocation's validation
+    pass (and `measure_stage._verify_and_load_rendered_pcm`) both pass and
+    the stage transitions normally. Appending a SECOND `render` ledger
+    event for the same `(row_id, probe_index)` is NOT a valid alternative:
+    `_recorded_render_sha()` and `_render_index_from_ledger()` both resolve
+    to the FIRST matching `render` event for a key (`entries` iterated in
+    ledger order — the loop returns/`setdefault`s on first match), so a
+    later duplicate would be silently ignored by every existing reader,
+    including measure-time pin verification — restoring the original bytes
+    on disk is the only contract-preserving recovery."""
+
+    def __init__(self, stage: str, failing_units: Sequence[tuple[str, int, str]]) -> None:
+        self.stage = stage
+        self.failing_units = tuple(failing_units)
+        detail = "; ".join(
+            f"row_id={rid!r} probe_index={pidx}: {msg}" for rid, pidx, msg in failing_units
+        )
+        super().__init__(
+            f"render_stage: completing invocation for stage={stage!r} found "
+            f"{len(failing_units)} stale skipped_resume unit(s) in the resume index, "
+            f"transition blocked: {detail}"
+        )
+
+
 @dataclass(frozen=True)
 class RenderOutcome:
     row_id: str
@@ -190,8 +258,169 @@ def _recorded_render_sha(
     return None
 
 
+def _render_index_from_ledger(
+    ledger_entries: Sequence[LedgerEntry],
+) -> dict[tuple[str, int], str]:
+    """Codex PR #345 finding #3 (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
+    one full ledger scan, building `{(row_id, probe_index): sha256}` for
+    every completed `render` event. `run_render_stage()` builds this once
+    per invocation and uses it to skip already-completed units before
+    dispatching them to `render_instance()` at all — mirroring
+    `measure_stage.MeterCallIndex`'s R3 fix for the measure loop. Without
+    this, a resumed slice re-entered `render_instance()` for every already-
+    completed unit (not just the unfinished ones), and each such call did
+    its own full-ledger `_recorded_render_sha()` rescan plus a PCM
+    read+sha256 — so a growing completed prefix made a fixed `--time-budget-
+    seconds` slice do less and less new work, in the worst case expiring
+    before any unfinished unit was even reached (no progress across
+    repeated PARTIAL_SLICE exits). First `render` event per key wins (a
+    completed unit's resume path never re-appends `render` for the same
+    key, so duplicates are not expected in practice)."""
+    index: dict[tuple[str, int], str] = {}
+    for entry in ledger_entries:
+        payload = entry.payload
+        if not isinstance(payload, Mapping) or payload.get("kind") != "render":
+            continue
+        row_id = payload.get("row_id")
+        probe_index = payload.get("probe_index")
+        sha = payload.get("sha256")
+        if not isinstance(row_id, str) or not isinstance(probe_index, int) or not isinstance(sha, str):
+            continue
+        index.setdefault((row_id, probe_index), sha)
+    return index
+
+
 def _pcm_path(campaign: FrozenCampaign, row_id: str, probe_index: int) -> Path:
     return campaign.renders_dir / row_id / f"{probe_index}.pcm"
+
+
+#: Codex PR #345 round 5 finding S3 (adopted, category ③, `[UNDERSPEC-CAL-D79]`,
+#: memo §6.5.3): ledger event kind marking that `stage`'s completing-
+#: invocation resume-index integrity scan (`_validate_skipped_resume_
+#: outcomes`, which re-reads and re-hashes every `skipped_resume` PCM) has
+#: already run once and passed — mirrors `fixture_valid`'s "phase reached"
+#: role but at a finer grain: `fixture_valid` (c1) / `holdout_executed_
+#: valid` (c4, the WHOLE stage) only fire once the stage is entirely done,
+#: while this marks just the render sub-phase of a `stage="c4"` call.
+#: Not one of `state.CampaignPhase`'s 8 gate values (`state.py`'s
+#: `LEDGER_KIND_FOR_PHASE`/`gate_monotonicity_ok` machinery is untouched by
+#: this event) — a plain idempotency marker, same non-gate tier as
+#: `stop_event`/`stale`/`f0_injection_rejected`.
+RENDER_PHASE_VALID_KIND = "holdout_render_valid"
+
+
+def _render_phase_already_valid(ledger_entries: Sequence[LedgerEntry], stage: str) -> bool:
+    """O(1)-per-entry, PCM-free scan for `stage`'s `RENDER_PHASE_VALID_KIND`
+    marker. Cheap even on a large ledger — unlike the full `skipped_resume`
+    PCM rehash it lets a later invocation skip entirely."""
+    for entry in ledger_entries:
+        payload = entry.payload
+        if (
+            isinstance(payload, Mapping)
+            and payload.get("kind") == RENDER_PHASE_VALID_KIND
+            and payload.get("stage") == stage
+        ):
+            return True
+    return False
+
+
+def _verify_pcm_sidecar(
+    campaign: FrozenCampaign, row_id: str, probe_index: int
+) -> tuple[bytes, str, str | None]:
+    """Codex PR #345 round 5 finding S4 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): the single source of truth for "does this
+    rendered PCM's `.sha256` sidecar agree with its own bytes", shared by
+    `_validate_skipped_resume_outcomes()` below (render_stage's completing-
+    invocation resume-index integrity check) and
+    `measure_stage._verify_and_load_rendered_pcm()` (the per-measurement
+    stale check, which also compares against the ledger-pinned sha —
+    that comparison is each caller's own responsibility, not this
+    function's, since the two callers source and report a mismatch against
+    the ledger-pinned value slightly differently: render_stage already has
+    it on hand as `outcome.sha256`, measure_stage looks it up itself via
+    `_recorded_render_sha()` and has a distinct message for "no ledger
+    event pins this instance at all").
+
+    Pre-fix, `_validate_skipped_resume_outcomes()` re-derived this same
+    PCM-vs-ledger-sha check from scratch instead of reusing
+    `measure_stage._verify_and_load_rendered_pcm()`'s stricter contract —
+    and, unlike that function, never read the `.sha256` sidecar at all. A
+    deleted or corrupted sidecar therefore passed render_stage's resume
+    validation cleanly (it only ever compared the PCM's own recomputed sha
+    to the ledger-pinned one) and only failed downstream at measure time
+    with a completely different error (`StaleRenderError`), defeating the
+    whole point of validating once at the render→measure transition: C1
+    would already read back as `NOOP_ALREADY_COMPLETE`
+    (`fixture_valid` reached) by the time C2 discovered the corruption, with
+    no resumable path back to render. Reusing one shared check here makes
+    the two validators structurally unable to diverge again.
+
+    Reads the PCM file (raises `FileNotFoundError` if absent — a distinct,
+    more basic "never rendered" state, not "stale"; both callers already
+    branch on this), then checks the `.sha256` sidecar's presence and match
+    against the actual bytes. Returns `(pcm_bytes, actual_sha256,
+    failure_detail)` where `failure_detail` is `None` iff the sidecar check
+    passes — callers still owe their own comparison against whatever
+    ledger-pinned sha256 they consider authoritative for this instance."""
+    pcm_path = _pcm_path(campaign, row_id, probe_index)
+    if not pcm_path.is_file():
+        raise FileNotFoundError(
+            f"pcm not rendered for row_id={row_id!r} probe_index={probe_index}: {pcm_path}"
+        )
+    pcm_bytes = pcm_path.read_bytes()
+    actual_sha = hashlib.sha256(pcm_bytes).hexdigest()
+    sha_path = pcm_path.with_suffix(".sha256")
+    if not sha_path.is_file():
+        return pcm_bytes, actual_sha, f"sha256 sidecar missing: {sha_path}"
+    sidecar_sha = sha_path.read_text(encoding="utf-8").strip()
+    if sidecar_sha != actual_sha:
+        return (
+            pcm_bytes,
+            actual_sha,
+            f"pcm sha256={actual_sha!r} does not match sidecar {sha_path}={sidecar_sha!r}",
+        )
+    return pcm_bytes, actual_sha, None
+
+
+def _validate_skipped_resume_outcomes(
+    campaign: FrozenCampaign, outcomes: Sequence[RenderOutcome]
+) -> list[tuple[str, int, str]]:
+    """F5 (round 3 ADOPT ③, `[UNDERSPEC-CAL-D79]`): one pass, run only in the
+    completing invocation (see `RenderResumeIndexIntegrityError`), over the
+    `skipped_resume` outcomes THIS call produced via the O(1) index skip —
+    not a per-unit ledger rescan (the recorded sha is already on hand from
+    `outcome.sha256`; `_recorded_render_sha` is not called again here).
+    Returns `(row_id, probe_index, detail)` for every unit whose PCM file is
+    missing, whose `.sha256` sidecar is missing/mismatched, or whose
+    current sha256 no longer matches the recorded render sha (empty if
+    every skipped unit is still intact).
+
+    round 5 finding S4 (adopted, category ③, `[UNDERSPEC-CAL-D79]`): now
+    delegates the PCM-vs-sidecar half of this check to `_verify_pcm_
+    sidecar()` — see that function's docstring for why the pre-fix version
+    (which recomputed the PCM's sha and compared it only against
+    `outcome.sha256`, never reading the sidecar) let a deleted/corrupted
+    sidecar silently pass."""
+    failing: list[tuple[str, int, str]] = []
+    for outcome in outcomes:
+        if outcome.status != "skipped_resume":
+            continue
+        try:
+            _pcm_bytes, actual_sha, detail = _verify_pcm_sidecar(
+                campaign, outcome.row_id, outcome.probe_index
+            )
+        except FileNotFoundError:
+            pcm_path = _pcm_path(campaign, outcome.row_id, outcome.probe_index)
+            failing.append((outcome.row_id, outcome.probe_index, f"pcm missing: {pcm_path}"))
+            continue
+        if detail is None and actual_sha != outcome.sha256:
+            detail = (
+                f"pcm sha256={actual_sha!r} does not match ledger-pinned render "
+                f"sha256={outcome.sha256!r}"
+            )
+        if detail is not None:
+            failing.append((outcome.row_id, outcome.probe_index, detail))
+    return failing
 
 
 def _run_one_render_worker(
@@ -276,6 +505,7 @@ def render_instance(
     timeout_s: float = 60.0,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
+    invocation_id: str | None = None,
 ) -> RenderOutcome:
     """1 instance を resume 判定 → (必要なら) 2 回 fresh-process render →
     byte 比較 → 書込の順で処理する。
@@ -389,6 +619,7 @@ def render_instance(
             candidate_id=None,
             successes=successes,
             failures=[(exc.failure_kind, exc.compute, exc.cause) for exc in failures],
+            invocation_id=invocation_id,
         )
 
     # No failures reached this point (the branch above always raises) -- both
@@ -420,6 +651,7 @@ def render_instance(
                 "probe_index": probe_index,
                 "cpu_seconds": cpu_seconds_total,
                 "storage_bytes": 0,
+                "invocation_id": invocation_id,
             }
         )
         if cap_counters is not None:
@@ -428,7 +660,7 @@ def render_instance(
             if cost_caps is not None:
                 decision = cost_caps_check(cap_counters, cost_caps)
                 if decision is not None:
-                    campaign.ledger.append(decision.event_payload)
+                    campaign.ledger.append({**decision.event_payload, "invocation_id": invocation_id})
                     raise CostCapExceededError(decision.detail)
         raise RenderNondeterministicError(row_id, probe_index)
 
@@ -452,7 +684,7 @@ def render_instance(
         if cost_caps is not None:
             decision = cost_caps_check(cap_counters, cost_caps)
             if decision is not None:
-                campaign.ledger.append(decision.event_payload)
+                campaign.ledger.append({**decision.event_payload, "invocation_id": invocation_id})
                 raise CostCapExceededError(decision.detail)
 
     return RenderOutcome(
@@ -499,14 +731,35 @@ def run_render_stage(
     stage: str,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
-) -> tuple[RenderOutcome, ...]:
+    time_budget: TimeBudget | None = None,
+    invocation_id: str | None = None,
+) -> tuple[RenderOutcome, ...] | tuple[tuple[RenderOutcome, ...], SliceStatus]:
     """`stage='c1'` または `stage='c4'`。C4 は render を試みる前に leakage
     検査を行う。determinism 違反時は既に render 済みの outcome を保ったまま
     `BLOCKED_C1_GENERATOR_NONDETERMINISTIC` stop event を ledger へ記帳し、
     `RenderNondeterministicError` を再送出する（fail-closed。以降の instance
     は render しない）。`cap_counters`/`cost_caps`（finding #1）は
     `render_instance` へ素通しし、cap 超過時は同様に以降の instance へ進まず
-    `CostCapExceededError` を伝播する。"""
+    `CostCapExceededError` を伝播する。
+
+    R2（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）:
+    `time_budget` が渡されれば instance 境界（1 unit = 1 `(row_id,
+    probe_index)` render）で予算超過を検査し、超過していれば以降の unit を
+    dispatch せず戻る（既に dispatch 済みの unit は完走する）。この場合、
+    `stage="c1"` でも完走しなかったときは `fixture_valid` event を記帳
+    しない（phase transition は次回の resume 呼び出しに委ねる）。戻り値は
+    `(outcomes, SliceStatus)` の 2-tuple になる。`time_budget` が `None`
+    （既定）のときは従来どおり `outcomes` 単体を返す（呼び出し元の挙動・
+    シグネチャは不変）。
+
+    Codex PR #345 round 4 finding #3（adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`, `measure_stage.run_measure_stage()` と同一修正）:
+    上記の予算境界検査は、次に dispatch する unit が既に `completed_units`
+    に載っている（＝真に pending ではない）場合は発動しない — index 参照
+    を budget 検査より先に行う。直前の呼び出しが最終 unit の render 完了後・
+    stage 完了記帳前に中断され、かつ `_render_index_from_ledger()`（全
+    ledger スキャン）自体が time_budget を使い切る場合でも、完了済み unit
+    の O(1) skip が budget 切れでブロックされず、stage は完了/遷移へ進む。"""
     assignment = campaign.realized_split.assignment
     if stage == "c1":
         units = workunits.enumerate_c1_render_units(matrix_rows, assignment)
@@ -518,7 +771,57 @@ def run_render_stage(
 
     rows_by_id = {mr.row_id: mr.row for mr in matrix_rows}
     outcomes: list[RenderOutcome] = []
+    completed_all = True
+    # Codex PR #345 finding #3 (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
+    # one full ledger scan up front (`_render_index_from_ledger`) instead of
+    # letting every already-completed unit below re-enter `render_instance()`
+    # (its own full-ledger `_recorded_render_sha()` rescan + a PCM read+
+    # sha256) each time this stage resumes.
+    completed_units = _render_index_from_ledger(campaign.ledger.entries)
     for unit in units:
+        # Codex PR #345 round 4 finding #3 (adopted, category ③,
+        # `[UNDERSPEC-CAL-D79]`): the O(1) index skip below is checked
+        # BEFORE the budget expiry check — an already-completed unit is
+        # never a "genuinely pending" dispatch, so it must not be blocked
+        # by an expired budget. Pre-fix ordering had the budget check run
+        # first: if rebuilding `completed_units` above (a full ledger scan)
+        # itself consumed the whole `time_budget`, the very first loop
+        # iteration would see `time_budget.expired() == True` and `break`
+        # immediately — even when every remaining unit (up to and including
+        # the last one) was already completed and only the phase transition
+        # below (`fixture_valid` / handoff to measure) was left. Repeated
+        # resumes with the same small budget would then never reach that
+        # transition. Consulting the index first makes every already-
+        # completed unit's O(1) skip budget-independent; only a unit that
+        # actually needs `render_instance()` dispatched is subject to the
+        # budget boundary below.
+        recorded_sha = completed_units.get((unit.row_id, unit.probe_index))
+        if recorded_sha is not None:
+            # Already completed in a prior invocation — skip re-entering
+            # `render_instance()` entirely: no ledger rescan, no PCM
+            # read/hash. This is what makes a resumed slice's completed
+            # prefix cost O(1) per unit instead of O(ledger) per unit, so a
+            # small `--time-budget-seconds` slice reaches unfinished work
+            # instead of expiring on the completed prefix. PCM staleness is
+            # still fail-closed at measurement time
+            # (`measure_stage._verify_and_load_rendered_pcm`), which every
+            # rendered unit passes through before being measured.
+            outcomes.append(
+                RenderOutcome(
+                    row_id=unit.row_id,
+                    probe_index=unit.probe_index,
+                    status="skipped_resume",
+                    sha256=recorded_sha,
+                )
+            )
+            continue
+        # R2 instance boundary: checked before dispatching a NEW (genuinely
+        # pending) unit — a unit already in flight always runs to
+        # completion. An already-completed unit above never reaches this
+        # check (see finding #3 note above).
+        if time_budget is not None and time_budget.expired():
+            completed_all = False
+            break
         row = rows_by_id[unit.row_id]
         try:
             outcome = render_instance(
@@ -530,6 +833,7 @@ def run_render_stage(
                 probe_index=unit.probe_index,
                 cap_counters=cap_counters,
                 cost_caps=cost_caps,
+                invocation_id=invocation_id,
             )
         except RenderNondeterministicError as exc:
             campaign.ledger.append(
@@ -539,6 +843,7 @@ def run_render_stage(
                     "row_id": unit.row_id,
                     "probe_index": unit.probe_index,
                     "stage": stage,
+                    "invocation_id": invocation_id,
                 }
             )
             raise exc
@@ -554,6 +859,7 @@ def run_render_stage(
                     "probe_index": unit.probe_index,
                     "stage": stage,
                     "detail": str(exc),
+                    "invocation_id": invocation_id,
                 }
             )
             raise exc
@@ -579,17 +885,121 @@ def run_render_stage(
                     # `sha256` cannot recover the byte count of the file it
                     # hashes).
                     "pcm_bytes": outcome.pcm_bytes,
+                    # round 8 finding #2 (R8-2, `[UNDERSPEC-CAL-D79]`): this
+                    # process's own invocation_id (see
+                    # `caps.cap_counters_from_ledger()`'s pairing-rule
+                    # docstring).
+                    "invocation_id": invocation_id,
                 }
             )
 
-    if stage == "c1":
+    if completed_all:
+        # F5 (round 3 ADOPT ③, `[UNDERSPEC-CAL-D79]`): this is a
+        # "completing invocation" — one that is about to transition the
+        # stage (c1's `fixture_valid` below, or hand c4-holdout's render
+        # sub-phase off to its measure sub-phase). A `PARTIAL_SLICE` exit
+        # (`completed_all=False`) never reaches here, so the O(1) index skip
+        # above stays untouched for every other invocation. Validate every
+        # `skipped_resume` unit THIS call produced once, before allowing the
+        # transition, so a deleted/corrupted PCM under an already-recorded
+        # `render` event cannot silently ride a false phase transition.
+        #
+        # round 5 finding S3 (adopted, category ③, `[UNDERSPEC-CAL-D79]`):
+        # for `stage="c1"`, "completing invocation" truly means "the only
+        # one" — `cli._stage_already_complete()` makes every later c1 call a
+        # NOOP before `run_render_stage()` is even invoked again once
+        # `fixture_valid` is recorded, so validating unconditionally here is
+        # already exactly-once. `stage="c4"` has no such outer guard while
+        # its paired measure sub-phase (`holdout_stage.render_and_measure_
+        # holdout()`) still has slices left: once every c4 render unit is
+        # done, `completed_all=True` on EVERY subsequent call too (nothing
+        # left to dispatch), so this block re-ran — and re-hashed every
+        # `skipped_resume` PCM from scratch — on every measure-only slice,
+        # competing with measurement for the same `time_budget` instead of
+        # running once at the real render→measure transition.
+        # `RENDER_PHASE_VALID_KIND` makes that one-time validation durable:
+        # once recorded for `stage="c4"`, later completing invocations of
+        # the SAME stage skip the scan (and the marker append) entirely.
+        already_valid = stage == "c4" and _render_phase_already_valid(
+            campaign.ledger.entries, stage
+        )
+        if not already_valid:
+            failing_units = _validate_skipped_resume_outcomes(campaign, outcomes)
+            if failing_units:
+                campaign.ledger.append(
+                    {
+                        "kind": "stop_event",
+                        "reason": "RENDER_RESUME_INDEX_INTEGRITY_MISMATCH",
+                        "stage": stage,
+                        "units": [
+                            {"row_id": rid, "probe_index": pidx, "detail": detail}
+                            for rid, pidx, detail in failing_units
+                        ],
+                        "invocation_id": invocation_id,
+                    }
+                )
+                raise RenderResumeIndexIntegrityError(stage, failing_units)
+            if stage == "c4":
+                campaign.ledger.append(
+                    {
+                        "kind": RENDER_PHASE_VALID_KIND,
+                        "stage": stage,
+                        "instance_count": len({(u.row_id, u.probe_index) for u in units}),
+                        "invocation_id": invocation_id,
+                    }
+                )
+
+    if stage == "c1" and completed_all:
         campaign.ledger.append(
             {
                 "kind": "fixture_valid",
                 "instance_count": len({(u.row_id, u.probe_index) for u in units}),
+                "invocation_id": invocation_id,
             }
         )
-    return tuple(outcomes)
+    if time_budget is None:
+        return tuple(outcomes)
+    # F6 (round 3 ADOPT ②): `instances_completed_this_run` counts only units
+    # newly rendered by THIS invocation — a resumed slice's `skipped_resume`
+    # units (the O(1) index skip above) are prior work, not this run's
+    # progress. Pre-fix `len(outcomes)` counted both, so a resumed slice
+    # that traversed only the already-completed prefix (0 new renders)
+    # still reported nonzero progress.
+    newly_rendered_count = sum(1 for o in outcomes if o.status == "rendered")
+    # rehearsal 4 finding G (adopted, `[UNDERSPEC-CAL-D79]`): `len(units) -
+    # len(outcomes)` over-reported remaining whenever the budget expired
+    # before this call's loop walked even its first unit (`outcomes` empty
+    # -> `instances_remaining == len(units)`, ignoring every unit already
+    # completed in a PRIOR invocation — rehearsal 4 observed
+    # `instances_remaining` jump backward 77->85 at a 0.001s budget). The
+    # true remaining count is `len(units)` minus the total now complete:
+    # `completed_units` (built from the ledger at the TOP of this call, so
+    # it already covers every unit finished in an earlier invocation) plus
+    # `newly_rendered_count` (this call's own new work) — never dependent
+    # on how far this call's own loop happened to walk.
+    #
+    # Codex PR #345 round 4 finding #2 (adopted, category ②,
+    # `[UNDERSPEC-CAL-D79]`): `completed_units` is built from the WHOLE
+    # ledger (`_render_index_from_ledger`), so on a sliced `c4-holdout`
+    # render sub-phase it also contains every prior `render` event from the
+    # `c1` stage — `len(completed_units)` over-counts against `len(units)`,
+    # which holds only THIS stage's units. Scope the completed count to the
+    # intersection with `units` (this stage's own `(row_id, probe_index)`
+    # keys) instead of the raw index size, so a c4 slice run after C1 has
+    # already rendered instances no longer under/over-counts (and never
+    # goes negative).
+    completed_in_stage = sum(
+        1 for u in units if (u.row_id, u.probe_index) in completed_units
+    )
+    instances_remaining = len(units) - (completed_in_stage + newly_rendered_count)
+    slice_status = SliceStatus(
+        time_budget_seconds=time_budget.seconds,
+        elapsed_seconds=time_budget.elapsed(),
+        instances_completed_this_run=newly_rendered_count,
+        instances_remaining=instances_remaining,
+        completed_all=completed_all,
+    )
+    return tuple(outcomes), slice_status
 
 
 __all__ = [
@@ -597,7 +1007,9 @@ __all__ = [
     "RenderNondeterministicError",
     "RenderStaleError",
     "RenderLeakageBlockedError",
+    "RenderResumeIndexIntegrityError",
     "RenderOutcome",
+    "RENDER_PHASE_VALID_KIND",
     "render_instance",
     "run_render_stage",
 ]

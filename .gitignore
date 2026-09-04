@@ -73,3 +73,4 @@ voice_genesis/foundry/recording_kit/*.lock
 voice_genesis/calibration/campaigns/*/renders/
 voice_genesis/calibration/campaigns/*/measurements/
 voice_genesis/calibration/campaigns/.staging-*/
+voice_genesis/calibration/campaigns/.publish.lock

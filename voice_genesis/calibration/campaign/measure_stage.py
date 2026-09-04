@@ -44,7 +44,6 @@ event を記帳した上で `StaleMeasurementError` により fail-closed する
 
 from __future__ import annotations
 
-import hashlib
 import importlib
 import json
 import math
@@ -64,11 +63,13 @@ from voice_genesis.calibration.campaign.caps import (
     CostCapExceededError,
     WorkerCpuSecondsInvalidError,
     charge_worker_attempts_before_raising,
+    is_invocation_id_summarized,
     reported_cpu_seconds_or_none,
     save_cap_counters,
     validate_worker_cpu_seconds,
 )
 from voice_genesis.calibration.campaign.state import FrozenCampaign
+from voice_genesis.calibration.campaign.time_budget import SliceStatus, TimeBudget
 from voice_genesis.calibration.candidates import adapter
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import Candidate
@@ -159,27 +160,29 @@ class StaleRenderError(RuntimeError):
 
 
 def _verify_and_load_rendered_pcm(
-    campaign: FrozenCampaign, row_id: str, probe_index: int, sr_hz: int
+    campaign: FrozenCampaign,
+    row_id: str,
+    probe_index: int,
+    sr_hz: int,
+    *,
+    invocation_id: str | None = None,
 ) -> tuple[np.ndarray, int]:
     """finding #4: 測定の直前に render 済み PCM の実バイト列を読み、sha256 を
     計算して **`.sha256` sidecar と ledger に pin された `render` event の
     sha256 の両方**と照合する。一方でも欠落/不一致なら測定を一切行わず
     `StaleRenderError`（ledger `stale` event 付き）で fail-closed する
-    （差し替えられた/破損した bytes を測定しない — `render_stage.py` の
-    resume 判定が sidecar 無しの sha だけを見ていたのに対し、本関数は
-    ledger 側の pin も独立に要求する二重照合）。PCM ファイル自体が存在
+    （差し替えられた/破損した bytes を測定しない）。PCM ファイル自体が存在
     しない場合は（render が一度も行われていない、より基本的な状態）
     `FileNotFoundError` のまま送出する — こちらは「差し替え」ではなく
     「まだ render していない」なので既存呼び出し元の分岐と型を変えない。
-    """
-    pcm_path = campaign.renders_dir / row_id / f"{probe_index}.pcm"
-    if not pcm_path.is_file():
-        raise FileNotFoundError(
-            f"measure_stage: pcm not rendered for row_id={row_id!r} "
-            f"probe_index={probe_index}: {pcm_path}"
-        )
-    pcm_bytes = pcm_path.read_bytes()
-    actual_sha = hashlib.sha256(pcm_bytes).hexdigest()
+
+    round 5 finding S4 (adopted, category ③, `[UNDERSPEC-CAL-D79]`): the
+    PCM-vs-sidecar half of this check is now `render_stage._verify_pcm_
+    sidecar()` — the same shared helper `render_stage._validate_skipped_
+    resume_outcomes()` uses for its completing-invocation resume check, so
+    the two can never again independently drift apart on which checks a
+    "valid rendered PCM" requires (pre-fix, render_stage's own resume
+    validator never read the sidecar at all)."""
 
     def _stale(detail: str) -> StaleRenderError:
         campaign.ledger.append(
@@ -188,18 +191,17 @@ def _verify_and_load_rendered_pcm(
                 "row_id": row_id,
                 "probe_index": probe_index,
                 "detail": detail,
+                "invocation_id": invocation_id,
             }
         )
         return StaleRenderError(row_id, probe_index, detail)
 
-    sha_path = pcm_path.with_suffix(".sha256")
-    if not sha_path.is_file():
-        raise _stale(f"sha256 sidecar missing: {sha_path}")
-    sidecar_sha = sha_path.read_text(encoding="utf-8").strip()
-    if sidecar_sha != actual_sha:
-        raise _stale(
-            f"pcm sha256={actual_sha!r} does not match sidecar {sha_path}={sidecar_sha!r}"
-        )
+    # `_verify_pcm_sidecar()` raises `FileNotFoundError` uncaught (the more
+    # basic "never rendered" state, distinct from "stale" — see its
+    # docstring), matching this function's own pre-fix contract.
+    pcm_bytes, actual_sha, detail = render_stage._verify_pcm_sidecar(campaign, row_id, probe_index)
+    if detail is not None:
+        raise _stale(detail)
 
     ledger_sha = render_stage._recorded_render_sha(campaign.ledger.entries, row_id, probe_index)
     if ledger_sha is None:
@@ -489,12 +491,60 @@ class StaleMeasurementError(RuntimeError):
     記帳されている場合の fail-closed error。測定・記帳のいずれも一切行わ
     ない — 中断状態からの自動再開（欠けている分だけ測定して埋める）は、
     なぜ中断したかが分からない以上安全に決定できないため、明示的な運用
-    判断（ledger 調査の上での手動復旧）に委ねる。"""
+    判断（ledger 調査の上での手動復旧、または R1 の
+    `--discard-partial-groups` による明示的な operator recovery）に委ねる。
 
-    def __init__(self, row_id: str, probe_index: int, candidate_id: str, detail: str) -> None:
+    R1（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）:
+    `kind` は `"partial"`（一部の repeat key しか記帳されていない — 中断
+    直後にありうる、`--discard-partial-groups` の対象）と `"duplicate"`
+    （同一 repeat key に複数件 — 単一 writer 契約違反または矛盾する
+    再測定。フラグの有無に関わらず常に fail-closed）を区別する。`kind ==
+    "partial"` のとき `present_keys` はその時点で記帳済みだった
+    `(repeat_kind, repeat_index)` キー集合（呼び出し元が discard event の
+    `discarded_repeat_keys` を組み立てるのに使う）。
+
+    Codex PR #345 round 6 finding #3 (adopted, category 3,
+    `[UNDERSPEC-CAL-D79]`): `kind == "partial"` のとき
+    `discarded_within_cpu_seconds` は present な記録（`by_key` の各キーに
+    ちょうど 1 件ずつ）が共有する `within_cpu_seconds` 値（`_resolve_meter_
+    group` が算出。同一 work unit の全記録は `run_measurement_for_instance`
+    の単一計算から書かれるため本来同一値のはずだが、`max()` を取ることで
+    型不正/欠落な個別レコードが混じっていても過大側に振れる — このモジュール
+    既存の fail-closed 方向と同じ）。呼び出し元が `meter_call_group_
+    discarded` event へそのまま転記し、`caps.cap_counters_from_ledger()` が
+    それを exactly-once で課金する（詳細は同関数 docstring）。
+
+    round 8 finding #2 (R8-2, category ③, `[UNDERSPEC-CAL-D79]`):
+    `kind == "partial"` のとき `invocation_id` は present な記録が共有する
+    `invocation_id` フィールド（`_partial_group_invocation_id` が算出 —
+    その group を書いた単一の invocation の識別子。1 group の全 present
+    records は常に単一の `run_measurement_for_instance` 呼び出しから書かれる
+    ため本来同一値のはず）。discard 実行時（`run_measurement_for_instance`
+    の except ハンドラ、または `run_measure_stage`/`cli._build_f0_by_
+    instance` の budget 検査前 discard 経路）が `caps.
+    is_invocation_id_summarized()` へそのまま渡し、`discarded_within_cpu_
+    seconds` を live `cap_counters` へ課金すべきか（= その writer 自身の
+    summary がまだ無い）を判定する。"""
+
+    def __init__(
+        self,
+        row_id: str,
+        probe_index: int,
+        candidate_id: str,
+        detail: str,
+        *,
+        kind: str,
+        present_keys: frozenset[tuple[str, int]] = frozenset(),
+        discarded_within_cpu_seconds: float = 0.0,
+        invocation_id: object = None,
+    ) -> None:
         self.row_id = row_id
         self.probe_index = probe_index
         self.candidate_id = candidate_id
+        self.kind = kind
+        self.present_keys = present_keys
+        self.discarded_within_cpu_seconds = discarded_within_cpu_seconds
+        self.invocation_id = invocation_id
         super().__init__(
             f"measure_stage: stale meter_call state for row_id={row_id!r} "
             f"probe_index={probe_index} candidate_id={candidate_id!r}: {detail}"
@@ -508,42 +558,77 @@ _EXPECTED_REPEAT_KEYS: frozenset[tuple[str, int]] = frozenset(
     | {("fresh", i) for i in range(FRESH_PROCESS_REPEATS)}
 )
 
+#: R1 の discard event（design memo `design_runner_robustness.md`,
+#: `[UNDERSPEC-CAL-D79]`）が使う ledger `kind`。
+METER_CALL_GROUP_DISCARDED_KIND = "meter_call_group_discarded"
 
-def _completed_meter_call_records(
-    ledger_entries: Sequence[LedgerEntry],
+
+def _partial_group_within_cpu_seconds(
+    by_key: Mapping[tuple[str, int], Sequence[Mapping[str, object]]],
+) -> float:
+    """Codex PR #345 round 6 finding #3 (adopted, category 3,
+    `[UNDERSPEC-CAL-D79]`): the shared `within_cpu_seconds` aggregate of a
+    partial (not-yet-6-record) meter_call group, to be recorded on the
+    `meter_call_group_discarded` event so a hard-killed process's within-
+    process CPU is not lost (see `caps.cap_counters_from_ledger()`
+    docstring for the exactly-once invariant). Every record of one work
+    unit carries the *same* `within_cpu_seconds` value (computed once by
+    `run_measurement_for_instance` before any of its 6 records are
+    appended) — so this is a single shared aggregate, not a per-record
+    quantity to sum (summing would multiply the same aggregate by however
+    many of the 6 records happened to persist before the kill). `by_key`
+    at the call site (post duplicate-check, pre-partial-raise) has exactly
+    1 payload per present key, so `max()` over the validated per-record
+    readings recovers that shared value while staying fail-closed
+    (overcount-safe) against any individual record whose field is
+    missing/non-finite/negative (0.0 contributed instead of aborting
+    discard-recovery — the whole point of the operator-recovery escape
+    hatch is robustness to whatever the interrupted process left behind)."""
+    best = 0.0
+    for entries in by_key.values():
+        for payload in entries:
+            value = payload.get("within_cpu_seconds")
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            if not math.isfinite(value) or value < 0:
+                continue
+            if float(value) > best:
+                best = float(value)
+    return best
+
+
+def _partial_group_invocation_id(
+    by_key: Mapping[tuple[str, int], Sequence[Mapping[str, object]]],
+) -> object:
+    """round 8 finding #2 (R8-2, category ③, `[UNDERSPEC-CAL-D79]`): the
+    shared `invocation_id` of a partial (not-yet-6-record) meter_call
+    group — the single writing invocation's identifier, present identically
+    on every one of that group's records (they are all written by one
+    `run_measurement_for_instance` call before any of the 6 are appended,
+    same invariant `_partial_group_within_cpu_seconds` relies on for
+    `within_cpu_seconds`). Returns the first non-`None` value found (there
+    is at most one distinct value by construction); `None` if every record
+    lacks the field (pre-round-8 legacy shape — not a concern in
+    production, see `caps.py` module docstring) or `by_key` is empty."""
+    for entries in by_key.values():
+        for payload in entries:
+            value = payload.get("invocation_id")
+            if value is not None:
+                return value
+    return None
+
+
+def _resolve_meter_group(
+    by_key: Mapping[tuple[str, int], Sequence[Mapping[str, object]]],
     row_id: str,
     probe_index: int,
     candidate_id: str,
 ) -> list[MeasurementRecord] | None:
-    """finding #9: ledger から (row_id, probe_index, candidate_id) の
-    `meter_call` を `(repeat_kind, repeat_index)` キーで再構成する。
-
-    - 1 件も無ければ `None`（未着手 — 呼び出し元は通常どおり測定する）。
-    - within `WITHIN_PROCESS_REPEATS` 件 + fresh `FRESH_PROCESS_REPEATS`
-      件がちょうど 1 件ずつ揃っていれば、その内容から再構成した
-      `MeasurementRecord` 列を返す（呼び出し元は再測定・再記帳しない —
-      二重追記の禁止）。
-    - それ以外（部分的にしか揃っていない、または同一キーに複数件記帳）は
-      `StaleMeasurementError` を送出する（呼び出し元は ledger `stop_event`
-      を記帳してから re-raise する）。
-    """
-    by_key: dict[tuple[str, int], list[Mapping[str, object]]] = {}
-    for entry in ledger_entries:
-        payload = entry.payload
-        if not isinstance(payload, Mapping) or payload.get("kind") != "meter_call":
-            continue
-        if (
-            payload.get("row_id") != row_id
-            or payload.get("probe_index") != probe_index
-            or payload.get("candidate_id") != candidate_id
-        ):
-            continue
-        repeat_kind = payload.get("repeat_kind")
-        repeat_index = payload.get("repeat_index")
-        if repeat_kind not in ("within", "fresh") or not isinstance(repeat_index, int):
-            continue
-        by_key.setdefault((repeat_kind, repeat_index), []).append(payload)
-
+    """`by_key`（1 つの discard-epoch 内で観測された `(repeat_kind,
+    repeat_index) -> [payload, ...]`）から `_completed_meter_call_records`/
+    `MeterCallIndex.completed_records` 共通の判定ロジックを適用する。
+    `MeterCallIndex`（R3）と素朴な 1 回スキャン（`_completed_meter_call_records`）
+    の両方がこの同じ関数を経由することで両者の等価性を構造的に保証する。"""
     if not by_key:
         return None
 
@@ -555,6 +640,7 @@ def _completed_meter_call_records(
             candidate_id,
             f"duplicate ledger meter_call entries for repeat keys {duplicate_keys!r} "
             "(single-writer contract violated, or conflicting re-measurement)",
+            kind="duplicate",
         )
 
     present_keys = frozenset(by_key.keys())
@@ -566,6 +652,10 @@ def _completed_meter_call_records(
             probe_index,
             candidate_id,
             f"incomplete meter_call state: missing={missing!r} unexpected={unexpected!r}",
+            kind="partial",
+            present_keys=present_keys,
+            discarded_within_cpu_seconds=_partial_group_within_cpu_seconds(by_key),
+            invocation_id=_partial_group_invocation_id(by_key),
         )
 
     records: list[MeasurementRecord] = []
@@ -586,6 +676,285 @@ def _completed_meter_call_records(
             )
         )
     return records
+
+
+class MeterCallIndex:
+    """R3（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）:
+    ledger を 1 回だけ走査して `(row_id, probe_index, candidate_id)` ごとの
+    `meter_call`/`meter_call_group_discarded` 状態をメモリ上に索引化する。
+
+    `run_measure_stage()` は stage 呼び出しごとに `build()` で 1 回だけ全体を
+    構築し、以降は `run_measurement_for_instance()` が `meter_call`/
+    `meter_call_group_discarded` を記帳するたびに `observe_entry()` で
+    その 1 件だけを反映する（`Ledger.entries` を再取得しない — このプロパティ
+    は呼ぶたびに `self._entries` から新しい tuple を作り直すため、instance
+    ごとに呼び直すと事実上 O(N) の rescan を繰り返すことになる。`append()`
+    が返す `LedgerEntry` をそのまま渡すことで、1 stage 呼び出しあたり
+    「初回の全走査 1 回 + 追記 1 件あたり O(1)」に抑える）。
+
+    `completed_records()` は `_completed_meter_call_records()`（素朴な
+    1 回スキャン版）と同じ判定ロジック（`_resolve_meter_group`）を共有し、
+    かつ discard-reset ルール（R1: あるキーへの discard event 以降の
+    `meter_call` のみを完全性・重複判定・scoring の対象とする — discard 前の
+    記録は ledger 上に残るが、以降の完全性判定からは除外される）も同一に
+    適用する。"""
+
+    def __init__(self) -> None:
+        self._by_key: dict[tuple[str, int, str], dict[tuple[str, int], list[Mapping[str, object]]]] = {}
+        self._scanned = 0
+
+    @classmethod
+    def build(cls, ledger_entries: Sequence[LedgerEntry]) -> "MeterCallIndex":
+        index = cls()
+        index.update(ledger_entries)
+        return index
+
+    def observe_entry(self, entry: LedgerEntry) -> None:
+        """`entry` 1 件だけを索引へ反映する（`Ledger.entries` を再取得しない
+        増分更新経路 — `run_measurement_for_instance` が `campaign.ledger.
+        append()` の戻り値をそのまま渡す）。"""
+        payload = entry.payload
+        if not isinstance(payload, Mapping):
+            return
+        kind = payload.get("kind")
+        if kind == METER_CALL_GROUP_DISCARDED_KIND:
+            outer_key = (
+                payload.get("row_id"),
+                payload.get("probe_index"),
+                payload.get("candidate_id"),
+            )
+            # R1 reconstruction rule: discard event はそのキーの蓄積を
+            # リセットする — discard 前の meter_call は ledger には残るが
+            # （append-only）、以降の完全性・重複・scoring 判定からは除外
+            # される。
+            self._by_key.pop(outer_key, None)  # type: ignore[arg-type]
+            return
+        if kind != "meter_call":
+            return
+        outer_key = (payload.get("row_id"), payload.get("probe_index"), payload.get("candidate_id"))
+        repeat_kind = payload.get("repeat_kind")
+        repeat_index = payload.get("repeat_index")
+        if repeat_kind not in ("within", "fresh") or not isinstance(repeat_index, int):
+            return
+        self._by_key.setdefault(outer_key, {}).setdefault(  # type: ignore[arg-type]
+            (repeat_kind, repeat_index), []
+        ).append(payload)
+
+    def update(self, ledger_entries: Sequence[LedgerEntry]) -> None:
+        """`ledger_entries` の末尾のうち、まだ索引化していない分だけを取り込む
+        （初回 `build()` は `self._scanned == 0` のため全体を走査する）。"""
+        for entry in ledger_entries[self._scanned :]:
+            self.observe_entry(entry)
+        self._scanned = len(ledger_entries)
+
+    def completed_records(
+        self, row_id: str, probe_index: int, candidate_id: str
+    ) -> list[MeasurementRecord] | None:
+        by_key = self._by_key.get((row_id, probe_index, candidate_id), {})
+        return _resolve_meter_group(by_key, row_id, probe_index, candidate_id)
+
+    def is_complete(self, row_id: str, probe_index: int, candidate_id: str) -> bool:
+        """rehearsal 4 finding D (adopted, `[UNDERSPEC-CAL-D79]`): O(1)
+        presence check — True iff `(row_id, probe_index, candidate_id)`
+        already has a complete, non-duplicate within3+fresh3 `meter_call`
+        group recorded (the same key-set criterion `completed_records()`
+        uses), WITHOUT reconstructing a single `MeasurementRecord`
+        (no `meter_output_from_dict()` call, no PCM read — this function
+        touches only the small in-memory `dict[(repeat_kind, repeat_index),
+        list[payload]]` this key already maps to).
+
+        Codex PR #345 round 7 finding #2 (adopted, category ③,
+        `[UNDERSPEC-CAL-D79]`): a duplicate-key group now raises
+        `StaleMeasurementError(kind="duplicate")` immediately, the same as
+        `completed_records()`/`_resolve_meter_group()` — it previously
+        returned `False` here instead (treating the cell as merely
+        "pending"), which let a resumed-slice caller's time-budget check
+        (`run_measure_stage()`'s per-instance boundary check, evaluated
+        strictly before any candidate is dispatched) exit with a clean
+        `PARTIAL_SLICE` for an already-tiny/exhausted budget *before*
+        `completed_records()`/`run_measurement_for_instance()` was ever
+        reached for that cell — silently hiding a genuine single-writer
+        contract violation behind an indefinitely repeatable "still
+        pending" report instead of failing closed. Raising here instead
+        means every caller — `run_measure_stage()`'s own `is_complete()`
+        checks included — now surfaces the duplicate regardless of budget
+        size; each such call site is responsible for its own `stop_event`
+        ledger entry before letting the exception propagate, mirroring
+        `run_measurement_for_instance()`'s existing duplicate handling."""
+        by_key = self._by_key.get((row_id, probe_index, candidate_id))
+        if not by_key:
+            return False
+        duplicate_keys = sorted(k for k, entries in by_key.items() if len(entries) > 1)
+        if duplicate_keys:
+            raise StaleMeasurementError(
+                row_id,
+                probe_index,
+                candidate_id,
+                f"duplicate ledger meter_call entries for repeat keys {duplicate_keys!r} "
+                "(single-writer contract violated, or conflicting re-measurement)",
+                kind="duplicate",
+            )
+        return frozenset(by_key.keys()) == _EXPECTED_REPEAT_KEYS
+
+    def partial_group(
+        self, row_id: str, probe_index: int, candidate_id: str
+    ) -> StaleMeasurementError | None:
+        """round 8 finding #3 (R8-3, category ③, `[UNDERSPEC-CAL-D79]`):
+        non-mutating probe — returns the `StaleMeasurementError(kind=
+        "partial")` `is_complete()`/`completed_records()` would raise for
+        this key IF it currently holds a non-empty, incomplete,
+        non-duplicate `meter_call` group (a `--discard-partial-groups`
+        candidate), `None` if there is nothing to discard (no records at
+        all, or an already-complete group — `is_complete()` is the
+        caller's own concern for that case). Raises `StaleMeasurementError
+        (kind="duplicate")` exactly like `is_complete()` for a
+        duplicate-key group — never returned, always propagated, so a
+        caller that pre-checks this before a budget boundary surfaces a
+        genuine single-writer contract violation the same way every other
+        `is_complete()` call site in this module does."""
+        by_key = self._by_key.get((row_id, probe_index, candidate_id), {})
+        if not by_key:
+            return None
+        try:
+            _resolve_meter_group(by_key, row_id, probe_index, candidate_id)
+        except StaleMeasurementError as exc:
+            if exc.kind == "partial":
+                return exc
+            raise
+        return None  # already a complete, non-duplicate group.
+
+
+def _completed_meter_call_records(
+    ledger_entries: Sequence[LedgerEntry],
+    row_id: str,
+    probe_index: int,
+    candidate_id: str,
+) -> list[MeasurementRecord] | None:
+    """finding #9: ledger から (row_id, probe_index, candidate_id) の
+    `meter_call` を `(repeat_kind, repeat_index)` キーで再構成する（1 回の
+    素朴な全走査 — `MeterCallIndex.build(ledger_entries).completed_records(...)`
+    の薄いラッパー。両者が同じ `_resolve_meter_group` を経由するため常に
+    等価な結果を返す — R3 equivalence test 参照）。
+
+    - 1 件も無ければ `None`（未着手 — 呼び出し元は通常どおり測定する）。
+    - within `WITHIN_PROCESS_REPEATS` 件 + fresh `FRESH_PROCESS_REPEATS`
+      件がちょうど 1 件ずつ揃っていれば、その内容から再構成した
+      `MeasurementRecord` 列を返す（呼び出し元は再測定・再記帳しない —
+      二重追記の禁止）。
+    - それ以外（部分的にしか揃っていない、または同一キーに複数件記帳）は
+      `StaleMeasurementError` を送出する（呼び出し元は ledger `stop_event`
+      を記帳してから re-raise する。R1: `kind == "partial"` かつ
+      `--discard-partial-groups` 指定時は discard event を記帳して
+      フルグループを再測定する — `run_measurement_for_instance` 参照）。
+
+    R1（design memo, `[UNDERSPEC-CAL-D79]`）: `kind ==
+    METER_CALL_GROUP_DISCARDED_KIND` の event がある場合、そのキーについて
+    その event **以降**に記帳された `meter_call` のみを対象とする
+    （discard 前の記録は ledger には残るが、この関数の判定からは除外
+    される — reconstruction rule）。
+    """
+    return MeterCallIndex.build(ledger_entries).completed_records(row_id, probe_index, candidate_id)
+
+
+def _discard_partial_group(
+    campaign: FrozenCampaign,
+    meter_call_index: MeterCallIndex | None,
+    exc: StaleMeasurementError,
+    *,
+    row_id: str,
+    probe_index: int,
+    candidate_id: str,
+    stage: str,
+    invocation_id: str | None,
+    cap_counters: CapCounters | None,
+    cost_caps: CostCaps | None,
+) -> None:
+    """R1（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）
+    の discard 実行本体 — `exc`（`kind == "partial"` の
+    `StaleMeasurementError`。`_resolve_meter_group`/`MeterCallIndex.
+    partial_group()` のいずれから来ても同じ shape）1 件から
+    `meter_call_group_discarded` event を記帳し、index を更新する。
+
+    round 8 finding #1/#3（R8-1/R8-3, category ③, `[UNDERSPEC-CAL-D79]`）で
+    2 つの呼び出し元に共有される単一実装へ統合: (1)
+    `run_measurement_for_instance` 自身の except ハンドラ（partial 検出時に
+    その場で discard）と (2) `run_measure_stage`/`cli._build_f0_by_
+    instance` が budget 境界検査の**前**に行う先行 discard（R8-3 — discard
+    は dispatch ではないため budget 非依存で実行してよい/すべき。呼び出し元
+    側のループがこの前処理を担う）。どちらの経路でも discard の記帳・課金・
+    cap 検査の意味論が一切分岐しないことを、この関数への一本化で保証する。
+
+    R8-1: `exc.discarded_within_cpu_seconds` を live な `cap_counters` へ
+    即座に課金し（`caps.is_invocation_id_summarized()` が `exc.
+    invocation_id`（discard される group を書いた WRITER 自身の
+    invocation_id — discard を実行している「この」プロセスの
+    invocation_id ではない）に対して `stage_summary`/`slice_summary` が
+    ledger 上に既に存在するかを判定し、存在しなければ課金対象と判定した
+    場合のみ）、persist し、**再測定を試みる前に** cap を再検査する —
+    `charge_worker_attempts_before_raising`/`_checkpoint_parent_cpu_before_
+    transition` と同じ「課金 → persist → 検査」の既存 pattern を流用する。
+    超過していれば他の全 breach 経路と同じ `COST_CAP_EXCEEDED` stop event を
+    記帳し `CostCapExceededError` を送出する（呼び出し元はこの場合、再測定を
+    一切試みない — 呼び出し元の残りのロジックに戻らない）。
+
+    round 13 finding (adopted, category ③, `[UNDERSPEC-CAL-D79]`,
+    Codex PR #345 第 13 巡): this discard event's `discarded_within_cpu_
+    seconds` charge (above, both here and in `caps.cap_counters_from_
+    ledger()`'s ledger reconstruction) is this partial group's ONLY charge
+    path — `cap_counters_from_ledger()`'s deferred post-scan pass now
+    charges COMPLETE groups exclusively (all expected repeat keys present),
+    never a still-partial one, precisely so this function's live-counter
+    charge just above can never be double-counted by a `--discard-partial-
+    groups` recovery's earlier from-ledger reconcile (which runs BEFORE
+    this function, while the group is still partial and this discard event
+    does not exist yet). **Invariant**: within CPU of a group from an
+    unsummarized writer is charged exactly once — complete groups via the
+    deferred pass, partial groups via their discard event (this function);
+    summarized writers are covered by their summary."""
+    discarded_repeat_keys = [list(k) for k in sorted(exc.present_keys)]
+    discard_entry = campaign.ledger.append(
+        {
+            "kind": METER_CALL_GROUP_DISCARDED_KIND,
+            "row_id": row_id,
+            "probe_index": probe_index,
+            "candidate_id": candidate_id,
+            "discarded_repeat_keys": discarded_repeat_keys,
+            "discarded_count": len(discarded_repeat_keys),
+            "reason": "operator_discard_partial_group_after_interrupt",
+            "stage": stage,
+            # round 6 finding #3: shared within-process CPU aggregate of the
+            # discarded group's present records (see `StaleMeasurementError`/
+            # `_partial_group_within_cpu_seconds` docstrings) — charged
+            # exactly once by `caps.cap_counters_from_ledger()` and (round 8
+            # finding #1, R8-1) the live-counter charge just below, both
+            # sharing the SAME `caps.is_invocation_id_summarized()` pairing
+            # predicate so the two can never diverge.
+            "discarded_within_cpu_seconds": exc.discarded_within_cpu_seconds,
+            # round 8 finding #2 (R8-2): this discarding process's own
+            # invocation_id (provenance of "who ran the discard" — distinct
+            # from `exc.invocation_id`, the discarded group's WRITER).
+            "invocation_id": invocation_id,
+        }
+    )
+    if meter_call_index is not None:
+        meter_call_index.observe_entry(discard_entry)
+    # round 8 finding #1 (R8-1): charge the live in-memory cap_counters (not
+    # only the ledger `counters.json` gets to see this later, on reconcile)
+    # and enforce the cap BEFORE any remeasurement is attempted — mirrors the
+    # charge-then-persist-then-check pattern every other cap-accounting call
+    # site in this package uses.
+    if (
+        cap_counters is not None
+        and exc.discarded_within_cpu_seconds > 0.0
+        and not is_invocation_id_summarized(campaign.ledger.entries, exc.invocation_id)
+    ):
+        cap_counters.add(compute=exc.discarded_within_cpu_seconds)
+        save_cap_counters(campaign.campaign_dir, cap_counters)
+        if cost_caps is not None:
+            decision = cost_caps_check(cap_counters, cost_caps)
+            if decision is not None:
+                campaign.ledger.append({**decision.event_payload, "invocation_id": invocation_id})
+                raise CostCapExceededError(decision.detail)
 
 
 def _params_with_f0(candidate: Candidate, f0_hz: float | None) -> dict[str, object]:
@@ -753,6 +1122,7 @@ def run_fresh_process_calls(
     max_workers: int = 1,
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
+    invocation_id: str | None = None,
 ) -> tuple[list[MeasurementRecord], float]:
     """`repeats` 回、subprocess worker (`_measure_worker.py`) を起動して測定
     する。`max_workers>1` なら `ThreadPoolExecutor` で並行起動する（結果は
@@ -833,6 +1203,7 @@ def run_fresh_process_calls(
             candidate_id=candidate.candidate_id,
             successes=successes,
             failures=[(exc.failure_kind, exc.compute, exc.cause) for exc in failures],
+            invocation_id=invocation_id,
         )
 
     # No failures reached this point (the branch above always raises) -- every
@@ -864,6 +1235,10 @@ def run_measurement_for_instance(
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
     max_workers: int = 1,
+    discard_partial_groups: bool = False,
+    stage: str = "unknown",
+    meter_call_index: MeterCallIndex | None = None,
+    invocation_id: str | None = None,
 ) -> list[MeasurementRecord]:
     """1 instance × 1 candidate = within 3 + fresh 3 の 6 call を実行し、
     ledger `meter_call` event を直列に記帳する。cap 超過を検出したら
@@ -924,28 +1299,96 @@ def run_measurement_for_instance(
     batch 内で最初に失敗した attempt の元の例外を再送出する — 旧実装
     （round 24 時点）は失敗した 1 attempt のみを課金し、既に完了していた
     兄弟 attempt（sequential では先行する成功、concurrent では他の future）
-    を無課金で破棄していた。"""
+    を無課金で破棄していた。
+
+    **R1 — 明示的な operator recovery**（design memo
+    `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）: `discard_
+    partial_groups=True` かつ resume 判定が `kind == "partial"`（一部の
+    repeat key しか記帳されていない — duplicate ではない）の
+    `StaleMeasurementError` のとき、`stop_event`/re-raise の代わりに
+    `meter_call_group_discarded` event を 1 件（`{row_id, probe_index,
+    candidate_id, discarded_repeat_keys, discarded_count, reason:
+    "operator_discard_partial_group_after_interrupt", stage}`）記帳してから
+    フルグループ（within3+fresh3 全 6 call）を測定・記帳する（通常の
+    未着手経路と同じ下り）。`kind == "duplicate"` は `discard_partial_groups`
+    の有無に関わらず常に `stop_event`+re-raise する（duplicate は
+    "operator が中断後に discard してよい" 対象ではない — 単一 writer
+    契約違反や矛盾する再測定の兆候であり、手動調査に委ねる）。
+
+    Codex PR #345 round 6 finding #3 (adopted, category 3,
+    `[UNDERSPEC-CAL-D79]`): the discard event above also carries an
+    additional field `discarded_within_cpu_seconds` (memo §6.5 lists the
+    payload keys exhaustively as of round 5 — this is a new optional field
+    added here, not yet reflected there) — `exc.discarded_within_cpu_
+    seconds` (see `StaleMeasurementError`/`_partial_group_within_cpu_
+    seconds`). Rationale: a process hard-killed (SIGKILL/OOM) mid-append
+    never reaches `cli.py` `main()`'s `finally` block, so it never emits
+    the `stage_summary`/`slice_summary` event that `within_cpu_seconds`
+    normally rides on (round 16 finding #3 — within-process CPU is
+    deliberately excluded from the per-`meter_call` compute charge on the
+    assumption a parent-CPU summary event covers it). For a discarded
+    partial group that assumption can be false, silently losing that CPU
+    from the compute cap forever. See `caps.cap_counters_from_ledger()`
+    docstring for the exactly-once charging invariant.
+
+    **R3 — 1 stage 呼び出し 1 スキャン**: `meter_call_index` が渡されれば
+    resume 判定・discard reset をそれ経由で行い（`campaign.ledger.entries`
+    を再取得しない）、新規に記帳した `meter_call`/`meter_call_group_
+    discarded` event も同じ index へ即座に反映する（`Ledger.append()` の
+    戻り値をそのまま渡す — O(1) の増分更新）。`None`（既定）なら従来どおり
+    `_completed_meter_call_records()` が `campaign.ledger.entries` を
+    1 回スキャンする（`run_measurement_for_instance` を単体で呼ぶ既存の
+    呼び出し元・テストの挙動は変わらない）。"""
     try:
-        resumed = _completed_meter_call_records(
-            campaign.ledger.entries, row_id, probe_index, candidate.candidate_id
+        resumed = (
+            meter_call_index.completed_records(row_id, probe_index, candidate.candidate_id)
+            if meter_call_index is not None
+            else _completed_meter_call_records(
+                campaign.ledger.entries, row_id, probe_index, candidate.candidate_id
+            )
         )
     except StaleMeasurementError as exc:
-        campaign.ledger.append(
-            {
-                "kind": "stop_event",
-                "reason": "STALE_MEASUREMENT_STATE",
-                "row_id": row_id,
-                "probe_index": probe_index,
-                "candidate_id": candidate.candidate_id,
-                "detail": str(exc),
-            }
-        )
-        raise
+        if discard_partial_groups and exc.kind == "partial":
+            # round 8 finding #1/#3 (R8-1/R8-3, `[UNDERSPEC-CAL-D79]`): the
+            # discard event append + live-counter charge + cap enforcement
+            # is now shared with `run_measure_stage()`/`cli._build_f0_by_
+            # instance()`'s own pre-budget-check discard path (see
+            # `_discard_partial_group()` docstring) — a breach detected here
+            # raises `CostCapExceededError` and no remeasurement is
+            # attempted below.
+            _discard_partial_group(
+                campaign,
+                meter_call_index,
+                exc,
+                row_id=row_id,
+                probe_index=probe_index,
+                candidate_id=candidate.candidate_id,
+                stage=stage,
+                invocation_id=invocation_id,
+                cap_counters=cap_counters,
+                cost_caps=cost_caps,
+            )
+            resumed = None
+        else:
+            campaign.ledger.append(
+                {
+                    "kind": "stop_event",
+                    "reason": "STALE_MEASUREMENT_STATE",
+                    "row_id": row_id,
+                    "probe_index": probe_index,
+                    "candidate_id": candidate.candidate_id,
+                    "detail": str(exc),
+                    "invocation_id": invocation_id,
+                }
+            )
+            raise
     if resumed is not None:
         return resumed
 
     pcm_path = campaign.renders_dir / row_id / f"{probe_index}.pcm"
-    signal, sr = _verify_and_load_rendered_pcm(campaign, row_id, probe_index, sr_hz)
+    signal, sr = _verify_and_load_rendered_pcm(
+        campaign, row_id, probe_index, sr_hz, invocation_id=invocation_id
+    )
 
     wall_t0 = time.perf_counter()
     within_cpu_t0 = _process_cpu_seconds()
@@ -965,6 +1408,7 @@ def run_measurement_for_instance(
             max_workers=max_workers,
             cap_counters=cap_counters,
             cost_caps=cost_caps,
+            invocation_id=invocation_id,
         )
     except WorkerCpuSecondsInvalidError as exc:
         campaign.ledger.append(
@@ -975,6 +1419,7 @@ def run_measurement_for_instance(
                 "probe_index": probe_index,
                 "candidate_id": candidate.candidate_id,
                 "detail": str(exc),
+                "invocation_id": invocation_id,
             }
         )
         raise
@@ -1011,6 +1456,11 @@ def run_measurement_for_instance(
             # charging docstring paragraph above and the `cap_counters.add()`
             # call below, which uses `fresh_cpu_seconds` only).
             "within_cpu_seconds": within_cpu_seconds,
+            # round 8 finding #2 (R8-2, `[UNDERSPEC-CAL-D79]`): this
+            # process's own invocation_id — all 6 records of one work unit
+            # share the same value (see `caps.cap_counters_from_ledger()`'s
+            # pairing-rule docstring).
+            "invocation_id": invocation_id,
             **meter_output_to_dict(record.output),
         }
         # round 15 finding #3 (`[UNDERSPEC-CAL-D31]`): unlike `cpu_seconds`
@@ -1023,7 +1473,9 @@ def run_measurement_for_instance(
         # below.
         record_bytes = len(json.dumps(payload).encode("utf-8"))
         payload["storage_bytes"] = record_bytes
-        campaign.ledger.append(payload)
+        appended_entry = campaign.ledger.append(payload)
+        if meter_call_index is not None:
+            meter_call_index.observe_entry(appended_entry)
         storage_bytes += record_bytes
 
     if cap_counters is not None:
@@ -1043,9 +1495,130 @@ def run_measurement_for_instance(
         if cost_caps is not None:
             decision = cost_caps_check(cap_counters, cost_caps)
             if decision is not None:
-                campaign.ledger.append(decision.event_payload)
+                campaign.ledger.append({**decision.event_payload, "invocation_id": invocation_id})
                 raise CostCapExceededError(decision.detail)
     return records
+
+
+def _instance_has_pending_candidate(
+    row_id: str,
+    probe_index: int,
+    candidates: Sequence[Candidate],
+    meter_call_index: MeterCallIndex,
+    f0_unusable_instances: frozenset[tuple[str, int]],
+) -> bool:
+    """rehearsal 4 finding G helper: True iff at least one of `candidates`
+    still needs measurement for this instance — i.e. is neither
+    permanently resolved (the `f0_unusable_instances` /
+    `F0_DEPENDENT_ALGORITHM_FAMILIES` skip `run_measure_stage()`'s own loop
+    applies) nor already `MeterCallIndex.is_complete()` in the ledger.
+    O(1) per candidate — index lookups only, no PCM read, no record
+    reconstruction — so callers may cheaply evaluate this for every
+    instance in a stage's full instance set, including ones a
+    budget-bounded dispatch loop never reached this invocation.
+
+    round 7 finding #2 (`[UNDERSPEC-CAL-D79]`): `MeterCallIndex.
+    is_complete()` now raises `StaleMeasurementError(kind="duplicate")`
+    instead of returning `False` for a duplicate-key cell — this function
+    does not catch it, so it propagates unchanged to whichever
+    `run_measure_stage()` call site invoked this helper (both wrap the
+    call in `try`/`except StaleMeasurementError` to log a `stop_event`
+    before re-raising; see `_append_stale_measurement_stop_event()`)."""
+    for candidate in candidates:
+        if (row_id, probe_index) in f0_unusable_instances and (
+            candidate.algorithm_family in F0_DEPENDENT_ALGORITHM_FAMILIES
+        ):
+            continue
+        if not meter_call_index.is_complete(row_id, probe_index, candidate.candidate_id):
+            return True
+    return False
+
+
+def family_has_pending_work(
+    instances: Sequence[tuple[str, int]],
+    candidates: Sequence[Candidate],
+    meter_call_index: MeterCallIndex,
+    f0_unusable_instances: frozenset[tuple[str, int]] = frozenset(),
+) -> bool:
+    """Codex PR #345 round 9 finding ③ (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): stage-level O(1) counterpart to
+    `_instance_has_pending_candidate()`, exported (unprefixed) for callers
+    outside this module — `cli._run_c3b()`'s per-family loop and
+    `holdout_stage.render_and_measure_holdout()`'s per-family loop both call
+    `run_measure_stage()` once per sub-phase (one `FixtureFamily` at a
+    time). Before either loop calls `run_measure_stage()` for a given
+    sub-phase, it must consult this function first: `run_measure_stage()`
+    itself only skips *dispatch* for an already-`is_complete()` cell (finding
+    D's O(1) skip inside its own loop) — it still unconditionally pays
+    `_rebuild_skipped_records()`'s reconstruction cost, and the caller still
+    pays its own criteria-computation cost, the moment *that call's own*
+    `completed_all` comes back `True` — which is trivially true, on EVERY
+    resumed invocation, for a sub-phase whose every cell was already
+    complete before this invocation even started (it dispatches nothing, so
+    it can never fail to "complete"). Repeating that reconstruction +
+    criteria cost on every invocation for a family that finished measuring
+    slices ago — while a DIFFERENT, still-pending family sits later in the
+    same per-family loop sharing the one `time_budget` — can by itself
+    consume the whole slice budget before the genuinely pending family is
+    ever reached, so no invocation ever dispatches its remaining work: a
+    concrete, budget-independent stall (not merely reduced throughput; see
+    rehearsal 4 finding D/G's already-fixed *unbounded growth* variant of
+    this same class of bug for contrast — this one is bounded per call but
+    repeats every call).
+
+    Callers use this to skip the `run_measure_stage()` call entirely (no
+    dispatch attempt, no reconstruction, no criteria computation) for any
+    sub-phase this returns `False` for, in any invocation where at least one
+    OTHER sub-phase still has pending work (a "nonterminal" invocation) —
+    deferring that sub-phase's full reconstruction + criteria computation to
+    the one invocation where every sub-phase's `family_has_pending_work()`
+    now reads `False` (the "completing" invocation), at which point every
+    sub-phase (including ones this function skipped on earlier invocations)
+    is reconstructed and evaluated together, exactly once.
+
+    O(1) per (instance, candidate) pair — index lookups only via
+    `_instance_has_pending_candidate()`, no PCM read, no `MeasurementRecord`
+    reconstruction — so callers may cheaply evaluate this for a sub-phase's
+    full instance set on every invocation, independent of `time_budget`.
+    Raises `StaleMeasurementError` (via `_instance_has_pending_candidate()`)
+    for a duplicate-key cell, same as every other `MeterCallIndex.
+    is_complete()` consumer in this module — callers must wrap this call the
+    same way they already wrap their own `run_measure_stage()` call site."""
+    return any(
+        _instance_has_pending_candidate(
+            row_id, probe_index, candidates, meter_call_index, f0_unusable_instances
+        )
+        for row_id, probe_index in instances
+    )
+
+
+def _append_stale_measurement_stop_event(
+    campaign: FrozenCampaign, exc: StaleMeasurementError, *, invocation_id: str | None = None
+) -> None:
+    """Codex PR #345 round 7 finding #2 (adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`): shared `stop_event` shape for a
+    `StaleMeasurementError` raised by `MeterCallIndex.is_complete()` (see
+    its docstring) at one of `run_measure_stage()`'s own `is_complete()`
+    call sites — same payload shape `run_measurement_for_instance()`'s
+    pre-existing "duplicate"/"partial" branches already use, so a
+    duplicate ledger state is always logged exactly once before the
+    exception propagates out of `run_measure_stage()`. Deliberately not
+    reused inside `run_measurement_for_instance()` itself: that function
+    logs its own `stop_event` from `completed_records()`'s raise
+    independently, and routing both through one shared call site risks
+    double-logging the same failure key if a future change ever let both
+    raise for the same cell within one call."""
+    campaign.ledger.append(
+        {
+            "kind": "stop_event",
+            "reason": "STALE_MEASUREMENT_STATE",
+            "row_id": exc.row_id,
+            "probe_index": exc.probe_index,
+            "candidate_id": exc.candidate_id,
+            "detail": str(exc),
+            "invocation_id": invocation_id,
+        }
+    )
 
 
 def run_measure_stage(
@@ -1059,10 +1632,57 @@ def run_measure_stage(
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
     max_workers: int = 1,
+    invocation_id: str | None = None,
     missing_reason: str = "F0_UNUSABLE",
-) -> list[MeasurementRecord]:
+    discard_partial_groups: bool = False,
+    stage: str = "unknown",
+    time_budget: TimeBudget | None = None,
+) -> list[MeasurementRecord] | tuple[list[MeasurementRecord], SliceStatus]:
     """`instances × candidates` の全 work unit を決定論的順序（instance →
     candidate_id 昇順）で処理する。
+
+    R3（design memo `design_runner_robustness.md`, `[UNDERSPEC-CAL-D79]`）:
+    呼び出しの先頭で `MeterCallIndex` を 1 回だけ構築し（`campaign.ledger.
+    entries` への唯一のアクセス）、以降は全 `run_measurement_for_instance()`
+    呼び出しへ同じ index を渡す（各呼び出しは新規記帳 1 件ごとに index を
+    O(1) で更新するのみで ledger を再スキャンしない）。`discard_partial_
+    groups`/`stage`（R1）も素通しする。
+
+    R2（`[UNDERSPEC-CAL-D79]`）: `time_budget` が渡されれば instance 境界
+    （`(row_id, probe_index)` 1 件 = 全 candidate の測定が揃って初めて
+    「完了」）で予算超過を検査し、超過していれば以降の instance を一切
+    dispatch せず戻る（既に dispatch 済みの instance は最後まで完走する
+    — `for candidate in candidates` の内側では検査しない）。この場合、
+    戻り値は `(records, SliceStatus)` の 2-tuple になる（`time_budget`
+    が `None`（既定）のときは従来どおり `records` 単体を返す — 呼び出し元
+    の挙動・シグネチャは不変）。
+
+    Codex PR #345 round 4 finding #3（adopted, category ③,
+    `[UNDERSPEC-CAL-D79]`, `render_stage.run_render_stage()` と同一修正）:
+    上記の予算境界検査は `_instance_has_pending_candidate()` で「真に
+    pending な instance」と判定された場合のみ発動する。既に全 candidate が
+    `is_complete()`（または F0-unusable による恒久解決）済みの instance は
+    budget に関わらず内側の `for candidate` ループへ進む（そこでの処理は
+    O(1) skip のみで dispatch は発生しない）。これにより、直前の呼び出しが
+    最終 instance の測定完了後・stage 完了記帳前に中断され、かつ `Meter
+    CallIndex.build()`（全 ledger スキャン）自体が time_budget を使い切る
+    場合でも、完了済み instance の skip が budget 切れを理由にブロック
+    されず、stage は完了/遷移へ進める。
+
+    rehearsal 4 finding D/G（adopted, `[UNDERSPEC-CAL-D79]`。c3b parent CPU
+    71.7s→78.9s→84.3s→88.3s の growth 実測）: 既に `MeterCallIndex.
+    is_complete()` で完了済みと分かるセルは `run_measurement_for_instance()`
+    を一切呼ばず（PCM 読込なし・`MeasurementRecord` 再構成なし）O(1) で
+    skip する — 再構成が要る呼び出し（`time_budget=None` の単発実行、または
+    slice が完走した completing invocation）だけ、skip したセル全体を
+    ループ後の 1 パスでまとめて再構成する（`_rebuild_skipped_records`）。
+    `instances_remaining` も `total_instances - instances_completed_this_run`
+    ではなく、`is_complete()` を使った index ベースの 1 パス
+    （`_instance_has_pending_candidate`）で「この呼び出し後の真の未完了数」
+    を数え直す — budget が最初の instance の dispatch 前に尽きた場合でも
+    （`instances_completed_this_run == 0`）、過去の呼び出しで完了済みの
+    instance を無視した過大な `instances_remaining` を報告しない
+    （非増加が保証される）。
 
     round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): `missing_reason` names the
     `measurement_missing` event's `reason` field for every cell this call
@@ -1107,7 +1727,18 @@ def run_measure_stage(
     which reads the absence of a `MeasurementRecord` against the frozen
     expected-instance set directly — this ledger event does not feed it.
     Idempotent across resume: a cell already recorded as missing by a prior
-    invocation is not re-appended."""
+    invocation is not re-appended.
+
+    round 8 finding #3 (R8-3, category ③, `[UNDERSPEC-CAL-D79]`): with
+    `discard_partial_groups=True`, every candidate's partial-group discard
+    for the instance about to be visited is processed BEFORE the R2/finding
+    #3 budget-boundary check above — discard is a non-dispatch recovery
+    operation and must not be blocked by an already-exhausted `time_budget`
+    (see the inline comment at the top of the loop below). `invocation_id`
+    (round 8 finding #2, R8-2) is threaded to every ledger event this call
+    appends that participates in cap accounting (`meter_call`,
+    `meter_call_group_discarded`, the `stop_event`s this function itself
+    logs) — see `caps.cap_counters_from_ledger()`'s pairing-rule docstring."""
     f0_map = f0_by_instance or {}
     already_missing: set[tuple[str, int, str]] = set()
     for entry in campaign.ledger.entries:
@@ -1118,9 +1749,108 @@ def run_measure_stage(
             if isinstance(cell, (list, tuple)) and len(cell) == 3:
                 already_missing.add((cell[0], cell[1], cell[2]))
 
+    # R3: single ledger scan for this whole invocation — every
+    # `run_measurement_for_instance()` call below shares this one index
+    # instead of each re-scanning `campaign.ledger.entries` itself.
+    meter_call_index = MeterCallIndex.build(campaign.ledger.entries)
+
+    sorted_instances = sorted(instances)
     all_records: list[MeasurementRecord] = []
     newly_missing: list[tuple[str, int, str]] = []
-    for row_id, probe_index in sorted(instances):
+    # rehearsal 4 finding D (adopted, `[UNDERSPEC-CAL-D79]`): cells this
+    # invocation's O(1) `is_complete()` fast path skipped without
+    # reconstructing a `MeasurementRecord` — reconstructed, once, in a
+    # single pass after the loop below, ONLY when this call's return value
+    # will actually be used (see the `time_budget is None`/`completed_all`
+    # branches at the bottom). A `PARTIAL_SLICE` return never rebuilds
+    # these: every caller of a sliced `run_measure_stage()` discards
+    # `records` on a non-terminal slice (`cli._partial_slice_report()`/
+    # `baseline_stage`'s `{"slice_status": ...}` early return), so paying
+    # to reconstruct a growing already-complete prefix on every resumed
+    # slice — the exact cost rehearsal 4 measured growing 71.7s->88.3s
+    # across 4 constant-new-work c3b slices — bought nothing.
+    skipped_complete_cells: list[tuple[str, int, str]] = []
+    instances_completed_this_run = 0
+    completed_all = True
+    for row_id, probe_index in sorted_instances:
+        # round 8 finding #3 (R8-3, category ③, `[UNDERSPEC-CAL-D79]`): a
+        # partial group's `is_complete()` returns `False` (never raises,
+        # unlike a duplicate) — making the cell look merely "pending" and,
+        # with `--discard-partial-groups`, the budget check below would
+        # otherwise `break` on an already-exhausted `time_budget` BEFORE the
+        # discard (only performed inside `run_measurement_for_instance()`,
+        # reached via the `for candidate` loop further down) ever ran. A
+        # small/exhausted budget then repeats `PARTIAL_SLICE` forever
+        # without ever recovering. Fix: process every candidate's partial-
+        # group discard for THIS instance here, unconditionally — discard is
+        # NOT a dispatch (no PCM read, no subprocess spawn), so it must not
+        # be budget-gated; only the remeasurement dispatch inside the `for
+        # candidate` loop below stays budget-gated via `has_pending`.
+        if discard_partial_groups:
+            for candidate in sorted(candidates, key=lambda c: c.candidate_id):
+                if (row_id, probe_index) in f0_unusable_instances and (
+                    candidate.algorithm_family in F0_DEPENDENT_ALGORITHM_FAMILIES
+                ):
+                    continue
+                try:
+                    partial_exc = meter_call_index.partial_group(
+                        row_id, probe_index, candidate.candidate_id
+                    )
+                except StaleMeasurementError as exc:
+                    _append_stale_measurement_stop_event(campaign, exc, invocation_id=invocation_id)
+                    raise
+                if partial_exc is not None:
+                    _discard_partial_group(
+                        campaign,
+                        meter_call_index,
+                        partial_exc,
+                        row_id=row_id,
+                        probe_index=probe_index,
+                        candidate_id=candidate.candidate_id,
+                        stage=stage,
+                        invocation_id=invocation_id,
+                        cap_counters=cap_counters,
+                        cost_caps=cost_caps,
+                    )
+        # Codex PR #345 round 4 finding #3 (adopted, category ③,
+        # `[UNDERSPEC-CAL-D79]`, mirrors `render_stage.run_render_stage()`'s
+        # identical fix): the budget check below must only block dispatch
+        # of a GENUINELY pending instance. Pre-fix ordering checked
+        # `time_budget.expired()` before consulting `meter_call_index` at
+        # all — so if building `MeterCallIndex.build()` above (a full
+        # ledger scan) itself consumed the whole `time_budget`, the very
+        # first instance would trip the budget check and `break`
+        # immediately, even when every instance's every candidate was
+        # already `is_complete()` (or permanently resolved as F0-unusable)
+        # and only the stage's own completion/transition was left.
+        # Repeated resumes with the same small budget would then never
+        # finish. `_instance_has_pending_candidate()` (already used below
+        # for `instances_remaining`) is the same O(1) index-only check —
+        # use it here first: an instance with nothing pending falls through
+        # to the `for candidate` loop, which then only does the cheap
+        # `is_complete()`/F0-unusable skip path (no PCM read, no dispatch),
+        # budget-independent, same as `render_stage`'s already-completed
+        # unit skip.
+        # round 7 finding #2 (`[UNDERSPEC-CAL-D79]`): `is_complete()` (via
+        # this helper) now raises `StaleMeasurementError(kind="duplicate")`
+        # for a duplicate-key cell instead of returning `False` — surfaced
+        # HERE, before the budget check below, so a duplicate is never
+        # masked as merely "pending" and hidden behind a repeatable clean
+        # `PARTIAL_SLICE` exit regardless of how small `time_budget` is.
+        try:
+            has_pending = _instance_has_pending_candidate(
+                row_id, probe_index, candidates, meter_call_index, f0_unusable_instances
+            )
+        except StaleMeasurementError as exc:
+            _append_stale_measurement_stop_event(campaign, exc, invocation_id=invocation_id)
+            raise
+        # R2 instance boundary: checked before starting a NEW (row_id,
+        # probe_index) group that actually has pending work — an instance
+        # already in flight (its own `for candidate` loop below) always
+        # runs to completion.
+        if has_pending and time_budget is not None and time_budget.expired():
+            completed_all = False
+            break
         for candidate in sorted(candidates, key=lambda c: c.candidate_id):
             if (row_id, probe_index) in f0_unusable_instances and (
                 candidate.algorithm_family in F0_DEPENDENT_ALGORITHM_FAMILIES
@@ -1128,6 +1858,24 @@ def run_measure_stage(
                 cell = (row_id, probe_index, candidate.candidate_id)
                 if cell not in already_missing:
                     newly_missing.append(cell)
+                continue
+            candidate_id = candidate.candidate_id
+            # round 7 finding #2: same duplicate-surfacing rule as the
+            # `has_pending` check above, at this cell's own `is_complete()`
+            # call.
+            try:
+                cell_is_complete = meter_call_index.is_complete(row_id, probe_index, candidate_id)
+            except StaleMeasurementError as exc:
+                _append_stale_measurement_stop_event(campaign, exc, invocation_id=invocation_id)
+                raise
+            if cell_is_complete:
+                # Finding D: O(1) skip — no PCM read, no `MeasurementRecord`
+                # reconstruction here (contrast the pre-fix behavior, which
+                # called `run_measurement_for_instance()` unconditionally
+                # and paid its full `meter_output_from_dict()` reconstruction
+                # cost for every already-complete cell on every resumed
+                # slice).
+                skipped_complete_cells.append((row_id, probe_index, candidate_id))
                 continue
             f0_hz = f0_map.get((row_id, probe_index))
             all_records.extend(
@@ -1141,17 +1889,93 @@ def run_measure_stage(
                     cap_counters=cap_counters,
                     cost_caps=cost_caps,
                     max_workers=max_workers,
+                    discard_partial_groups=discard_partial_groups,
+                    stage=stage,
+                    meter_call_index=meter_call_index,
+                    invocation_id=invocation_id,
                 )
             )
+        if has_pending:
+            # Codex PR #345 round 5 finding S2 (adopted, category ②,
+            # `[UNDERSPEC-CAL-D79]`, same rule as round 3 finding F6's
+            # `render_stage.run_render_stage()` fix): only count an
+            # instance as "completed this run" when it had at least one
+            # genuinely pending candidate — `has_pending` (computed above,
+            # before this instance's `for candidate` loop) is exactly that
+            # signal, since a `False` value means every candidate already
+            # took the `is_complete()` O(1) skip path with no dispatch, and
+            # a `True` value guarantees at least one candidate below is not
+            # yet `is_complete()` and so IS dispatched via `run_measurement_
+            # for_instance()`. Pre-fix, this incremented unconditionally for
+            # every instance the loop merely walked through — so a resumed
+            # slice re-entering a fully completed prefix (every candidate
+            # skipped) still reported nonzero "new" progress.
+            instances_completed_this_run += 1
     if newly_missing:
         campaign.ledger.append(
             {
                 "kind": "measurement_missing",
                 "reason": missing_reason,
                 "cells": [[r, p, c] for r, p, c in sorted(newly_missing)],
+                "invocation_id": invocation_id,
             }
         )
-    return all_records
+
+    def _rebuild_skipped_records() -> None:
+        """Finding D: the ONE place `skipped_complete_cells` is ever turned
+        back into `MeasurementRecord`s — a single pass over exactly the
+        cells this call's fast path bypassed, not a per-slice repeat."""
+        for row_id, probe_index, candidate_id in skipped_complete_cells:
+            all_records.extend(
+                meter_call_index.completed_records(row_id, probe_index, candidate_id) or []
+            )
+
+    if time_budget is None:
+        # No slicing: this is the call's only invocation, so the caller
+        # always needs the complete record set.
+        _rebuild_skipped_records()
+        return all_records
+
+    # rehearsal 4 finding G (adopted, `[UNDERSPEC-CAL-D79]`): `remaining`
+    # must reflect the TRUE post-run completion state read from the index
+    # — not `total_instances - instances_completed_this_run`, which was 0
+    # (and so `remaining == total_instances`, ignoring every already-
+    # complete instance from prior invocations) whenever the budget expired
+    # before this call's loop walked even its first instance. This full
+    # index-only pass is O(1) per (instance, candidate) — presence/key-set
+    # checks via `is_complete()`, never a PCM read or record reconstruction
+    # — so it stays cheap even though it (deliberately) covers every
+    # instance in `sorted_instances`, including any this call never reached.
+    # round 7 finding #2: same duplicate-surfacing rule as the two
+    # `is_complete()`-consulting call sites above — an explicit loop (not a
+    # generator expression) so the `StaleMeasurementError` a duplicate cell
+    # anywhere in `sorted_instances` now raises can be logged before it
+    # propagates, even for an instance this call's own dispatch loop above
+    # never reached.
+    instances_remaining = 0
+    for row_id, probe_index in sorted_instances:
+        try:
+            pending = _instance_has_pending_candidate(
+                row_id, probe_index, candidates, meter_call_index, f0_unusable_instances
+            )
+        except StaleMeasurementError as exc:
+            _append_stale_measurement_stop_event(campaign, exc, invocation_id=invocation_id)
+            raise
+        if pending:
+            instances_remaining += 1
+    slice_status = SliceStatus(
+        time_budget_seconds=time_budget.seconds,
+        elapsed_seconds=time_budget.elapsed(),
+        instances_completed_this_run=instances_completed_this_run,
+        instances_remaining=instances_remaining,
+        completed_all=completed_all,
+    )
+    if completed_all:
+        # Completing invocation: the caller (e.g. `cli._criteria_with_fail_
+        # filters()`) needs every record, not just what this call newly
+        # dispatched — rebuild the skipped prefix once, here.
+        _rebuild_skipped_records()
+    return all_records, slice_status
 
 
 __all__ = [
@@ -1161,6 +1985,8 @@ __all__ = [
     "WorkerCpuSecondsInvalidError",
     "StaleRenderError",
     "StaleMeasurementError",
+    "METER_CALL_GROUP_DISCARDED_KIND",
+    "MeterCallIndex",
     "resolve_measure_callable",
     "pcm_bytes_to_signal",
     "load_pcm_signal",
@@ -1174,4 +2000,5 @@ __all__ = [
     "run_fresh_process_calls",
     "run_measurement_for_instance",
     "run_measure_stage",
+    "family_has_pending_work",
 ]

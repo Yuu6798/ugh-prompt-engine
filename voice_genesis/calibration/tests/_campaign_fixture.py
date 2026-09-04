@@ -140,8 +140,16 @@ def build_tiny_campaign(
     max_claim_scope: Sequence[str] | None = None,
     dependencies: Mapping[str, str] | None = None,
     frozen_inputs: Mapping[str, object] | None = None,
+    freeze_event_time_utc: str | None = "2026-09-02T00:00:00+00:00",
 ) -> tuple[Path, Path]:
     """`(campaign_dir, secret_dir_root)` を組み立てて返す。
+
+    `freeze_event_time_utc`（#345 指摘②, `UNDERSPEC-CAL-D85`: `campaign.unseal`
+    の Gate 3 freeze-後発行検証テスト専用）は合成 `c0_freeze` event の
+    `event_time_utc` フィールドへそのまま埋め込む。既定は
+    `write_gate3_approval()` の既定 `approved_at_utc`（後述、freeze より後）
+    より前の値。`None` を渡すと `event_time_utc` キー自体を省略する
+    （unparsable/legacy ledger を模した fixture 用）。
 
     `gate1_nonce`/`gate1_cost_caps`（既定は `write_gate1_approval()` の既定と
     一致するよう選んである）は manifest の `authorization_nonce`/
@@ -235,14 +243,15 @@ def build_tiny_campaign(
     campaign_dir.mkdir(parents=True)
     (campaign_dir / "c0_manifest.json").write_text(canonical_json(manifest), encoding="utf-8")
     fixture_ledger = Ledger(campaign_dir / "ledger.jsonl")
-    fixture_ledger.append(
-        {
-            "kind": "c0_freeze",
-            "campaign_id": campaign_id,
-            "manifest_sha": _manifest_sha(manifest),
-            "realized_split_sha": realized.realized_sha,
-        }
-    )
+    freeze_event: dict[str, object] = {
+        "kind": "c0_freeze",
+        "campaign_id": campaign_id,
+        "manifest_sha": _manifest_sha(manifest),
+        "realized_split_sha": realized.realized_sha,
+    }
+    if freeze_event_time_utc is not None:
+        freeze_event["event_time_utc"] = freeze_event_time_utc
+    fixture_ledger.append(freeze_event)
     # round 14 finding #1: call the production `split_frozen` emitter
     # (`c0_freeze.split_frozen_event_payload`) instead of hand-fabricating an
     # equivalent dict here, so fixture and production payload shape cannot
@@ -311,11 +320,17 @@ def write_gate1_approval(
     )
 
 
-def write_gate3_approval(approval_dir: Path, *, accepted: bool = True) -> None:
+def write_gate3_approval(
+    approval_dir: Path, *, accepted: bool = True, approved_at_utc: str = "2026-09-02T01:00:00Z"
+) -> None:
+    """`approved_at_utc`（#345 指摘②, `UNDERSPEC-CAL-D85`）既定値は
+    `build_tiny_campaign()` の既定 `freeze_event_time_utc`
+    （`2026-09-02T00:00:00+00:00`）より厳密に後——`campaign.unseal.unseal_campaign()`
+    の freeze-後発行検証を素通りするデフォルト束縛を維持する。"""
     payload = {
         "gate": "GATE3_SEAL_ACCEPTANCE",
         "approver": "tester",
-        "approved_at_utc": "2026-09-02T00:00:00Z",
+        "approved_at_utc": approved_at_utc,
         "design_doc_sha256": design_doc_sha256(),
         "memo_sha256": memo_sha256(),
         "seal_protection_level_accepted": accepted,

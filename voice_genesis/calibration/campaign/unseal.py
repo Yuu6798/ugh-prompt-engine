@@ -12,7 +12,14 @@ selection_rule_sha + selected_candidate_sha + selection_freeze_event_sha
 2. Gate 3（`approvals.Gate.GATE3_SEAL_ACCEPTANCE`）の
    `seal_protection_level_accepted` 承認を読み、`GATE3_ACCEPTED` ledger
    event（承認ファイルの content sha256 を記録）を **unseal より前に** 記帳
-   する（memo §6.4「seal 保護水準の受容」承認）。
+   する（memo §6.4「seal 保護水準の受容」承認）。memo §6.4 は Gate 3 を
+   「C0 freeze **後**に成立する」承認として定義するため（`UNDERSPEC-CAL-D85`,
+   #345 指摘②）、承認ファイルの `approved_at_utc` が campaign の `c0_freeze`
+   ledger event（`FrozenCampaign.freeze_event["event_time_utc"]`）より厳密に
+   後であり、かつチェック時点の現在時刻（`datetime.now(timezone.utc)`、60 秒
+   のクロックスキュー許容幅つき）以前であることも検証する
+   （`freeze_time < gate3_time <= now_utc`）— 早い/同時刻/未来日付/パース不能は
+   すべて fail-closed で拒否する（`_parse_iso8601_utc`）。
 3. `holdout_unseal` event を記帳する（`selection_freeze_event_sha` +
    `selection_frozen` と同一の 4 前提 sha を copy、加えて 2 の `gate3_accepted`
    event を参照する `gate3_accepted_sha`）。これは `provenance.Ledger.check_leakage`
@@ -29,6 +36,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from voice_genesis.calibration.approvals import Gate, load_approval
@@ -45,6 +53,39 @@ _PREREQUISITE_KIND_FOR_KEY: Mapping[str, str] = {
 
 class UnsealError(RuntimeError):
     """5-sha 相互参照検査または Gate 3 承認が失敗した際の fail-closed error。"""
+
+
+#: #345 指摘②（`UNDERSPEC-CAL-D85` 追補、Codex レビュー分類②で採用）: freeze-後
+#: 発行検証は下限（`freeze_time < gate3_time`）のみでは不十分——構文上有効な
+#: **未来日付**の `approved_at_utc`（freeze より後だが現在時刻より後）を素通り
+#: させてしまい、事前に用意した未来日付の承認ファイルで後の freeze を先取り
+#: 認可できてしまう。上限（`gate3_time <= now_utc`）も同じ検査で要求する。
+#: 実行環境間のわずかなクロックスキューで「承認直後の正当な approved_at_utc」を
+#: 誤って拒否しないための許容幅（秒）。0 ではなく 60 秒を選んだのは、本チェックの
+#: 目的（先読み登録された遠い未来日付の悪用防止）に対し秒オーダーの正当な誤差を
+#: fail-closed で弾かないための実務的な安全マージン——分オーダー以上のずれは
+#: 依然として拒否される。
+_CLOCK_SKEW_TOLERANCE_SECONDS = 60
+
+
+def _parse_iso8601_utc(value: object) -> datetime | None:
+    """`provenance._is_iso8601_utc_timestamp`/`approvals._is_iso8601_utc_timestamp`
+    と同じ意味論（`Z` または `+00:00` の明示 UTC オフセットのみ許容）で ISO 8601
+    UTC 文字列を `datetime` へ変換する。不正・非 UTC・非文字列なら `None`
+    （#345 指摘②, `UNDERSPEC-CAL-D85`: Gate 3 freeze-後発行検証専用）。
+    `approvals.py`/`provenance.py` は本 fix の編集対象外のため、両モジュールの
+    docstring が既に採用している「独立実装として重複させる」方針を踏襲する
+    （import による cross-module 結合を増やさない）。"""
+    if not isinstance(value, str) or not value:
+        return None
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        return None
+    return parsed
 
 
 def _find_last_entry_of_kind(entries: list[LedgerEntry], kind: str) -> LedgerEntry | None:
@@ -92,7 +133,12 @@ class UnsealResult:
     selection_frozen_entry_sha: str
 
 
-def unseal_campaign(campaign: FrozenCampaign, *, approval_dir: Path) -> UnsealResult:
+def unseal_campaign(
+    campaign: FrozenCampaign,
+    *,
+    approval_dir: Path,
+    invocation_id: str | None = None,
+) -> UnsealResult:
     """§7 の 5-sha 相互参照検査 → Gate 3 承認検証 → `GATE3_ACCEPTED` event →
     `holdout_unseal` event の順で実行する。いずれかが失敗すれば `UnsealError`
     を送出し ledger には一切書き込まない。"""
@@ -107,6 +153,35 @@ def unseal_campaign(campaign: FrozenCampaign, *, approval_dir: Path) -> UnsealRe
         reasons = "; ".join(gate3_result.reasons) or "seal_protection_level_accepted is not true"
         raise UnsealError(f"Gate 3 (seal acceptance) not approved: {reasons}")
 
+    # #345 指摘②（`UNDERSPEC-CAL-D85`）: IMPLEMENTATION_MAP_v1.md §6.4 は Gate 3
+    # を「C0 freeze **後**に成立する」承認として定義するが、この束縛は従来
+    # `seal_protection_level_accepted`/booleans/hash のみを検証しており、
+    # freeze 前に発行された Gate 3 承認ファイルでも通ってしまっていた。ここで
+    # `gate3.approved_at_utc` が campaign の `c0_freeze` ledger event
+    # （`campaign.freeze_event["event_time_utc"]`、`c0_freeze.armed_freeze()`
+    # が刻む値）より厳密に後であることを要求する。早い/同時刻/どちらかが
+    # パース不能ならすべて fail-closed で拒否する（BlockedCode は使わない —
+    # 既存の "Gate 3 not approved" 経路と同じ pre-dispatch 拒否スタイル。
+    # ledger には一切書き込まない）。
+    freeze_time = _parse_iso8601_utc(campaign.freeze_event.get("event_time_utc"))
+    gate3_time = _parse_iso8601_utc(gate3_result.record.approved_at_utc)
+    if freeze_time is None or gate3_time is None or gate3_time <= freeze_time:
+        raise UnsealError(
+            "Gate 3 (seal acceptance) not approved: approval_file:gate3_predates_freeze"
+        )
+    # #345 指摘② 拡張（Codex レビュー分類②で採用）: 下限のみでは、freeze より
+    # 後だが現在時刻より後——構文上有効な**未来日付**の `approved_at_utc` を
+    # 事前に用意しておけば、その日付が来るまで後の freeze を先取り認可でき
+    # てしまう。ここで `gate3_time` が「チェック時点の現在時刻 + クロックスキュー
+    # 許容幅」を超えないことも要求する（早い/同時刻同様 fail-closed。
+    # ledger には一切書き込まない）。上限チェックは下限チェックとは異なる
+    # missing-factor 文字列で失敗理由を区別する。
+    now_utc = datetime.now(timezone.utc)
+    if gate3_time > now_utc + timedelta(seconds=_CLOCK_SKEW_TOLERANCE_SECONDS):
+        raise UnsealError(
+            "Gate 3 (seal acceptance) not approved: approval_file:gate3_future_dated"
+        )
+
     gate3_entry = campaign.ledger.append(
         {
             "kind": "gate3_accepted",
@@ -114,6 +189,7 @@ def unseal_campaign(campaign: FrozenCampaign, *, approval_dir: Path) -> UnsealRe
             "seal_protection_level_accepted": gate3_result.record.seal_protection_level_accepted,
             "approver": gate3_result.record.approver,
             "approved_at_utc": gate3_result.record.approved_at_utc,
+            "invocation_id": invocation_id,
         }
     )
 
@@ -128,6 +204,7 @@ def unseal_campaign(campaign: FrozenCampaign, *, approval_dir: Path) -> UnsealRe
             "selection_rule_sha": payload["selection_rule_sha"],
             "selected_candidate_sha": payload["selected_candidate_sha"],
             "gate3_accepted_sha": gate3_entry.entry_sha,
+            "invocation_id": invocation_id,
         }
     )
     return UnsealResult(

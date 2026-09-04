@@ -350,8 +350,41 @@ def _split_complete_lines(content: str) -> tuple[list[str], bool, bool]:
     return raw_lines, truncated_tail, missing_final_newline
 
 
+def _last_nonblank_line_byte_range(content: str) -> tuple[int, int] | None:
+    """`content` 内で `_split_complete_lines()` が返す `raw_lines` の最後の
+    要素（最後の非空・完全行、改行文字を含まない本文）が占める UTF-8 バイト
+    範囲 `(start, end)` を返す。該当行が無ければ `None`。
+
+    `#345` 指摘③ 追補（末尾空行での偽 append 失敗）: `_set_watermark()` は
+    従来、watermark 末尾エントリのバイト範囲を `_v_bytes`（ファイル全体の
+    検証済みバイト長）から逆算していた（`last_end = v_bytes - 1` 等）。この
+    逆算は「最終非空行がファイル末尾（改行未終端なら EOF、そうでなければ
+    末尾の `\\n` の直前）で終わる」ことを前提にしており、有効な chain の末尾
+    に空行が 1 行以上続く場合に成立しない（空行の分だけ実際の終端よりも
+    後ろを指す）。本関数は `content.splitlines(keepends=True)` を 1 パスで
+    走査し、`_split_complete_lines()` と同じ「空白のみの行は無視する」判定
+    (`stripped.strip()`) で最後の非空行そのものの実バイト範囲を直接返す。
+    ファイル全体の長さ (`_v_bytes`) や末尾改行の有無に一切依存しないため、
+    末尾空行が何行続いても（`missing_final_newline` の場合を含め）常に
+    正しい範囲を指す。"""
+    offset = 0
+    result: tuple[int, int] | None = None
+    for raw_line in content.splitlines(keepends=True):
+        line_byte_len = len(raw_line.encode("utf-8"))
+        stripped = raw_line.splitlines()[0]
+        if stripped.strip():
+            result = (offset, offset + len(stripped.encode("utf-8")))
+        offset += line_byte_len
+    return result
+
+
 def _verify_chain_prefix(
-    raw_lines: Sequence[str], truncated_tail: bool, missing_final_newline: bool
+    raw_lines: Sequence[str],
+    truncated_tail: bool,
+    missing_final_newline: bool,
+    *,
+    start_seq: int = 0,
+    start_prev_sha: str = GENESIS_PREV_SHA,
 ) -> ChainVerification:
     """`raw_lines`（`_split_complete_lines` が返す、改行区切りの完全な行の列）
     に対して entry_sha 連鎖検証を行う純関数（I/O なし）。`verify_chain()`
@@ -359,10 +392,20 @@ def _verify_chain_prefix(
     読んだ内容をそのまま渡す、Codex レビュー 2026-09-01 P1 finding #4）の
     両方が共有する判定ロジック本体。`truncated_tail`/`missing_final_newline`
     は呼び出し側が `_split_complete_lines` から得た値をそのまま渡す。
+
+    `start_seq`/`start_prev_sha`（UNDERSPEC-CAL-D84: `Ledger.append()` の
+    増分検証）: 既定 (`0`/`GENESIS_PREV_SHA`) はファイル先頭からの検証
+    （`verify_chain()`・旧来の `append()` フル検証と完全に同じ挙動）。
+    `Ledger.append()` の watermark 経由の呼び出しは、`raw_lines` に
+    watermark **以降**（suffix）の行だけを渡し、`start_seq`/`start_prev_sha`
+    に watermark の `seq`/`entry_sha` を渡すことで、chain の続きとして
+    検証する。`tamper_at_seq`/`detail` の `seq` は常にグローバルな
+    （台帳全体での）`seq` 番号（`start_seq + i`）で報告する。
     """
-    prev = GENESIS_PREV_SHA
+    prev = start_prev_sha
     verified = 0
     for i, line in enumerate(raw_lines):
+        expected_seq = start_seq + i
         try:
             raw = json.loads(line)
         except json.JSONDecodeError:
@@ -384,20 +427,23 @@ def _verify_chain_prefix(
                 ok=False,
                 entries_verified=verified,
                 truncated_tail=truncated_tail,
-                tamper_at_seq=i,
+                tamper_at_seq=expected_seq,
                 detail=(
-                    f"malformed entry at position {i} (seq slot {i}): "
+                    f"malformed entry at position {i} (seq slot {expected_seq}): "
                     f"missing required field(s) {missing_keys}"
                 ),
                 missing_final_newline=missing_final_newline,
             )
-        if raw.get("seq") != i:
+        if raw.get("seq") != expected_seq:
             return ChainVerification(
                 ok=False,
                 entries_verified=verified,
                 truncated_tail=truncated_tail,
-                tamper_at_seq=i,
-                detail=f"seq mismatch at position {i}: expected {i}, got {raw.get('seq')}",
+                tamper_at_seq=expected_seq,
+                detail=(
+                    f"seq mismatch at position {i}: expected {expected_seq}, "
+                    f"got {raw.get('seq')}"
+                ),
                 missing_final_newline=missing_final_newline,
             )
         if raw.get("prev_sha") != prev:
@@ -405,18 +451,18 @@ def _verify_chain_prefix(
                 ok=False,
                 entries_verified=verified,
                 truncated_tail=truncated_tail,
-                tamper_at_seq=i,
-                detail=f"prev_sha mismatch at seq {i} (sibling branch or tamper)",
+                tamper_at_seq=expected_seq,
+                detail=f"prev_sha mismatch at seq {expected_seq} (sibling branch or tamper)",
                 missing_final_newline=missing_final_newline,
             )
-        expected = _entry_sha(i, prev, raw.get("payload", {}))
+        expected = _entry_sha(expected_seq, prev, raw.get("payload", {}))
         if expected != raw.get("entry_sha"):
             return ChainVerification(
                 ok=False,
                 entries_verified=verified,
                 truncated_tail=truncated_tail,
-                tamper_at_seq=i,
-                detail=f"entry_sha mismatch at seq {i} (content tamper)",
+                tamper_at_seq=expected_seq,
+                detail=f"entry_sha mismatch at seq {expected_seq} (content tamper)",
                 missing_final_newline=missing_final_newline,
             )
         prev = raw["entry_sha"]
@@ -454,6 +500,34 @@ _UNSEAL_COMMITMENT_KEYS: tuple[str, ...] = tuple(_UNSEAL_PREREQUISITE_KINDS)
 #: references but a missing or arbitrary Gate 3 reference was accepted as an
 #: authorized boundary by `Ledger.check_leakage`.
 _GATE3_ACCEPTED_KIND = "gate3_accepted"
+
+#: `Ledger.append()` G2（`#345` 指摘③）: これらの `payload["kind"]` を追記する
+#: 直前は、watermark 経由の O(1) 増分検証をスキップし、on-disk ledger 全体を
+#: seq 0 から `_verify_chain_prefix` でフル検証してから書き込む（fail-closed）。
+#: `campaign/state.py::LEDGER_KIND_FOR_PHASE`（D2 runner のフェーズ到達判定が
+#: 見る kind 語彙）を権威とし、実際に emit される表記ゆれ（`baseline_audit`
+#: 実装 vs `state.py` 側の `baseline_audited`）双方を含める。加えて
+#: `campaign/unseal.py`/`render_stage.py`/`close.py` が記帳する `kind`（
+#: `LEDGER_KIND_FOR_PHASE` 未収載の `gate3_accepted`/`holdout_render_valid`/
+#: `split_secret_revealed`）と、`stage_summary`/`slice_summary`（フェーズでは
+#: ないが campaign 進行の要約 terminal event）を明示的に加える。
+_TRANSITION_EVENT_KINDS: frozenset[str] = frozenset(
+    {
+        "fixture_valid",
+        "baseline_audit",
+        "baseline_audited",
+        "f0_selection_frozen",
+        "selection_frozen",
+        "holdout_render_valid",
+        "holdout_executed_valid",
+        "gate3_accepted",
+        "holdout_unseal",
+        "campaign_closed",
+        "split_secret_revealed",
+        "stage_summary",
+        "slice_summary",
+    }
+)
 
 
 def _is_sha256_hex(value: object) -> bool:
@@ -749,6 +823,60 @@ def _parse_ledger_lines(
     return entries, malformed
 
 
+def _read_and_verify(
+    path: Path,
+) -> tuple[
+    list[LedgerEntry],
+    list[MalformedLedgerLine],
+    ChainVerification,
+    int,
+    list[str],
+    tuple[int, int] | None,
+    tuple[int, int, int] | None,
+]:
+    """`path` を一度だけ読み、entries 構築 (`_parse_ledger_lines`)・chain 検証
+    (`_verify_chain_prefix`)・検証済みバイト長の取得を同一バッファから行う
+    純粋 I/O ヘルパー（UNDERSPEC-CAL-D84）。`Ledger.__init__` と
+    `Ledger.load_with_verification` の両方が使う — finding #12 が
+    `load_with_verification` 用に導入した「1 回読取」パターンを構築経路
+    全体へ拡張したもので、ここで得る `ChainVerification`/バイト長が
+    `Ledger.append()` の増分検証で使う「検証済み watermark」の元になる。
+    ファイルが存在しない場合は空とみなす。戻り値の `raw_lines` は
+    `_set_watermark()` が watermark 末尾エントリの生バイト列 fingerprint
+    （`#345 指摘③`: rollback/tamper 検出用）を導出するために使う。同じく
+    戻り値の `last_line_byte_range`（`#345 指摘③` 追補）は、その fingerprint
+    バイト列を次回 `append()` が O(1) で再読取する際の実際のファイル内
+    バイト範囲（末尾空行の有無に依存しない）を渡すために使う。
+
+    戻り値の `stat_info`（`(st_ino, st_mtime_ns, st_size)`。ファイルが存在
+    しなければ `None`）は `#345` 指摘③ G1（`Ledger.append()` の安価な変更
+    検出器）が使う「検証済み時点の stat」の起点。この読取と同じファイル
+    ディスクリプタから `os.fstat()` するため、content と stat の間に
+    別々の `exists()`/`stat()` 呼び出しが持つ TOCTOU の隙間がない。"""
+    stat_info: tuple[int, int, int] | None = None
+    if path.exists():
+        with path.open("rb") as f:
+            st = os.fstat(f.fileno())
+            raw_bytes = f.read()
+        content = raw_bytes.decode("utf-8")
+        stat_info = (st.st_ino, st.st_mtime_ns, st.st_size)
+    else:
+        content = ""
+    raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(content)
+    entries, malformed = _parse_ledger_lines(raw_lines)
+    chain = _verify_chain_prefix(raw_lines, truncated_tail, missing_final_newline)
+    last_line_byte_range = _last_nonblank_line_byte_range(content)
+    return (
+        entries,
+        malformed,
+        chain,
+        len(content.encode("utf-8")),
+        raw_lines,
+        last_line_byte_range,
+        stat_info,
+    )
+
+
 class Ledger:
     """append-only JSONL 台帳。
 
@@ -772,62 +900,125 @@ class Ledger:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        self._entries: list[LedgerEntry] = []
-        self._malformed: list[MalformedLedgerLine] = []
-        if path.exists():
-            self._entries, self._malformed = self._read_all()
+        entries, malformed, chain, content_bytes, raw_lines, last_line_byte_range, stat_info = (
+            _read_and_verify(path)
+        )
+        self._entries = entries
+        self._malformed = malformed
+        self._set_watermark(
+            chain, entries, content_bytes, raw_lines, last_line_byte_range, stat_info
+        )
 
-    def _read_all(self) -> tuple[list[LedgerEntry], list[MalformedLedgerLine]]:
-        """既存ファイルから読み込む（キャッシュ用途）。`(entries, malformed)`
-        を返す。
+    def _set_watermark(
+        self,
+        chain: ChainVerification,
+        entries: Sequence[LedgerEntry],
+        content_bytes: int,
+        raw_lines: Sequence[str],
+        last_line_byte_range: tuple[int, int] | None = None,
+        stat_info: tuple[int, int, int] | None = None,
+    ) -> None:
+        """`append()` の増分検証（UNDERSPEC-CAL-D84）が使う「検証済み
+        watermark」を設定する。`__init__`/`load_with_verification`（構築時）
+        と `append()`（追記成功後）の両方から呼ばれる。
 
-        末尾の truncated/不完全な行は静かにスキップする（クラッシュさせない。
-        `_split_complete_lines` を再利用し、`verify_chain()`/`append()` と
-        同じ行分割・truncated 判定基準を共有する）。
+        `chain.ok` が `True` の場合のみ `content_bytes`（検証済みバイト長）と
+        末尾エントリの `seq`/`entry_sha` を watermark として信用する。
+        `chain.ok` が `False`（改竄・truncated tail・malformed 行のいずれか）
+        の場合は「未検証」を意味する sentinel `(0, -1, GENESIS_PREV_SHA,
+        False)` を設定する — この場合、次回 `append()` は watermark 0 から
+        suffix（＝ファイル全体）を検証する旧来の full-verify に自動的に
+        フォールバックし、fail-closed 契約を一切弱めない
+        （`test_ledger_append_refuses_when_middle_entry_tampered` 等が
+        これを検証する）。
 
-        JSON としてはパース可能だが `LedgerEntry` に必須のフィールド
-        （`_ENTRY_REQUIRED_KEYS`）を欠く「構造的 malformed」な行（例:
-        `{"seq": 0}`）に対しても、`raw["prev_sha"]` のような直接インデックス
-        で `KeyError` を送出してはならない（Codex レビュー 2026-09-01 P1
-        finding #3: 従来はここで `KeyError` が `Ledger.__init__` へそのまま
-        伝播し、`verify_chain()` を呼ぶ前に構築自体がクラッシュしていた ―
-        「破損を検出して報告する」という契約を満たせていなかった）。
-        malformed な行は `LedgerEntry` としては構築せず、`MalformedLedgerLine`
-        として別途記録して読み進める。
+        `_v_last_line_len`/`_v_last_line_sha256`（`#345 指摘③` 採用）:
+        watermark 末尾エントリ 1 行分の生バイト長と sha256。`append()` は
+        次回呼び出し時、これを使って watermark 直下の 1 行だけを O(1) で
+        再読取・再検証する（`raw_lines` 全体の再検証ではない）。これにより
+        「ファイルサイズは watermark と同じだが末尾エントリの内容だけが
+        同じ長さの別内容に差し替えられている」改竄（O(1) suffix 検証では
+        素通りする）も fail-closed で検出する。
 
-        破損の有無・種別についての権威ある判定は本メソッドの責務ではなく、
-        `verify_chain()` がファイル全体を独立に読み直して行う
-        （`_verify_chain_prefix` が同じ `_ENTRY_REQUIRED_KEYS` 検査を chain
-        順序の文脈で再実行し、malformed な行の位置を `ok=False` +
-        `tamper_at_seq` として報告する）。
-        """
-        content = self.path.read_text(encoding="utf-8")
-        raw_lines, _truncated_tail, _missing_final_newline = _split_complete_lines(content)
-        return _parse_ledger_lines(raw_lines)
+        `_v_last_line_start`/`_v_last_line_end`（`#345 指摘③` 追補、末尾空行
+        での偽 append 失敗の修正）: 上記 fingerprint バイト列の、ファイル内
+        での実際の開始/終了バイトオフセット。`last_line_byte_range`
+        （`_last_nonblank_line_byte_range()` が `content_bytes` とは独立に
+        1 パスで求めた、最後の**非空**完全行そのものの範囲）をそのまま格納
+        する。旧実装は `last_end` を `content_bytes`（watermark のファイル
+        全体バイト長）から `- 1` 等で逆算していたため、有効な chain の末尾に
+        空行が 1 行以上続く場合（`content_bytes` が空行の分だけ実際の終端
+        より後ろにずれる）、`append()` の O(1) fingerprint 再照合が誤った
+        バイト範囲を読み、正当な台帳を `LedgerChainInvalidError` で拒否して
+        いた（`#345` 指摘: append の偽失敗でリカバリを阻害する欠陥）。本
+        オフセットは末尾空行の有無や `missing_final_newline` に関わらず常に
+        最終非空行そのものを指すため、この逆算が不要になる。
+
+        `_v_ino`/`_v_mtime_ns`/`_v_stat_size`（`#345` 指摘③ G1 採用）: この
+        watermark を確立した読取直後（`stat_info`。構築時は `_read_and_verify`
+        が同一 fd から `os.fstat` した値、`append()` 成功時は自身の write→
+        flush→`fsync` 直後に再 `fstat` した値）の `(st_ino, st_mtime_ns,
+        st_size)`。`chain.ok=False`（watermark 未確立）の場合は `None` —
+        この場合 `append()` は `v_bytes=0` 経由で常に全体検証へ落ちるため
+        G1 の出番がない。mtime 粒度の注意: Linux では `st_mtime_ns` はナノ秒
+        単位で記録され、実務上は同一秒内の書き込みでも異なる値になるが、
+        OS/ファイルシステム/`utimensat` による意図的な時刻偽装までは
+        保証しない（モジュール docstring の保護水準宣言のとおり、台帳の外側
+        で動く敵対的な実行者は対象外）。"""
+        if chain.ok:
+            self._v_bytes = content_bytes
+            self._v_ino, self._v_mtime_ns, self._v_stat_size = (
+                stat_info if stat_info is not None else (None, None, None)
+            )
+            if entries:
+                tail = entries[-1]
+                self._v_seq = tail.seq
+                self._v_sha = tail.entry_sha
+                last_line_bytes = raw_lines[-1].encode("utf-8") if raw_lines else b""
+                self._v_last_line_len = len(last_line_bytes)
+                self._v_last_line_sha256 = hashlib.sha256(last_line_bytes).hexdigest()
+                if last_line_byte_range is not None:
+                    self._v_last_line_start, self._v_last_line_end = last_line_byte_range
+                else:
+                    self._v_last_line_start = self._v_last_line_end = 0
+            else:
+                self._v_seq = -1
+                self._v_sha = GENESIS_PREV_SHA
+                self._v_last_line_len = 0
+                self._v_last_line_sha256 = None
+                self._v_last_line_start = self._v_last_line_end = 0
+            self._v_missing_final_newline = chain.missing_final_newline
+        else:
+            self._v_bytes = 0
+            self._v_seq = -1
+            self._v_sha = GENESIS_PREV_SHA
+            self._v_missing_final_newline = False
+            self._v_last_line_len = 0
+            self._v_last_line_sha256 = None
+            self._v_last_line_start = self._v_last_line_end = 0
+            self._v_ino = self._v_mtime_ns = self._v_stat_size = None
 
     @classmethod
     def load_with_verification(cls, path: Path) -> tuple["Ledger", ChainVerification]:
-        """`path` を **1 回だけ** 読み、同一バッファから entries 構築
-        （`_read_all()` 相当）と chain 検証（`verify_chain()` 相当）の両方を
-        行う（finding #12: `campaign/state.py::load_frozen_campaign` は従来
-        `Ledger(path)`（1 回読取） → `ledger.verify_chain()`（もう 1 回読取）
-        の 2 回読みだった）。`Ledger(path)`/`verify_chain()` 単体の挙動・
-        シグネチャは変更しない — 本メソッドは追加の入口であり、
-        `_split_complete_lines`/`_parse_ledger_lines`/`_verify_chain_prefix`
-        という既存の純関数を同一バッファへ 2 度（構築用・検証用）適用する
-        だけの薄い合成。"""
-        if path.exists():
-            content = path.read_text(encoding="utf-8")
-        else:
-            content = ""
-        raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(content)
-        entries, malformed = _parse_ledger_lines(raw_lines)
-        chain = _verify_chain_prefix(raw_lines, truncated_tail, missing_final_newline)
+        """`path` を **1 回だけ** 読み、同一バッファから entries 構築と
+        chain 検証の両方を行う（finding #12: `campaign/state.py::
+        load_frozen_campaign` は従来 `Ledger(path)`（1 回読取） →
+        `ledger.verify_chain()`（もう 1 回読取）の 2 回読みだった）。
+        `Ledger(path)`/`verify_chain()` 単体の挙動・シグネチャは変更しない
+        — 本メソッドは追加の入口であり、`_read_and_verify` という既存の
+        純関数を薄く呼ぶだけ。返す `chain` はここで確立した watermark の
+        根拠でもある（UNDERSPEC-CAL-D84: `Ledger.append()` の増分検証）。"""
+        entries, malformed, chain, content_bytes, raw_lines, last_line_byte_range, stat_info = (
+            _read_and_verify(path)
+        )
 
         instance = cls.__new__(cls)
         instance.path = path
         instance._entries = entries
         instance._malformed = malformed
+        instance._set_watermark(
+            chain, entries, content_bytes, raw_lines, last_line_byte_range, stat_info
+        )
         return instance, chain
 
     @property
@@ -836,9 +1027,9 @@ class Ledger:
 
     @property
     def malformed_lines(self) -> tuple[MalformedLedgerLine, ...]:
-        """`_read_all()` が検出した構造的 malformed 行（Codex レビュー
-        2026-09-01 P1 finding #3）。空タプルは「malformed 行なし」を意味する。
-        権威ある chain 検証結果は `verify_chain()` を使うこと（本 property は
+        """構築時に検出された構造的 malformed 行（Codex レビュー 2026-09-01
+        P1 finding #3）。空タプルは「malformed 行なし」を意味する。権威ある
+        chain 検証結果は `verify_chain()` を使うこと（本 property は
         `Ledger(path)` 構築時点でのスナップショットに過ぎず、on-disk 内容が
         構築後に変化していれば古くなる）。"""
         return tuple(self._malformed)
@@ -865,24 +1056,248 @@ class Ledger:
         `verify_chain()` はこの状態を `missing_final_newline=True` として
         報告する（fail-closed の対象外）。
 
-        **全 chain 検証**（Codex レビュー 2026-09-01 P1 finding #4）: 排他
-        ロックを保持したまま、既読の全行 (`raw_lines`) に対して
-        `verify_chain()` と同じ判定 (`_verify_chain_prefix`) を再実行し、
-        途中の 1 行でも改竄・seq 欠番・破損があれば `LedgerChainInvalidError`
-        を送出して書込を一切行わない（fail-closed）。コストは append 1 回
-        あたり O(n)（n=既存エントリ数）だが、台帳全体の完全性を append の
-        都度保証する設計正本 §7 の優先事項として許容する（末尾 1 行のみの
-        検査では、改竄行より後ろを改竄後に再計算した "整合する" chain へ
-        差し替えられていた場合に検出できない）。
+        **増分 chain 検証**（UNDERSPEC-CAL-D84。旧: Codex レビュー
+        2026-09-01 P1 finding #4 の「全 chain 再検証」）: 旧実装は、排他
+        ロックを保持したまま既存ファイルの **全行** を毎回 `verify_chain()`
+        と同じ判定 (`_verify_chain_prefix`) で再検証し、さらに `_read_all()`
+        で全行を再パースしていた（append 1 回あたり O(n)、n=既存エントリ数。
+        実測: 本番 campaign RUN10-CAL-20260903-9bcbbf86 の c2-baseline で
+        n=11,220 のとき 1 回の append が 912 ms、group あたり 6 回で 5.47 s
+        ＝完走に約 112 h CPU / 約 2,700 slices を要する O(n²) が判明した）。
+
+        本実装は、この `Ledger` インスタンスが最後に検証した地点
+        （`self._v_bytes`/`_v_seq`/`_v_sha`/`_v_missing_final_newline` —
+        `__init__`/`load_with_verification`（構築時）または直前の
+        `append()` 成功時に設定される「検証済み watermark」）**以降**の
+        suffix だけを `_verify_chain_prefix` で検証する（O(1) — suffix は
+        通常 0〜数行）。`fcntl.flock(LOCK_EX)` を先に獲得し、そのロックを
+        保持したまま on-disk の現在のファイルを watermark から読み直すため、
+        以下は旧実装と同じ強度で検出される（fail-closed を弱めない）:
+
+        - watermark **以降**に他プロセス/他 `Ledger` インスタンスが書いた
+          内容の改竄・truncated tail・malformed 行（suffix を通常どおり
+          `_verify_chain_prefix` で検証するため）
+        - watermark 末尾エントリ 1 行そのものが（truncate を伴わず）同じ
+          長さの別内容へ差し替えられている場合（`_v_last_line_sha256` との
+          O(1) 再照合で検出。`#345 指摘③` 採用）
+
+        **`#345` 指摘③（fail-closed 化。旧: watermark 未満へのフォール
+        バック）**: ファイルが watermark のバイト位置より短くなっている
+        場合（restore/sync rollback 等で VALID だが短い prefix へ戻された
+        ケースを含む）、旧実装は watermark を `0` にリセットしてファイル
+        全体を再検証するフォールバックへ落ちていた。この再検証自体は
+        通っても、`append()` 末尾で `self._entries` に suffix（＝ロール
+        バック後のファイル全体）を単純 `extend` していたため、ロール
+        バック前の古いキャッシュ（例: 3 エントリ）の後ろへロールバック後の
+        内容（例: 2 エントリ）が継ぎ足され、`self._entries` の `seq` 列が
+        `[0,1,2,0,1]` のように disk（`[0,1]`）と乖離する
+        （in-memory キャッシュの再同期）。本実装はこの再同期を行わず、
+        watermark 未満へのサイズ減少を **無条件に** rollback/tamper とみなし
+        `LedgerChainInvalidError` で fail-closed する（書き込みなし・
+        `self._entries` 等の in-memory 状態も不変）。呼び出し側は
+        `Ledger(path)`/`load_with_verification(path)` で明示的に作り直して
+        から再試行すること。
+
+        **`#345` 指摘③ G1（安価な変更検出器）**: 上記の watermark 直下 1 行
+        fingerprint 再照合は、watermark 末尾エントリ「より前」（＝この
+        インスタンスが最後に検証した prefix のうち末尾エントリを除いた
+        部分）の in-place 同一長改ざんは検出しない — ファイルサイズも
+        watermark 末尾行の内容も変わらないため。これを塞ぐため、
+        watermark 確立時（構築時読取直後、または直前の自分自身の write→
+        flush→`fsync` 直後）に `(st_ino, st_mtime_ns, st_size)` も併せて
+        記録する（`self._v_ino`/`_v_mtime_ns`/`_v_stat_size`）。今回の
+        `append()` は、まず現在の on-disk stat を `os.fstat()` で取得し、
+        これが記録済みの値と（inode・mtime・size のいずれか 1 つでも）
+        食い違っていれば——このインスタンス自身の直近の write で説明が
+        つかない変化とみなし——O(1) の高速経路（last-line fingerprint 再照合
+        + suffix のみの `_verify_chain_prefix`）をスキップし、seq 0 から
+        on-disk ledger 全体を `_verify_chain_prefix` でフル再検証してから
+        書き込む。フル再検証が失敗すれば `LedgerChainInvalidError` で
+        fail-closed（書き込みなし）。成功すれば（例: 単一 writer 境界の契約
+        が許す「flock で直列化された複数 `Ledger` インスタンスの正当な交互
+        append」）、watermark と `self._entries` をこのフル読取の内容へ
+        再同期してから続行する（ロールバック時（`#345 指摘③` 既存の
+        「watermark 未満へのサイズ減少」チェックが依然として先に fail-closed
+        するため、ここでの再同期は「同じかそれ以上のサイズで、かつ chain
+        全体が正当」な場合のみに限られる）。mtime 粒度の注意: Linux では
+        `st_mtime_ns` はナノ秒粒度で記録され、実務上は同一秒内の書き込み
+        でも異なる値になるが、`utimensat` 等による意図的な mtime 偽装や
+        inode 温存トリックまでは検出しない。
+
+        **`#345` 指摘③ G2（遷移 event 前のフル検証）**: `payload["kind"]` が
+        `_TRANSITION_EVENT_KINDS`（フェーズ到達を示す terminal event。
+        `campaign/state.py::LEDGER_KIND_FOR_PHASE` を権威とし、そこに現れ
+        ない `gate3_accepted`/`holdout_render_valid`/`split_secret_revealed`
+        と、`stage_summary`/`slice_summary` の 2 summary も加える）に含まれる
+        場合、stat が変化していなくても無条件に G1 と同じフル再検証経路へ
+        入る（この 1 か所の分岐だけで済むよう、呼び出し側の変更は不要）。
+        頻度は 1 campaign あたり高々数十〜数百件（フェーズ遷移 + summary）
+        であり、O(n) 再検証を要求しても campaign 全体としては許容可能な
+        コストにとどまる（D84 が問題視した「毎 append で O(n)」とは異なる）。
+
+        **残余露出（G1/G2 適用後も残る唯一の隙間）**: watermark 末尾より前の
+        in-place 同一長改ざんが、かつ (a) この操作自身の直近 write と
+        「区別できない」ほど stat（ino/mtime_ns/size）まで精巧に偽装され、
+        かつ (b) 次に追記される payload の `kind` が `_TRANSITION_EVENT_KINDS`
+        のいずれでもない（＝ただの `meter_call` 等）場合に限り、その 1 回の
+        `append()` では検出されない。この露出は次のいずれかで必ず検出される:
+        次の遷移/summary event の append（G2）、プロセス再起動後の
+        `Ledger(path)`/`load_with_verification(path)`（構築時は常にフル
+        検証）、または明示的な `verify_chain()` 呼び出し。モジュール
+        docstring が宣言する保護水準（事故的 leakage / 事後改竄の検出、
+        台帳の外側で動く敵対的な実行者は対象外）を弱めるものではない。
         """
         payload_j = _jsonable(payload)
+        transition_kind = payload_j.get("kind") if isinstance(payload_j, Mapping) else None
+        force_full_chain_verify = transition_kind in _TRANSITION_EVENT_KINDS
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a+", encoding="utf-8") as f:
+        full_resync = False
+        full_entries_for_resync: list[LedgerEntry] = []
+        with self.path.open("a+b") as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
-                f.seek(0)
-                content = f.read()
-                raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(content)
+                f.seek(0, os.SEEK_END)
+                current_size = f.tell()
+                v_bytes = self._v_bytes
+                v_seq = self._v_seq
+                v_sha = self._v_sha
+                v_missing_final_newline = self._v_missing_final_newline
+                if v_bytes > 0:
+                    if current_size < v_bytes:
+                        # watermark より短い＝restore/sync rollback 等の
+                        # 外部要因によるロールバック（VALID だが短い prefix
+                        # を含む）。watermark を再同期して受理してはならない
+                        # （#345 指摘③: 旧実装はここで watermark を 0 に
+                        # 戻してフォールバック検証していたため、on-disk が
+                        # [0,1] へ縮んでも in-memory `self._entries` は
+                        # ロールバック前の内容を保持したまま suffix を
+                        # extend し、`[0,1,2,0,1]` のような重複キャッシュを
+                        # 生んでいた）。in-memory 状態を変更せず、書き込みも
+                        # 一切行わずに fail-closed する。
+                        raise LedgerChainInvalidError(
+                            self.path,
+                            f"on-disk ledger size ({current_size} bytes) is smaller than "
+                            f"this instance's verified watermark ({v_bytes} bytes, "
+                            f"seq={v_seq}): rollback or truncation detected; refusing to "
+                            "re-sync onto a shortened chain. Reconstruct via Ledger(path) "
+                            "or load_with_verification(path) to re-verify from scratch "
+                            "before appending again.",
+                            v_seq,
+                        )
+                    # `#345` 指摘③ G1: watermark 確立時（構築時 or 直前の
+                    # 自分自身の write 直後）に記録した stat と現在の on-disk
+                    # stat を比較する安価な変更検出器。一致していれば
+                    # （＝このインスタンス自身の直近の write 以外、誰も
+                    # ファイルへ触れていない）既存の O(1) last-line
+                    # fingerprint 再照合だけで十分。`#345` 指摘③ G2: 追記
+                    # しようとしている event 自体がフェーズ遷移/terminal
+                    # summary（`_TRANSITION_EVENT_KINDS`）なら、stat が
+                    # 一致していても無条件にフル再検証へ回す。
+                    current_stat = os.fstat(f.fileno())
+                    stat_unchanged = (
+                        self._v_ino is not None
+                        and current_stat.st_ino == self._v_ino
+                        and current_stat.st_mtime_ns == self._v_mtime_ns
+                        and current_stat.st_size == self._v_stat_size
+                    )
+                    if stat_unchanged and not force_full_chain_verify:
+                        # サイズは watermark 以上でも、watermark 末尾エントリ
+                        # そのものが同じ長さの別内容へ差し替えられていれば
+                        # （truncate を伴わない改竄）、suffix 検証だけでは
+                        # 素通りする（suffix はまさにこの 1 行の直後から読む
+                        # ため）。watermark 末尾 1 行分だけを O(1) で読み直し、
+                        # 記録済み sha256 と一致するか確認する（#345 指摘③）。
+                        # バイト範囲は `_set_watermark()` が構築時に直接記録
+                        # した最終非空行の実オフセット
+                        # （`_v_last_line_start`/`_end`）をそのまま使う —
+                        # `v_bytes`（ファイル全体長）からの逆算ではない。
+                        # 逆算は watermark 末尾に空行が続く有効な chain で
+                        # 実際の終端より後ろを指し、正当な台帳の append を
+                        # 偽の tamper 検出として拒否していた（`#345` 指摘③
+                        # 追補: 末尾空行での偽 append 失敗）。
+                        last_len = self._v_last_line_len
+                        last_start = self._v_last_line_start
+                        f.seek(last_start)
+                        last_bytes = f.read(last_len)
+                        if (
+                            len(last_bytes) != last_len
+                            or hashlib.sha256(last_bytes).hexdigest()
+                            != self._v_last_line_sha256
+                        ):
+                            raise LedgerChainInvalidError(
+                                self.path,
+                                f"on-disk content at this instance's verified watermark "
+                                f"(seq={v_seq}) no longer matches what was last verified: "
+                                "content tamper at/behind the watermark; refusing to "
+                                "append without re-verifying the full chain.",
+                                v_seq,
+                            )
+                    else:
+                        # G1（stat が想定外に変化）または G2（遷移 event）:
+                        # watermark より前の in-place 同一長改ざんは stat の
+                        # みでは疑わしいと分かっても位置を特定できないため、
+                        # on-disk ledger 全体を seq 0 からフル再検証する。
+                        f.seek(0)
+                        full_raw = f.read()
+                        try:
+                            full_content = full_raw.decode("utf-8")
+                        except UnicodeDecodeError as exc:
+                            raise LedgerTruncatedTailError(
+                                self.path,
+                                "existing ledger content is not valid utf-8; refusing "
+                                "to append",
+                            ) from exc
+                        full_lines, full_truncated_tail, full_missing_final_newline = (
+                            _split_complete_lines(full_content)
+                        )
+                        if full_truncated_tail:
+                            raise LedgerTruncatedTailError(
+                                self.path,
+                                "existing ledger tail is truncated (incomplete final "
+                                "line); refusing to append onto partial bytes",
+                            )
+                        full_check = _verify_chain_prefix(
+                            full_lines,
+                            truncated_tail=False,
+                            missing_final_newline=full_missing_final_newline,
+                        )
+                        if not full_check.ok:
+                            raise LedgerChainInvalidError(
+                                self.path, full_check.detail, full_check.tamper_at_seq
+                            )
+                        # フル検証済み: watermark とこのインスタンスの
+                        # `self._entries` キャッシュを、このフル読取の内容へ
+                        # 再同期する（旧キャッシュへの単純 extend は行わない
+                        # — `#345` 指摘③ ロールバック fix と同じ理由で、
+                        # 一部だけを継ぎ足すと disk と乖離した重複キャッシュ
+                        # を生みうる）。
+                        full_entries_for_resync, _full_malformed = _parse_ledger_lines(
+                            full_lines
+                        )
+                        full_resync = True
+                        v_bytes = len(full_raw)
+                        v_missing_final_newline = full_missing_final_newline
+                        if full_lines:
+                            tail_raw_full = json.loads(full_lines[-1])
+                            v_seq = int(tail_raw_full["seq"])
+                            v_sha = str(tail_raw_full["entry_sha"])
+                        else:
+                            v_seq = -1
+                            v_sha = GENESIS_PREV_SHA
+
+                f.seek(v_bytes)
+                suffix_raw = f.read()
+                try:
+                    suffix_content = suffix_raw.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise LedgerTruncatedTailError(
+                        self.path,
+                        "existing ledger suffix is not valid utf-8; refusing to append",
+                    ) from exc
+
+                raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(
+                    suffix_content
+                )
                 if truncated_tail:
                     raise LedgerTruncatedTailError(
                         self.path,
@@ -890,25 +1305,24 @@ class Ledger:
                         "refusing to append onto partial bytes",
                     )
                 chain_check = _verify_chain_prefix(
-                    raw_lines, truncated_tail=False, missing_final_newline=missing_final_newline
+                    raw_lines,
+                    truncated_tail=False,
+                    missing_final_newline=missing_final_newline,
+                    start_seq=v_seq + 1,
+                    start_prev_sha=v_sha,
                 )
                 if not chain_check.ok:
                     raise LedgerChainInvalidError(
                         self.path, chain_check.detail, chain_check.tamper_at_seq
                     )
-                if missing_final_newline:
-                    f.seek(0, os.SEEK_END)
-                    f.write("\n")
+
                 if raw_lines:
-                    try:
-                        tail_raw = json.loads(raw_lines[-1])
-                        seq = int(tail_raw["seq"]) + 1
-                        prev_sha = str(tail_raw["entry_sha"])
-                    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-                        raise LedgerTruncatedTailError(
-                            self.path,
-                            "existing ledger tail line is unparseable/malformed; refusing to append",
-                        ) from exc
+                    tail_raw = json.loads(raw_lines[-1])
+                    seq = int(tail_raw["seq"]) + 1
+                    prev_sha = str(tail_raw["entry_sha"])
+                elif v_seq >= 0:
+                    seq = v_seq + 1
+                    prev_sha = v_sha
                 else:
                     seq = 0
                     prev_sha = GENESIS_PREV_SHA
@@ -925,14 +1339,49 @@ class Ledger:
                         "payload": entry.payload,
                     }
                 )
+                # `suffix_content` が空、かつ watermark 自身が末尾改行未終端
+                # だった場合のみ、欠けた "\n" をまず自己修復として書く
+                # （suffix が非空なら、それを書いた側の append() が既に
+                # 同じ自己修復を行っているため不要）。
+                heal_missing_newline = v_missing_final_newline and not suffix_content
+                heal_prefix = b"\n" if heal_missing_newline else b""
+                new_line_bytes = line.encode("utf-8")
+                new_bytes = heal_prefix + new_line_bytes + b"\n"
                 f.seek(0, os.SEEK_END)
-                f.write(line)
-                f.write("\n")
+                write_pos = f.tell()
+                f.write(new_bytes)
                 f.flush()
                 os.fsync(f.fileno())
+                # `#345` 指摘③ G1: 次回 append() の安価な変更検出器が使う
+                # baseline を、この write を fsync した直後の実 stat から
+                # 取り直す（f.tell() からの逆算ではなく、on-disk の実値）。
+                new_stat = os.fstat(f.fileno())
+                new_v_bytes = f.tell()
+                new_line_start = write_pos + len(heal_prefix)
+                new_line_end = new_line_start + len(new_line_bytes)
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        self._entries, self._malformed = self._read_all()
+
+        if full_resync:
+            # G1/G2 でフル再検証した回: 旧キャッシュへの部分 extend ではなく
+            # フル読取の内容で `self._entries` を丸ごと差し替える（disk との
+            # 乖離を残さない）。
+            self._entries = list(full_entries_for_resync)
+        else:
+            suffix_entries, _suffix_malformed = _parse_ledger_lines(raw_lines)
+            self._entries.extend(suffix_entries)
+        self._entries.append(entry)
+        self._v_bytes = new_v_bytes
+        self._v_seq = entry.seq
+        self._v_sha = entry.entry_sha
+        self._v_missing_final_newline = False
+        self._v_last_line_len = len(new_line_bytes)
+        self._v_last_line_sha256 = hashlib.sha256(new_line_bytes).hexdigest()
+        self._v_last_line_start = new_line_start
+        self._v_last_line_end = new_line_end
+        self._v_ino = new_stat.st_ino
+        self._v_mtime_ns = new_stat.st_mtime_ns
+        self._v_stat_size = new_stat.st_size
         return entry
 
     def verify_chain(self) -> ChainVerification:
