@@ -109,10 +109,27 @@ k1 ≤ 5, k2 ≤ 2, k3 ≤ 2 → Σ ≤ 9 < 10）、検算の結果採用。欠�
 sweep 薄まりのみであるため、クラスタ化を **HOLDOUT だけ**に縮小した 2 段割当へ
 差し替えた。
 
-**段 1 — holdout sweep pinning**: family ごとに、declared sweep（`fixtures.matrix.
-declared_sweeps_by_family()` が正本、member 行数 r・sweep 数 S）から
-`HMAC-SHA256(split_secret, sweep_id の canonical 表現)` 昇順の先頭 `k_hold` 個を
-**HOLDOUT 専属 sweep** として pin し、その member 全行を HOLDOUT へ割当てる。
+**段 1 — holdout sweep pinning（層内選抜）**: family ごとに、declared sweep
+（`fixtures.matrix.declared_sweeps_by_family()` が正本、member 行数 r・sweep 数 S）
+から `k_hold` 個を **HOLDOUT 専属 sweep** として pin し、その member 全行を HOLDOUT
+へ割当てる。選抜は一括の HMAC 順位ではなく **sweep stratum 内**で行う（Codex
+レビュー第 2 巡 P1 × 2 採用、2026-09-04 — 一括順位は (a) FORMANT_GT で pin 3 個が
+全て同一 generator_impl になり得て「各 split に各 generator_impl ≥ 1」coverage が
+secret 依存で充足不能になる条件付き実行不能、(b) IDENTITY_CAUSAL_SWEEP で pin 3 個
+が trait を欠き得て、無被覆 trait の M6 成分に holdout 証拠ゼロのまま directional
+主張が立つ経路を作る）:
+
+- **sweep stratum key**（C0 で凍結）: 当該 family の held-fixed field のうち、
+  (a) coverage 軸に該当するもの（`generator_impl`）と (b) claim 構成要素
+  （IDENTITY_CAUSAL_SWEEP の `trait`）。該当 field が無い family は単一 stratum。
+  456 セル canonical matrix では FORMANT_GT = generator_impl 2 strata（各 6 sweep）、
+  IDENTITY_CAUSAL_SWEEP = trait 3 strata（各 4 sweep）、他 5 family = 単一 stratum。
+- stratum ごとの pin 数は stratum の sweep 数に対する largest-remainder で `k_hold`
+  を配分（同点は stratum key の字句順で決定）し、**全 stratum に最低 1 個**を要求する。
+  `k_hold < stratum 数` となる family 構成は C0 validation で fail-closed
+  （456 セルでは FORMANT k=3 ≥ 2、IDENTITY k=3 = 3 で発生しない）。
+- stratum 内の選抜は `HMAC-SHA256(split_secret, sweep_id の canonical 表現)` 昇順の
+  先頭から。
 
 ```
 k_hold(family) = min( max(1, floor(0.25 * S + 0.5)),   # 25% 目標の half-up 丸め、最低 1
@@ -163,6 +180,9 @@ selection 側（C3b）の行構成と selection rule（v1.0 §9）の式・順�
 - positive control instance の最小数（§10.1 の N_pos >= 10）は、HOLDOUT が pin sweep
   の r × 5 probe（最小 F0_CONTROL の 4 × 5 = 20）、SELECTION は従来どおり行単位割当
   + TRUTH_CORE 最低 2 行 coverage で充足。
+- 層内選抜により、HOLDOUT は FORMANT_GT の両 generator_impl の truth 行と
+  IDENTITY_CAUSAL_SWEEP の全 3 trait の sweep を必ず 1 個以上持つ（M6 の各 claim
+  構成要素に holdout 証拠が存在しない状態での directional 主張は構造的に発生しない）。
 
 ## V3. c4 実 gate 組み立ての配線（D17 の閉塞。campaign 成立要件への昇格）
 
