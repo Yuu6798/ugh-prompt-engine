@@ -120,26 +120,39 @@ secret 依存で充足不能になる条件付き実行不能、(b) IDENTITY_CAU
 主張が立つ経路を作る）:
 
 - **sweep stratum key**（C0 で凍結）: 当該 family の held-fixed field のうち、
-  (a) coverage 軸に該当するもの（`generator_impl`）と (b) claim 構成要素
-  （IDENTITY_CAUSAL_SWEEP の `trait`）。該当 field が無い family は単一 stratum。
-  456 セル canonical matrix では FORMANT_GT = generator_impl 2 strata（各 6 sweep）、
-  IDENTITY_CAUSAL_SWEEP = trait 3 strata（各 4 sweep）、他 5 family = 単一 stratum。
-- stratum ごとの pin 数は stratum の sweep 数に対する largest-remainder で `k_hold`
-  を配分（同点は stratum key の字句順で決定）し、**全 stratum に最低 1 個**を要求する。
-  `k_hold < stratum 数` となる family 構成は C0 validation で fail-closed
-  （456 セルでは FORMANT k=3 ≥ 2、IDENTITY k=3 = 3 で発生しない）。
-- stratum 内の選抜は `HMAC-SHA256(split_secret, sweep_id の canonical 表現)` 昇順の
-  先頭から。
+  (a) coverage 軸に該当するもの（`generator_impl`）と (b) claim 構成次元
+  （IDENTITY_CAUSAL_SWEEP の `trait` と `founder_id` — founder 次元の追加は Codex
+  レビュー第 3 巡 P1 採用、2026-09-04: trait のみの層化では pin 3 個が単一 founder に
+  集中し得て、無被覆 founder に holdout 証拠ゼロのまま M6 directional 主張が立つ）。
+  該当 field が無い family は単一 stratum。456 セル canonical matrix では
+  FORMANT_GT = generator_impl 2 strata（各 6 sweep）、IDENTITY_CAUSAL_SWEEP =
+  founder_id × trait の 12 cell（各 1 sweep）、他 5 family = 単一 stratum。
+- **被覆要件**: pin された sweep 集合は、各 stratum-key field の**全ての値**を最低
+  1 回含むこと。これを満たすため `k_hold` は
+  `min( max( floor(0.25*S + 0.5), 1, max_field_cardinality ), floor((N_hold-1)/r) )`
+  とし（max_field_cardinality = stratum-key field の値数の最大。IDENTITY は
+  founder 4 値 → k_hold = 4）、被覆要件が cap `floor((N_hold-1)/r)` 内で充足不能な
+  family 構成は C0 validation で fail-closed（456 セルでは FORMANT k=3 ≥ 2、
+  IDENTITY k=4 = cap 4 で発生しない）。
+- **選抜規則**: 単一 field の family（FORMANT_GT）は field 値ごとの largest-remainder
+  配分（全値 ≥ 1、同点は値の字句順）+ stratum 内 `HMAC-SHA256(split_secret,
+  sweep_id の canonical 表現)` 昇順。複数 field の family（IDENTITY_CAUSAL_SWEEP）は
+  決定論的被覆選抜: founder を `HMAC-SHA256(split_secret, founder_id)` 昇順に並べ、
+  trait を `HMAC-SHA256(split_secret, trait)` 昇順に並べ、i 番目（i = 0..k_hold-1）の
+  founder に trait `i mod 3` の sweep を割当てる（4 pin で全 founder × 全 trait を
+  被覆。各 (founder, trait) cell は sweep 1 個なので一意に定まる）。
 
 ```
 k_hold(family) = min( max(1, floor(0.25 * S + 0.5)),   # 25% 目標の half-up 丸め、最低 1
                       floor((N_hold - 1) / r) )        # 非 sweep 行 ≥ 1 の枠を保証
 ```
 
-（N_hold = §5.2 の family holdout 目標行数。456 セル canonical matrix での値:
+（N_hold = §5.2 の family holdout 目標行数。式の完全形は下記「被覆要件」の
+max_field_cardinality 項を含む。456 セル canonical matrix での値:
 F0_CONTROL k=1 / FORMANT_GT k=3 / TILT_GT k=2 / APERIODICITY_GT k=2 /
-RESONANCE_GT k=2 / TRANSITION_GT k=2 / IDENTITY_CAUSAL_SWEEP k=3。
-各 family とも `N_hold - k*r >= 1` で boundary/negative 行の holdout 枠が残る。）
+RESONANCE_GT k=2 / TRANSITION_GT k=2 / IDENTITY_CAUSAL_SWEEP k=4（founder 被覆、
+第 3 巡改訂）。各 family とも `N_hold - k*r >= 1` で boundary/negative 行の
+holdout 枠が残る — IDENTITY は 24 - 20 = 4。）
 
 **段 2 — 残余の行単位割当（v1.0 §7 の既存機構）**: pin されなかった全行
 （残りの truth-core 行・confound・boundary・negative control）は従来どおり行単位の
@@ -180,9 +193,10 @@ selection 側（C3b）の行構成と selection rule（v1.0 §9）の式・順�
 - positive control instance の最小数（§10.1 の N_pos >= 10）は、HOLDOUT が pin sweep
   の r × 5 probe（最小 F0_CONTROL の 4 × 5 = 20）、SELECTION は従来どおり行単位割当
   + TRUTH_CORE 最低 2 行 coverage で充足。
-- 層内選抜により、HOLDOUT は FORMANT_GT の両 generator_impl の truth 行と
-  IDENTITY_CAUSAL_SWEEP の全 3 trait の sweep を必ず 1 個以上持つ（M6 の各 claim
-  構成要素に holdout 証拠が存在しない状態での directional 主張は構造的に発生しない）。
+- 層内選抜により、HOLDOUT は FORMANT_GT の両 generator_impl の truth 行と、
+  IDENTITY_CAUSAL_SWEEP の全 3 trait・全 4 founder の sweep を必ず 1 個以上持つ
+  （M6 の claim 構成次元のいずれかに holdout 証拠が存在しない状態での directional
+  主張は構造的に発生しない）。
 
 ## V3. c4 実 gate 組み立ての配線（D17 の閉塞。campaign 成立要件への昇格）
 
@@ -209,10 +223,16 @@ campaign 成立要件とする:
   配線。precondition 不成立は NOT_EVALUABLE（不変）。
 - M4 は §16-1 どおり全候補 DIAGNOSTIC_ONLY 固定（不変）。F0_CONTROL は gate 評価外
   （上流 control、不変）。
-- gate 入力の欠落は fail-closed（`NOT_EVALUABLE / INPUT_MISSING`）とし、placeholder に
-  よる無言の DIAGNOSTIC_ONLY へ戻さない。gate が正直に fail した場合の
-  `DIAGNOSTIC_ONLY` / `NOT_EVALUABLE` は正当な終端であり、通過のための閾値調整は
-  §10.2（結果後付けの禁止）により引き続き禁止。
+- 欠落の終端写像は **v1.0 §11 の一意写像に完全に従う**（Codex レビュー第 3 巡 P1
+  採用で明確化、2026-09-04 — 本 ruling は §11 を一切変更しない）: C0 **入力側**の
+  critical 欠落（E_use evidence 行の欠落等）→ `NOT_EVALUABLE / INPUT_MISSING`。
+  測定 **output** の全欠損・最小数割れで score/gate 計算不能 →
+  `NOT_EVALUABLE / OUTPUT_NOT_EVALUABLE`。score 計算可能だが PRIMARY 一部 output
+  missing で gate 不通過 → `DIAGNOSTIC_ONLY / OUTPUT_MISSING`（D66–D77 家系で実装済み
+  の被覆分類のまま）。いずれの場合も placeholder による無言の DIAGNOSTIC_ONLY へ
+  戻さない。gate が正直に fail した場合の `DIAGNOSTIC_ONLY` / `NOT_EVALUABLE` は
+  正当な終端であり、通過のための閾値調整は §10.2（結果後付けの禁止）により引き続き
+  禁止。
 
 ## V4. 破棄 campaign ledger の圧縮保全（運用規約）
 
@@ -238,10 +258,13 @@ campaign 成立要件とする:
 - **D87**: cap 会計の順序統一 — pre-dispatch CPU（campaign ロード・全 chain 検証）の
   課金、c1/c2/unseal の遷移前 cap 再検査、summary 直前の最終 delta 計上。ledger
   summary append → counters cache 保存の権威順序は不変。
-- **D88**: replay 検証器に Gate 3 順序 parity（`c0_freeze` event 時刻 < gate3
-  `approved_at_utc` ≤ `holdout_unseal` event 時刻、fail-closed）を追加。空行のみの
-  検証済み ledger への正当 append を拒否する偽失敗（genesis watermark の縮退比較）を
-  修正。
+- **D88**: replay 検証器に Gate 3 順序 parity を追加 — `c0_freeze` event 時刻 <
+  gate3 `approved_at_utc` ≤ `holdout_unseal` event 時刻 **+ 許容 clock skew**
+  （producer 側 `unseal_campaign()` が受容する `_CLOCK_SKEW_TOLERANCE_SECONDS` =
+  60s と同一の共有定数。Codex レビュー第 3 巡 P2 採用: producer は +60s までの
+  未来日付 Gate 3 を受容して直後に local clock で `holdout_unseal` を記帳するため、
+  厳密不等式は正常経路の ledger を偽拒否する）。fail-closed。空行のみの検証済み
+  ledger への正当 append を拒否する偽失敗（genesis watermark の縮退比較）を修正。
 - **D90**: `f0_injection_rejected` の resume 跨ぎ重複記帳を、既記帳 instance との
   差集合記帳（空なら無記帳）で排除。
 
