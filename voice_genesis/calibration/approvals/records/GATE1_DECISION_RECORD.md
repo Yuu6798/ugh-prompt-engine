@@ -457,3 +457,28 @@ key 分もう一度課金する——同一 within CPU の二重計上により�
 memo_sha256 を
 `1dcbb6a5c762f2d6c884d59ff1cc67a722e3b0b5e65d04d59d951472af16da6f` へ
 更新した。承認内容（cost caps / claim scope / E_use 境界）は §10 と同一。
+
+### 10.8 D83 正誤表（2026-09-04、campaign close 後）
+
+(a) 誤: §10.7 の「偽成功経路」（第 13 巡の finding をこの語で 2 箇所ラベル）。
+正: 「偽失敗経路（偽 `COST_CAP_EXCEEDED`）」——第 13 巡の finding は第 12 巡
+deferred pass の within CPU 二重計上により凍結 compute cap を偽に超過させ
+`COST_CAP_EXCEEDED` を誤って発生させ得た欠落であり、campaign を誤って
+falsely advance させる偽成功経路ではなく、campaign を誤って falsely 停止
+させる偽失敗経路である。§10.7 本文（432–459 行）はこの正誤表を付す形で
+訂正し、原文そのものは書き換えない。
+
+(b) 指摘元 = PR #345 第 14 巡（`GATE1_DECISION_RECORD.md` ~435 行
+「Label the round-13 correction as a false failure」）。採否 = ②
+将来汚染（記録の誤記が下流の記録を汚す）。
+
+(c) 適用が campaign close 後になった理由: 本記録は E_use table により
+digest 固定され、その E_use table は campaign RUN10-CAL-20260904-862dec28
+の凍結入力の一つだった（holdout stage が `E_USE_TABLE_STALE_OR_MUTATED`
+を検査する）ため、§10.7 本文への訂正は `campaign_closed`（ledger seq
+70627、commit 25be66d）の後にのみ適用可能だった。
+
+(d) campaign dir（`voice_genesis/calibration/campaigns/
+RUN10-CAL-20260904-862dec28/`）は正誤表適用前の E_use table の凍結コピーを
+別途保持しているため、閉じた campaign の記録はこの restamp の影響を受けない。
+本 restamp は今後の campaign にのみ適用される。
