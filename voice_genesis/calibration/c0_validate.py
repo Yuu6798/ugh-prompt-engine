@@ -150,7 +150,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import streams, vocab
+from . import approvals, streams, vocab
 from .candidates import registry as candidate_registry
 from .fixtures import axes as fixture_axes
 from .fixtures.matrix import (
@@ -554,11 +554,22 @@ def scan_calibration_tree_inventory(repo_root: Path | None = None) -> frozenset[
     （inventory ファイル自体も版管理・監査対象であるため。§3.1「候補 meter・
     generator・schema・test の全 path」に含める必要はないが、inventory の
     自己完結性のため同じ集合に含めておく）。
+
+    v1.1 §V6（統合3, `[UNDERSPEC-CAL-D79]`, WP2d 報告の申し送り）: 統治設計
+    文書 2 本（v1.1 統治正本 `approvals.DESIGN_DOC_RELATIVE_PATH` / 読み取り
+    専用基底 `approvals.BASE_DESIGN_DOC_RELATIVE_PATH`）を scan 結果へ union
+    する — どちらも `.py` ではないため `rglob("*.py")` からは構造的に漏れて
+    おり、v1.1 §V6 が要求する「v1.0/v1.1 両文書を path inventory 検査対象へ」
+    が未実施のままだった。文書パスに対する sha 検査等の意味論は追加しない
+    （既存の inventory 項目と同じ「対象集合に含まれる」以上の扱いを増やさない
+    ——過剰設計しない）。
     """
     root = repo_root if repo_root is not None else _REPO_ROOT
     package_dir = root / "voice_genesis" / "calibration"
     paths = {p.relative_to(root).as_posix() for p in package_dir.rglob("*.py")}
     paths.add((package_dir / PATH_INVENTORY_FILENAME).relative_to(root).as_posix())
+    paths.add(approvals.DESIGN_DOC_RELATIVE_PATH)
+    paths.add(approvals.BASE_DESIGN_DOC_RELATIVE_PATH)
     return frozenset(paths)
 
 

@@ -693,7 +693,27 @@ def _c0_freeze_ordering_violation(
     relative to the live check-time clock (see `_CLOCK_SKEW_TOLERANCE_
     SECONDS` above) — a strict `<=` would falsely reject a normal-path
     ledger whenever the approval file's clock ran ahead of the unsealing
-    process's own clock by less than that same tolerance."""
+    process's own clock by less than that same tolerance.
+
+    R7 P2 fix (Codex PR #346 round 7 finding #2, `[UNDERSPEC-CAL-D79]`):
+    `holdout_unseal.event_time_utc` did not exist before v1.1 —
+    `campaign.unseal.unseal_campaign()` only started stamping it once this
+    D88(a) check needed a local unseal-side timestamp to compare against.
+    A v1.0-and-earlier ledger's `holdout_unseal` payload therefore has no
+    `event_time_utc` key at all (not merely an unparseable one), and the
+    pre-fix code treated that absence exactly like a parse failure —
+    `unseal_time is None` — and fail-closed the whole ordering check,
+    falsely invalidating replay/audit of every campaign closed before v1.1
+    (e.g. the real closed campaign `RUN10-CAL-20260904-862dec28`) even
+    though its `freeze_time < gate3_time` ordering genuinely holds. When
+    the key is missing (`payload.get(...) is None`, as opposed to present
+    but malformed — a malformed-but-present value still fails closed via
+    `unseal_time is None` below, unchanged), this function now falls back
+    to the pre-v1.1 ordering check: only the lower bound
+    (`freeze_time < gate3_time`) is enforced, since there is no local
+    unseal-side clock reading to bound the upper side against. Every
+    ledger `unseal.py` writes today always includes `event_time_utc`, so
+    new campaigns are unaffected and get the full two-sided check."""
     if not ledger_entries:
         return False
     first_payload = ledger_entries[0].payload
@@ -701,7 +721,15 @@ def _c0_freeze_ordering_violation(
         return False
     freeze_time = _parse_iso8601_utc(first_payload.get("event_time_utc"))
     gate3_time = _parse_iso8601_utc(gate3_accepted_payload.get("approved_at_utc"))
-    unseal_time = _parse_iso8601_utc(holdout_unseal_payload.get("event_time_utc"))
+    raw_unseal_event_time = holdout_unseal_payload.get("event_time_utc")
+    if raw_unseal_event_time is None:
+        # R7 P2 fix: legacy (pre-v1.1) `holdout_unseal` — no local
+        # unseal-side clock reading exists to bound the upper side against,
+        # so fall back to the lower-bound-only ordering check.
+        if freeze_time is None or gate3_time is None:
+            return True
+        return not (freeze_time < gate3_time)
+    unseal_time = _parse_iso8601_utc(raw_unseal_event_time)
     if freeze_time is None or gate3_time is None or unseal_time is None:
         return True
     unseal_upper_bound = unseal_time + timedelta(seconds=_CLOCK_SKEW_TOLERANCE_SECONDS)

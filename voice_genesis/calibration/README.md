@@ -13,8 +13,11 @@ resonance / M5 transition / M6 identity / F0 control）を、正解付き合成 
 
 正本ドキュメント:
 
+- [`DESIGN_VG_METER_CAL_DEBT_v1.1.md`](DESIGN_VG_METER_CAL_DEBT_v1.1.md) —
+  VG-METER-CAL-DEBT-DESIGN-v1.1。統治 revision（現行の技術内容の正本）。
 - [`DESIGN_VG_METER_CAL_DEBT_v1.0.md`](DESIGN_VG_METER_CAL_DEBT_v1.0.md) —
-  VG-METER-CAL-DEBT-DESIGN-v1.0。技術内容の唯一の正本。
+  VG-METER-CAL-DEBT-DESIGN-v1.0。**read-only 基底**（以後改変不可。v1.1 の
+  `base_document_sha256` front matter が事後改変を pin 検証で検出する）。
 - [`IMPLEMENTATION_MAP_v1.md`](IMPLEMENTATION_MAP_v1.md) — 実装マップ
   (Design Memo)。モジュール → 設計正本 §番号の対応表。
 
@@ -139,6 +142,33 @@ dry-run（`plan`、または `--armed` を渡さない全サブコマンド）�
 | `campaign/holdout_stage.py` | C4 gate 判定 + 終端 status cascade。building blocks（`build_instance_margins`/`build_directional_pairs`/`evaluate_absolute_meter`/`evaluate_directional_meter`）は `observables.py`/`gates.py`/`status.py` を呼ぶ薄いラッパーで、合成観測値のみで単体テスト可能。`declared_axes_for_family()`（`[UNDERSPEC-CAL-D18]`）は凍結 `frozen_design.fixture_spec.<FAMILY>.confound_axes` を gate4' invariance 軸/DIRECTIONAL sweep_id 宣言として再利用する。`load_e_use_rows()`/`split_e_use_rows_by_mode()` は `gates.EUseEvidenceRow.e_use_mode`（absolute/relative）で E_use 行を分割する。`render_and_measure_holdout()`/`run_holdout_stage()` は実 audio 経路のオーケストレーション。`HOLDOUT_EXECUTED_VALID` は全 meter の終端 status + reason code をまとめた単一 event | §10, §11, memo §6.4 |
 | `campaign/close.py` | `CAMPAIGN_CLOSED` event: 全 `vocab.MeterId` が終端 status を持つことを要求（`vocab.campaign_closed()`）し、`derived.debt_discharged`（`vocab.debt_discharged()` の派生値の写しのみ、宣言フィールド化はしない = D1）を記録。CLAIM_CRITICAL_SET 全 member が CALIBRATED_ABSOLUTE かつ M6 component/E_use が明示供給された場合のみ `m6_identity.m6_distance()` を計算。`reveal_split_secret()`（`[UNDERSPEC-CAL-D09]`、`--reveal-split-secret` 経由のみ）は CAMPAIGN_CLOSED **後**にのみ `split_secret` の commit-reveal event を許可する | §1 D1, §7, §12, memo §6.4 |
 | `campaign/cli.py` + `campaign/__main__.py` | `python -m voice_genesis.calibration.campaign <plan\|c1-fixtures\|c2-baseline\|c3a-f0-selection\|c3b-selection\|unseal\|c4-holdout\|close> --campaign-dir ... --secret-dir ... [--armed] [--workers N] [--reveal-split-secret]`。`plan` は常に副作用ゼロで設計値 vs realized split の work unit 件数を報告。他サブコマンドは `--armed` 無しなら当該 stage の計画のみ表示、`--armed` ありなら三要素武装判定（`approvals.check_armed(GATE1)`）→ 未武装なら `AUTHORIZATION_REQUIRED`（副作用ゼロ）→ 武装済みなら該当 stage 関数を実行。`c4-holdout` の E_use 拘束 absolute/directional gate 組立の完全な CLI 配線は本 D2 infra の範囲外とした（`[UNDERSPEC-CAL-D17]`。`holdout_stage.evaluate_absolute_meter`/`evaluate_directional_meter` は実 gate 配線込みでテストで直接検証する）。`main()` は `campaign.caps.load_cap_counters()` 直後・stage dispatch 前に frozen cap 超過を再チェックし、breach していれば dispatch 前に `COST_CAP_EXCEEDED` で拒否する（idempotent stop_event。`[UNDERSPEC-CAL-D26]`）。同じ箇所で `campaign.caps.cost_caps_from_manifest()` の `cost_caps.BudgetAccountingUndeclaredError` を捕捉し `BUDGET_ACCOUNTING_UNDECLARED` で dispatch を拒否する（`[UNDERSPEC-CAL-D27]`） | §18, memo §6.1, §6.4 |
+| `tools/archive_aborted_ledger.py` | 破棄（abort）裁定済み campaign の `ledger.jsonl` を原子的に gzip 保全する運用ツール（同一ディレクトリ内固定名 staging → 伸長+chain 検証 → `os.fsync`+`os.rename` で公開 → 原本削除。中断回復込みの単一入口 `ensure_archived()`）。詳細は下記「運用」節と `tools/archive_aborted_ledger.py` の docstring を参照 | v1.1 §V4 |
+
+## 運用
+
+### 破棄 campaign ledger の圧縮保全（v1.1 §V4）
+
+破棄（abort）裁定済み campaign の `ledger.jsonl` は
+`voice_genesis/calibration/tools/archive_aborted_ledger.py` で原子的に
+gzip 保全する:
+
+    python -m voice_genesis.calibration.tools.archive_aborted_ledger \
+        voice_genesis/calibration/campaigns/<discarded-campaign-id>
+
+対象ディレクトリに `ledger.jsonl.gz` + `ledger.jsonl.sha256`
+（`sha256sum -c` 互換）が生成され、原本 `ledger.jsonl` は検証成功後にのみ
+削除される。原子的置換・中断回復の詳細仕様は設計正本
+`DESIGN_VG_METER_CAL_DEBT_v1.1.md` §V4、実装/回復ロジックは
+`tools/archive_aborted_ledger.py` の docstring を参照。
+
+**閉鎖（CAMPAIGN_CLOSED）campaign には絶対に適用しないこと** —
+このスクリプトは対象を選ばないため、呼び出し側が対象を破棄 campaign に
+限定する責務を負う。
+
+適用済み: `RUN10-CAL-20260903-9bcbbf86`
+（sha256=`2be10706717efd51bc08069d73143fb4d99bfc50bc7f078785a75ccdbb184221`）、
+`RUN10-CAL-20260903-591cadcd`
+（sha256=`c02f513b086ade0b2e23e2153adb009bf51204dfb3bfb9d61ff8a3828e969580`）。
 
 ## UNDERSPEC 台帳
 

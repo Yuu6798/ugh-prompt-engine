@@ -709,6 +709,44 @@ def cap_counters_from_ledger(
       for any stage with a mid-dispatch checkpoint; the persisted cache
       itself was already correct, since the checkpoint's own delta was
       separately charged to `cap_counters` in-memory when it ran).
+    - `parent_cpu_checkpoint` events (R7 P1 fix: `cli._checkpoint_parent_cpu_
+      before_transition()`): a mid-dispatch checkpoint of a stage's own
+      cumulative parent-side CPU since dispatch start, appended immediately
+      before the cap check that gates a phase-transition event
+      (`fixture_valid`/`baseline_audited`/`f0_selection_frozen`/
+      `selection_frozen`/`holdout_unseal`/`holdout_executed_valid`/
+      `campaign_closed`) — closing a gap where a process killed right after
+      that transition event (but before its own eventual `stage_summary`/
+      `slice_summary`, appended only in `cli.main()`'s `finally` block) left
+      the checkpointed CPU durably charged in-memory to that invocation's
+      `cap_counters` but recorded nowhere in the ledger, so a subsequent
+      reconstruction from the ledger alone silently dropped it. Every
+      current call site invokes the checkpoint function at most once per
+      invocation (immediately before that invocation's single phase-
+      transition append), so the event's own `parent_cpu_seconds` (the
+      checkpoint's delta since dispatch start) already equals this
+      invocation's *cumulative* parent CPU to that point — the same
+      quantity a `stage_summary`/`slice_summary` would eventually record
+      for a normally-completing dispatch.
+
+      Same-identity dedup as the `meter_call_group_discarded`/`meter_call`
+      pairing rule above: this reconstruction must never add a checkpoint's
+      CPU on top of that SAME invocation's own `stage_summary`/
+      `slice_summary` (whose `parent_cpu_seconds` already covers the full
+      dispatch, checkpoint included — see `main()`'s `finally` block
+      `_checkpoint_before_summary()`) — that would double count. Tracked in
+      a deferred pass mirroring the `meter_group_within_cpu` one above: the
+      *maximum* `parent_cpu_seconds` seen per `invocation_id` (never a sum —
+      each event already carries the cumulative-since-dispatch-start value,
+      not a delta to add to previous checkpoints) is charged once per
+      invocation, but only for an `invocation_id` that never appears in
+      `invocation_ids_with_summary` by the end of the scan (a `stage_summary`/
+      `slice_summary` is always appended strictly after any checkpoint from
+      the same writer, so the deferred pass — run after the full forward
+      scan — sees the complete picture). A missing/`None` `invocation_id`
+      is always charged (fail-closed default, matching every other
+      identity-keyed fallback in this module). `storage`/`budget` are
+      unaffected — a checkpoint is not a completed work unit.
     - `worker_failed` events (round 24 ADOPT (1), `[UNDERSPEC-CAL-D55]`,
       `caps.charge_worker_failure()`): each event is 1 charged *attempt* at
       a fresh-process worker call (measure or render) that failed post-spawn
@@ -807,6 +845,11 @@ def cap_counters_from_ledger(
     # `last_meter_invocation`/`meter_group_within_cpu` so a remeasurement
     # after a discard starts its own fresh count.
     meter_group_repeat_keys: dict[tuple[object, object, object], set[tuple[object, object]]] = {}
+    # R7 P1 fix: per-`invocation_id` maximum `parent_cpu_checkpoint.
+    # parent_cpu_seconds` seen so far — see the docstring paragraph above.
+    # Charged in a deferred pass (mirrors `meter_group_within_cpu`) once the
+    # full scan has determined which invocations ever got summarized.
+    checkpoint_cpu_by_invocation: dict[object, float] = {}
     for entry in ledger_entries:
         payload = entry.payload
         if not isinstance(payload, Mapping):
@@ -932,6 +975,17 @@ def cap_counters_from_ledger(
             invocation_id = payload.get("invocation_id")
             if invocation_id is not None:
                 invocation_ids_with_summary.add(invocation_id)
+        elif kind == "parent_cpu_checkpoint":
+            # R7 P1 fix: track the maximum cumulative value seen per
+            # `invocation_id` — never summed (each event already carries the
+            # full cumulative-since-dispatch-start figure, not a delta on top
+            # of prior checkpoints; see docstring). Charged in the deferred
+            # pass below, gated on that invocation never being summarized.
+            checkpoint_invocation_id = payload.get("invocation_id")
+            checkpoint_value = _finite_nonneg_float(payload.get("parent_cpu_seconds"))
+            existing = checkpoint_cpu_by_invocation.get(checkpoint_invocation_id)
+            if existing is None or checkpoint_value > existing:
+                checkpoint_cpu_by_invocation[checkpoint_invocation_id] = checkpoint_value
         elif kind == "worker_failed":
             # round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): compute — no dedup,
             # every event is its own charged attempt.
@@ -992,6 +1046,17 @@ def cap_counters_from_ledger(
             if len(meter_group_repeat_keys.get(key, ())) < _METER_REPEAT_KEY_COUNT:
                 continue
             compute += meter_group_within_cpu.get(key, 0.0)
+    # R7 P1 fix: charge each invocation's own `parent_cpu_checkpoint` maximum
+    # exactly once, but only for an invocation that never got a
+    # `stage_summary`/`slice_summary` (whose own `parent_cpu_seconds` already
+    # covers this same CPU — double counting otherwise). See the
+    # `parent_cpu_checkpoint` docstring paragraph above.
+    for checkpoint_invocation_id, checkpoint_value in checkpoint_cpu_by_invocation.items():
+        if (
+            checkpoint_invocation_id is None
+            or checkpoint_invocation_id not in invocation_ids_with_summary
+        ):
+            compute += checkpoint_value
     budget = 0.0
     if cost_caps is not None:
         per_unit = cost_caps.budget_charge_per_work_unit()

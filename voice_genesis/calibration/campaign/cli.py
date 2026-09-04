@@ -991,6 +991,7 @@ def _checkpoint_parent_cpu_before_transition(
     cost_caps: CostCaps,
     parent_cpu_checkpoint: list[float],
     *,
+    stage: str | None = None,
     invocation_id: str | None = None,
 ) -> StopDecision | None:
     """round 16 finding #2 ordering ruling (`[UNDERSPEC-CAL-D34]`): charge
@@ -1035,13 +1036,43 @@ def _checkpoint_parent_cpu_before_transition(
 
     Mutates `parent_cpu_checkpoint[0]` to the new checkpoint so `main()`'s
     `finally` block charges only the residual CPU spent after this point,
-    rather than double-charging the portion already charged here."""
+    rather than double-charging the portion already charged here.
+
+    R7 P1 fix (Codex PR #346 round 7 finding #1, `[UNDERSPEC-CAL-D79]`):
+    before running the cap check (and therefore before the caller's own
+    phase-transition ledger append that this function gates), persist a
+    `parent_cpu_checkpoint` ledger event carrying this checkpoint's `delta`
+    — every current call site invokes this function at most once per
+    invocation, immediately before that invocation's single phase-transition
+    append, so `delta` here already equals the invocation's *cumulative*
+    parent CPU since dispatch start (`parent_cpu_checkpoint[0]` at entry is
+    always still `parent_cpu_t0`, unmutated by any earlier checkpoint in the
+    same invocation). Without this, a hard kill right after the transition
+    event this checkpoint gates (`fixture_valid`/`baseline_audited`/
+    `f0_selection_frozen`/`selection_frozen`/`holdout_unseal`/
+    `holdout_executed_valid`/`campaign_closed`) but before `main()`'s
+    `finally` block ever appends that invocation's `stage_summary`/
+    `slice_summary` left this CPU charged only in-memory/`counters.json` —
+    never in the ledger — so `caps.cap_counters_from_ledger()`'s
+    authoritative reconstruction permanently dropped it (a false cap-pass on
+    resume). `caps.cap_counters_from_ledger()` charges this event's own
+    `parent_cpu_seconds` only when the SAME `invocation_id` never gets a
+    `stage_summary`/`slice_summary` (which would already cover it) — see
+    that function's `parent_cpu_checkpoint` docstring paragraph."""
     now = _process_cpu_seconds()
     delta = now - parent_cpu_checkpoint[0]
     if delta < 0.0:  # pragma: no cover - defensive only
         delta = 0.0
     parent_cpu_checkpoint[0] = now
     cap_counters.add(compute=delta)
+    campaign.ledger.append(
+        {
+            "kind": "parent_cpu_checkpoint",
+            "stage": stage,
+            "parent_cpu_seconds": delta,
+            "invocation_id": invocation_id,
+        }
+    )
     return _refuse_if_caps_already_breached(
         campaign, cost_caps, cap_counters, invocation_id=invocation_id
     )
@@ -1053,6 +1084,7 @@ def _pre_transition_checkpoint_callback(
     cost_caps: CostCaps | None,
     parent_cpu_checkpoint: list[float] | None,
     *,
+    stage: str | None = None,
     invocation_id: str | None,
 ) -> Callable[[], StopDecision | None] | None:
     """`[UNDERSPEC-CAL-D87]`(ii): build the `pre_transition_checkpoint`
@@ -1073,7 +1105,12 @@ def _pre_transition_checkpoint_callback(
 
     def _checkpoint() -> StopDecision | None:
         return _checkpoint_parent_cpu_before_transition(
-            campaign, cap_counters, cost_caps, parent_cpu_checkpoint, invocation_id=invocation_id
+            campaign,
+            cap_counters,
+            cost_caps,
+            parent_cpu_checkpoint,
+            stage=stage,
+            invocation_id=invocation_id,
         )
 
     return _checkpoint
@@ -1106,7 +1143,12 @@ def _run_c1(
 ) -> dict[str, Any]:
     # `[UNDERSPEC-CAL-D87]`(ii): see `_pre_transition_checkpoint_callback()`.
     pre_transition_checkpoint = _pre_transition_checkpoint_callback(
-        campaign, cap_counters, cost_caps, parent_cpu_checkpoint, invocation_id=invocation_id
+        campaign,
+        cap_counters,
+        cost_caps,
+        parent_cpu_checkpoint,
+        stage="c1",
+        invocation_id=invocation_id,
     )
     if time_budget_seconds is not None:
         outcomes, slice_status = render_stage.run_render_stage(
@@ -1153,7 +1195,12 @@ def _run_c2(
 ) -> dict[str, Any]:
     # `[UNDERSPEC-CAL-D87]`(ii): see `_pre_transition_checkpoint_callback()`.
     pre_transition_checkpoint = _pre_transition_checkpoint_callback(
-        campaign, cap_counters, cost_caps, parent_cpu_checkpoint, invocation_id=invocation_id
+        campaign,
+        cap_counters,
+        cost_caps,
+        parent_cpu_checkpoint,
+        stage="c2",
+        invocation_id=invocation_id,
     )
     result = baseline_stage.run_baseline_stage(
         campaign,
@@ -1273,7 +1320,12 @@ def _run_c3a(
     # failure afterwards.
     if parent_cpu_checkpoint is not None and cap_counters is not None and cost_caps is not None:
         breach = _checkpoint_parent_cpu_before_transition(
-            campaign, cap_counters, cost_caps, parent_cpu_checkpoint, invocation_id=invocation_id
+            campaign,
+            cap_counters,
+            cost_caps,
+            parent_cpu_checkpoint,
+            stage="c3a",
+            invocation_id=invocation_id,
         )
         if breach is not None:
             return {"result": "COST_CAP_EXCEEDED", "detail": breach.detail}
@@ -1588,7 +1640,12 @@ def _run_c3b(
     # `selection_frozen` is appended below.
     if parent_cpu_checkpoint is not None and cap_counters is not None and cost_caps is not None:
         breach = _checkpoint_parent_cpu_before_transition(
-            campaign, cap_counters, cost_caps, parent_cpu_checkpoint, invocation_id=invocation_id
+            campaign,
+            cap_counters,
+            cost_caps,
+            parent_cpu_checkpoint,
+            stage="c3b",
+            invocation_id=invocation_id,
         )
         if breach is not None:
             return {"result": "COST_CAP_EXCEEDED", "detail": breach.detail}
@@ -1637,7 +1694,12 @@ def _run_unseal(
 ) -> dict[str, Any]:
     # `[UNDERSPEC-CAL-D87]`(ii): see `_pre_transition_checkpoint_callback()`.
     pre_transition_checkpoint = _pre_transition_checkpoint_callback(
-        campaign, cap_counters, cost_caps, parent_cpu_checkpoint, invocation_id=invocation_id
+        campaign,
+        cap_counters,
+        cost_caps,
+        parent_cpu_checkpoint,
+        stage="unseal",
+        invocation_id=invocation_id,
     )
     try:
         result = unseal_stage.unseal_campaign(
@@ -2292,7 +2354,12 @@ def _run_c4(
     # `holdout_executed_valid` is appended below.
     if parent_cpu_checkpoint is not None and cap_counters is not None and cost_caps is not None:
         breach = _checkpoint_parent_cpu_before_transition(
-            campaign, cap_counters, cost_caps, parent_cpu_checkpoint, invocation_id=invocation_id
+            campaign,
+            cap_counters,
+            cost_caps,
+            parent_cpu_checkpoint,
+            stage="c4",
+            invocation_id=invocation_id,
         )
         if breach is not None:
             return {"result": "COST_CAP_EXCEEDED", "detail": breach.detail}
@@ -2326,7 +2393,12 @@ def _run_close(
     # see that block's `post_close_breach` handling).
     if parent_cpu_checkpoint is not None and cap_counters is not None and cost_caps is not None:
         breach = _checkpoint_parent_cpu_before_transition(
-            campaign, cap_counters, cost_caps, parent_cpu_checkpoint, invocation_id=invocation_id
+            campaign,
+            cap_counters,
+            cost_caps,
+            parent_cpu_checkpoint,
+            stage="close",
+            invocation_id=invocation_id,
         )
         if breach is not None:
             return {"result": "COST_CAP_EXCEEDED", "detail": breach.detail}
