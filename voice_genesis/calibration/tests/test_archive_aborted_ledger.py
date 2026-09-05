@@ -712,6 +712,123 @@ def test_appender_refused_not_lost_after_archiver_unlinks_under_stable_lock(
         assert ledger_path.read_bytes() == b""
 
 
+# ---------------------------------------------------------------------------
+# R15 fix (PR #346 round 15 採用): "Lock recovery before reading the residual
+# ledger" — 検証済み公開物 (gz+sidecar) が既にある場合の回復分岐（残存
+# `ledger.jsonl` の sha 照合・`_reconcile_diverged_original()` 経由の再
+# archive・unlink）は、修正前は `_ledger_write_lock()` を取得せずに実行
+# されていた。R12/R14 は (1)-(4) のフレッシュ archive 区間のみを排他化して
+# おり、この回復分岐は素通りだった。
+# ---------------------------------------------------------------------------
+
+
+def test_recovery_branch_blocks_concurrent_append_and_rejects_stale_appender(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R15 の核心回帰: 公開済み gz+sidecar が揃い、原本削除 (4) の前で中断
+    した状態（`already_archived` 回復分岐）で `ensure_archived()` を実行する
+    と、回復分岐の判定（`_verify_gz_sidecar_pair()` 呼び出し時点）で既に
+    安定ロックを保持している——このロック保持中、archiver 起動前から生きて
+    いた `Ledger` インスタンス（stale watermark）の `append()` はブロック
+    され続け、archiver が回復分岐を完了してロックを解放した後にようやく
+    進行する。この時点で `ledger_path` は既に `unlink()` 済みのため、
+    `append()` は「まっさらな新しい inode」を open することになり、
+    `current_size (0) < 保持していた watermark (>0)` の rollback 検知で
+    fail-closed 拒否される（R14 と同型の安全な結果 — 正典喪失ゼロ）。
+
+    修正前（回復分岐がロック未保持）では、この race 窓の中で append が
+    割り込むと、回復分岐の sha 照合がそれを検出しないまま無条件 `unlink()`
+    に巻き込み、追記内容を恒久喪失し得た。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-abort"
+    original_bytes = _build_tiny_ledger(campaign_dir, n=3)
+    expected_sha = hashlib.sha256(original_bytes).hexdigest()
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    sidecar_path = campaign_dir / archive.SIDECAR_FILENAME
+
+    # 公開済み gz+sidecar が揃っているが、原本削除 (4) の前で中断した状態
+    # を模す（`test_recovers_from_interruption_after_publish_before_
+    # original_delete` と同じ構成 — recovery 側の "already_archived" 分岐
+    # に入る）。
+    gz_path.write_bytes(archive._write_gzip_bytes(original_bytes))
+    sidecar_path.write_text(archive._sidecar_text(expected_sha), encoding="utf-8")
+    assert ledger_path.is_file()
+
+    # 「archiver 起動前から生きていた appender」を模す: watermark は
+    # archiving 前の 3 エントリを指したまま。
+    stale_ledger = Ledger(ledger_path)
+    assert stale_ledger.entries[-1].seq == 2
+
+    entered_recovery = threading.Event()
+    release_recovery = threading.Event()
+    real_verify = archive._verify_gz_sidecar_pair
+    call_count = {"n": 0}
+
+    def _blocking_verify(gz: Path, sidecar: Path) -> str:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # 回復分岐（`has_gz and has_sidecar`）の最初の検証呼び出し —
+            # R15 fix が正しければ、この時点で既に安定ロックを保持している。
+            entered_recovery.set()
+            release_recovery.wait(timeout=5)
+        return real_verify(gz, sidecar)
+
+    monkeypatch.setattr(archive, "_verify_gz_sidecar_pair", _blocking_verify)
+
+    archiver_result: dict[str, archive.ArchiveResult] = {}
+
+    def _run_archiver() -> None:
+        archiver_result["value"] = archive.ensure_archived(campaign_dir)
+
+    archiver_thread = threading.Thread(target=_run_archiver)
+    archiver_thread.start()
+    assert entered_recovery.wait(timeout=5), "archiver never entered the recovery branch"
+
+    append_errors: list[BaseException] = []
+    append_done = threading.Event()
+
+    def _do_append() -> None:
+        try:
+            stale_ledger.append({"kind": "test_event", "i": 99})
+        except BaseException as exc:  # noqa: BLE001 - captured for the main thread
+            append_errors.append(exc)
+        finally:
+            append_done.set()
+
+    append_thread = threading.Thread(target=_do_append)
+    append_thread.start()
+
+    # archiver が回復分岐でロックを保持している間、append は完了できない
+    # はず（修正前は回復分岐がロック未保持だったため、ここで完了してしまい
+    # 得た）。
+    blocked_in_time = not append_done.wait(timeout=0.3)
+    assert blocked_in_time, "append() was not blocked by the recovery branch's lock"
+
+    release_recovery.set()
+    archiver_thread.join(timeout=5)
+    append_thread.join(timeout=5)
+    assert not archiver_thread.is_alive()
+    assert not append_thread.is_alive()
+
+    result = archiver_result["value"]
+    assert result.action == "already_archived"
+    assert result.sha256 == expected_sha
+
+    # append は archiver 完了後（unlink 済みの旧 inode に対する fail-closed
+    # 拒否）として安全に終わる。
+    assert len(append_errors) == 1, f"expected exactly one refusal, got {append_errors}"
+    assert isinstance(append_errors[0], LedgerChainInvalidError)
+
+    # アーカイブは無傷: 拒否された追記はどこにも存在せず、gz は元の 3
+    # エントリを欠落なく保全している（正典喪失ゼロ）。
+    assert gzip.decompress(gz_path.read_bytes()) == original_bytes
+    if ledger_path.exists():
+        # "a+b" は open 時に新しい（空の）inode を作り得るが、append() は
+        # 書き込みに至る前に fail-closed するため中身は空のままである。
+        assert ledger_path.read_bytes() == b""
+    assert _has_authoritative_copy(campaign_dir)
+
+
 def test_ensure_archived_rearchives_when_original_extended_during_archival(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

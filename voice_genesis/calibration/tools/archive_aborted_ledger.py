@@ -107,6 +107,36 @@ entry が恒久的に失われる（R12 が閉じた「読み取り開始〜削�
 inode で flock を獲得する」という経路自体が構造的に存在しなくなる——
 R12 の (a)(b) の枠組み（区間全体の排他 + 削除直前の sha 再照合）は
 そのまま維持し、ロック対象のみを差し替える。
+
+R15 fix（PR #346 round 15、Codex 採用, "Lock recovery before reading the
+residual ledger"）: R12/R14 が排他化したのは `ensure_archived()` の
+「原本 bytes 読み取り 〜 原本 unlink」区間（(1)-(4)。**フレッシュ archive
+経路**）のみだった。検証済み公開物 (`ledger.jsonl.gz` + sidecar) が既に
+揃っている場合の**回復分岐**——残存する `ledger.jsonl` を読み、その
+sha256 を公開済み sidecar の宣言値と照合し、食い違えば
+`_reconcile_diverged_original()` で byte-prefix 拡張か判定して再 archive
+するか、一致すれば単に `unlink()` する——はロックを取得せずに実行されて
+いた。この分岐の読み取り開始（sha 照合の起点）から `unlink()`/再 archive
+の完了までの間に `Ledger.append()` が割り込むと、新規 entry が (a) sha
+一致判定を素通りしたまま無条件 `unlink()` に巻き込まれて恒久喪失するか、
+(b) 乖離として検出されても `_reconcile_diverged_original()` が読んだ
+snapshot に含まれず、その再 archive 後に古い gz へ置換されてしまう
+（append 自体は生き残るが、直後に snapshot ベースの gz で上書きされ、
+gz 側からは見えなくなる）——という、R12 が閉じたはずの「読み取り〜削除」
+race の**回復経路版**が未閉塞のまま残っていた。
+
+本 fix は `_ledger_write_lock(ledger_path)` の取得位置を `ensure_archived()`
+の入口——closed-campaign 検査の直後、`gz_path`/`sidecar_path`/`ledger_path`
+を読む前——に統一し、回復判定ブロックと (1)-(4) のフレッシュ archive
+ブロックの両方を単一の `with` の下に置いた（(1)-(4) 側が独自に持っていた
+内側の `with _ledger_write_lock(ledger_path):` は、同一ロックファイルへの
+二重 `flock` が自己デッドロックするため削除し、外側の 1 箇所に統合）。
+`Ledger.append()` 側は R14 により「ledger 本体を open する前に」同じ安定
+ロックを取得する契約になっているため、この統一によって
+`ensure_archived()` がどちらの分岐（回復・フレッシュ archive）を辿るに
+せよ、append は「ロック区間の外側で完全に先行して完了し、この関数の
+どの読み取りにも既に反映されている」か「この関数の判定・削除がすべて
+確定してロックが解放されるまで待たされる」のいずれかに必ず整列する。
 """
 
 from __future__ import annotations
@@ -557,144 +587,173 @@ def ensure_archived(campaign_dir: Path) -> ArchiveResult:
             "be archived"
         )
 
-    has_gz = gz_path.is_file()
-    has_sidecar = sidecar_path.is_file()
+    # R15 fix (PR #346 round 15, Codex 採用, "Lock recovery before reading
+    # the residual ledger"): 安定ロック（`_ledger_write_lock()`。R14 で
+    # `Ledger.append()` と共有するよう変更した同一ロック）を、ここ——
+    # closed-campaign 検査の直後・`ledger_path`/`gz_path`/`sidecar_path` を
+    # 読む前——で一度だけ取得し、以下の回復判定ブロックと (1)-(4) の
+    # フレッシュ archive ブロックの**両方**をこの単一 `with` の下に置く。
+    #
+    # R12/R14 が排他化したのは (1)-(4) の区間（原本 bytes 読み取り〜
+    # 原本 unlink）のみで、回復判定ブロック（検証済み公開物が既にある場合の
+    # 残存 `ledger.jsonl` 読取・sha 照合・`_reconcile_diverged_original()`
+    # 経由の再 archive・`unlink`）はロック外で実行されていた。この区間の
+    # 途中で `Ledger.append()` が割り込むと、(a) 追記が sha 不一致として
+    # 検出されないまま無条件 `unlink()` に飲まれて恒久喪失するか、
+    # (b) 検出されて `_reconcile_diverged_original()` が再 archive を
+    # 始めた直後に別の追記が来て、その新規追記が再 archive の snapshot にも
+    # 含まれず次の `unlink()` で失われる、という R12 と同型の race が
+    # 回復経路にも存在した。
+    #
+    # ロック取得位置を関数入口（この位置）に統一することで、以後の
+    # 回復判定・再 archive・(1)-(4) のフレッシュ archive は常にこの単一の
+    # ロック保持区間の内側で直列に実行される——`Ledger.append()` は
+    # `ledger_path` を open する前に同じロックの獲得を待たされるため、
+    # この関数がどちらの分岐を辿るにせよ、append は「完全に先行して完了し
+    # 読み取りに反映される」か「この関数の判定・削除がすべて確定してから
+    # 実行される」のいずれかに必ず整列する（正典喪失ゼロ）。同一ロック
+    # ファイルへの二重 `flock` は自己デッドロックするため、旧来 (1)-(4)
+    # だけを囲んでいた内側の `with _ledger_write_lock(ledger_path):` は
+    # 削除し、この外側の `with` 一つに統合した。
+    with _ledger_write_lock(ledger_path):
+        has_gz = gz_path.is_file()
+        has_sidecar = sidecar_path.is_file()
 
-    # --- 回復判定: 公開物が両方あれば検証を試みる。 ---
-    if has_gz and has_sidecar:
-        try:
-            published_sha = _verify_gz_sidecar_pair(gz_path, sidecar_path)
-        except ArchiveError:
-            if not ledger_path.is_file():
-                # 公開物は壊れていて、原本も無い — 正本喪失。手順どおりに
-                # 実行していればここには到達しない（原本削除は公開検証成功
-                # の後にしか行わないため）。fail-closed で停止する。
-                raise
-            # 原本が正 — 壊れた公開物・残存 staging を破棄してやり直す。
-            _discard_if_exists(gz_path)
-            _discard_if_exists(sidecar_path)
-        else:
-            # R9 fix: defense-in-depth against a verified public gz/sidecar
-            # pair whose ledger is actually a CLOSED campaign's. Reachable
-            # both when `ledger_path` no longer exists (the top-of-function
-            # guard above already caught every case where an intact original
-            # is present) and — R10 fix — when it exists but is corrupt
-            # (truncated restore residue from a prior killed
-            # `_restore_original_from_verified_gz()` run, or other damage):
-            # such a stale original would otherwise silently pass as "the
-            # original exists" forever, permanently blocking recovery.
-            # `gz_path`'s bytes are already sidecar-sha256- and
-            # chain-verified by `_verify_gz_sidecar_pair()` above, so
-            # decompressing them again here is safe to trust.
-            decompressed_gz = gzip.decompress(gz_path.read_bytes())
-            if _ledger_bytes_contain_campaign_closed(decompressed_gz):
-                original_missing = not ledger_path.is_file()
-                original_corrupt = not original_missing and (
-                    _sha256_bytes(ledger_path.read_bytes()) != published_sha
-                )
-                restored = original_missing or original_corrupt
-                if restored:
-                    _restore_original_from_verified_gz(
-                        ledger_path,
-                        gz_path,
-                        campaign_dir,
-                        staging_ledger_path,
-                        decompressed=decompressed_gz,
-                    )
-                restore_note = ""
-                if original_corrupt:
-                    restore_note = (
-                        " (original was present but did not match the verified "
-                        "archive's sha256 — treated as broken restore residue and "
-                        "replaced from the verified archive)"
-                    )
-                elif restored:
-                    restore_note = " (original restored from the verified archive)"
-                raise ArchiveError(
-                    f"{campaign_dir}: archived ledger.jsonl.gz contains a "
-                    "campaign_closed event — closed campaigns are immutable "
-                    "canonical records and must never be archived; refusing "
-                    "to remove anything further" + restore_note
-                )
-            # R11 fix (PR #346 round 11 採用, 2026-09-05): 公開済み gz+sidecar
-            # が揃った後・原本削除前 (4) に中断し、その後残存 `ledger.jsonl`
-            # へ追記があった場合、修正前はここで無条件 `unlink` していたため
-            # 追記分が恒久喪失した。原本を消す前に、残存原本の sha256 を
-            # 公開済み sidecar の sha256 と突き合わせる。
-            if ledger_path.is_file():
-                leftover_bytes = ledger_path.read_bytes()
-                leftover_sha = _sha256_bytes(leftover_bytes)
+        # --- 回復判定: 公開物が両方あれば検証を試みる。 ---
+        if has_gz and has_sidecar:
+            try:
+                published_sha = _verify_gz_sidecar_pair(gz_path, sidecar_path)
+            except ArchiveError:
+                if not ledger_path.is_file():
+                    # 公開物は壊れていて、原本も無い — 正本喪失。手順どおりに
+                    # 実行していればここには到達しない（原本削除は公開検証成功
+                    # の後にしか行わないため）。fail-closed で停止する。
+                    raise
+                # 原本が正 — 壊れた公開物・残存 staging を破棄してやり直す。
+                _discard_if_exists(gz_path)
+                _discard_if_exists(sidecar_path)
             else:
-                leftover_bytes = None
-                leftover_sha = None
+                # R9 fix: defense-in-depth against a verified public gz/sidecar
+                # pair whose ledger is actually a CLOSED campaign's. Reachable
+                # both when `ledger_path` no longer exists (the top-of-function
+                # guard above already caught every case where an intact original
+                # is present) and — R10 fix — when it exists but is corrupt
+                # (truncated restore residue from a prior killed
+                # `_restore_original_from_verified_gz()` run, or other damage):
+                # such a stale original would otherwise silently pass as "the
+                # original exists" forever, permanently blocking recovery.
+                # `gz_path`'s bytes are already sidecar-sha256- and
+                # chain-verified by `_verify_gz_sidecar_pair()` above, so
+                # decompressing them again here is safe to trust.
+                decompressed_gz = gzip.decompress(gz_path.read_bytes())
+                if _ledger_bytes_contain_campaign_closed(decompressed_gz):
+                    original_missing = not ledger_path.is_file()
+                    original_corrupt = not original_missing and (
+                        _sha256_bytes(ledger_path.read_bytes()) != published_sha
+                    )
+                    restored = original_missing or original_corrupt
+                    if restored:
+                        _restore_original_from_verified_gz(
+                            ledger_path,
+                            gz_path,
+                            campaign_dir,
+                            staging_ledger_path,
+                            decompressed=decompressed_gz,
+                        )
+                    restore_note = ""
+                    if original_corrupt:
+                        restore_note = (
+                            " (original was present but did not match the verified "
+                            "archive's sha256 — treated as broken restore residue and "
+                            "replaced from the verified archive)"
+                        )
+                    elif restored:
+                        restore_note = " (original restored from the verified archive)"
+                    raise ArchiveError(
+                        f"{campaign_dir}: archived ledger.jsonl.gz contains a "
+                        "campaign_closed event — closed campaigns are immutable "
+                        "canonical records and must never be archived; refusing "
+                        "to remove anything further" + restore_note
+                    )
+                # R11 fix (PR #346 round 11 採用, 2026-09-05): 公開済み gz+sidecar
+                # が揃った後・原本削除前 (4) に中断し、その後残存 `ledger.jsonl`
+                # へ追記があった場合、修正前はここで無条件 `unlink` していたため
+                # 追記分が恒久喪失した。原本を消す前に、残存原本の sha256 を
+                # 公開済み sidecar の sha256 と突き合わせる。
+                if ledger_path.is_file():
+                    leftover_bytes = ledger_path.read_bytes()
+                    leftover_sha = _sha256_bytes(leftover_bytes)
+                else:
+                    leftover_bytes = None
+                    leftover_sha = None
 
-            if leftover_sha is not None and leftover_sha != published_sha:
-                # 一致しない — 残存原本が公開済み archive から乖離している。
-                # (i) 残存原本の chain 検証を行い、(ii) 公開済み ledger の
-                # 厳密な byte-prefix 拡張（先頭部分が byte 一致・真に長い）
-                # であることの両方を満たす場合に限り、追記が正当な続きだと
-                # みなして原本を正とし archive を作り直す（staging → 検証 →
-                # rename で既存の gz/sidecar を置換）。それ以外（不整合 —
-                # 改竄・無関係な ledger との取り違え等）は何も削除せず
-                # `ArchiveError` で停止し、両方を保全する。
-                new_sha = _reconcile_diverged_original(
-                    campaign_dir=campaign_dir,
-                    ledger_path=ledger_path,
-                    gz_path=gz_path,
-                    sidecar_path=sidecar_path,
-                    staging_gz_path=staging_gz_path,
-                    staging_sidecar_path=staging_sidecar_path,
-                    leftover_bytes=leftover_bytes,
-                    leftover_sha=leftover_sha,
-                    published_bytes=decompressed_gz,
-                    published_sha=published_sha,
-                )
-                ledger_path.unlink()
+                if leftover_sha is not None and leftover_sha != published_sha:
+                    # 一致しない — 残存原本が公開済み archive から乖離している。
+                    # (i) 残存原本の chain 検証を行い、(ii) 公開済み ledger の
+                    # 厳密な byte-prefix 拡張（先頭部分が byte 一致・真に長い）
+                    # であることの両方を満たす場合に限り、追記が正当な続きだと
+                    # みなして原本を正とし archive を作り直す（staging → 検証 →
+                    # rename で既存の gz/sidecar を置換）。それ以外（不整合 —
+                    # 改竄・無関係な ledger との取り違え等）は何も削除せず
+                    # `ArchiveError` で停止し、両方を保全する。
+                    new_sha = _reconcile_diverged_original(
+                        campaign_dir=campaign_dir,
+                        ledger_path=ledger_path,
+                        gz_path=gz_path,
+                        sidecar_path=sidecar_path,
+                        staging_gz_path=staging_gz_path,
+                        staging_sidecar_path=staging_sidecar_path,
+                        leftover_bytes=leftover_bytes,
+                        leftover_sha=leftover_sha,
+                        published_bytes=decompressed_gz,
+                        published_sha=published_sha,
+                    )
+                    ledger_path.unlink()
+                    return ArchiveResult(
+                        campaign_dir=campaign_dir,
+                        gz_path=gz_path,
+                        sidecar_path=sidecar_path,
+                        sha256=new_sha,
+                        action="archived",
+                    )
+
+                # 公開物は検証済み。staging の残骸と、残存していれば原本を除去
+                # して完了とする（原本を消す前に必ずここで検証を通している）。
+                _discard_if_exists(staging_gz_path)
+                _discard_if_exists(staging_sidecar_path)
+                _discard_if_exists(ledger_path)
                 return ArchiveResult(
                     campaign_dir=campaign_dir,
                     gz_path=gz_path,
                     sidecar_path=sidecar_path,
-                    sha256=new_sha,
-                    action="archived",
+                    sha256=published_sha,
+                    action="already_archived",
                 )
+        elif has_gz or has_sidecar:
+            # 公開物が片方だけ — rename の途中で中断した状態。原本が正である
+            # 限り、不完全な公開物は破棄してやり直す。
+            if not ledger_path.is_file():
+                raise ArchiveError(
+                    "partial published artifact found (only one of gz/sidecar present) "
+                    "but original ledger.jsonl is also missing — cannot recover safely: "
+                    f"gz={gz_path} (exists={has_gz}), sidecar={sidecar_path} (exists={has_sidecar})"
+                )
+            _discard_if_exists(gz_path)
+            _discard_if_exists(sidecar_path)
 
-            # 公開物は検証済み。staging の残骸と、残存していれば原本を除去
-            # して完了とする（原本を消す前に必ずここで検証を通している）。
-            _discard_if_exists(staging_gz_path)
-            _discard_if_exists(staging_sidecar_path)
-            _discard_if_exists(ledger_path)
-            return ArchiveResult(
-                campaign_dir=campaign_dir,
-                gz_path=gz_path,
-                sidecar_path=sidecar_path,
-                sha256=published_sha,
-                action="already_archived",
-            )
-    elif has_gz or has_sidecar:
-        # 公開物が片方だけ — rename の途中で中断した状態。原本が正である
-        # 限り、不完全な公開物は破棄してやり直す。
         if not ledger_path.is_file():
             raise ArchiveError(
-                "partial published artifact found (only one of gz/sidecar present) "
-                "but original ledger.jsonl is also missing — cannot recover safely: "
-                f"gz={gz_path} (exists={has_gz}), sidecar={sidecar_path} (exists={has_sidecar})"
+                f"neither a verified published artifact nor the original ledger is "
+                f"present in {campaign_dir} — nothing to archive and nothing to recover"
             )
-        _discard_if_exists(gz_path)
-        _discard_if_exists(sidecar_path)
 
-    if not ledger_path.is_file():
-        raise ArchiveError(
-            f"neither a verified published artifact nor the original ledger is "
-            f"present in {campaign_dir} — nothing to archive and nothing to recover"
-        )
-
-    # --- ここから (1)-(4)。原本が正であることが確定している。 ---
-    # R12 fix: 原本 bytes 読み取り → staging → 検証 → 公開 → 原本 unlink の
-    # 一連を、`Ledger.append()` と同一の排他ロック下で実行する（この区間の
-    # 途中で他の `Ledger.append()` が割り込んで書いた内容を、検出しないまま
-    # 最後の `unlink()` で恒久喪失することを防ぐ。モジュール docstring の
-    # R12 fix 節参照）。
-    with _ledger_write_lock(ledger_path):
+        # --- ここから (1)-(4)。原本が正であることが確定している。 ---
+        # R12 fix: 原本 bytes 読み取り → staging → 検証 → 公開 → 原本 unlink の
+        # 一連を、`Ledger.append()` と同一の排他ロック下で実行する（この区間の
+        # 途中で他の `Ledger.append()` が割り込んで書いた内容を、検出しないまま
+        # 最後の `unlink()` で恒久喪失することを防ぐ。モジュール docstring の
+        # R12 fix 節参照）。R15 fix: このロックは関数入口の外側 `with` で
+        # 既に取得済みのため、ここでの再取得は行わない。
         _discard_if_exists(staging_gz_path)
         _discard_if_exists(staging_sidecar_path)
 
