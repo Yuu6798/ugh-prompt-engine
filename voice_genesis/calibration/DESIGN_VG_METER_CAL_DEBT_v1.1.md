@@ -380,6 +380,13 @@ duration / noise / context）を invariance 軸として一律宣言する一方
   CONFOUND 行を最低 1 行持つことを段 2 の coverage 制約に加える（`_COVERAGE_AXES`
   へ nuisance 軸キーを追加。既存の swap 修復で充足、不能は fail-closed）。これにより
   holdout で各宣言軸が ≥ 5 pair（1 行 × 5 probe）を構造的に持ち得る。
+- **anchor の共有測定**（Codex レビュー第 15 巡 P1 採用、2026-09-05）: pair の
+  anchor 側（family の指定 positive anchor 行）が HOLDOUT 以外の split に home すると
+  pair が全滅する。指定 anchor 行は negative control と同じく **split 非依存の共有
+  control**（v1.0 §2.7 の control 共有契約の同型）として扱い、C4 で選抜候補により
+  HOLDOUT 変異行と同一 probe_index で測定して pair を構成する（split 割当・leakage
+  規則は不変 — anchor 行は C1 で全 split 分 render 済みであり、HOLDOUT 行の unseal 前
+  露出は生じない）。
 - **§10.1 の意味論は不変**: 未達軸が 1 つでもあれば ABSOLUTE 不可（実測で pair が
   欠落した場合は従来どおり正直に fail）。本追補は「宣言と行列の不整合による構造的
   偽失敗」だけを除去する。
