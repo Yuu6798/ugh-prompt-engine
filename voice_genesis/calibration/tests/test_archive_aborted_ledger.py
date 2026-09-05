@@ -237,6 +237,109 @@ def test_corrupt_published_pair_with_original_present_is_discarded_and_redone(
     assert _has_authoritative_copy(campaign_dir)
 
 
+# ---------------------------------------------------------------------------
+# R22 fix (PR #346 round 22 finding (3) 採用, "Preserve invalid archives
+# until the original verifies"): 無効な公開物 (gz/sidecar 全部または片方) を
+# 削除する前に、残存 `ledger.jsonl` 自身の chain 検証を必ず通す。原本が
+# 検証を通らない限り、たとえ公開物側の検証が失敗していても一切削除しない
+# （その公開物が唯一の回復可能なコピーであり得るため）。
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_pair_with_truncated_original_refuses_and_preserves_all_files(
+    tmp_path: Path,
+) -> None:
+    """(a) 有効な gz（それ自体は伸長でき chain も通る）+ 宣言 sha256 が
+    食い違う（＝ペア検証失敗の原因）sidecar + 途中で切り詰められた元
+    ledger が残った状態。gz は唯一の回復可能なコピーであり得るため、修正前
+    のように「原本が存在する」というだけで無条件削除してはならない。修正後
+    は削除ゼロで `LedgerArchiveRefusedError`（`ArchiveError` のサブクラス）を
+    送出し、3 ファイルとも byte 単位で無傷のまま残す。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-abort"
+    recoverable_bytes = _build_tiny_ledger(campaign_dir, n=3)
+
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    sidecar_path = campaign_dir / archive.SIDECAR_FILENAME
+    gz_bytes_before = archive._write_gzip_bytes(recoverable_bytes)
+    gz_path.write_bytes(gz_bytes_before)
+    # sidecar は無関係な sha256 を宣言する（stale/mismatched — ペア検証は
+    # 伸長ではなく sha256 不一致で失敗する）。
+    stale_sidecar_text = archive._sidecar_text("a" * 64)
+    sidecar_path.write_text(stale_sidecar_text, encoding="utf-8")
+
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    truncated_bytes = recoverable_bytes[: len(recoverable_bytes) // 2]
+    ledger_path.write_bytes(truncated_bytes)
+
+    with pytest.raises(archive.LedgerArchiveRefusedError) as excinfo:
+        archive.ensure_archived(campaign_dir)
+    assert isinstance(excinfo.value, archive.ArchiveError)  # 既存語彙も維持
+
+    # 削除ゼロ・変更ゼロ: 3 ファイルとも byte 単位で無傷のまま。
+    assert gz_path.read_bytes() == gz_bytes_before
+    assert sidecar_path.read_text(encoding="utf-8") == stale_sidecar_text
+    assert ledger_path.read_bytes() == truncated_bytes
+    assert not (campaign_dir / archive._STAGING_GZ_FILENAME).exists()
+    assert not (campaign_dir / archive._STAGING_SIDECAR_FILENAME).exists()
+
+
+def test_invalid_pair_with_valid_original_still_rearchives_as_before(
+    tmp_path: Path,
+) -> None:
+    """(b) 無効ペア + 有効な原本 — 従来どおり原本を正として安全に
+    re-archive できることの回帰確認（`_require_canonical_original_or_refuse`
+    が「原本が canonical なら削除して続行」の経路を壊していないことを
+    明示的に固定する。`test_corrupt_published_pair_with_original_present_
+    is_discarded_and_redone` と同型だが、本テストは finding (3) のテスト
+    観点 (b) 用に独立して残す）。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-abort"
+    original_bytes = _build_tiny_ledger(campaign_dir, n=3)
+    expected_sha = hashlib.sha256(original_bytes).hexdigest()
+
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    sidecar_path = campaign_dir / archive.SIDECAR_FILENAME
+    gz_path.write_bytes(archive._write_gzip_bytes(original_bytes))
+    # sidecar に誤った sha256 を書く（改竄/破損を模す — ペア検証失敗）。
+    sidecar_path.write_text(archive._sidecar_text("f" * 64), encoding="utf-8")
+
+    result = archive.ensure_archived(campaign_dir)
+
+    assert result.action == "archived"
+    assert result.sha256 == expected_sha
+    assert not (campaign_dir / archive.LEDGER_FILENAME).exists()
+    assert _has_authoritative_copy(campaign_dir)
+
+
+def test_partial_pair_with_truncated_original_refuses_and_preserves_all_files(
+    tmp_path: Path,
+) -> None:
+    """(c) 監査で発見した同型の穴: 公開物が片方のみ存在する分岐
+    （`elif has_gz or has_sidecar:`）も、原本の chain 検証前に不完全な公開物
+    を削除していた。有効な gz 単体（sidecar は未公開のまま — rename 途中の
+    中断を模す）+ 切り詰められた元 ledger が残る場合、この gz が唯一の
+    回復可能なコピーであり得るため、同じ規則で削除を拒否する。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-abort"
+    recoverable_bytes = _build_tiny_ledger(campaign_dir, n=3)
+
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    gz_bytes_before = archive._write_gzip_bytes(recoverable_bytes)
+    gz_path.write_bytes(gz_bytes_before)
+    # sidecar は公開されていない（rename の途中で中断した状態を模す）。
+
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    truncated_bytes = recoverable_bytes[: len(recoverable_bytes) // 2]
+    ledger_path.write_bytes(truncated_bytes)
+
+    with pytest.raises(archive.LedgerArchiveRefusedError):
+        archive.ensure_archived(campaign_dir)
+
+    assert gz_path.read_bytes() == gz_bytes_before
+    assert not (campaign_dir / archive.SIDECAR_FILENAME).exists()
+    assert ledger_path.read_bytes() == truncated_bytes
+    assert not (campaign_dir / archive._STAGING_GZ_FILENAME).exists()
+    assert not (campaign_dir / archive._STAGING_SIDECAR_FILENAME).exists()
+
+
 def test_orphaned_state_without_original_or_valid_publish_raises(tmp_path: Path) -> None:
     """原本も無く、公開物も検証を通らない — 正本喪失。手順どおりに実行して
     いれば到達しない状態だが、到達したら fail-closed で `ArchiveError` を

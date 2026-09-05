@@ -158,6 +158,41 @@ R14 により ledger 本体を open する前に同じ安定ロックの獲得�
 契約になっているため、この検査自体も「append が完全に先行して完了し
 反映された状態」か「この関数の判定・削除がすべて確定してロックが解放
 されるまで待たされた状態」のいずれかでしか実行されなくなる。
+
+R22 fix（PR #346 round 22 finding (3)、Codex 採用, "Preserve invalid
+archives until the original verifies"）: gz+sidecar が両方存在するが
+ペア検証（`_verify_gz_sidecar_pair()`）に失敗する分岐で、修正前は
+残存 `ledger.jsonl` が「存在する」というだけで、その中身を一切検証
+せずに無効な gz/sidecar 両方を無条件削除していた——コメントは「原本が
+正」と述べるだけでその前提を実際には検証していなかった。再公開が
+中断し「有効な gzip（旧世代の内容を指すが、それ自体は伸長でき chain も
+通る）+ 宣言 sha256 が食い違う sidecar + 途中で切り詰められた元
+ledger」が残るケースでは、この gz こそが唯一の回復可能なコピーであり
+得るにも関わらず、旧実装はそれを削除したうえで、続いて壊れた原本を
+archive しようとして (1)-(4) が失敗する——正本を完全に喪失する経路
+だった。
+
+本 fix は、この分岐で公開物を削除する前に必ず残存 `ledger.jsonl` 自身の
+chain 検証（`Ledger.load_with_verification()`）を先に行う規則
+（`_require_canonical_original_or_refuse()`）に統一した: (a) 原本の
+chain が有効であれば、原本を正として従来どおり無効な gz/sidecar を
+削除しやり直す。(b) 原本が無効（切り詰め・改竄・検証時例外）であれば、
+**一切削除・変更を行わず** 新設の `LedgerArchiveRefusedError`
+（`ArchiveError` のサブクラス——`except ArchiveError` の既存語彙を
+壊さずに「手動回復が必要」というこの状況だけを狙い撃ちで区別できる
+名前を追加した）を送出して停止する。メッセージには 3 ファイル
+（gz/sidecar/原本）それぞれのパスと sha256（存在すれば）、ペア検証の
+失敗理由、原本 chain 検証の失敗理由をすべて含める。
+
+同型の穴の監査（finding (3) 4 項）: 「公開物が片方のみ存在する」分岐
+（`elif has_gz or has_sidecar:`）にも全く同じ欠陥があった——コメントは
+「原本が正である限り」と述べつつ、原本の中身を検証せず不完全な公開物
+（gz または sidecar 単体。それ自体が唯一の回復可能なコピーであり得る）
+を無条件削除していた。同じ `_require_canonical_original_or_refuse()`
+規則で修正した。`_reconcile_diverged_original()`（残存原本の再照合・
+再 archive 経路）と closed-campaign 検査（R9/R17）は、いずれも公開物を
+削除・上書きする前に既に原本または対象データの chain 検証を経由して
+おり、この型の欠陥は無かった。
 """
 
 from __future__ import annotations
@@ -204,6 +239,26 @@ class ArchiveError(RuntimeError):
     検証済み公開物 (`ledger.jsonl.gz` + sidecar) のうち少なくとも一方は
     必ず無傷のまま残っている（本モジュールが呼び出し側に代わって原本を
     削除するのは、公開物の検証に成功した直後のみ）。
+    """
+
+
+class LedgerArchiveRefusedError(ArchiveError):
+    """R22 fix (PR #346 round 22 finding (3), Codex 採用, "Preserve invalid
+    archives until the original verifies"): 公開済み成果物
+    (`ledger.jsonl.gz` および/または `ledger.jsonl.sha256`) の検証に失敗し、
+    かつ残存する原本 `ledger.jsonl` 自身も chain 検証を通らない（切り詰め・
+    改竄・欠落・検証時例外）ために、どちらを正とすべきか本モジュールが
+    自動判定できない場合に送出する（`_require_canonical_original_or_refuse()`
+    参照）。
+
+    `ArchiveError` 一般の契約（「原本と公開物の少なくとも一方は必ず無傷」）
+    よりも狭い、より強い保証を持つ: このサブクラスに限っては、送出された
+    時点で 3 者（gz・sidecar・原本）のいずれも一切削除・変更されていない
+    ——中身が壊れている無効な公開物であっても、それが唯一の回復可能な
+    コピーであり得る限り、原本が canonical だと証明されるまで保全する。
+    `except ArchiveError` で従来どおり捕捉できる語彙は維持しつつ、
+    `except LedgerArchiveRefusedError` でこの「手動回復が必要」な状況だけを
+    狙い撃ちで区別できるようにするため、独立したサブクラス名を与える。
     """
 
 
@@ -331,6 +386,68 @@ def _verify_gz_sidecar_pair(gz_path: Path, sidecar_path: Path) -> str:
 def _discard_if_exists(path: Path) -> None:
     if path.exists():
         path.unlink()
+
+
+def _describe_file_sha256(path: Path) -> str:
+    """`LedgerArchiveRefusedError` の診断メッセージ専用ヘルパー: `path` の
+    絶対パスと sha256 を 1 行にまとめる（存在しなければその旨を返す）。
+    検証ロジックには一切関与しない——判定はすべて呼び出し元で完結して
+    いる。"""
+    if not path.is_file():
+        return f"{path} (missing)"
+    return f"{path} (sha256={_sha256_bytes(path.read_bytes())})"
+
+
+def _require_canonical_original_or_refuse(
+    *,
+    campaign_dir: Path,
+    ledger_path: Path,
+    gz_path: Path,
+    sidecar_path: Path,
+    published_artifact_failure: str,
+) -> None:
+    """R22 fix (PR #346 round 22 finding (3) 採用, "Preserve invalid archives
+    until the original verifies"): 公開済み成果物 (`gz_path`/`sidecar_path`
+    のうち存在するもの) の検証が既に失敗している状況で、それらを削除する
+    直前に必ず呼ぶ。残存 `ledger_path` 自身の chain 検証
+    (`Ledger.load_with_verification()`) を行い、chain が有効な場合にのみ
+    正常 return する（呼び出し側はそれを受けて公開済み成果物を削除して
+    よい）。
+
+    chain が無効（切り詰め・改竄）、または検証中に例外が起きた場合は、
+    **何も削除・変更せず** `LedgerArchiveRefusedError` を送出する——公開物
+    の中身が壊れていても、それが原本より新しい/回復可能な唯一のコピーで
+    あり得る以上、「原本がそこに存在する」というだけでは削除の根拠に
+    ならない（本モジュールが呼び出し側に代わって公開物を削除してよいのは
+    原本が canonical だと証明された場合のみ、というのが本 fix の規則）。
+    """
+    try:
+        _, original_chain = Ledger.load_with_verification(ledger_path)
+    except Exception as chain_exc:  # noqa: BLE001 - 検証不能も「無効」扱い
+        original_failure = f"exception during chain verification: {chain_exc!r}"
+        original_ok = False
+    else:
+        original_ok = original_chain.ok
+        original_failure = (
+            "chain verification failed (ok=False, "
+            f"tamper_at_seq={original_chain.tamper_at_seq}, "
+            f"truncated_tail={original_chain.truncated_tail})"
+        )
+
+    if original_ok:
+        return
+
+    raise LedgerArchiveRefusedError(
+        f"{campaign_dir}: refusing to discard the published archive artifact(s) "
+        "— they failed verification, but the original ledger.jsonl does not "
+        "verify as canonical either; manual recovery is required. No file has "
+        "been deleted or modified.\n"
+        f"  gz: {_describe_file_sha256(gz_path)}\n"
+        f"  sidecar: {_describe_file_sha256(sidecar_path)}\n"
+        f"  original: {_describe_file_sha256(ledger_path)}\n"
+        f"  published artifact verification failure: {published_artifact_failure}\n"
+        f"  original verification failure: {original_failure}"
+    )
 
 
 def _ledger_lock_path(ledger_path: Path) -> Path:
@@ -667,13 +784,25 @@ def ensure_archived(campaign_dir: Path) -> ArchiveResult:
         if has_gz and has_sidecar:
             try:
                 published_sha = _verify_gz_sidecar_pair(gz_path, sidecar_path)
-            except ArchiveError:
+            except ArchiveError as invalid_pair_exc:
                 if not ledger_path.is_file():
                     # 公開物は壊れていて、原本も無い — 正本喪失。手順どおりに
                     # 実行していればここには到達しない（原本削除は公開検証成功
                     # の後にしか行わないため）。fail-closed で停止する。
                     raise
-                # 原本が正 — 壊れた公開物・残存 staging を破棄してやり直す。
+                # R22 fix (PR #346 round 22 finding (3) 採用): 「原本が正」で
+                # あることは、原本が存在するというだけでは証明されない —
+                # 削除する前に必ず原本自身の chain 検証を通す（無効なら
+                # 何も削除せず `LedgerArchiveRefusedError` で停止する）。
+                _require_canonical_original_or_refuse(
+                    campaign_dir=campaign_dir,
+                    ledger_path=ledger_path,
+                    gz_path=gz_path,
+                    sidecar_path=sidecar_path,
+                    published_artifact_failure=str(invalid_pair_exc),
+                )
+                # 原本が canonical だと証明された — 無効な公開物・残存
+                # staging を破棄してやり直す。
                 _discard_if_exists(gz_path)
                 _discard_if_exists(sidecar_path)
             else:
@@ -782,6 +911,22 @@ def ensure_archived(campaign_dir: Path) -> ArchiveResult:
                     "but original ledger.jsonl is also missing — cannot recover safely: "
                     f"gz={gz_path} (exists={has_gz}), sidecar={sidecar_path} (exists={has_sidecar})"
                 )
+            # R22 fix (PR #346 round 22 finding (3), 同型の穴の監査で発見):
+            # ここも「原本が正である限り」と述べるだけで、その前提を検証
+            # せずに不完全な公開物（gz または sidecar 単体。それ自体が唯一の
+            # 回復可能なコピーであり得る）を無条件削除していた。上と同じ
+            # 規則で、原本の chain 検証を先に通す。
+            _require_canonical_original_or_refuse(
+                campaign_dir=campaign_dir,
+                ledger_path=ledger_path,
+                gz_path=gz_path,
+                sidecar_path=sidecar_path,
+                published_artifact_failure=(
+                    "partial published artifact found (only one of gz/sidecar "
+                    f"present): gz={gz_path} (exists={has_gz}), "
+                    f"sidecar={sidecar_path} (exists={has_sidecar})"
+                ),
+            )
             _discard_if_exists(gz_path)
             _discard_if_exists(sidecar_path)
 
@@ -910,6 +1055,7 @@ __all__ = [
     "GZ_FILENAME",
     "SIDECAR_FILENAME",
     "ArchiveError",
+    "LedgerArchiveRefusedError",
     "ArchiveResult",
     "ensure_archived",
 ]
