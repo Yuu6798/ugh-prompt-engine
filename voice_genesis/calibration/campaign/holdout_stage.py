@@ -30,20 +30,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import statistics
 from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from pathlib import Path
 from typing import Any
 
 from voice_genesis.calibration.campaign import measure_stage, workunits
 from voice_genesis.calibration.campaign.render_stage import run_render_stage
+from voice_genesis.calibration.campaign.selection_stage import truth_value_for_row
 from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.campaign.time_budget import SliceStatus, TimeBudget
 from voice_genesis.calibration.candidates.registry import Candidate, candidate_by_id
 from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
 from voice_genesis.calibration.e_use_table import row_from_dict
-from voice_genesis.calibration.fixtures.matrix import MatrixRow
+from voice_genesis.calibration.e_use_table import find_row as find_e_use_row
+from voice_genesis.calibration.fixtures import controls as fixture_controls
+from voice_genesis.calibration.fixtures.matrix import FixtureRow, MatrixRow
 from voice_genesis.calibration.gates import (
     AbsoluteGateResult,
     DirectionalGateResult,
@@ -54,10 +59,25 @@ from voice_genesis.calibration.gates import (
     absolute_gates,
     directional_gates,
 )
-from voice_genesis.calibration.observables import error_terms, two_stage_median
+from voice_genesis.calibration.observables import (
+    detection_rates,
+    error_terms,
+    nuisance_ds,
+    two_stage_median,
+    u_proc,
+    u_rep,
+)
 from voice_genesis.calibration.provenance import LedgerEntry
 from voice_genesis.calibration.status import terminal_status
-from voice_genesis.calibration.vocab import ClaimCeiling, Domain, MeterId, MissingReason, TerminalStatus
+from voice_genesis.calibration.vocab import (
+    ClaimCeiling,
+    Domain,
+    MeterId,
+    MissingReason,
+    Split,
+    TerminalStatus,
+)
+
 
 # ---------------------------------------------------------------------------
 # frozen fixture_spec からの invariance 軸宣言 [UNDERSPEC-CAL-D18]
@@ -92,6 +112,826 @@ def declared_axes_for_family(manifest: Mapping[str, object], family: str) -> tup
     if not isinstance(axes, list):
         return ()
     return tuple(str(a) for a in axes)
+
+
+# ---------------------------------------------------------------------------
+# v1.1 §V3.2 (D17 close): real gate input assembly from campaign measurements
+# ---------------------------------------------------------------------------
+
+
+def declared_u_gt_u_num_for_family(
+    manifest: Mapping[str, object], family: str
+) -> tuple[float, float] | None:
+    """v1.1 §V3.2: ABSOLUTE/DIRECTIONAL 実 gate の `U_GT[i]`/`U_num[i]`
+    （設計正本 §10.2「generator truth の保守上限」「PCM 量子化・浮動小数・
+    宣言分解能から機械導出」）を campaign 実測から組み立てる唯一の入口。
+
+    **実地調査の結果（本 WP の一次事実）**: 現行 `c0_freeze.py`（本 WP の対象
+    外ファイル）は `frozen_design.fixture_spec.<FAMILY>` に `confound_axes`/
+    `declared_sweeps`/`generator_hash` 等は凍結するが、per-family の数値
+    `U_GT`/`U_num` 保守上限は **まだ凍結していない**
+    （`campaigns/RUN10-CAL-20260904-862dec28/c0_manifest.json` 実測で確認
+    済み）。本関数はこの現実に合わせ、`frozen_design.fixture_spec.<FAMILY>`
+    に `u_gt_bound`/`u_num_bound`（いずれも non-negative finite な
+    number）という後方互換の任意キーを読む——欠落している既存 manifest
+    （閉 campaign 含む）を壊さず、値が無い/型不正/負/非有限のいずれかなら
+    `None` を返すのみに留める。
+
+    呼び出し側（`build_absolute_gate_inputs`/`build_directional_gate_
+    inputs`）はこれを§11「C0 入力側 critical missing → NOT_EVALUABLE/
+    INPUT_MISSING」として扱う。これは正直な結果である: `c0_freeze.py` が
+    このキーを実際に populate するまで、本番 campaign の ABSOLUTE/
+    DIRECTIONAL gate は構造的に `INPUT_MISSING` へ倒れる——閾値を緩めて
+    これを迂回することは §10.2 により禁止される（これは本 WP の意図的な
+    スコープ境界であり、報告に明記する）。テスト fixture
+    （`tests/_campaign_fixture.py`）は `c0_freeze.py` を経由せず manifest を
+    直接組み立てるため、このキーを注入して gate 全通過シナリオを検証
+    できる。"""
+    frozen_design = manifest.get("frozen_design")
+    if not isinstance(frozen_design, Mapping):
+        return None
+    fixture_spec = frozen_design.get("fixture_spec")
+    if not isinstance(fixture_spec, Mapping):
+        return None
+    family_spec = fixture_spec.get(family)
+    if not isinstance(family_spec, Mapping):
+        return None
+    raw_u_gt = family_spec.get("u_gt_bound")
+    raw_u_num = family_spec.get("u_num_bound")
+    if isinstance(raw_u_gt, bool) or not isinstance(raw_u_gt, (int, float)):
+        return None
+    if isinstance(raw_u_num, bool) or not isinstance(raw_u_num, (int, float)):
+        return None
+    u_gt_value = float(raw_u_gt)
+    u_num_value = float(raw_u_num)
+    if not (math.isfinite(u_gt_value) and u_gt_value >= 0.0):
+        return None
+    if not (math.isfinite(u_num_value) and u_num_value >= 0.0):
+        return None
+    return u_gt_value, u_num_value
+
+
+def instance_id_str(row_id: str, probe_index: int) -> str:
+    """`(row_id, probe_index)` の canonical 文字列 instance id
+    （`InstanceMargin.instance_id`/`evaluate_absolute_meter`
+    の `expected_primary_instance_ids` が要求する `str` 型への唯一の変換
+    入口——campaign 実測ではこの形式以前に確立された正本が無かったため
+    本 WP で新規に定める）。"""
+    return f"{row_id}#{probe_index}"
+
+
+def absolute_e_use_value(row: EUseEvidenceRow, truth: float) -> float | None:
+    """`gates.EUseEvidenceRow.e_use_mode` に従って instance 単位の絶対
+    `E_use[i]` を展開する（`gates.py` の `EUseEvidenceRow` docstring:
+    relative 行は `e_use_value * declared_truth` の展開を呼び出し側の責務と
+    する）。`row.e_use_value is None`（`UNJUSTIFIED`）、または展開結果が
+    有限正でなければ `None`（§10.2 gate3 前提と同じ `> 0` 基準）。符号付き
+    construct（例: TILT の負の slope）でも E_use は正の許容誤差量である
+    ため `abs(truth)` を使う。"""
+    if row.e_use_value is None:
+        return None
+    value = row.e_use_value * abs(truth) if row.e_use_mode == "relative" else row.e_use_value
+    if not (math.isfinite(value) and value > 0.0):
+        return None
+    return float(value)
+
+
+class GateInputError(RuntimeError):
+    """v1.1 §V3.2: ABSOLUTE/DIRECTIONAL 実 gate の入力組み立て不能
+    （E_use 行欠落・U_GT/U_num 未凍結・U_rep/U_proc 計算不能等）。
+    呼び出し側は §11「C0 入力側 critical missing → NOT_EVALUABLE/
+    INPUT_MISSING」へ写像する。"""
+
+
+def _detected_output(output: measure_stage.adapter.MeterOutput) -> bool:
+    """`campaign.selection_stage._detected()` と同一定義（missing_reason/
+    ineligible のいずれでも説明されない finite 出力を「検出した」とみなす）
+    を本モジュールから独立に持つ（private helper を跨 module 参照しない
+    既存方針）。"""
+    return output.missing_reason is None and not output.ineligible
+
+
+def _per_instance_output_repeats(
+    records: Sequence[measure_stage.MeasurementRecord],
+    candidate: Candidate,
+    row_id: str,
+    probe_index: int,
+) -> dict[str, list[float]]:
+    """`(row_id, probe_index)` の `candidate` own record を `process_id ->
+    [output value, ...]` へグルーピングする（`observables.two_stage_median`
+    の入力形そのもの）。非有限/欠落値は素通しせず除外する。"""
+    per_process: dict[str, list[float]] = {}
+    for r in records:
+        if r.candidate_id != candidate.candidate_id:
+            continue
+        if r.row_id != row_id or r.probe_index != probe_index:
+            continue
+        value = measure_stage.primary_output_value(candidate, r.output)
+        if value is None or not math.isfinite(value):
+            continue
+        per_process.setdefault(r.process_id, []).append(value)
+    return per_process
+
+
+def _sweep_context_fields(row: FixtureRow) -> dict[str, object]:
+    """v1.1 §V2.2/§V2.4 の claim-shrinkage 列挙が使う、sweep の held-fixed
+    文脈の可読スナップショット（best-effort。C0 は `claim_relevant_fields`
+    を family ごとに凍結する規約を予告しているが本 WP 時点では未実装のため、
+    汎用の代表的 field のみを機械的に拾う——列挙義務そのもの（v1.1 §V2.4）
+    を先に満たし、より精密な `claim_relevant_fields` 消費は将来の改訂に
+    委ねる）。"""
+    candidates: dict[str, object] = {
+        "generator_impl": row.generator_impl,
+        "founder_id": row.founder_id,
+        "trait": row.trait,
+        "join_type": row.join_type,
+        "duration_class": row.duration_class,
+        "bandwise_band": row.bandwise_band,
+        "sr_hz": row.sr_hz,
+    }
+    return {k: v for k, v in candidates.items() if v is not None}
+
+
+@dataclass(frozen=True)
+class ControlDetection:
+    fdr0: float
+    fnr1: float
+    n_neg: int
+    n_pos: int
+    min_count_met: bool
+    negative_control_failures: int
+    positive_control_failures: int
+
+
+def control_detection_for_family(
+    *,
+    matrix_rows: Sequence[MatrixRow],
+    assignment: Mapping[str, object],
+    family: str,
+    candidate: Candidate,
+    records: Sequence[measure_stage.MeasurementRecord],
+) -> ControlDetection:
+    """gate5（§10.1 detection、§10.3 gate5）の `FDR0`/`FNR1` を、negative/
+    positive control instance の実測から組み立てる。
+
+    - negative control: `fixtures.controls.negative_control_instances()`
+      （split に依らず全件——module docstring「sweep truth を運ばない
+      control class は全段階で評価可」）。
+    - positive control: `fixtures.controls.positive_detection_instances(...,
+      Split.HOLDOUT, family=family)`（memo「gate 5 の FDR0/FNR1 = holdout に
+      home する control instance」の holdout 版）。
+
+    判定 predicate は `_detected_output()`（`selection_stage._detected()` と
+    同一定義）を instance 単位へ畳み込む: その instance の own record が
+    1 件以上あり、かつ **全 repeat** が detected の場合のみ「検出した」と
+    数える（1 repeat でも非検出なら instance 全体を非検出——単一 flaky
+    repeat による誤 detection を避ける、ABSOLUTE gate1 の `usable_primary_
+    instances` 全件一致規約と対称な設計判断）。record が 1 件も無い
+    instance は非検出（保守的既定）。"""
+    neg_instances = fixture_controls.negative_control_instances(matrix_rows, family=family)
+    pos_instances = fixture_controls.positive_detection_instances(
+        matrix_rows, assignment, Split.HOLDOUT, family=family
+    )
+    own_records = [r for r in records if r.candidate_id == candidate.candidate_id]
+    by_instance: dict[tuple[str, int], list[measure_stage.MeasurementRecord]] = {}
+    for r in own_records:
+        by_instance.setdefault((r.row_id, r.probe_index), []).append(r)
+
+    def _all_detected(instance: tuple[str, int]) -> bool:
+        group = by_instance.get(instance)
+        if not group:
+            return False
+        return all(_detected_output(r.output) for r in group)
+
+    neg_outcomes = {
+        instance_id_str(row_id, probe_index): _all_detected((row_id, probe_index))
+        for row_id, probe_index in neg_instances
+    }
+    pos_outcomes = {
+        instance_id_str(row_id, probe_index): _all_detected((row_id, probe_index))
+        for row_id, probe_index in pos_instances
+    }
+    result = detection_rates(neg_outcomes, pos_outcomes, control_gate="APPLICABLE")
+    return ControlDetection(
+        fdr0=result.fdr0,
+        fnr1=result.fnr1,
+        n_neg=result.n_neg,
+        n_pos=result.n_pos,
+        min_count_met=result.min_count_met,
+        negative_control_failures=sum(1 for v in neg_outcomes.values() if v),
+        positive_control_failures=sum(1 for v in pos_outcomes.values() if not v),
+    )
+
+
+def build_invariance_pairs_for_family(
+    *,
+    matrix_rows: Sequence[MatrixRow],
+    assignment: Mapping[str, object],
+    family: str,
+    candidate: Candidate,
+    records: Sequence[measure_stage.MeasurementRecord],
+    declared_axes: Collection[str],
+    e_use_row: EUseEvidenceRow,
+) -> dict[str, tuple[InvariancePair, ...]]:
+    """gate4' の invariance pair を、CONFOUND 行の `nuisance_tag`
+    （`fixtures.matrix._build_confound_block`: 1本目 anchor からの変動は
+    `f"{axis}={value!r}"`、2本目 anchor からの変動は `f"A2:{axis}={value!r}"`）
+    から機械的に組み立てる。各 varied 行は、**同じ truth**
+    （`selection_stage.truth_value_for_row` — nuisance 行は truth を anchor
+    に固定したまま 1 軸だけ変動させる、という matrix.py の構築規約そのもの）
+    を持つ family の designated anchor（`fixtures.controls.
+    positive_controls_by_family()`。2 件中 1 本目/2 本目を `nuisance_tag` の
+    `A2:` 接頭辞で判別）とペアにする——`observables.nuisance_ds` の
+    「anchor error / varied error」そのもの。両側とも `Split.HOLDOUT` に
+    home し、かつ usable な出力を持つ `probe_index` のみを 1
+    `InvariancePair` とする（それ以外は黙ってスキップする——gate4' 自体が
+    `<5 pairs` を FAIL として検出するため、母集団を人為的に水増ししない）。
+    """
+    positive_by_family = fixture_controls.positive_controls_by_family(matrix_rows)
+    anchor_row_ids = positive_by_family.get(family, ())
+    if not anchor_row_ids or not declared_axes:
+        return {axis: () for axis in declared_axes}
+
+    row_by_id = {mr.row_id: mr.row for mr in matrix_rows}
+    anchors_by_truth: dict[tuple[str, float], str] = {}
+    for i, anchor_row_id in enumerate(anchor_row_ids):
+        row = row_by_id.get(anchor_row_id)
+        if row is None:
+            continue
+        truth = truth_value_for_row(row)
+        if truth is None:
+            continue
+        prefix = "A2:" if i == 1 else ""
+        anchors_by_truth[(prefix, truth)] = anchor_row_id
+
+    pairs_by_axis: dict[str, list[InvariancePair]] = {axis: [] for axis in declared_axes}
+    for mr in matrix_rows:
+        row = mr.row
+        if row.family != family or row.block != "CONFOUND" or row.nuisance_tag is None:
+            continue
+        tag = row.nuisance_tag
+        prefix = "A2:" if tag.startswith("A2:") else ""
+        bare_tag = tag[len("A2:"):] if prefix else tag
+        if "=" not in bare_tag:
+            continue
+        axis = bare_tag.split("=", 1)[0]
+        if axis not in declared_axes:
+            continue
+        truth = truth_value_for_row(row)
+        if truth is None:
+            continue
+        anchor_row_id = anchors_by_truth.get((prefix, truth))
+        if anchor_row_id is None:
+            continue
+        if assignment.get(mr.row_id) != Split.HOLDOUT or assignment.get(anchor_row_id) != Split.HOLDOUT:
+            continue
+        e_use_value = absolute_e_use_value(e_use_row, truth)
+        if e_use_value is None:
+            continue
+        for probe_index in range(fixture_controls.PROBE_REPEATS):
+            varied_repeats = _per_instance_output_repeats(records, candidate, mr.row_id, probe_index)
+            anchor_repeats = _per_instance_output_repeats(records, candidate, anchor_row_id, probe_index)
+            if not varied_repeats or not anchor_repeats:
+                continue
+            varied_e = error_terms(two_stage_median(varied_repeats), truth, 1e-9).e
+            anchor_e = error_terms(two_stage_median(anchor_repeats), truth, 1e-9).e
+            pairs_by_axis[axis].append(
+                InvariancePair(
+                    pair_id=f"{axis}:{mr.row_id}:{probe_index}",
+                    axis=axis,
+                    ds=nuisance_ds(anchor_e, varied_e),
+                    e_use_i0=e_use_value,
+                    e_use_ia=e_use_value,
+                )
+            )
+    return {axis: tuple(pairs) for axis, pairs in pairs_by_axis.items()}
+
+
+@dataclass(frozen=True)
+class AbsoluteGateInputBundle:
+    margins: tuple[InstanceMargin, ...]
+    invariance_pairs_by_axis: Mapping[str, tuple[InvariancePair, ...]]
+    declared_invariance_axes: tuple[str, ...]
+    u_rep: float
+    u_proc: float
+    fdr0: float
+    fnr1: float
+    min_count_met: bool
+
+
+def build_absolute_gate_inputs(
+    *,
+    manifest: Mapping[str, object],
+    family: str,
+    candidate: Candidate,
+    row_by_id: Mapping[str, FixtureRow],
+    matrix_rows: Sequence[MatrixRow],
+    assignment: Mapping[str, object],
+    records: Sequence[measure_stage.MeasurementRecord],
+    expected_primary_instances: Collection[tuple[str, int]],
+    e_use_rows: Sequence[EUseEvidenceRow],
+) -> AbsoluteGateInputBundle:
+    """v1.1 §V3.2: §10.3 ABSOLUTE holdout gate の実入力を campaign 実測から
+    組み立てる。入力の出所:
+
+    - `E_use[i]`: `e_use_rows`（`load_e_use_rows()`）から `candidate.
+      construct/unit/domain` に一致する 1 行（`e_use_table.find_row()`）。
+      relative 行は `absolute_e_use_value()` で instance 単位に展開する。
+    - `U_GT[i]`/`U_num[i]`: `declared_u_gt_u_num_for_family()`
+      （family 単位の C0-frozen 保守上限。全 instance で共通値として使う
+      ——現行 C0 freeze はこれより細かい粒度を凍結していない）。
+    - `U_rep`/`U_proc`: `observables.u_rep`/`u_proc`（本関数が組み立てた
+      within/fresh process の実測 repeat 値から）。
+    - invariance 軸 pair: `build_invariance_pairs_for_family()`。
+    - gate5 の `FDR0`/`FNR1`: `control_detection_for_family()`。
+
+    必須入力（E_use 行・U_GT/U_num・U_rep・U_proc）のいずれかが欠落/計算
+    不能なら `GateInputError`（呼び出し側が §11 の `NOT_EVALUABLE/
+    INPUT_MISSING` へ写像する）。"""
+    e_use_row = find_e_use_row(
+        e_use_rows, construct_id=candidate.construct, unit=candidate.unit, domain=candidate.domain
+    )
+    if e_use_row is None:
+        raise GateInputError(
+            "no E_use evidence row for "
+            f"(construct={candidate.construct!r}, unit={candidate.unit!r}, "
+            f"domain={candidate.domain!r})"
+        )
+    u_gt_u_num = declared_u_gt_u_num_for_family(manifest, family)
+    if u_gt_u_num is None:
+        raise GateInputError(f"no frozen U_GT/U_num bound for family {family!r}")
+    u_gt_value, u_num_value = u_gt_u_num
+
+    own_records = [r for r in records if r.candidate_id == candidate.candidate_id]
+
+    margins: list[InstanceMargin] = []
+    per_process_ranges: dict[tuple[str, str], list[float]] = {}
+    per_instance_process_medians: dict[str, list[float]] = {}
+    for row_id, probe_index in sorted(expected_primary_instances):
+        instance_id = instance_id_str(row_id, probe_index)
+        row = row_by_id.get(row_id)
+        if row is None:
+            raise GateInputError(f"expected PRIMARY instance {instance_id!r} has no matrix row")
+        truth = truth_value_for_row(row)
+        if truth is None:
+            raise GateInputError(
+                f"row {row_id!r} (family {family!r}) has no declared truth value"
+            )
+        per_process = _per_instance_output_repeats(own_records, candidate, row_id, probe_index)
+        if not per_process:
+            raise GateInputError(f"no usable measurement for expected PRIMARY instance {instance_id!r}")
+        m = two_stage_median(per_process)
+        et = error_terms(m, truth, 1e-9)
+        e_use_value = absolute_e_use_value(e_use_row, truth)
+        if e_use_value is None:
+            raise GateInputError(
+                f"E_use for construct {candidate.construct!r} is not a usable positive "
+                f"value (evidence_class={e_use_row.evidence_class.value})"
+            )
+        margins.append(
+            InstanceMargin(
+                instance_id=instance_id,
+                domain=Domain.PRIMARY,
+                eligible=True,
+                ae=et.ae,
+                e=et.e,
+                u_gt=u_gt_value,
+                u_num=u_num_value,
+                e_use=e_use_value,
+            )
+        )
+        for process_id, values in per_process.items():
+            per_process_ranges[(instance_id, process_id)] = list(values)
+        per_instance_process_medians[instance_id] = [
+            statistics.median(values) for values in per_process.values()
+        ]
+
+    u_rep_value = u_rep(per_process_ranges)
+    if u_rep_value is None:
+        raise GateInputError(
+            "U_rep is not computable from the measured repeats (no >=2-repeat process cell)"
+        )
+    try:
+        u_proc_value = u_proc(per_instance_process_medians)
+    except ValueError as exc:
+        raise GateInputError(f"U_proc is not computable: {exc}") from exc
+
+    declared_axes = declared_axes_for_family(manifest, family)
+    invariance_pairs_by_axis = build_invariance_pairs_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family=family,
+        candidate=candidate,
+        records=own_records,
+        declared_axes=declared_axes,
+        e_use_row=e_use_row,
+    )
+
+    detection = control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family=family,
+        candidate=candidate,
+        records=own_records,
+    )
+
+    return AbsoluteGateInputBundle(
+        margins=tuple(margins),
+        invariance_pairs_by_axis=invariance_pairs_by_axis,
+        declared_invariance_axes=declared_axes,
+        u_rep=u_rep_value,
+        u_proc=u_proc_value,
+        fdr0=detection.fdr0,
+        fnr1=detection.fnr1,
+        min_count_met=detection.min_count_met,
+    )
+
+
+def evaluate_absolute_meter_from_campaign(
+    *,
+    meter_id: str,
+    family: str,
+    candidate: Candidate,
+    manifest: Mapping[str, object],
+    row_by_id: Mapping[str, FixtureRow],
+    matrix_rows: Sequence[MatrixRow],
+    assignment: Mapping[str, object],
+    records: Sequence[measure_stage.MeasurementRecord],
+    expected_primary_instances: Collection[tuple[str, int]],
+    e_use_rows: Sequence[EUseEvidenceRow],
+) -> MeterHoldoutResult:
+    """v1.1 §V3.2 (D17 close): `evaluate_absolute_meter()` の入力を campaign
+    実測から組み立て、実 gate を評価する。入力組み立て不能は正直に
+    `NOT_EVALUABLE/INPUT_MISSING` として終端する（§11: C0 入力側 critical
+    missing。gate が正直に fail するのとは異なる終端——ここでは gate 自体を
+    評価する前に入力が組み立てられない）。"""
+    try:
+        bundle = build_absolute_gate_inputs(
+            manifest=manifest,
+            family=family,
+            candidate=candidate,
+            row_by_id=row_by_id,
+            matrix_rows=matrix_rows,
+            assignment=assignment,
+            records=records,
+            expected_primary_instances=expected_primary_instances,
+            e_use_rows=e_use_rows,
+        )
+    except GateInputError as exc:
+        return MeterHoldoutResult(
+            meter_id=meter_id,
+            terminal_status=TerminalStatus.NOT_EVALUABLE.value,
+            reason_code=MissingReason.INPUT_MISSING.value,
+            ceiling=ClaimCeiling.NONE.value,
+            selected_candidate_id=candidate.candidate_id,
+            gate_detail={
+                "reason": f"[v1.1 §V3.2] ABSOLUTE gate input assembly failed: {exc}",
+            },
+        )
+    return evaluate_absolute_meter(
+        meter_id,
+        ClaimCeiling.ABSOLUTE,
+        selected_candidate_id=candidate.candidate_id,
+        per_instance_margins=bundle.margins,
+        u_rep=bundle.u_rep,
+        u_proc=bundle.u_proc,
+        invariance_pairs_by_axis=bundle.invariance_pairs_by_axis,
+        declared_invariance_axes=bundle.declared_invariance_axes,
+        expected_primary_instance_ids=[
+            instance_id_str(row_id, probe_index) for row_id, probe_index in expected_primary_instances
+        ],
+        fdr0=bundle.fdr0,
+        fnr1=bundle.fnr1,
+        min_count_met=bundle.min_count_met,
+    )
+
+
+def directional_claim_shrinkage_detail(
+    *,
+    expected_sweep_member_row_ids: Mapping[str, Sequence[str]],
+    row_by_id: Mapping[str, FixtureRow],
+) -> dict[str, object]:
+    """v1.1 §V2.2 末尾 + §V2.4（claim 縮小の列挙義務）: 全 family の
+    DIRECTIONAL 終端 status の claim text に必須で列挙する「評価済み sweep
+    の held-fixed 文脈」+ prohibited interpretations。claim-relevant field
+    の全値被覆が成立する family（FORMANT/IDENTITY の周辺被覆）でも列挙義務は
+    同様に課される（§V2.2 末尾: 「被覆成立は claim の広さではなく選抜の質の
+    保証にすぎない」）。"""
+    evaluated_sweep_contexts: list[dict[str, object]] = []
+    for sweep_id in sorted(expected_sweep_member_row_ids):
+        member_row_ids = tuple(sorted(expected_sweep_member_row_ids[sweep_id]))
+        sample_row = next((row_by_id[rid] for rid in member_row_ids if rid in row_by_id), None)
+        held_fixed = _sweep_context_fields(sample_row) if sample_row is not None else {}
+        evaluated_sweep_contexts.append(
+            {
+                "sweep_id": sweep_id,
+                "held_fixed_context": held_fixed,
+                "member_row_ids": member_row_ids,
+            }
+        )
+    return {
+        "evaluated_sweep_contexts": evaluated_sweep_contexts,
+        "prohibited_interpretations": (
+            "directional extrapolation to sweep contexts not listed in "
+            "evaluated_sweep_contexts is prohibited (v1.1 SS V2.2/V2.4)",
+        ),
+    }
+
+
+@dataclass(frozen=True)
+class DirectionalGateInputBundle:
+    pairs: tuple[DirectionalPair, ...]
+    expected_sweep_ids: tuple[str, ...]
+    expected_adjacent_pair_ids: Mapping[str, tuple[str, ...]]
+    u_rep: float
+    u_proc: float
+    negative_control_failures: int
+    positive_control_failures: int
+
+
+def build_directional_gate_inputs(
+    *,
+    family: str,
+    candidate: Candidate,
+    row_by_id: Mapping[str, FixtureRow],
+    matrix_rows: Sequence[MatrixRow],
+    assignment: Mapping[str, object],
+    records: Sequence[measure_stage.MeasurementRecord],
+    usable_primary_instances: Collection[tuple[str, int]],
+    expected_sweep_member_row_ids: Mapping[str, Sequence[str]],
+    manifest: Mapping[str, object],
+) -> DirectionalGateInputBundle:
+    """v1.1 §V3.2/§V2.3: §10.4 DIRECTIONAL holdout gate の実入力。sweep 単位
+    = V2.3 の holdout 常駐 declared sweep（`expected_sweep_member_row_ids`
+    ——呼び出し側 `cli._run_c4` が manifest `holdout_sweeps[family]`
+    （優先）または `declared_sweeps_by_family()` から渡す、既存の
+    `expected_sweep_ids` と同じ入口）。sweep 内の distinct truth level
+    （`selection_stage.truth_value_for_row`）ごとに集約した
+    two-stage-median 出力から、truth 昇順で全 pair を構成する（隣接 pair =
+    ソート順で連続する 2 level。gates.directional_gates() 自身が resolvable
+    性・符号・sweep 最小数を判定する——本関数は候補ペアの機械的組み立てのみ
+    を担う）。`U_GT`/`U_num` は ABSOLUTE と同じ family 単位の frozen bound
+    （`declared_u_gt_u_num_for_family()`）を再利用する。"""
+    u_gt_u_num = declared_u_gt_u_num_for_family(manifest, family)
+    if u_gt_u_num is None:
+        raise GateInputError(f"no frozen U_GT/U_num bound for family {family!r}")
+    u_gt_value, u_num_value = u_gt_u_num
+
+    own_records = [r for r in records if r.candidate_id == candidate.candidate_id]
+    usable_set = set(usable_primary_instances)
+
+    pairs: list[DirectionalPair] = []
+    expected_adjacent_pair_ids: dict[str, tuple[str, ...]] = {}
+    per_process_ranges: dict[tuple[str, str], list[float]] = {}
+    per_instance_process_medians: dict[str, list[float]] = {}
+
+    for sweep_id in sorted(expected_sweep_member_row_ids):
+        member_row_ids = expected_sweep_member_row_ids[sweep_id]
+        by_truth: dict[float, list[str]] = {}
+        for row_id in member_row_ids:
+            row = row_by_id.get(row_id)
+            if row is None:
+                continue
+            truth = truth_value_for_row(row)
+            if truth is None:
+                continue
+            by_truth.setdefault(truth, []).append(row_id)
+
+        level_outputs: dict[float, float] = {}
+        for truth, row_ids in by_truth.items():
+            per_process: dict[str, list[float]] = {}
+            for row_id in row_ids:
+                for probe_index in range(fixture_controls.PROBE_REPEATS):
+                    if (row_id, probe_index) not in usable_set:
+                        continue
+                    repeats = _per_instance_output_repeats(own_records, candidate, row_id, probe_index)
+                    if not repeats:
+                        continue
+                    instance_id = instance_id_str(row_id, probe_index)
+                    for process_id, values in repeats.items():
+                        per_process.setdefault(f"{row_id}:{process_id}", []).extend(values)
+                        per_process_ranges.setdefault((instance_id, process_id), []).extend(values)
+                    per_instance_process_medians[instance_id] = [
+                        statistics.median(values) for values in repeats.values()
+                    ]
+            if per_process:
+                level_outputs[truth] = two_stage_median(per_process)
+
+        expected_adjacent_pair_ids.setdefault(sweep_id, ())
+        levels = sorted(level_outputs)
+        if len(levels) < 2:
+            continue
+        adjacent_ids: list[str] = []
+        for i in range(len(levels)):
+            for j in range(i + 1, len(levels)):
+                truth_i, truth_j = levels[i], levels[j]
+                delta_truth = truth_j - truth_i
+                delta_output = level_outputs[truth_j] - level_outputs[truth_i]
+                pair_id = f"{sweep_id}#{i}#{j}"
+                is_adjacent = j == i + 1
+                pairs.append(
+                    DirectionalPair(
+                        pair_id=pair_id,
+                        delta_truth=delta_truth,
+                        delta_output=delta_output,
+                        u_gt_i=u_gt_value,
+                        u_num_i=u_num_value,
+                        u_gt_j=u_gt_value,
+                        u_num_j=u_num_value,
+                        correct_sign=(delta_truth > 0) == (delta_output > 0),
+                        is_adjacent=is_adjacent,
+                        sweep_id=sweep_id,
+                    )
+                )
+                if is_adjacent:
+                    adjacent_ids.append(pair_id)
+        expected_adjacent_pair_ids[sweep_id] = tuple(adjacent_ids)
+
+    if not pairs:
+        raise GateInputError("no directional pair could be assembled from usable holdout instances")
+
+    u_rep_value = u_rep(per_process_ranges)
+    if u_rep_value is None:
+        raise GateInputError("U_rep is not computable from the measured repeats")
+    try:
+        u_proc_value = u_proc(per_instance_process_medians)
+    except ValueError as exc:
+        raise GateInputError(f"U_proc is not computable: {exc}") from exc
+
+    detection = control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family=family,
+        candidate=candidate,
+        records=records,
+    )
+
+    return DirectionalGateInputBundle(
+        pairs=tuple(pairs),
+        expected_sweep_ids=tuple(sorted(expected_sweep_member_row_ids)),
+        expected_adjacent_pair_ids=expected_adjacent_pair_ids,
+        u_rep=u_rep_value,
+        u_proc=u_proc_value,
+        negative_control_failures=detection.negative_control_failures,
+        positive_control_failures=detection.positive_control_failures,
+    )
+
+
+def evaluate_directional_meter_from_campaign(
+    *,
+    meter_id: str,
+    family: str,
+    candidate: Candidate,
+    manifest: Mapping[str, object],
+    row_by_id: Mapping[str, FixtureRow],
+    matrix_rows: Sequence[MatrixRow],
+    assignment: Mapping[str, object],
+    records: Sequence[measure_stage.MeasurementRecord],
+    usable_primary_instances: Collection[tuple[str, int]],
+    expected_sweep_member_row_ids: Mapping[str, Sequence[str]],
+    units_commensurate: bool = False,
+) -> MeterHoldoutResult:
+    """v1.1 §V3.2 (D17 close): `evaluate_directional_meter()` の入力を
+    campaign 実測から組み立て、実 gate を評価する。終端 status がいずれで
+    あっても（`CALIBRATED_DIRECTIONAL`/`DIAGNOSTIC_ONLY`/`NOT_EVALUABLE`）、
+    v1.1 §V2.4 の claim-shrinkage 列挙義務を `gate_detail["claim_text"]`/
+    `gate_detail["prohibited_interpretations"]` として必ず添付する（何も
+    評価できなかった場合に claim を主張しないよう、`NOT_EVALUABLE` のときは
+    列挙を空のまま——ただし INPUT_MISSING 以外は常に添付する。INPUT_MISSING
+    は gate 自体に到達していないため対象外）。"""
+    try:
+        bundle = build_directional_gate_inputs(
+            family=family,
+            candidate=candidate,
+            row_by_id=row_by_id,
+            matrix_rows=matrix_rows,
+            assignment=assignment,
+            records=records,
+            usable_primary_instances=usable_primary_instances,
+            expected_sweep_member_row_ids=expected_sweep_member_row_ids,
+            manifest=manifest,
+        )
+    except GateInputError as exc:
+        return MeterHoldoutResult(
+            meter_id=meter_id,
+            terminal_status=TerminalStatus.NOT_EVALUABLE.value,
+            reason_code=MissingReason.INPUT_MISSING.value,
+            ceiling=ClaimCeiling.NONE.value,
+            selected_candidate_id=candidate.candidate_id,
+            gate_detail={
+                "reason": f"[v1.1 §V3.2] DIRECTIONAL gate input assembly failed: {exc}",
+            },
+        )
+    result = evaluate_directional_meter(
+        meter_id,
+        ClaimCeiling.DIRECTIONAL,
+        selected_candidate_id=candidate.candidate_id,
+        pairs=bundle.pairs,
+        u_rep=bundle.u_rep,
+        u_proc=bundle.u_proc,
+        expected_sweep_ids=bundle.expected_sweep_ids,
+        expected_adjacent_pair_ids=bundle.expected_adjacent_pair_ids,
+        negative_control_failures=bundle.negative_control_failures,
+        positive_control_failures=bundle.positive_control_failures,
+        units_commensurate=units_commensurate,
+    )
+    claim_detail = directional_claim_shrinkage_detail(
+        expected_sweep_member_row_ids=expected_sweep_member_row_ids,
+        row_by_id=row_by_id,
+    )
+    return dataclass_replace(
+        result,
+        gate_detail={
+            **dict(result.gate_detail),
+            "claim_text": {"evaluated_sweep_contexts": claim_detail["evaluated_sweep_contexts"]},
+            "prohibited_interpretations": claim_detail["prohibited_interpretations"],
+        },
+    )
+
+
+def evaluate_m6_identity(
+    *,
+    manifest: Mapping[str, object],
+    matrix_rows: Sequence[MatrixRow],
+) -> MeterHoldoutResult:
+    """v1.1 §V3.2 M6: `vocab.CLAIM_CRITICAL_SET` の全 member が
+    `CALIBRATED_ABSOLUTE` のときのみ呼び出し側（`cli._run_c4`）から呼ばれる
+    ——precondition の判定自体は呼び出し側の責務のまま変えない（既存分岐は
+    実評価呼び出しへ差し替えるのみ）。
+
+    **既知の infra gap（本 WP のスコープ境界。正直に記録する）**: 設計正本
+    §12 の `m6_identity.m6_distance()` は IDENTITY_CAUSAL_SWEEP fixture 上で
+    CLAIM_CRITICAL_SET の 3 meter（M3_FORMANTS/M2_SPECTRAL_TILT/
+    M2_APERIODICITY）を founder pair（A/B）に対して実測した component
+    vector と、null pair 母集団（`T_null` 用）を要求する。しかし
+    `campaign.cli._FAMILY_TO_METER` は IDENTITY_CAUSAL_SWEEP を全く含まず
+    （実地調査で確認済み: M6 は独立 fixture family を持たない独立 meter で
+    あり、この family の候補は C4 の per-family loop で一度も測定されない）、
+    この cross-family 測定（3 meter の選択済み candidate を IDENTITY 音声に
+    対して追加測定する経路。加えて「A/B のどの行を比較するか」「null pair を
+    どう構成するか」という実験設計そのものが v1.0/v1.1 で操作的に規定されて
+    いない）は `render_stage`/`measure_stage`/`workunits`（いずれも本 WP の
+    許可ファイル範囲外）への新規測定ユニット追加を要する——単なる「配線」を
+    超える、別の Design Memo を要する設計課題である。したがって本関数は
+    precondition が真であっても常に `NOT_EVALUABLE/INPUT_MISSING`
+    （§11「C0 入力側 critical missing」）を返す——これは D17 placeholder の
+    ような無言の固定応答ではなく、precondition を実評価した上での正直な
+    境界宣言であり、次の Design Memo（IDENTITY pair 測定経路の設計）への
+    引き継ぎ材料として `gate_detail` に記録する。"""
+    holdout_sweeps = manifest.get("holdout_sweeps")
+    identity_sweeps = (
+        holdout_sweeps.get("IDENTITY_CAUSAL_SWEEP")
+        if isinstance(holdout_sweeps, Mapping)
+        else None
+    )
+    detail: dict[str, object] = {
+        "reason": (
+            "[v1.1 SS V3.2 boundary] M6 identity-preservation gate precondition "
+            "satisfied (all CLAIM_CRITICAL_SET members reached CALIBRATED_ABSOLUTE), "
+            "but the cross-family measurement path that would produce "
+            "component_a/component_b (the 3 CLAIM_CRITICAL_SET meters measured "
+            "against IDENTITY_CAUSAL_SWEEP founder-pair audio, plus a null-pair "
+            "population for T_null) does not exist in the current measurement "
+            "pipeline (campaign.cli._FAMILY_TO_METER never maps "
+            "IDENTITY_CAUSAL_SWEEP to a meter) and its experimental design "
+            "(which rows form the A/B comparison, how null pairs are built) is "
+            "unspecified in DESIGN_VG_METER_CAL_DEBT v1.0/v1.1. Building it is "
+            "out of this work package's file scope (render_stage/measure_stage/"
+            "workunits) and requires a follow-up Design Memo, not silent "
+            "wiring. Recorded honestly rather than papered over."
+        ),
+    }
+    if isinstance(identity_sweeps, Mapping) and identity_sweeps:
+        row_by_id = {mr.row_id: mr.row for mr in matrix_rows}
+        pinned_cells = []
+        for sweep_id, member in sorted(identity_sweeps.items()):
+            member_row_ids = tuple(sorted(member))
+            sample_row = next(
+                (row_by_id[rid] for rid in member_row_ids if rid in row_by_id), None
+            )
+            pinned_cells.append(
+                {
+                    "sweep_id": sweep_id,
+                    "held_fixed_context": (
+                        _sweep_context_fields(sample_row) if sample_row is not None else {}
+                    ),
+                    "member_row_ids": member_row_ids,
+                }
+            )
+        detail["pinned_identity_cells"] = pinned_cells
+        detail["prohibited_interpretations"] = (
+            "no identity-preservation claim is made for any (founder, trait) cell "
+            "-- pinned_identity_cells lists what holdout sweep pinning made "
+            "structurally available, not what M6 evaluated (v1.1 SS V2.4)",
+        )
+    return MeterHoldoutResult(
+        meter_id=MeterId.M6_IDENTITY.value,
+        terminal_status=TerminalStatus.NOT_EVALUABLE.value,
+        reason_code=MissingReason.INPUT_MISSING.value,
+        ceiling=ClaimCeiling.NONE.value,
+        selected_candidate_id=None,
+        gate_detail=detail,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -603,8 +1443,24 @@ def render_and_measure_holdout(
     sr_by_row = {mr.row_id: mr.row.sr_hz for mr in matrix_rows}
     results: dict[str, list[measure_stage.MeasurementRecord]] = {}
     family_order = sorted(candidates_by_family.items())
+    # v1.1 §V3.2 (D17 close): `control_detection_for_family()`'s gate5
+    # FDR0/FNR1 needs the selected candidate's own measurement on negative
+    # control instances (`fixtures.controls.negative_control_instances()`)
+    # — `workunits.c4_holdout_instances()` deliberately excludes them
+    # (`control_row_ids`, §7 leakage-artifact reuse contract: their PCM is
+    # already rendered by c1, split-independent). Positive control evidence
+    # needs no extra measurement here: `positive_detection_instances(...,
+    # Split.HOLDOUT, family)` is a subset of the non-BOUNDARY HOLDOUT
+    # population `c4_holdout_instances()` already covers (positive controls
+    # are ordinary TRUTH_CORE rows). Union, not replace, so every existing
+    # consumer of `instances_by_family`/`results` sees a strict superset.
     instances_by_family = {
-        family: workunits.c4_holdout_instances(matrix_rows, assignment, family=family)
+        family: tuple(
+            sorted(
+                frozenset(workunits.c4_holdout_instances(matrix_rows, assignment, family=family))
+                | fixture_controls.negative_control_instances(matrix_rows, family=family)
+            )
+        )
         for family, _candidates in family_order
     }
 
@@ -794,6 +1650,21 @@ def run_holdout_stage(
 
 __all__ = [
     "declared_axes_for_family",
+    "declared_u_gt_u_num_for_family",
+    "instance_id_str",
+    "absolute_e_use_value",
+    "GateInputError",
+    "ControlDetection",
+    "control_detection_for_family",
+    "build_invariance_pairs_for_family",
+    "AbsoluteGateInputBundle",
+    "build_absolute_gate_inputs",
+    "evaluate_absolute_meter_from_campaign",
+    "directional_claim_shrinkage_detail",
+    "DirectionalGateInputBundle",
+    "build_directional_gate_inputs",
+    "evaluate_directional_meter_from_campaign",
+    "evaluate_m6_identity",
     "StaleEUseTableError",
     "load_e_use_rows",
     "split_e_use_rows_by_mode",

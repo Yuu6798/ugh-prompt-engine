@@ -147,6 +147,8 @@ def build_tiny_campaign(
     frozen_inputs: Mapping[str, object] | None = None,
     freeze_event_time_utc: str | None = "2026-09-02T00:00:00+00:00",
     holdout_sweeps: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
+    fixture_spec: Mapping[str, Mapping[str, object]] | None = None,
+    force_holdout_row_ids: Sequence[str] | None = None,
 ) -> tuple[Path, Path]:
     """`(campaign_dir, secret_dir_root)` を組み立てて返す。
 
@@ -185,7 +187,22 @@ def build_tiny_campaign(
     `pinned_holdout_row_ids` として強制的に HOLDOUT へ確定してから
     manifest のトップレベル non-core `holdout_sweeps` 節へそのまま埋め込む
     （§V2.3「realized split 上で holdout_sweeps の member に HOLDOUT 非所属
-    行があれば fail-closed」を fixture 側でも満たすため）。"""
+    行があれば fail-closed」を fixture 側でも満たすため）。
+
+    `fixture_spec`（v1.1 §V3.2 新設、WP2c: c4 実 gate 組み立ての配線）:
+    `{family: {key: value}}` を `frozen_design.fixture_spec.<FAMILY>` へ
+    そのままマージする（既存の空 dict `{}` 既定を上書き）。ABSOLUTE/
+    DIRECTIONAL 実 gate が読む `u_gt_bound`/`u_num_bound`
+    （`holdout_stage.declared_u_gt_u_num_for_family()`）や、gate4' が読む
+    `confound_axes`（`holdout_stage.declared_axes_for_family()`）を注入する
+    のに使う——本番 `c0_freeze.py` はまだ `u_gt_bound`/`u_num_bound` を
+    populate しないため（実地調査で確認済み。`holdout_stage.declared_u_gt_
+    u_num_for_family()` の docstring 参照）、これらのテストはこの fixture
+    引数を介して c0_freeze.py を経由せず直接注入する。`force_holdout_
+    row_ids`（同新設）は `holdout_sweeps` のような sweep 意味論を持たず、
+    与えた row_id を単に `realize_split()` の `pinned_holdout_row_ids` へ
+    追加するだけ——gate4' の invariance pair（anchor + CONFOUND 行）を
+    確実に HOLDOUT へ着地させたいテストで使う。"""
     subset = subset if subset is not None else small_matrix_subset()
     row_inputs = [
         RowInput(
@@ -203,7 +220,7 @@ def build_tiny_campaign(
         for family_sweeps in (holdout_sweeps or {}).values()
         for member_row_ids in family_sweeps.values()
         for rid in member_row_ids
-    )
+    ) | frozenset(force_holdout_row_ids or ())
     realized = realize_split(
         row_inputs,
         split_secret,
@@ -240,7 +257,9 @@ def build_tiny_campaign(
         },
         "realized_split_sha": realized.realized_sha,
         "frozen_design": {
-            "fixture_spec": {},
+            "fixture_spec": {
+                family: dict(spec) for family, spec in (fixture_spec or {}).items()
+            },
             "cost_caps": dict(gate1_cost_caps)
             if gate1_cost_caps is not None
             else dict(DEFAULT_GATE1_COST_CAPS),

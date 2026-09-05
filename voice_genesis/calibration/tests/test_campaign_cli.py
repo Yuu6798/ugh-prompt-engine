@@ -2580,9 +2580,15 @@ def test_c4_directional_holdout_sweeps_manifest_narrows_expected_sweep_ids(
     `DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT` under the pre-v1.1 "all
     declared sweeps are expected" rule (10 expected, 8 starved). With
     `expected_sweep_ids` narrowed to just the 2 pinned sweeps (both fully
-    covered), the check must instead fall through to the existing D17
-    placeholder (`DIAGNOSTIC_ONLY`) — proving the false unresolvable-on-
-    holdout terminal no longer fires for properly pinned holdout sweeps.
+    covered), the capacity check must fall through to the real DIRECTIONAL
+    gate (v1.1 §V3.2, D17 close) instead of the old D17 `DIAGNOSTIC_ONLY`
+    placeholder — proving the false unresolvable-on-holdout terminal no
+    longer fires for properly pinned holdout sweeps. This tiny fixture's
+    manifest carries no frozen `u_gt_bound`/`u_num_bound`
+    (`build_tiny_campaign()` default), so the real gate's input assembly
+    fails honestly with `NOT_EVALUABLE/INPUT_MISSING` (§11) rather than the
+    D17 placeholder's `DIAGNOSTIC_ONLY` — the intentional behavior change
+    this test now locks in.
     """
     from voice_genesis.calibration.fixtures.matrix import pin_holdout_sweeps_by_family
 
@@ -2650,13 +2656,15 @@ def test_c4_directional_holdout_sweeps_manifest_narrows_expected_sweep_ids(
     ]
     per_meter = holdout_events[-1]["per_meter"]
     m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
-    # not the false NOT_EVALUABLE/DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT
-    # terminal the pre-v1.1 "all declared sweeps" rule would have forced here.
-    assert m2a_result["terminal_status"] == "DIAGNOSTIC_ONLY"
+    # not the false DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT terminal the
+    # pre-v1.1 "all declared sweeps" rule would have forced here (that
+    # branch's `gate_detail_reason_code` key is absent below).
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "INPUT_MISSING"
     assert m2a_result["selected_candidate_id"] == independent_candidate.candidate_id
     gate_detail = m2a_result["gate_detail"]
     assert "gate_detail_reason_code" not in gate_detail
-    assert gate_detail["note"].startswith("[UNDERSPEC-CAL-D17]")
+    assert "no frozen U_GT/U_num bound" in gate_detail["reason"]
 
 
 def test_c4_directional_partial_coverage_at_minimum_count_closes_diagnostic_only(
@@ -2758,10 +2766,16 @@ def test_c4_selected_candidate_fully_covered_is_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Control case: the selected candidate has a usable record for every
-    expected C4 instance — the fix must not disturb this pre-existing
-    DIAGNOSTIC_ONLY behavior ([UNDERSPEC-CAL-D17]: real gate assembly is out
-    of D2 CLI scope, so a fully-covered selected candidate still closes
-    DIAGNOSTIC_ONLY here, not CALIBRATED_ABSOLUTE)."""
+    expected C4 instance. v1.1 §V3.2 (D17 close) **intentionally changes**
+    this outcome: coverage-complete now reaches the real ABSOLUTE gate
+    (`holdout_stage.evaluate_absolute_meter_from_campaign`) instead of the
+    D17 `DIAGNOSTIC_ONLY` placeholder. This tiny fixture's manifest carries
+    no `frozen_inputs.e_use_table_sha256` pin (`build_tiny_campaign()`
+    default), so the real gate's input assembly fails honestly with
+    `NOT_EVALUABLE/INPUT_MISSING` (§11: C0 input-side critical missing) —
+    proving the D17 placeholder path is no longer reachable here, not a
+    regression in coverage handling (which this test still isolates via the
+    unchanged `selected_candidate_id`)."""
     campaign, subset, harmonic_residual, expected_instances = (
         _c4_setup_selected_candidate_coverage_test(tmp_path, monkeypatch)
     )
@@ -2793,8 +2807,10 @@ def test_c4_selected_candidate_fully_covered_is_unchanged(
     ]
     per_meter = holdout_events[-1]["per_meter"]
     m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
-    assert m2a_result["terminal_status"] == "DIAGNOSTIC_ONLY"
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "INPUT_MISSING"
     assert m2a_result["selected_candidate_id"] == harmonic_residual.candidate_id
+    assert "E_use evidence table unavailable" in m2a_result["gate_detail"]["reason"]
 
 
 # ---------------------------------------------------------------------------
@@ -2899,7 +2915,12 @@ def test_c4_boundary_only_miss_is_not_a_coverage_failure(
     fully covers every PRIMARY instance but is correctly, explainedly
     missing on the BOUNDARY-only instance — this must close exactly like the
     fully-covered control case (`test_c4_selected_candidate_fully_covered_
-    is_unchanged`), with no coverage-failure `reason`/`reason_code` at all."""
+    is_unchanged`), with no coverage-failure `reason`/`reason_code` at all
+    (i.e. never `OUTPUT_MISSING`/"gate 1 not passed"). v1.1 §V3.2 (D17
+    close) changes what "closes exactly like" the control case now means —
+    see that test's docstring: coverage-complete reaches the real ABSOLUTE
+    gate, which this manifest-less-E_use-table tiny fixture fails honestly
+    with `NOT_EVALUABLE/INPUT_MISSING`."""
     campaign, subset, harmonic_residual, primary_expected, boundary_only = (
         _c4_setup_boundary_and_primary_coverage_test(tmp_path, monkeypatch)
     )
@@ -2933,9 +2954,10 @@ def test_c4_boundary_only_miss_is_not_a_coverage_failure(
         e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
     ]
     m2a_result = holdout_events[-1]["per_meter"][MeterId.M2_APERIODICITY.value]
-    assert m2a_result["terminal_status"] == "DIAGNOSTIC_ONLY"
-    assert m2a_result["reason_code"] is None
-    assert "reason" not in m2a_result["gate_detail"]
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "INPUT_MISSING"
+    assert "gate 1 not passed" not in m2a_result["gate_detail"]["reason"]
+    assert "expected_instance_count" not in m2a_result["gate_detail"]
     assert m2a_result["selected_candidate_id"] == harmonic_residual.candidate_id
 
 
@@ -2990,6 +3012,245 @@ def test_c4_primary_partial_coverage_closes_diagnostic_only_boundary_ignored(
     # folded into either count.
     assert gate_detail["expected_instance_count"] == len(primary_expected)
     assert gate_detail["seen_instance_count"] == len(partial_primary)
+
+
+# ---------------------------------------------------------------------------
+# v1.1 §V3.2 (WP2c, D17 close) AC8: coverage-complete now reaches the real
+# ABSOLUTE gate (`holdout_stage.evaluate_absolute_meter_from_campaign`)
+# through the actual `cli._run_c4` control flow, instead of the retired D17
+# `DIAGNOSTIC_ONLY` placeholder. `render_and_measure_holdout` is
+# monkeypatched (as every other C4 coverage test above does) to supply
+# hand-crafted, fully-controlled `MeasurementRecord`s — what is exercised
+# for real is `_run_c4`'s gate-input assembly and `gates.absolute_gates()`
+# itself, not audio synthesis/measurement precision.
+# ---------------------------------------------------------------------------
+
+
+def _tilt_row(
+    row_id: str,
+    *,
+    block: str,
+    slope: float | None,
+    control_class: str | None = None,
+    positive_control: bool = False,
+    nuisance_tag: str | None = None,
+):
+    from voice_genesis.calibration.fixtures.matrix import FixtureRow, MatrixRow
+    from voice_genesis.calibration.vocab import Domain
+
+    row = FixtureRow(
+        family="TILT_GT",
+        block=block,
+        f0_hz=220.0,
+        sr_hz=44100,
+        gain_dbfs=-6.0,
+        duration_s=1.0,
+        noise_clean=True,
+        noise_snr_db=None,
+        context="wp2c-c4-gate-wiring-e2e-fixture",
+        control_class=control_class,
+        positive_control=positive_control,
+        nuisance_tag=nuisance_tag,
+        slope_db_per_oct=slope,
+    )
+    domain = Domain.BOUNDARY if control_class is not None else Domain.PRIMARY
+    return MatrixRow(row=row, row_id=row_id, domain=domain)
+
+
+def _tilt_records(
+    candidate_id: str, row_id: str, *, truth: float, missing: bool = False, n_probes: int = 5
+) -> list[measure_stage.MeasurementRecord]:
+    output = (
+        MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
+        if missing
+        else MeterOutput(values={"tilt_db_per_oct": truth})
+    )
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(n_probes):
+        for repeat_index in range(2):
+            records.append(
+                measure_stage.MeasurementRecord(
+                    row_id=row_id,
+                    probe_index=probe_index,
+                    candidate_id=candidate_id,
+                    repeat_kind="within",
+                    repeat_index=repeat_index,
+                    process_id="within-process",
+                    output=output,
+                )
+            )
+        records.append(
+            measure_stage.MeasurementRecord(
+                row_id=row_id,
+                probe_index=probe_index,
+                candidate_id=candidate_id,
+                repeat_kind="fresh",
+                repeat_index=0,
+                process_id="fresh-process-0",
+                output=output,
+            )
+        )
+    return records
+
+
+def _build_absolute_gate_campaign(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, e_use_value: float):
+    """Tiny TILT_GT campaign with everything the real ABSOLUTE gate needs
+    frozen (v1.1 §V3.2): a `u_gt_bound`/`u_num_bound` + `confound_axes`
+    `fixture_spec` injection and a matching `e_use_table.json` +
+    `frozen_inputs.e_use_table_sha256` pin — neither of which the real
+    `c0_freeze.py` populates today (see `holdout_stage.declared_u_gt_u_num_
+    for_family()`'s docstring), so this bypasses it entirely via
+    `_campaign_fixture.build_tiny_campaign()`'s test-only `fixture_spec`/
+    `frozen_inputs`/`force_holdout_row_ids` arguments. 2 positive-control
+    TRUTH_CORE anchors (10 instances, gate5 N_pos>=10) + 1 CONFOUND row
+    varying `sr_hz` from the first anchor (5 gate4' invariance pairs) + 2
+    NOISE_ONLY negative controls (10 instances, gate5 N_neg>=10), all forced
+    into HOLDOUT — plus 15 padding TRUTH_CORE rows (never measured, never
+    referenced by the returned `subset`) so `splitter.realize_split()`'s
+    family-total 50/25/25 balance (`n=20` -> exactly CAL=10/SEL=5/HOLD=5)
+    has real donor rows to place in CALIBRATION/SELECTION: pinning every row
+    of a tiny family straight into HOLDOUT (`n=5` -> target HOLD=1) leaves
+    `_balance_family_totals()` with no movable candidate and raises
+    `CoverageRepairInfeasible`. The padding rows share the anchors'
+    TRUTH_CORE/PRIMARY stratum, so `splitter`'s per-stratum pin handling
+    (`_two_way_split_counts`) keeps them out of HOLDOUT entirely — no
+    family-total balancing swap is even needed. Returns `(campaign, subset,
+    candidate)`, where `subset` — the argument the test passes to
+    `cli._run_c4` — contains only the 5 essential rows (the padding rows
+    still exist in `campaign.realized_split.assignment` but are irrelevant
+    to what `_run_c4` reads from `matrix_rows`)."""
+    candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_SPECTRAL_TILT) if c.algorithm_family == "HARMONIC_OLS"
+    )
+    anchor1 = _tilt_row("anchor-6", block="TRUTH_CORE", slope=-6.0, positive_control=True)
+    anchor2 = _tilt_row("anchor-12", block="TRUTH_CORE", slope=-12.0, positive_control=True)
+    confound = _tilt_row("confound-sr", block="CONFOUND", slope=-6.0, nuisance_tag="sr_hz=8000")
+    neg_a = _tilt_row("neg-a", block="NEGATIVE_CONTROL", slope=None, control_class="NOISE_ONLY")
+    neg_b = _tilt_row("neg-b", block="NEGATIVE_CONTROL", slope=None, control_class="NOISE_ONLY")
+    subset = [anchor1, anchor2, confound, neg_a, neg_b]
+    padding_rows = [
+        _tilt_row(f"padding-{i}", block="TRUTH_CORE", slope=-18.0) for i in range(15)
+    ]
+    padded_subset = subset + padding_rows
+
+    from voice_genesis.calibration import e_use_table as e_use_table_module
+    from voice_genesis.calibration.gates import EUseEvidenceRow
+    from voice_genesis.calibration.vocab import EvidenceClass
+
+    e_use_row = EUseEvidenceRow(
+        construct_id=candidate.construct,
+        unit=candidate.unit,
+        domain=candidate.domain,
+        intended_use="wp2c c4 gate wiring E2E test",
+        maximum_claim="ABSOLUTE",
+        e_use_value=e_use_value,
+        derivation_rule="test fixture",
+        evidence_class=EvidenceClass.USER_ACCEPTED_USE_BOUND,
+        source_id_or_url="test",
+        source_checked_at="2026-09-05",
+        source_hash_or_version="test",
+        applicability_argument="test",
+        review_status="APPROVED_BY_DELEGATION",
+    )
+    serialized = (
+        json.dumps(
+            [e_use_table_module.row_to_dict(e_use_row)], indent=2, ensure_ascii=False, sort_keys=True
+        )
+        + "\n"
+    )
+    e_use_sha = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path,
+        subset=padded_subset,
+        frozen_inputs={"e_use_table_sha256": e_use_sha},
+        force_holdout_row_ids=[mr.row_id for mr in subset],
+        fixture_spec={
+            "TILT_GT": {"u_gt_bound": 0.01, "u_num_bound": 0.01, "confound_axes": ["sr_hz"]},
+        },
+    )
+    (campaign_dir / "e_use_table.json").write_text(serialized, encoding="utf-8")
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": "F0-B0-CURRENT",
+            "outcome": "SELECTED",
+        }
+    )
+    campaign.ledger.append(
+        {"kind": "selection_frozen", "selected_by_family": {"TILT_GT": candidate.candidate_id}}
+    )
+
+    records = (
+        _tilt_records(candidate.candidate_id, "anchor-6", truth=-6.0)
+        + _tilt_records(candidate.candidate_id, "anchor-12", truth=-12.0)
+        + _tilt_records(candidate.candidate_id, "confound-sr", truth=-6.0)
+        + _tilt_records(candidate.candidate_id, "neg-a", truth=0.0, missing=True)
+        + _tilt_records(candidate.candidate_id, "neg-b", truth=0.0, missing=True)
+    )
+    monkeypatch.setattr(
+        cli.holdout_stage, "render_and_measure_holdout", lambda *a, **kw: {"TILT_GT": records}
+    )
+    return campaign, subset, candidate
+
+
+@pytest.mark.slow
+def test_c4_absolute_gate_wiring_reaches_calibrated_absolute_on_clean_synthetic_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC8(a): coverage-complete + real E_use/U_GT/U_num/confound_axes +
+    zero-error measurement reaches `CALIBRATED_ABSOLUTE` through the real
+    `_run_c4` gate assembly — the D17 placeholder path is unreachable here."""
+    campaign, subset, candidate = _build_absolute_gate_campaign(tmp_path, monkeypatch, e_use_value=2.0)
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2t_result = per_meter[MeterId.M2_SPECTRAL_TILT.value]
+    assert m2t_result["terminal_status"] == "CALIBRATED_ABSOLUTE", m2t_result
+    assert m2t_result["reason_code"] is None
+    assert m2t_result["selected_candidate_id"] == candidate.candidate_id
+    assert m2t_result["gate_detail"]["passed"] is True
+    # AC8 (D17 closure regression lock): the retired placeholder text must
+    # never appear on a coverage-complete, capacity-satisfied real-gate path.
+    assert "UNDERSPEC-CAL-D17" not in json.dumps(m2t_result)
+
+
+@pytest.mark.slow
+def test_c4_absolute_gate_wiring_fails_honestly_to_diagnostic_only_with_tiny_e_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC8(b): identical clean measurement, but E_use shrunk far below
+    U_GT+U_num, so gate2'/gate_max' fail honestly (§10.2: no threshold
+    relaxation to force a pass) -- `DIAGNOSTIC_ONLY`, not a silent
+    DIAGNOSTIC_ONLY placeholder note."""
+    campaign, subset, candidate = _build_absolute_gate_campaign(
+        tmp_path, monkeypatch, e_use_value=0.0001
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2t_result = per_meter[MeterId.M2_SPECTRAL_TILT.value]
+    assert m2t_result["terminal_status"] == "DIAGNOSTIC_ONLY", m2t_result
+    assert m2t_result["reason_code"] == "OUTPUT_MISSING"
+    assert m2t_result["selected_candidate_id"] == candidate.candidate_id
+    gate_detail = m2t_result["gate_detail"]
+    assert gate_detail["passed"] is False
+    assert any(
+        "gate2" in reason or "gate_max" in reason for reason in gate_detail["failure_reasons"]
+    )
+    assert "UNDERSPEC-CAL-D17" not in json.dumps(m2t_result)
 
 
 def test_c4_primary_all_missing_closes_not_evaluable_despite_usable_boundary(

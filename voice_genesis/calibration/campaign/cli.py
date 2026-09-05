@@ -1979,6 +1979,17 @@ def _run_c4(
     # finding #10: `results` must cover exactly the 7 `vocab.MeterId` values
     # (holdout_stage.run_holdout_stage now enforces this itself, fail-closed).
     results: list[holdout_stage.MeterHoldoutResult] = []
+    # v1.1 §V3.2 (D17 close): the E_use evidence table is loaded lazily, at
+    # most once per `_run_c4` invocation — only the first ABSOLUTE-ceiling
+    # meter actually needs it, and most families here never reach ABSOLUTE
+    # (many tiny test campaigns carry no `e_use_table.json`/`frozen_inputs.
+    # e_use_table_sha256` pin at all). Eager unconditional loading would
+    # append a spurious `E_USE_TABLE_STALE_OR_MUTATED` stop_event and raise
+    # out of `_run_c4` for every such campaign, even when no meter here
+    # needs the table. `holdout_stage.load_e_use_rows()` already appends its
+    # own stop_event + reraises on failure — memoizing here only avoids
+    # repeating that ledger write once per ABSOLUTE meter in this loop.
+    e_use_rows_holder: dict[str, object] = {"rows": None, "error": None}
     for family, meter in _FAMILY_TO_METER.items():
         if meter is MeterId.M4_RESONANCE:
             # M4 always closes DIAGNOSTIC_ONLY regardless of selection
@@ -2295,31 +2306,131 @@ def _run_c4(
                 )
             )
             continue
-        # finding #11: record the claim-scope capping fact for this meter's
-        # selected candidate (§b/§c). The placeholder `ceiling` below stays
-        # DIAGNOSTIC_ONLY regardless — swapping it for the capped ceiling
-        # would misreport an ABSOLUTE claim no real gate ever evaluated
-        # ([UNDERSPEC-CAL-D17]); real gate assembly (out of CLI scope) is
-        # where `evaluate_absolute_meter`/`evaluate_directional_meter`
-        # would receive the capped ceiling directly as their `ceiling` arg.
-        results.append(
-            holdout_stage.MeterHoldoutResult(
-                meter_id=meter.value,
-                terminal_status="DIAGNOSTIC_ONLY",
-                reason_code=None,
-                ceiling=ClaimCeiling.DIAGNOSTIC_ONLY.value,
-                selected_candidate_id=selected_id,
-                gate_detail={
-                    "note": (
-                        "[UNDERSPEC-CAL-D17] full E_use-bound absolute/directional gate "
-                        "assembly from CLI is out of D2 infra scope; holdout_stage "
-                        "evaluate_absolute_meter/evaluate_directional_meter building "
-                        "blocks are exercised directly in tests with real gate wiring."
-                    ),
-                    "claim_scope": claim_scope_detail,
-                },
+        # v1.1 §V3.2 (D17 close): coverage is complete and (for DIRECTIONAL)
+        # the sweep capacity check above passed — assemble and evaluate the
+        # REAL gate for this meter's selected candidate instead of the D17
+        # DIAGNOSTIC_ONLY placeholder. `selected_candidate_obj`/`effective_
+        # ceiling` come from `claim_scope_report()` above (the same
+        # capped-ceiling arbitration D74/D76/D77 already gate on) — the
+        # branch below only decides which real gate family applies; it does
+        # not re-derive the ceiling itself.
+        if selected_candidate_obj is None:
+            # stale/unresolvable selected_id (e.g. a candidate_id that no
+            # longer exists in the registry) — mirrors the record-presence
+            # fallback the coverage checks above already use for this case:
+            # no real gate can be assembled without a resolvable Candidate
+            # (construct/unit/domain, algorithm_family are all needed).
+            results.append(
+                holdout_stage.MeterHoldoutResult(
+                    meter_id=meter.value,
+                    terminal_status=TerminalStatus.NOT_EVALUABLE.value,
+                    reason_code=MissingReason.OUTPUT_NOT_EVALUABLE.value,
+                    ceiling=ClaimCeiling.NONE.value,
+                    selected_candidate_id=selected_id,
+                    gate_detail={
+                        "reason": (
+                            "selected_candidate_id does not resolve to a known Candidate; "
+                            "real gate assembly requires it (construct/unit/domain lookup)"
+                        ),
+                        "claim_scope": claim_scope_detail,
+                    },
+                )
             )
-        )
+        elif effective_ceiling is ClaimCeiling.ABSOLUTE:
+            if e_use_rows_holder["rows"] is None and e_use_rows_holder["error"] is None:
+                try:
+                    e_use_rows_holder["rows"] = holdout_stage.load_e_use_rows(
+                        campaign, invocation_id=invocation_id
+                    )
+                except holdout_stage.StaleEUseTableError as exc:
+                    e_use_rows_holder["error"] = exc
+            if e_use_rows_holder["rows"] is None:
+                results.append(
+                    holdout_stage.MeterHoldoutResult(
+                        meter_id=meter.value,
+                        terminal_status=TerminalStatus.NOT_EVALUABLE.value,
+                        reason_code=MissingReason.INPUT_MISSING.value,
+                        ceiling=ClaimCeiling.NONE.value,
+                        selected_candidate_id=selected_id,
+                        gate_detail={
+                            "reason": (
+                                "[v1.1 §V3.2] E_use evidence table unavailable: "
+                                f"{e_use_rows_holder['error']}"
+                            ),
+                            "claim_scope": claim_scope_detail,
+                        },
+                    )
+                )
+            else:
+                gate_result = holdout_stage.evaluate_absolute_meter_from_campaign(
+                    meter_id=meter.value,
+                    family=family.value,
+                    candidate=selected_candidate_obj,
+                    manifest=campaign.manifest,
+                    row_by_id=row_by_id,
+                    matrix_rows=matrix_rows,
+                    assignment=assignment,
+                    records=records_by_family[family.value],
+                    expected_primary_instances=expected_holdout_instances,
+                    e_use_rows=e_use_rows_holder["rows"],
+                )
+                results.append(
+                    dataclasses.replace(
+                        gate_result,
+                        gate_detail={**dict(gate_result.gate_detail), "claim_scope": claim_scope_detail},
+                    )
+                )
+        elif effective_ceiling is ClaimCeiling.DIRECTIONAL:
+            family_holdout_sweeps = (
+                holdout_sweeps_section.get(family.value)
+                if isinstance(holdout_sweeps_section, Mapping)
+                else None
+            )
+            expected_sweep_member_row_ids = (
+                {sid: list(rids) for sid, rids in family_holdout_sweeps.items()}
+                if isinstance(family_holdout_sweeps, Mapping)
+                else dict(declared_sweeps_by_family_map.get(family.value, {}))
+            )
+            gate_result = holdout_stage.evaluate_directional_meter_from_campaign(
+                meter_id=meter.value,
+                family=family.value,
+                candidate=selected_candidate_obj,
+                manifest=campaign.manifest,
+                row_by_id=row_by_id,
+                matrix_rows=matrix_rows,
+                assignment=assignment,
+                records=records_by_family[family.value],
+                usable_primary_instances=usable_primary_instances,
+                expected_sweep_member_row_ids=expected_sweep_member_row_ids,
+            )
+            results.append(
+                dataclasses.replace(
+                    gate_result,
+                    gate_detail={**dict(gate_result.gate_detail), "claim_scope": claim_scope_detail},
+                )
+            )
+        else:
+            # effective_ceiling is DIAGNOSTIC_ONLY or NONE (e.g. capped by
+            # max_claim_scope, or an INVALID_CIRCULAR/SHARED_MODEL_DIAGNOSTIC
+            # independence tier): no ABSOLUTE/DIRECTIONAL gate applies to
+            # this candidate at all — close honestly as DIAGNOSTIC_ONLY.
+            results.append(
+                holdout_stage.MeterHoldoutResult(
+                    meter_id=meter.value,
+                    terminal_status=TerminalStatus.DIAGNOSTIC_ONLY.value,
+                    reason_code=None,
+                    ceiling=ClaimCeiling.DIAGNOSTIC_ONLY.value,
+                    selected_candidate_id=selected_id,
+                    gate_detail={
+                        "reason": (
+                            "effective_ceiling="
+                            f"{effective_ceiling.value if effective_ceiling is not None else None} "
+                            "-- no ABSOLUTE/DIRECTIONAL gate applies to this candidate"
+                        ),
+                        "claim_scope": claim_scope_detail,
+                    },
+                )
+            )
 
     # M4_RESONANCE (§16-1: always DIAGNOSTIC_ONLY, selection not gate-tested).
     results.append(
@@ -2347,34 +2458,21 @@ def _run_c4(
             )
         )
 
-    # M6_IDENTITY (finding #10): evaluated only when every claim-critical
-    # meter (vocab.CLAIM_CRITICAL_SET) reached ABSOLUTE ceiling; otherwise
-    # NOT_EVALUABLE. Under the current D2 CLI scope the per-family branch
-    # above always assigns DIAGNOSTIC_ONLY (never ABSOLUTE — see the D17
-    # note), so this correctly resolves to NOT_EVALUABLE today; the check
-    # itself is real (not hardcoded) so it lights up once real gate
-    # assembly lands upstream.
+    # M6_IDENTITY (finding #10, v1.1 §V3.2): evaluated only when every
+    # claim-critical meter (vocab.CLAIM_CRITICAL_SET) reached ABSOLUTE
+    # ceiling; otherwise NOT_EVALUABLE. The precondition check itself is
+    # unchanged (real, not hardcoded) — only the "precondition satisfied"
+    # branch is replaced: instead of the D17 DIAGNOSTIC_ONLY placeholder, it
+    # now calls `holdout_stage.evaluate_m6_identity()`, a real (if currently
+    # boundary-honest — see that function's docstring for the scope gap)
+    # evaluation.
     critical_ceilings = {r.meter_id: r.ceiling for r in results}
     all_critical_absolute = all(
         critical_ceilings.get(m.value) == ClaimCeiling.ABSOLUTE.value for m in CLAIM_CRITICAL_SET
     )
     if all_critical_absolute:
         results.append(
-            holdout_stage.MeterHoldoutResult(
-                meter_id=MeterId.M6_IDENTITY.value,
-                terminal_status=TerminalStatus.DIAGNOSTIC_ONLY.value,
-                reason_code=None,
-                ceiling=ClaimCeiling.DIAGNOSTIC_ONLY.value,
-                selected_candidate_id=None,
-                gate_detail={
-                    "note": (
-                        "[UNDERSPEC-CAL-D17] full M6 identity-preservation gate "
-                        "assembly is out of D2 infra scope; all claim-critical "
-                        "meters reached ABSOLUTE ceiling (necessary precondition "
-                        "satisfied)."
-                    )
-                },
-            )
+            holdout_stage.evaluate_m6_identity(manifest=campaign.manifest, matrix_rows=matrix_rows)
         )
     else:
         results.append(
