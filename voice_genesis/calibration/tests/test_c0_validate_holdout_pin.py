@@ -197,6 +197,104 @@ def test_holdout_membership_passes_when_all_pinned_rows_are_holdout() -> None:
     assert violations == ()
 
 
+# ---------------------------------------------------------------------------
+# R10 対応（PR #346 第 10 巡 P1 採用、2026-09-05）: 縮退カウントの検証側
+# 完全再導出。修正前は「宣言された pin 数が degradation_floor<=count<k_hold
+# の範囲に収まっていれば、その宣言値をそのまま override として段 1 のみ
+# 再導出照合する」ため、独立に構築/改竄した manifest が縮退を自称するだけで
+# holdout sweep 宣言を水減らしできた。修正後は宣言値を一切入力にせず、公称
+# k_hold から始まる段 1+段 2 の縮退ループ（`splitter.pin_and_realize_
+# holdout()` — `armed_freeze()` と同一関数）を検証側で完全再実行する。
+# ---------------------------------------------------------------------------
+
+
+def test_holdout_sweeps_fabricated_degradation_within_allowed_range_is_rejected() -> None:
+    """(a) 公称 k_hold で段 2 が実際には成功する（縮退不要）canonical matrix
+    に対し、`degradation_floor <= 宣言数 < k_hold` の許容範囲に収まる
+    「もっともらしい」水減らし宣言は fail-closed で検出される。
+
+    FORMANT_GT は k_hold=3・degradation_floor=2（max_field_cardinality=2 >
+    1 の claim 被覆 family）なので、宣言 pin 数=2 はちょうどこの範囲に
+    収まる——修正前はこの一点だけで宣言値をそのまま `k_hold_overrides` に
+    採用し、段 1 のみを k=2 で再導出照合していたため、宣言が「本物の 3
+    sweep 選抜の先頭 2 件のみを自称した」偽物であっても一致してしまい得た。
+    修正後は宣言を無視して公称 k_hold=3 から段 1+段 2 を完全再実行するため
+    （canonical matrix では FORMANT_GT の段 2 は常に k=3 で成功し縮退は
+    一切発生しない）、再導出結果は 3 sweep のまま——宣言の 2 sweep とは
+    必ず食い違う。"""
+    tampered = {family: dict(sweeps) for family, sweeps in _PINNED.items()}
+    formant = tampered["FORMANT_GT"]
+    assert len(formant) == 3
+    dropped_sweep_id = sorted(formant)[-1]
+    tampered["FORMANT_GT"] = {
+        sid: members for sid, members in formant.items() if sid != dropped_sweep_id
+    }
+    assert len(tampered["FORMANT_GT"]) == 2  # degradation_floor(2) <= 2 < k_hold(3)
+
+    manifest = _holdout_sweeps_manifest(tampered)
+    violations = c0_validate._check_holdout_sweeps_declaration_match(manifest, _SECRET)
+    assert violations, "fabricated degradation must be rejected even within the allowed range"
+    assert all(v.violation == "holdout_pin_declaration_mismatch" for v in violations)
+    assert any(v.family == "FORMANT_GT" for v in violations)
+
+
+def test_holdout_sweeps_genuine_partial_degradation_passes_with_secret(monkeypatch) -> None:
+    """(b) 公称 k_hold で段 2 が本当に `CoverageRepairInfeasible` に陥り、
+    k=1 への縮退で初めて成功する合成 matrix（対照ケース）は pass する。
+
+    TILT_GT（非 claim-coverage family、degradation_floor=0）の TRUTH_CORE
+    全 30 行 + confound 1 行 + boundary 2 行だけを取り出した matrix:
+    非 pin の movable 行が極端に少ないため、公称 k_hold=2（pin 行 10）は
+    実際の HOLDOUT 枠を超過し修復不能——k=1（pin 行 5）まで縮退して初めて
+    成功する（決定論的に 14 種のダミー secret 全てで再現済み）。宣言が
+    この「本当に必要だった」縮退の帰結と厳密一致するため、公称 k_hold
+    からの正規縮退ループ再実行と一致し pass する。"""
+    from voice_genesis.calibration.splitter import (
+        STRATUM_FACTOR_NAMES,
+        pin_and_realize_holdout,
+        row_inputs_for_split,
+    )
+
+    truth_core = [
+        mr for mr in _ROWS if mr.row.family == "TILT_GT" and mr.row.block == "TRUTH_CORE"
+    ]
+    confound = [mr for mr in _ROWS if mr.row.family == "TILT_GT" and mr.row.block == "CONFOUND"]
+    boundary = [mr for mr in _ROWS if mr.row.family == "TILT_GT" and mr.row.block == "BOUNDARY"]
+    synth = tuple(truth_core) + tuple(confound[:1]) + tuple(boundary[:2])
+
+    row_inputs = row_inputs_for_split(synth, STRATUM_FACTOR_NAMES)
+    holdout_sweeps, _realized = pin_and_realize_holdout(
+        synth, row_inputs, _SECRET, STRATUM_FACTOR_NAMES
+    )
+    assert len(holdout_sweeps["TILT_GT"]) == 1  # 公称 k_hold=2 は infeasible、k=1 へ縮退
+
+    monkeypatch.setattr(c0_validate, "build_matrix", lambda: synth)
+    manifest = _holdout_sweeps_manifest(holdout_sweeps)
+    violations = c0_validate._check_holdout_sweeps_declaration_match(manifest, _SECRET)
+    assert violations == ()
+
+
+def test_holdout_sweeps_declaration_fails_closed_when_canonical_rederivation_raises(
+    monkeypatch,
+) -> None:
+    """(c) 公称 k_hold からの正規縮退ループそのものが再実行できない
+    （構造的異常・matrix 変更等）場合は、「検証不能」を「検証成功」として
+    通さず、宣言のある全 family を無条件で fail-closed mismatch 扱いに
+    する。"""
+    from voice_genesis.calibration.fixtures.matrix import HoldoutPinDegradationExhausted
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise HoldoutPinDegradationExhausted("FORMANT_GT", floor=2, attempted_k=2)
+
+    monkeypatch.setattr(c0_validate, "pin_and_realize_holdout", _boom)
+    manifest = _holdout_sweeps_manifest(_PINNED)
+    violations = c0_validate._check_holdout_sweeps_declaration_match(manifest, _SECRET)
+    assert violations
+    assert all(v.violation == "holdout_pin_declaration_mismatch" for v in violations)
+    declared_families = {fam for fam, sweeps in _PINNED.items() if sweeps}
+    assert {v.family for v in violations} == declared_families
+
+
 def test_holdout_membership_detects_pinned_row_not_in_holdout() -> None:
     """§V2.3 fail-closed: `holdout_sweeps` の member 行が 1 行でも realized
     split 上で HOLDOUT でなければ検出する。"""

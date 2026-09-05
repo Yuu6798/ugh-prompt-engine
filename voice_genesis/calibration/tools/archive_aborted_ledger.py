@@ -30,11 +30,26 @@ R9 fix（PR #346 round 9、`[UNDERSPEC-CAL-D79]` 系）: 上記は従来「呼�
 対象を選ばなかった。誤って closed campaign に対して呼ばれた場合の
 fail-closed を実装で保証するため、`ensure_archived()` は原本
 （`ledger.jsonl`。存在する場合は常にこの分岐が最初に走る）または既に検証済みの
-公開物（`ledger.jsonl.gz`。原本が既に無い場合のみ）のどちらかに
-`kind == "campaign_closed"` の event を見つけた時点で、**一切の書き込み・
-削除を行う前に** `ArchiveError` を送出する（後者の分岐で原本が既に無い場合は、
-検証済み gz から原本を復元してから停止する — closed campaign の「凍結
-ディレクトリは不変のまま」という前提を能動的に回復する）。
+公開物（`ledger.jsonl.gz`。原本が既に無い、または壊れている場合のみ）の
+どちらかに `kind == "campaign_closed"` の event を見つけた時点で、**一切の
+書き込み・削除を行う前に** `ArchiveError` を送出する（後者の分岐で原本が
+既に無い/壊れている場合は、検証済み gz から原本を復元してから停止する —
+closed campaign の「凍結ディレクトリは不変のまま」という前提を能動的に
+回復する）。
+
+R10 fix（PR #346 round 10、Codex P1 採用）: 上記の復元は従来
+`Path.write_bytes()` の直書きだったため、復元処理自体が kill されると
+truncated な `ledger.jsonl` が残り得た——次回起動時は「原本が存在する」
+ため復元分岐に入らず、truncated な原本がそのまま正典として扱われる詰み
+状態になっていた。復元も (1) staging ファイル（`ledger.jsonl.restoring`）
+へ書く → (2) fsync → (3) `os.rename` で原本パスへ公開、の 3 段で原子化した
+（既存の gz/sidecar staging と同じ規約）。回復規則も追補: 起動時に
+`ledger.jsonl.restoring` staging 残骸があれば無条件で破棄してからやり直す。
+さらに、gz+sidecar が検証を通り closed event を含む場合、原本が**存在は
+するが**検証済み gz の sha256 と一致しない（＝上記の truncated 復元残骸、
+または他要因での破損）ケースも「復元すべき原本欠落」と同一に扱い、
+staging 経由で再復元する（従来は「原本が存在する」の一点のみで復元をスキップ
+しており、この壊れた原本ケースを回復できなかった）。
 """
 
 from __future__ import annotations
@@ -59,6 +74,10 @@ SIDECAR_FILENAME = "ledger.jsonl.sha256"
 #: ように、`tempfile` のランダムサフィックスは使わない）。
 _STAGING_GZ_FILENAME = "ledger.jsonl.gz.archiving"
 _STAGING_SIDECAR_FILENAME = "ledger.jsonl.sha256.archiving"
+#: R10 fix: 検証済み gz からの原本復元（`_restore_original_from_verified_gz()`）
+#: も同じ「同一ディレクトリ内固定名 staging → fsync → rename」規約で原子化
+#: する（上記 2 つと同型）。
+_STAGING_LEDGER_FILENAME = "ledger.jsonl.restoring"
 
 #: gzip の非決定メタデータ（mtime・元ファイル名）を固定し、同一入力から
 #: 常に同一バイト列の `.gz` を作る（再現性確保。§V4 の「機械検証できる」を
@@ -237,20 +256,40 @@ def _ledger_bytes_contain_campaign_closed(data: bytes) -> bool:
 
 
 def _restore_original_from_verified_gz(
-    ledger_path: Path, gz_path: Path, campaign_dir: Path
+    ledger_path: Path,
+    gz_path: Path,
+    campaign_dir: Path,
+    staging_ledger_path: Path,
+    *,
+    decompressed: bytes | None = None,
 ) -> None:
-    """R9 fix: `ledger_path` no longer exists (a prior, already-completed
-    archive — from before this closed-campaign guard existed, or a manual
-    deletion) but the verified public `gz_path` turns out to hold a
-    `campaign_closed` ledger. Restore the original from the gz's own
-    decompressed bytes (already sidecar-sha256-verified by the caller) so
-    the directory returns to having its canonical, unarchived original
-    present — the closed-campaign invariant this module must never violate
-    — before the caller raises `ArchiveError` and stops.
+    """R9 fix: `ledger_path` is missing or corrupt (a prior, already-completed
+    archive — from before this closed-campaign guard existed, a manual
+    deletion, or R10's truncated-restore-residue case below) but the
+    verified public `gz_path` turns out to hold a `campaign_closed` ledger.
+    Restore the original from the gz's own decompressed bytes (already
+    sidecar-sha256-verified by the caller) so the directory returns to
+    having its canonical, unarchived original present — the closed-campaign
+    invariant this module must never violate — before the caller raises
+    `ArchiveError` and stops.
+
+    R10 fix (PR #346 round 10, Codex P1 採用): the restore itself must be
+    atomic — a prior direct `Path.write_bytes(ledger_path, ...)` could be
+    killed mid-write and leave a truncated `ledger.jsonl` in place, which
+    the top-of-function guard would then treat as "the original exists" on
+    the next run and refuse to restore further (a stuck state requiring
+    manual deletion). This now follows the same 3-step protocol as the
+    gz/sidecar staging above: (1) write to a same-directory staging path,
+    (2) fsync the staging file and the directory, (3) `os.rename()` onto
+    `ledger_path` (atomic within the same filesystem) and fsync the
+    directory again so the rename itself is durable.
     """
-    decompressed = gzip.decompress(gz_path.read_bytes())
-    ledger_path.write_bytes(decompressed)
-    _fsync_file(ledger_path)
+    if decompressed is None:
+        decompressed = gzip.decompress(gz_path.read_bytes())
+    staging_ledger_path.write_bytes(decompressed)
+    _fsync_file(staging_ledger_path)
+    _fsync_dir(campaign_dir)
+    os.rename(staging_ledger_path, ledger_path)
     _fsync_dir(campaign_dir)
 
 
@@ -266,6 +305,17 @@ def ensure_archived(campaign_dir: Path) -> ArchiveResult:
     sidecar_path = campaign_dir / SIDECAR_FILENAME
     staging_gz_path = campaign_dir / _STAGING_GZ_FILENAME
     staging_sidecar_path = campaign_dir / _STAGING_SIDECAR_FILENAME
+    staging_ledger_path = campaign_dir / _STAGING_LEDGER_FILENAME
+
+    # R10 fix: discard any leftover restore-staging residue unconditionally,
+    # first — a prior `_restore_original_from_verified_gz()` call that was
+    # interrupted between writing the staging file and the `os.rename()`
+    # leaves this behind. It is never itself read for any decision below
+    # (the restore always regenerates it from the verified gz), so
+    # discarding it here is a pure no-op when absent and a safe "redo from
+    # scratch" when present (same staging convention as the gz/sidecar
+    # archiving staging discarded further below).
+    _discard_if_exists(staging_ledger_path)
 
     # R9 fix (PR #346 round 9 採用): a CLOSED campaign's ledger is the
     # immutable canonical record (module docstring) and must never be
@@ -301,22 +351,46 @@ def ensure_archived(campaign_dir: Path) -> ArchiveResult:
             _discard_if_exists(sidecar_path)
         else:
             # R9 fix: defense-in-depth against a verified public gz/sidecar
-            # pair whose ledger is actually a CLOSED campaign's. Only
-            # reachable here when `ledger_path` no longer exists — the
-            # top-of-function guard above already caught every case where
-            # it does. `gz_path`'s bytes are already sidecar-sha256- and
+            # pair whose ledger is actually a CLOSED campaign's. Reachable
+            # both when `ledger_path` no longer exists (the top-of-function
+            # guard above already caught every case where an intact original
+            # is present) and — R10 fix — when it exists but is corrupt
+            # (truncated restore residue from a prior killed
+            # `_restore_original_from_verified_gz()` run, or other damage):
+            # such a stale original would otherwise silently pass as "the
+            # original exists" forever, permanently blocking recovery.
+            # `gz_path`'s bytes are already sidecar-sha256- and
             # chain-verified by `_verify_gz_sidecar_pair()` above, so
             # decompressing them again here is safe to trust.
-            if _ledger_bytes_contain_campaign_closed(gzip.decompress(gz_path.read_bytes())):
-                restored = not ledger_path.is_file()
+            decompressed_gz = gzip.decompress(gz_path.read_bytes())
+            if _ledger_bytes_contain_campaign_closed(decompressed_gz):
+                original_missing = not ledger_path.is_file()
+                original_corrupt = not original_missing and (
+                    _sha256_bytes(ledger_path.read_bytes()) != published_sha
+                )
+                restored = original_missing or original_corrupt
                 if restored:
-                    _restore_original_from_verified_gz(ledger_path, gz_path, campaign_dir)
+                    _restore_original_from_verified_gz(
+                        ledger_path,
+                        gz_path,
+                        campaign_dir,
+                        staging_ledger_path,
+                        decompressed=decompressed_gz,
+                    )
+                restore_note = ""
+                if original_corrupt:
+                    restore_note = (
+                        " (original was present but did not match the verified "
+                        "archive's sha256 — treated as broken restore residue and "
+                        "replaced from the verified archive)"
+                    )
+                elif restored:
+                    restore_note = " (original restored from the verified archive)"
                 raise ArchiveError(
                     f"{campaign_dir}: archived ledger.jsonl.gz contains a "
                     "campaign_closed event — closed campaigns are immutable "
                     "canonical records and must never be archived; refusing "
-                    "to remove anything further"
-                    + (" (original restored from the verified archive)" if restored else "")
+                    "to remove anything further" + restore_note
                 )
             # 公開物は検証済み。staging の残骸と、残存していれば原本を除去
             # して完了とする（原本を消す前に必ずここで検証を通している）。

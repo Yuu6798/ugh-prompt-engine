@@ -39,6 +39,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from voice_genesis.calibration.canonical import manifest_sha
+from voice_genesis.calibration.fixtures.matrix import (
+    HoldoutPinDegradationExhausted,
+    MatrixRow,
+    holdout_pin_params_by_family,
+    pin_holdout_sweeps_by_family,
+)
 from voice_genesis.calibration.vocab import Split
 
 _COVERAGE_AXES: tuple[str, ...] = ("truth_level", "generator_impl", "boundary_class")
@@ -661,3 +667,133 @@ def verify_split(
         and recomputed.swaps == realized.swaps
         and recomputed.realized_sha == realized.realized_sha
     )
+
+
+# ---------------------------------------------------------------------------
+# §V2.2 holdout sweep pin: 段 1 (`fixtures.matrix.pin_holdout_sweeps_by_
+# family()`) + 段 2 (`realize_split()`) の縮退リトライ共有入口。
+#
+# R10 対応（Codex 第 10 巡 P1 採用、2026-09-05）: 元々 `c0_freeze.py` にのみ
+# 存在した `STRATUM_FACTOR_NAMES` / `_row_inputs_for_split()` /
+# `_pin_and_realize_holdout()` をここへ移設し公開関数化した。
+# `c0_validate._check_holdout_sweeps_declaration_match()` が secret 依存
+# 検証で「公称 k_hold から始まる同一の縮退ループ」を検証側で完全再実行する
+# ための共有入口が必要になったが、`c0_freeze.py` は `c0_validate` を
+# import しているため（生成 → 検証呼び出しの都合上）逆方向の import は
+# できない。両者が依存できる中立モジュールとして `splitter.py`
+# （`fixtures.matrix` にも `c0_freeze`/`c0_validate` にも依存されない側）
+# へ実装を寄せることで、生成と検証が**同一関数**を呼ぶ構造にした（二重
+# 実装の分岐を作らない）。`c0_freeze.py` は後方互換のため
+# `pin_and_realize_holdout as _pin_and_realize_holdout` /
+# `row_inputs_for_split as _row_inputs_for_split` で再輸出する
+# （既存テストの import 元を変更しない）。
+# ---------------------------------------------------------------------------
+
+#: `realize_split()` の stratum 化因子。[UNDERSPEC-CAL-D08] 設計正本 §7 は
+#: 「stratum 因子を C0 で明示列挙」とのみ述べ具体軸は規定しないため、
+#: `_COVERAGE_AXES` のうち row 単位で常に定義される 2 軸（`truth_level`/
+#: `boundary_class`）を採用した（`generator_impl` は FORMANT_GT 以外では
+#: 常に `None` — 定数軸を stratum に含めても意味が薄いため除外）。
+STRATUM_FACTOR_NAMES: tuple[str, ...] = ("truth_level", "boundary_class")
+
+
+def row_inputs_for_split(
+    matrix_rows: Sequence[MatrixRow],
+    stratum_factor_names: Sequence[str] = STRATUM_FACTOR_NAMES,
+) -> list[RowInput]:
+    """`provenance.Ledger.check_leakage` の `canonical_split_inputs` 構築と
+    同一の規約（`truth_level`→`row.block`、`boundary_class`/`domain`→
+    `matrix_row.domain.value`）で `RowInput` を組み立てる。D2 の leakage 検査
+    が独立に再構築する canonical row と一致しなければならないため。"""
+    out: list[RowInput] = []
+    for mrow in matrix_rows:
+        fr = mrow.row
+        stratum: dict[str, object] = {}
+        for name in stratum_factor_names:
+            if name == "truth_level":
+                stratum[name] = fr.block
+            elif name in ("boundary_class", "domain"):
+                stratum[name] = mrow.domain.value
+            elif name == "generator_impl":
+                stratum[name] = fr.generator_impl
+            else:
+                stratum[name] = getattr(fr, name, None)
+        out.append(
+            RowInput(
+                row_id=mrow.row_id,
+                family=fr.family,
+                stratum=stratum,
+                truth_level=fr.block,
+                generator_impl=fr.generator_impl,
+                boundary_class=mrow.domain.value,
+            )
+        )
+    return out
+
+
+def pin_and_realize_holdout(
+    matrix_rows: Sequence[MatrixRow],
+    row_inputs: Sequence[RowInput],
+    split_secret: bytes,
+    stratum_factor_names: Sequence[str],
+) -> tuple[dict[str, dict[str, tuple[str, ...]]], RealizedSplitMap]:
+    """§V2.2 段 1 + 段 2 実行部（縮退規則、2026-09-04 追補。2026-09-05 に
+    `c0_freeze.py` から本モジュールへ移設・公開化 — モジュール docstring
+    直上の節を参照）。
+
+    `pin_holdout_sweeps_by_family()`（段 1）→ `realize_split()`（段 2）の順に
+    試み、段 2 が `CoverageRepairInfeasible` で落ちた場合（pin 選抜の結果
+    として family 合計補正/coverage 修復が不能になった場合）は、当該
+    family の `k_hold` を 1 ずつ決定論的に下げて段 1 から再選抜し、段 2 を
+    再試行する。縮退の下限は family の `degradation_floor`
+    （`holdout_pin_params_by_family()` 参照 — claim 被覆 family
+    （max_field_cardinality > 1）は max_field_cardinality、それ以外は 0）で、
+    これを割り込む縮退が必要になった場合は `HoldoutPinDegradationExhausted`
+    を送出する（fail-closed、未捕捉のまま呼び出し元の外へ漏らさない —
+    `c0_freeze.armed_freeze()` は捕捉して `FreezeOutcome.VALIDATION_BLOCKED`
+    へ変換し、`c0_validate._check_holdout_sweeps_declaration_match()` は
+    捕捉して宣言のある全 family を fail-closed mismatch 扱いにする）。
+
+    `HoldoutPinInfeasible`（cap>=1 だが被覆要件が cap を超える構造的欠陥）は
+    縮退対象ではなくそのまま呼び出し側へ伝播する（従来どおり）。
+
+    実現された k は戻り値の `holdout_sweeps` の宣言数（宣言 sweep 数）
+    としてそのまま表れる（「宣言数 = 実現 k」）——本関数はパラメータに
+    一切「宣言値」を受け取らない（`matrix_rows`/`row_inputs`/
+    `split_secret`/`stratum_factor_names` のみが入力）——`c0_freeze.
+    armed_freeze()` の生成呼び出しと `c0_validate.
+    _check_holdout_sweeps_declaration_match()` の検証呼び出しは、常に
+    公称 `k_hold` からこのループを起動する同一の呼び出し規約を共有する。
+    """
+    params = holdout_pin_params_by_family(matrix_rows)
+    k_hold_overrides: dict[str, int] = {}
+    while True:
+        holdout_sweeps = pin_holdout_sweeps_by_family(
+            matrix_rows, split_secret, k_hold_overrides=k_hold_overrides or None
+        )
+        pinned_holdout_row_ids = frozenset(
+            rid
+            for family_sweeps in holdout_sweeps.values()
+            for member_row_ids in family_sweeps.values()
+            for rid in member_row_ids
+        )
+        try:
+            realized = realize_split(
+                row_inputs,
+                split_secret,
+                stratum_factor_names,
+                pinned_holdout_row_ids=pinned_holdout_row_ids,
+            )
+        except CoverageRepairInfeasible as exc:
+            fam = exc.family
+            if fam is None or fam not in params:
+                raise
+            current_k = k_hold_overrides.get(fam, params[fam].k_hold)
+            floor = params[fam].degradation_floor
+            if current_k <= floor:
+                raise HoldoutPinDegradationExhausted(
+                    fam, floor=floor, attempted_k=current_k
+                ) from exc
+            k_hold_overrides[fam] = current_k - 1
+            continue
+        return holdout_sweeps, realized

@@ -60,24 +60,22 @@ from voice_genesis.calibration.fixtures.controls import ControlClass
 from voice_genesis.calibration.fixtures.matrix import (
     HoldoutPinDegradationExhausted,
     HoldoutPinInfeasible,
-    MatrixRow,
     _negative_applicable,
     build_matrix,
     claim_relevant_fields_by_family,
     declared_sweeps_by_family,
-    holdout_pin_params_by_family,
-    pin_holdout_sweeps_by_family,
 )
 from voice_genesis.calibration.fixtures.matrix import build_matrix as _canonical_build_matrix
 from voice_genesis.calibration.provenance import Ledger
 from voice_genesis.calibration.splitter import (
-    CoverageRepairInfeasible,
+    STRATUM_FACTOR_NAMES,
     RealizedSplitMap,
     RowInput,
     SwapRecord,
-    realize_split,
     verify_split,
 )
+from voice_genesis.calibration.splitter import pin_and_realize_holdout as _pin_and_realize_holdout
+from voice_genesis.calibration.splitter import row_inputs_for_split as _row_inputs_for_split
 from voice_genesis.calibration.vocab import Split
 
 #: `c0_freeze.py` から 2 階層上が repo root（`voice_genesis/calibration/c0_freeze.py`）。
@@ -858,106 +856,18 @@ def dry_run(
     )
 
 
-#: `splitter.realize_split` の stratum 化因子。[UNDERSPEC-CAL-D08] 設計正本
-#: §7 は「stratum 因子を C0 で明示列挙」とのみ述べ具体軸は規定しないため、
-#: `splitter._COVERAGE_AXES` のうち row 単位で常に定義される 2 軸
-#: （`truth_level`/`boundary_class`）を採用した（`generator_impl` は
-#: FORMANT_GT 以外では常に `None` — 定数軸を stratum に含めても意味が薄い
-#: ため除外）。
-STRATUM_FACTOR_NAMES: tuple[str, ...] = ("truth_level", "boundary_class")
-
-
-def _row_inputs_for_split(
-    matrix_rows: Sequence[MatrixRow], stratum_factor_names: Sequence[str]
-) -> list[RowInput]:
-    """`provenance.Ledger.check_leakage` の `canonical_split_inputs` 構築と
-    同一の規約（`truth_level`→`row.block`、`boundary_class`/`domain`→
-    `matrix_row.domain.value`）で `RowInput` を組み立てる。D2 の leakage 検査
-    が独立に再構築する canonical row と一致しなければならないため。"""
-    out: list[RowInput] = []
-    for mrow in matrix_rows:
-        fr = mrow.row
-        stratum: dict[str, object] = {}
-        for name in stratum_factor_names:
-            if name == "truth_level":
-                stratum[name] = fr.block
-            elif name in ("boundary_class", "domain"):
-                stratum[name] = mrow.domain.value
-            elif name == "generator_impl":
-                stratum[name] = fr.generator_impl
-            else:
-                stratum[name] = getattr(fr, name, None)
-        out.append(
-            RowInput(
-                row_id=mrow.row_id,
-                family=fr.family,
-                stratum=stratum,
-                truth_level=fr.block,
-                generator_impl=fr.generator_impl,
-                boundary_class=mrow.domain.value,
-            )
-        )
-    return out
-
-
-def _pin_and_realize_holdout(
-    matrix_rows: Sequence[MatrixRow],
-    row_inputs: Sequence[RowInput],
-    split_secret: bytes,
-    stratum_factor_names: Sequence[str],
-) -> tuple[dict[str, dict[str, tuple[str, ...]]], RealizedSplitMap]:
-    """§V2.2 段 1 + 段 2 実行部（縮退規則、2026-09-04 追補）。
-
-    `pin_holdout_sweeps_by_family()`（段 1）→ `realize_split()`（段 2）の順に
-    試み、段 2 が `CoverageRepairInfeasible` で落ちた場合（pin 選抜の結果
-    として family 合計補正/coverage 修復が不能になった場合）は、当該
-    family の `k_hold` を 1 ずつ決定論的に下げて段 1 から再選抜し、段 2 を
-    再試行する。縮退の下限は family の `degradation_floor`
-    （`holdout_pin_params_by_family()` 参照 — claim 被覆 family
-    （max_field_cardinality > 1）は max_field_cardinality、それ以外は 0）で、
-    これを割り込む縮退が必要になった場合は `HoldoutPinDegradationExhausted`
-    を送出する（fail-closed、未捕捉のまま `armed_freeze()` の外へ漏らさない
-    — 呼び出し側が捕捉して `FreezeOutcome.VALIDATION_BLOCKED` へ変換する）。
-
-    `HoldoutPinInfeasible`（cap>=1 だが被覆要件が cap を超える構造的欠陥）は
-    縮退対象ではなくそのまま呼び出し側へ伝播する（従来どおり）。
-
-    実現された k は戻り値の `holdout_sweeps` の宣言数（宣言 sweep 数）
-    としてそのまま表れる（「宣言数 = 実現 k」）——`c0_validate.
-    _check_holdout_sweeps_declaration_match()` が同じ規約で再導出照合する。
-    """
-    params = holdout_pin_params_by_family(matrix_rows)
-    k_hold_overrides: dict[str, int] = {}
-    while True:
-        holdout_sweeps = pin_holdout_sweeps_by_family(
-            matrix_rows, split_secret, k_hold_overrides=k_hold_overrides or None
-        )
-        pinned_holdout_row_ids = frozenset(
-            rid
-            for family_sweeps in holdout_sweeps.values()
-            for member_row_ids in family_sweeps.values()
-            for rid in member_row_ids
-        )
-        try:
-            realized = realize_split(
-                row_inputs,
-                split_secret,
-                stratum_factor_names,
-                pinned_holdout_row_ids=pinned_holdout_row_ids,
-            )
-        except CoverageRepairInfeasible as exc:
-            fam = exc.family
-            if fam is None or fam not in params:
-                raise
-            current_k = k_hold_overrides.get(fam, params[fam].k_hold)
-            floor = params[fam].degradation_floor
-            if current_k <= floor:
-                raise HoldoutPinDegradationExhausted(
-                    fam, floor=floor, attempted_k=current_k
-                ) from exc
-            k_hold_overrides[fam] = current_k - 1
-            continue
-        return holdout_sweeps, realized
+#: R10 対応（2026-09-05）: `STRATUM_FACTOR_NAMES` / `_row_inputs_for_split()`
+#: / `_pin_and_realize_holdout()` は `splitter.py` へ移設・公開化した
+#: （`splitter.STRATUM_FACTOR_NAMES` / `splitter.row_inputs_for_split()` /
+#: `splitter.pin_and_realize_holdout()`。モジュール先頭の import で同一
+#: オブジェクトをこの名前空間へ再輸出しているため、本モジュールおよび
+#: 既存テストからの参照はそのまま動く）。`c0_validate.
+#: _check_holdout_sweeps_declaration_match()` が secret 依存検証で「公称
+#: k_hold から始まる同一の縮退ループ」を検証側で完全再実行するための
+#: 共有入口が必要になったが、`c0_freeze.py` は `c0_validate` を import する
+#: ため逆方向の import ができず、両者が依存できる `splitter.py` へ実装を
+#: 寄せた（生成と検証が二重実装に分岐しない構造）。詳細は `splitter.py`
+#: の該当節 docstring を参照。
 
 
 def _realized_split_to_dict(realized: RealizedSplitMap) -> dict[str, object]:

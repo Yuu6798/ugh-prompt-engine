@@ -154,11 +154,12 @@ from . import approvals, streams, vocab
 from .candidates import registry as candidate_registry
 from .fixtures import axes as fixture_axes
 from .fixtures.matrix import (
+    HoldoutPinDegradationExhausted,
+    HoldoutPinInfeasible,
     build_matrix,
     claim_relevant_fields_by_family,
     declared_sweeps_by_family,
     holdout_pin_params_by_family,
-    pin_holdout_sweeps_by_family,
     truth_identity_for_row,
 )
 #: §V2.2 縮退規則（2026-09-04 追補）: `c0_freeze._fixture_specs()` は
@@ -178,6 +179,16 @@ from .fixtures.matrix import (
 #: 差し替え可能な参照を使うため、対応関係が一致する。
 from .fixtures.matrix import build_matrix as _canonical_build_matrix
 from .gates import MIN_RESOLVABLE_PAIRS_PER_SWEEP
+#: R10 対応（2026-09-05）: `armed_freeze()` が実際に holdout sweep を
+#: pin/split するのと**同一の**縮退ループ入口（`splitter.
+#: pin_and_realize_holdout()` — 段 1 `pin_holdout_sweeps_by_family()` +
+#: 段 2 `splitter.realize_split()` の統合リトライ本体）を検証側から
+#: 呼ぶための import。`c0_freeze.py` は `c0_validate` を import するため
+#: 逆方向の import はできず、両者が依存できる中立モジュール `splitter.py`
+#: から取る（生成と検証が二重実装に分岐しない構造 — 詳細は
+#: `splitter.py` の該当節 docstring、および
+#: `_check_holdout_sweeps_declaration_match()` の docstring を参照）。
+from .splitter import STRATUM_FACTOR_NAMES, pin_and_realize_holdout, row_inputs_for_split
 
 # ---------------------------------------------------------------------------
 # 二層キー語彙（設計正本 §3.1 / §3.2 の機械可読な写像）
@@ -1704,27 +1715,50 @@ def _check_holdout_sweeps_declaration_match(
     （`fixtures.matrix.pin_holdout_sweeps_by_family()` が
     HMAC(split_secret, ...) で選抜する）ため、secret 非依存の
     `declared_sweeps` とは異なり、本関数は `split_secret` が渡された場合に
-    限り完全再導出照合を行う。`split_secret=None`（`dry_run()` — secret が
-    まだ存在しない、または `holdout_sweeps` を持たない v1.1 以前の manifest
-    を読む場合）では、secret 非依存の構造検査のみ行う: 宣言 pin 数が
-    `holdout_pin_params_by_family()` の `k_hold` と一致し、各宣言 sweep_id が
-    `declared_sweeps_by_family()` に実在しその member row_id が完全一致する
-    こと。secret 依存の「どの sweep が選ばれたか」まではこの経路では検査
-    できない。
+    限り完全再導出照合を行う。
 
-    §V2.2 縮退規則（2026-09-04 追補）: `c0_freeze._pin_and_realize_holdout()`
-    が段 2 修復不能により family の k_hold を nominal 値から縮退させている
-    ことがある（「実現された k は宣言数として自動的に記録される」——宣言数
-    = 実現 k）。本関数は `split_secret` がある場合、家族ごとの宣言 pin 数
-    （`len(actual)`）が nominal `k_hold` と異なり、かつ縮退規則が許す範囲
-    （`degradation_floor <= 宣言数 < k_hold`、pin_exempt family は除く）に
-    収まっているときに限り、その宣言数を `k_hold_overrides` として
-    `pin_holdout_sweeps_by_family()` の再導出に渡す——`_pin_and_realize_
-    holdout()` が実際に使ったのと同一の縮退規則・同一の入口（
-    `pin_holdout_sweeps_by_family()`）で再選抜するため、縮退が正当な場合は
-    再導出結果が宣言と厳密一致する。範囲外の宣言数（縮退の必要なく水増し・
-    水減らしされた偽の宣言）は nominal `k_hold` のまま再導出するため、
-    以降の per-sweep_id 照合で確実に不一致として検出される。
+    R10 対応（Codex 第 10 巡 P1 採用、2026-09-05）: 修正前は、宣言された
+    pin 数が `degradation_floor <= 宣言数 < k_hold` の範囲に収まってさえ
+    いれば、その**宣言値をそのまま** `k_hold_overrides` として段 1
+    （`pin_holdout_sweeps_by_family()`）だけを再導出照合していた——「公称
+    `k_hold` で段 2 (`realize_split()`) が本当に `CoverageRepairInfeasible`
+    に落ちたか」という縮退の必要性そのものは一切検証しておらず、独立に
+    構築した/改竄した manifest が縮退を自称するだけで宣言 pin 数を水減らし
+    できる穴があった（宣言を信頼する側と実測する側の入力が同じ変数に
+    癒着していたのが根本原因）。
+
+    本対応は、`split_secret` が渡された場合に限り、**宣言値を一切入力に
+    せず**公称 `k_hold` から始まる `splitter.pin_and_realize_holdout()`
+    （段 1 `pin_holdout_sweeps_by_family()` → 段 2 `splitter.
+    realize_split()` の縮退リトライループ本体。`c0_freeze.armed_freeze()`
+    が実際の freeze 時に呼ぶのと**同一の関数**——検証と生成が二重実装に
+    分岐しないよう `splitter.py` へ共有化した。`c0_freeze` は
+    `c0_validate` を import するため逆方向の import ができず、両者が依存
+    できる `splitter` へ実装を寄せた）を検証側で完全に再実行し、その結果
+    (`full_pin`) を「真の」holdout sweep 集合として宣言と突き合わせる。
+    段 2 の修復不能を経て初めて到達する縮退後の k は再実行結果に
+    **そのまま**表れるため、宣言が正当な縮退の帰結であれば厳密一致し、
+    水増し/水減らしされた偽の宣言は（同じ secret・matrix の下で本当に
+    その縮退が起きない限り）per-sweep_id 照合で確実に不一致として検出
+    される（fail-closed）。
+
+    再実行自体が `HoldoutPinInfeasible`/`HoldoutPinDegradationExhausted`
+    を送出した場合（構造的欠陥、または matrix 変更などにより freeze 時と
+    再現できない異常事態）は、再導出結果を一切信頼できないため、宣言の
+    ある家族すべてを無条件で mismatch 扱いにする（fail-closed。「検証
+    不能」を「検証成功」として通さない）。
+
+    `split_secret=None`（`dry_run()` — secret がまだ存在しない、または
+    `holdout_sweeps` を持たない v1.1 以前の manifest を読む場合）では、
+    secret 依存の段 2 再実行は原理的に行えないため、secret 非依存の構造
+    検査のみ行う: 宣言 pin 数が `holdout_pin_params_by_family()` の
+    **nominal** `k_hold` と一致し、各宣言 sweep_id が
+    `declared_sweeps_by_family()` に実在しその member row_id が完全一致する
+    こと。**この経路は宣言された pin 数を override として一切信頼しない**
+    ——nominal `k_hold` との単純一致のみを見るため、縮退を自称する宣言は
+    secret 無しでは「その縮退が正当だったか」を検査できず、単に
+    `len(actual) != k_hold` として構造 mismatch になる（secret 依存の
+    完全再導出照合でのみ縮退の正当性まで確認できる）。
     """
     found_holdout, holdout_section = _resolve(manifest, "holdout_sweeps")
     rows = build_matrix()
@@ -1743,26 +1777,19 @@ def _check_holdout_sweeps_declaration_match(
                 declared_raw = entry.get("holdout_sweeps")
         declared_raw_by_family[fam] = declared_raw
 
-    k_hold_overrides: dict[str, int] = {}
+    # secret 依存経路: 宣言値は一切参照せず、公称 k_hold から始まる正規の
+    # 縮退ループを検証側で完全再実行する（`armed_freeze()` と同一関数）。
+    full_pin: dict[str, dict[str, tuple[str, ...]]] | None = None
+    canonical_rederivation_error: Exception | None = None
     if split_secret is not None:
-        for fam, raw in declared_raw_by_family.items():
-            p = params.get(fam)
-            if p is None or p.pin_exempt:
-                continue
-            if raw is None or _is_hollow(raw) or not isinstance(raw, Mapping):
-                continue
-            normalized = _normalize_declared_sweeps(raw)
-            if normalized is None:
-                continue
-            declared_count = len(normalized)
-            if declared_count != p.k_hold and p.degradation_floor <= declared_count < p.k_hold:
-                k_hold_overrides[fam] = declared_count
+        row_inputs = row_inputs_for_split(rows, STRATUM_FACTOR_NAMES)
+        try:
+            full_pin, _realized = pin_and_realize_holdout(
+                rows, row_inputs, split_secret, STRATUM_FACTOR_NAMES
+            )
+        except (HoldoutPinInfeasible, HoldoutPinDegradationExhausted) as exc:
+            canonical_rederivation_error = exc
 
-    full_pin = (
-        pin_holdout_sweeps_by_family(rows, split_secret, k_hold_overrides=k_hold_overrides or None)
-        if split_secret is not None
-        else None
-    )
     violations: list[SweepManifestViolationDetail] = []
     for family in fixture_axes.FixtureFamily:
         fam = family.value
@@ -1784,10 +1811,34 @@ def _check_holdout_sweeps_declaration_match(
             )
             continue
 
+        if canonical_rederivation_error is not None:
+            # 公称 k_hold からの正規縮退ループそのものが再実行できない
+            # （fail-closed）——宣言のどんな内容とも突き合わせようがない。
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="holdout_pin_declaration_mismatch",
+                    family=fam,
+                    sweep_id="",
+                    expected_count=0,
+                    actual_count=len(actual),
+                    detail=(
+                        f"holdout_sweeps.{fam}: canonical pin-and-realize degradation "
+                        f"retry from nominal k_hold could not be re-executed "
+                        f"({canonical_rederivation_error}) — declaration cannot be "
+                        "trusted, refusing (fail-closed)"
+                    ),
+                )
+            )
+            continue
+
         expected = full_pin.get(fam, {}) if full_pin is not None else None
         family_declared = declared.get(fam, {})
         k_hold = params[fam].k_hold if fam in params else None
 
+        # secret 非依存経路（`expected is None`）: nominal k_hold との単純
+        # 一致のみを見る——宣言された pin 数を override として信頼しない
+        # （縮退の正当性は段 2 の再実行なしには判定できないため、secret が
+        # なければ「縮退している」という宣言そのものを検査対象にしない）。
         if expected is None and k_hold is not None and len(actual) != k_hold:
             violations.append(
                 SweepManifestViolationDetail(

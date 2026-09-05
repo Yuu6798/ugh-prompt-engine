@@ -347,6 +347,96 @@ def test_ensure_archived_refuses_closed_original_even_with_valid_archived_copy_p
     assert ledger_path.read_bytes() == original_bytes
 
 
+# ---------------------------------------------------------------------------
+# R10 fix (PR #346 round 10, Codex P1 採用): 復元経路の原子化。旧実装は
+# `Path.write_bytes()` の直書きで、kill されると truncated な
+# `ledger.jsonl` が残り、次回起動は「原本が存在する」ため復元を拒否 —
+# 手動削除まで正典が壊れて見える詰み状態だった。
+# ---------------------------------------------------------------------------
+
+
+def test_restore_original_from_verified_gz_is_atomic_via_staging(tmp_path: Path) -> None:
+    """`_restore_original_from_verified_gz()` 単体: staging ファイル
+    （`ledger.jsonl.restoring`）を経由して `os.rename()` で公開し、呼び出し
+    完了後は staging が残らないこと（原子性の直接固定）。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-restore"
+    campaign_dir.mkdir(parents=True)
+    payload = b'{"kind": "campaign_closed"}\n'
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    gz_path.write_bytes(archive._write_gzip_bytes(payload))
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    staging_ledger_path = campaign_dir / archive._STAGING_LEDGER_FILENAME
+
+    archive._restore_original_from_verified_gz(
+        ledger_path, gz_path, campaign_dir, staging_ledger_path
+    )
+
+    assert ledger_path.read_bytes() == payload
+    assert not staging_ledger_path.exists()
+
+
+def test_ensure_archived_discards_leftover_restore_staging_and_recovers(
+    tmp_path: Path,
+) -> None:
+    """復元処理が (1) staging 書込直後・(2) `os.rename()` 未実施で kill
+    された状態を直接構成する。回復規則どおり、次回起動は staging 残骸を
+    無条件で破棄してから正しく復元し直す（staging の中身がゴミでも
+    構わない — 再実行は常に検証済み gz から作り直すため）。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-closed"
+    original_bytes = _build_closed_ledger(campaign_dir)
+    expected_sha = hashlib.sha256(original_bytes).hexdigest()
+
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    sidecar_path = campaign_dir / archive.SIDECAR_FILENAME
+    gz_path.write_bytes(archive._write_gzip_bytes(original_bytes))
+    sidecar_path.write_text(archive._sidecar_text(expected_sha), encoding="utf-8")
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    ledger_path.unlink()  # 本ガード追加前に完了していた archive を模す。
+
+    staging_ledger = campaign_dir / archive._STAGING_LEDGER_FILENAME
+    staging_ledger.write_bytes(b"garbage-left-behind-by-a-killed-restore")
+
+    with pytest.raises(archive.ArchiveError, match="campaign_closed"):
+        archive.ensure_archived(campaign_dir)
+
+    assert not staging_ledger.exists()
+    assert ledger_path.is_file()
+    assert ledger_path.read_bytes() == original_bytes
+
+
+def test_ensure_archived_replaces_truncated_restore_residue_original(
+    tmp_path: Path,
+) -> None:
+    """旧実装（`write_bytes()` 直書き）の復元が kill され、truncated な
+    `ledger.jsonl` が残った状態を直接構成する。原本が「存在する」というだけ
+    で復元をスキップしていた旧挙動と異なり、検証済み gz の sha256 と一致
+    しない原本は「壊れた復元残骸」として検出され、staging 経由で再復元
+    される——手動削除なしに詰み状態から回復できることを固定する。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-closed"
+    original_bytes = _build_closed_ledger(campaign_dir)
+    expected_sha = hashlib.sha256(original_bytes).hexdigest()
+
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    sidecar_path = campaign_dir / archive.SIDECAR_FILENAME
+    gz_path.write_bytes(archive._write_gzip_bytes(original_bytes))
+    sidecar_path.write_text(archive._sidecar_text(expected_sha), encoding="utf-8")
+
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    # 旧実装の直書きが途中で kill された状態を模す: 先頭部分だけの
+    # truncated な内容（`campaign_closed` の最終行を含まない）。
+    truncated = original_bytes[: len(original_bytes) // 3]
+    ledger_path.write_bytes(truncated)
+    assert ledger_path.is_file()
+    assert hashlib.sha256(ledger_path.read_bytes()).hexdigest() != expected_sha
+
+    with pytest.raises(archive.ArchiveError, match="campaign_closed"):
+        archive.ensure_archived(campaign_dir)
+
+    assert ledger_path.is_file()
+    assert ledger_path.read_bytes() == original_bytes  # truncation healed
+    assert not (campaign_dir / archive._STAGING_LEDGER_FILENAME).exists()
+
+
 def test_cli_main_reports_failure_for_campaign_closed_ledger(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
