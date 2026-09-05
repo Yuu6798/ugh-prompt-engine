@@ -14,6 +14,15 @@
 バージョン管理された監査証跡である。承認の有効性判定は常に
 `VG_CAL_APPROVAL_DIR` 直下の実ファイルのみに基づく。
 
+campaign manifest（`campaigns/*/c0_manifest.json`）の `approvals.gate*_sha256`
+に pin された参照コピーは、以後**不変**（再 stamp 禁止）である —
+`DESIGN_VG_METER_CAL_DEBT_*.md`/`IMPLEMENTATION_MAP_v1.md` の編集で
+working tree 側の実測 sha256 が動いても、そのコピー自体は書き換えない
+（書き換えると closed campaign の pin と食い違い、将来の監査を汚染する）。
+tree との整合（`refresh_document_hashes()` での追随）が要求されるのは、
+まだどの manifest にも pin されていない**未消費**の参照コピーのみ
+（`tests/test_approvals.py` の regression guard もこの区別で判定する）。
+
 ## 配置場所
 
 承認ファイルは checkout **外** の `VG_CAL_APPROVAL_DIR`（環境変数。既定

@@ -653,48 +653,95 @@ def test_cli_refresh_missing_gate_arg_errors() -> None:
 
 
 # ---------------------------------------------------------------------------
-# round 23 ADOPT (1): the checkout-internal reference copy of the Gate 1
+# round 23 ADOPT (1): the checkout-internal reference copies of the Gate 1
 # approval file (`approvals/README.md`'s "reference copy" rule — the loader
-# never reads it, only `~/.vg_cal/approvals/` does) drifts silently whenever
+# never reads them, only `~/.vg_cal/approvals/` does) drift silently whenever
 # `DESIGN_VG_METER_CAL_DEBT_v1.0.md`/`IMPLEMENTATION_MAP_v1.md` are edited
 # without a matching `refresh_document_hashes()` re-stamp of that copy (the
 # live approval file used by `load_approval()` is outside the checkout, so
-# CI cannot see a drift there — only this reference copy is inspectable).
+# CI cannot see a drift there — only these reference copies are inspectable).
 # `[UNDERSPEC-CAL-D51]`.
+#
+# 2026-09-04 改訂: `IMPLEMENTATION_MAP_v1.md` に §7 を追記したコミット
+# (f0eebfa) で `2026-09-02` レコードコピーの memo_sha256 が tree-at-head と
+# 乖離し失敗した。原因は D51 の設計前提が「参照コピーは常に生きている
+# （tree に追随し続けるべき）」だった点 — しかしこのコピーのバイト sha256 は
+# 既に `campaigns/RUN10-CAL-20260904-862dec28/c0_manifest.json` の
+# `approvals.gate1_sha256` に pin 済み（= **consumed**）だった。consumed な
+# 参照コピーは監査証跡そのものであり、ドキュメント編集のたびに再 stamp すると
+# closed campaign の pin と食い違ってしまう（将来汚染）。そのため契約を
+# 「manifest に pin 済み（consumed）= 不変・pin 一致のみ確認 / 未消費 = 従来
+# どおり tree-at-head 追随を要求」の二分岐に改める。D51 が守りたかった
+# 「生きている参照コピーのドリフト検知」は未消費コピーに対して維持する。
 # ---------------------------------------------------------------------------
 
-_GATE1_RECORD_COPY_RELATIVE_PATH = (
-    "voice_genesis/calibration/approvals/records/gate1_campaign_execution.2026-09-02.json"
-)
+_GATE1_RECORD_COPY_GLOB = "gate1_campaign_execution.*.json"
+_GATE1_RECORD_COPY_DIR = "voice_genesis/calibration/approvals/records"
+_CAMPAIGN_MANIFEST_GLOB = "voice_genesis/calibration/campaigns/*/c0_manifest.json"
 
 
-def test_repo_gate1_record_copy_document_hashes_match_tree_at_head() -> None:
-    """`approvals/records/gate1_campaign_execution.2026-09-02.json`（checkout
-    内の参照用コピー。正本は checkout 外の `~/.vg_cal/approvals/` で本テストの
-    対象外）の `design_doc_sha256`/`memo_sha256` が、現在の
-    `DESIGN_VG_METER_CAL_DEBT_v1.0.md`/`IMPLEMENTATION_MAP_v1.md` の実測 sha256
-    と一致することを確認する regression guard（round 23 ADOPT (1):
-    `memo_sha256` が stale だった finding の再発防止）。
+def _pinned_gate1_shas() -> set[str]:
+    """全 campaign の `c0_manifest.json` の `approvals.gate1_sha256` 集合。
+    closed campaign ディレクトリは一切変更せず read-only で走査する。"""
+    pins: set[str] = set()
+    for manifest_path in sorted(_REPO_ROOT.glob(_CAMPAIGN_MANIFEST_GLOB)):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        gate1_sha = manifest.get("approvals", {}).get("gate1_sha256")
+        if isinstance(gate1_sha, str) and gate1_sha:
+            pins.add(gate1_sha)
+    return pins
 
-    期待値は `_base_design_sha()`/`_memo_sha()` が現在の working tree から都度
-    実測する値であり、本テスト内にハッシュを一切ハードコードしない —
-    DESIGN/メモを将来編集し、その都度 `refresh_document_hashes()` で参照用
-    コピーを追随させる正当な変更では失敗しない。比較対象は「committed record
-    の値」と「working tree のドキュメント実体」であり、`c0_validate.py` の
-    `repo.dirty_tree` チェック（未コミット差分の有無）とは無関係 — 本テストが
-    dirty tree で意味を変えることはない（GATE1_DECISION_RECORD.md 冒頭の
-    注記どおり、承認ファイルの正本自体は git 管理外）。
 
-    v1.1 統治文書切替（§V6, 2026-09-04）後の注記: このレコードは切替前
-    （2026-09-02/03）に発行され、承認時点で pin していたのは v1.0 のため、
-    比較対象は `approvals.DESIGN_DOC_RELATIVE_PATH`（切替後は v1.1）ではなく
-    `approvals.BASE_DESIGN_DOC_RELATIVE_PATH`（v1.0、常に不変の read-only
-    基底文書）である — `_design_sha()` ではなく `_base_design_sha()` を使う。
+def test_repo_gate1_record_copies_consumed_pins_or_tree_at_head() -> None:
+    """`approvals/records/gate1_campaign_execution.*.json`（checkout 内の
+    参照用コピー。正本は checkout 外の `~/.vg_cal/approvals/` で本テストの
+    対象外）を全件走査し、各レコードを次の 2 通りに分類して検証する。
+
+    - **consumed**（レコードのバイト sha256 が、いずれかの campaign の
+      `c0_manifest.json` の `approvals.gate1_sha256` と一致する）: そのレコードは
+      既に freeze で消費された監査証跡であり、以後不変（再 stamp 禁止 —
+      書き換えると closed campaign の pin と食い違い将来汚染になる）。
+      `design_doc_sha256` が `_base_design_sha()`（v1.0、常に不変の read-only
+      基底文書）と一致することのみ確認する。memo_sha256 の tree-at-head 比較
+      は行わない — v1.1 §7 のようなメモ追記でここが動くのは正当な変更であり
+      regression ではない。
+    - **未消費**（どの manifest の pin にも一致しない = まだ freeze で
+      消費されていない生きた参照コピー）: 従来どおり `design_doc_sha256`/
+      `memo_sha256` が現在の working tree（`approvals.DESIGN_DOC_RELATIVE_PATH`
+      = v1.1 切替後の現行文書、`approvals.MEMO_RELATIVE_PATH`）の実測 sha256
+      と一致することを要求する regression guard（round 23 ADOPT (1):
+      `memo_sha256` が stale だった finding の再発防止をここで維持する）。
+
+    期待値は `_design_sha()`/`_memo_sha()`/`_base_design_sha()` が現在の
+    working tree から都度実測する値であり、本テスト内にハッシュを一切
+    ハードコードしない。比較対象は「committed record の値」と「working tree
+    のドキュメント実体」であり、`c0_validate.py` の `repo.dirty_tree` チェック
+    （未コミット差分の有無）とは無関係 — 本テストが dirty tree で意味を変える
+    ことはない（GATE1_DECISION_RECORD.md 冒頭の注記どおり、承認ファイルの
+    正本自体は git 管理外）。
+
+    走査結果が 0 件（レコードコピーが 1 つも見つからない）場合は、ガードの
+    空振り防止のため fail する。少なくとも 1 件は consumed（pin 済み campaign
+    が存在する）ことも合わせて assert する。
     """
-    record_path = _REPO_ROOT / _GATE1_RECORD_COPY_RELATIVE_PATH
-    payload = json.loads(record_path.read_text(encoding="utf-8"))
-    assert payload["design_doc_sha256"] == _base_design_sha()
-    assert payload["memo_sha256"] == _memo_sha()
+    record_paths = sorted((_REPO_ROOT / _GATE1_RECORD_COPY_DIR).glob(_GATE1_RECORD_COPY_GLOB))
+    assert record_paths, "no gate1_campaign_execution.*.json reference copies found"
+
+    pinned_shas = _pinned_gate1_shas()
+    consumed_count = 0
+    for record_path in record_paths:
+        record_bytes = record_path.read_bytes()
+        record_sha = hashlib.sha256(record_bytes).hexdigest()
+        payload = json.loads(record_bytes)
+
+        if record_sha in pinned_shas:
+            consumed_count += 1
+            assert payload["design_doc_sha256"] == _base_design_sha(), record_path
+        else:
+            assert payload["design_doc_sha256"] == _design_sha(), record_path
+            assert payload["memo_sha256"] == _memo_sha(), record_path
+
+    assert consumed_count >= 1, "expected at least one gate1 record copy pinned by a closed campaign manifest"
 
 
 # ---------------------------------------------------------------------------
