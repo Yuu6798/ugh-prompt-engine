@@ -185,20 +185,37 @@ def _pinned_row_ids(holdout_sweeps: dict[str, dict[str, tuple[str, ...]]]) -> fr
 @pytest.mark.parametrize("secret", DUMMY_SECRETS)
 def test_realize_split_pin_integration_full_matrix(secret: bytes) -> None:
     """AC6 (a)-(e) を単一 secret について検証する（parametrize で >=12 回
-    実行）。"""
+    実行）。
+
+    v1.1 §V3.5 実装時発見（2026-09-05）: `TILT_GT` は新設の `nuisance_axis`
+    coverage 制約（3 distinct 軸 + BOUNDARY = 4 distinct 行）が非 pin
+    HOLDOUT 枠 X=2（nominal k_hold=2 時）を上回るため、nominal k_hold では
+    構造的に coverage 修復不能——**全 secret で決定論的に** k_hold=2->1 まで
+    縮退して初めて可解になる（実測: 14 dummy secret 全件で確認）。これは
+    v1.1 §V2.2 縮退規則（`splitter.pin_and_realize_holdout()`）が正しく
+    機能した結果であり bug ではないが、本テストは production と同じ縮退
+    対応入口（`_pin_and_realize_holdout` = `c0_freeze.armed_freeze()` が
+    実際に呼ぶ関数）を使うよう更新した（旧実装は縮退なしの生
+    `pin_holdout_sweeps_by_family`+`realize_split()` を直接呼んでおり、
+    coverage 制約が増えると構造的に対応できなかった）。(a) の等号検査は
+    「宣言数 <= nominal k_hold」（縮退がありうる）へ緩和し、被覆保証
+    （§V2.2 縮退規則の degradation_floor）は `test_k_hold_matches_v2_2_
+    frozen_table` 側の静的検査で別途固定済みのため、ここでは弱めない。
+    """
     rows = build_matrix()
     row_inputs = _row_inputs_for_split(rows, STRATUM_FACTOR_NAMES)
     rows_by_id = {r.row_id: r for r in row_inputs}
-    holdout_sweeps = pin_holdout_sweeps_by_family(rows, secret)
+    holdout_sweeps, realized = _pin_and_realize_holdout(rows, row_inputs, secret, STRATUM_FACTOR_NAMES)
     pinned_ids = _pinned_row_ids(holdout_sweeps)
+    assert realized.pinned_holdout_row_ids == pinned_ids
 
-    realized = realize_split(
-        row_inputs, secret, STRATUM_FACTOR_NAMES, pinned_holdout_row_ids=pinned_ids
-    )
-
-    # (a) 各 family の pin sweep 数が k_hold 期待値で member 全行 HOLDOUT。
+    # (a) 各 family の pin sweep 数は k_hold 期待値以下（§V3.5 coverage 制約
+    # による決定論的縮退がありうる——`TILT_GT` は全 secret で 2->1 に縮退する
+    # ことを実測済み。degradation_floor（claim 被覆 family の周辺被覆保証）
+    # は不変）で、member 全行 HOLDOUT。
     for family, sweeps in holdout_sweeps.items():
-        assert len(sweeps) == EXPECTED_K_HOLD[family]
+        assert len(sweeps) <= EXPECTED_K_HOLD[family]
+        assert len(sweeps) >= 1  # 456 セルでは pin_exempt な family は無い
         for member_row_ids in sweeps.values():
             for rid in member_row_ids:
                 assert realized.assignment[rid] == Split.HOLDOUT
@@ -254,6 +271,88 @@ def test_realize_split_pin_integration_full_matrix(secret: bytes) -> None:
 
     # (e) verify_split 照合成立。
     assert verify_split(row_inputs, secret, realized) is True
+
+    # (f) v1.1 §V3.5 追加分: 宣言 invariance 軸ごとに count>=3 の (family, axis)
+    # ペアは、既存 coverage 制約（(d) と同じ `_required_pairs`/`_axis_value`
+    # 規約）により各 split に単一軸 CONFOUND 行を >= 1 行持つ——これにより
+    # holdout で各宣言軸が >= 5 pair（1 行 x 5 probe）を構造的に持ち得る
+    # （§V3.5「本追補は宣言と行列実体の不整合による構造的偽失敗だけを除去
+    # する」との整合を、456 セル全 family・全 count>=3 軸について明示的に
+    # 固定する）。
+    for family in axes.FAMILY_ORDER:
+        fam_key = family.value
+        fam_rows = [r for r in row_inputs if r.family == fam_key]
+        nuisance_axis_counts: dict[str, int] = {}
+        for r in fam_rows:
+            if r.nuisance_axis is not None:
+                nuisance_axis_counts[r.nuisance_axis] = (
+                    nuisance_axis_counts.get(r.nuisance_axis, 0) + 1
+                )
+        for axis_name, count in nuisance_axis_counts.items():
+            if count < 3:
+                continue  # below the existing count>=3 coverage threshold (structural gap)
+            for split in (Split.CALIBRATION, Split.SELECTION, Split.HOLDOUT):
+                cnt = sum(
+                    1
+                    for r in fam_rows
+                    if realized.assignment[r.row_id] == split and r.nuisance_axis == axis_name
+                )
+                assert cnt >= 1, (fam_key, axis_name, split)
+
+
+#: (family, axis) 軸ごとの CONFOUND 行数（456 セル canonical matrix、
+#: `single_axis_nuisance_tag_axis()` 実測）。count>=3 の軸のみが coverage
+#: 制約対象（`_required_pairs()` の既存規則）。gain_dbfs は F0_CONTROL/
+#: FORMANT_GT でのみ count>=3（A2 系列を持つ family、各 4 件）——TILT_GT/
+#: APERIODICITY_GT/TRANSITION_GT は anchor2 が無いため gain_dbfs count=2 に
+#: 留まり coverage 対象外（構造的な既存ギャップ、本 PR で新規に導入した
+#: ものではない——§V3.5 末尾「実測で pair が欠落した場合は従来どおり正直に
+#: fail」の範囲）。APERIODICITY_GT は `exclude_axis_family="noise"` のため
+#: noise_snr_db 軸自体が存在せず、context も count=1（<3）のため
+#: duration_s のみが対象。TRANSITION_GT は `exclude_axis_family="context"`
+#: のため context 軸が存在しない。
+#:
+#: **RESONANCE_GT / IDENTITY_CAUSAL_SWEEP は実装時発見（2026-09-05）により
+#: 空 tuple**: 両 family は gate4'/ABSOLUTE ceiling に到達しない
+#: （`RESONANCE_GT` は §16-1 で全候補 DIAGNOSTIC_ONLY 固定、
+#: `IDENTITY_CAUSAL_SWEEP` の M6 は DIRECTIONAL-only の founder/trait pair
+#: 評価であり gate4' を一切消費しない——`c0_freeze._U_ABSENT_REASON` と同じ
+#: 2 family）ため、`nuisance_axis` coverage を課しても機能的な保護を生まない
+#: 一方、`IDENTITY_CAUSAL_SWEEP` は非 pin HOLDOUT 枠 X=4 に対し必要 distinct
+#: 行数 5（4 nuisance 軸 + boundary）が上回り、かつ `degradation_floor`
+#: （founder x trait 周辺被覆保護）が nominal `k_hold` と同値で縮退不能
+#: なため、課すと **456 セル campaign が任意の secret で恒久的に C0 freeze
+#: 不能になる**（`splitter.HoldoutPinDegradationExhausted` が必ず発生）。
+#: よって `splitter.row_inputs_for_split()` はこの 2 family の
+#: `RowInput.nuisance_axis` を常に `None` に強制する
+#: （`splitter._GATE4_INAPPLICABLE_FAMILIES`）——宣言軸自体
+#: （`fixtures.matrix.invariance_axes_by_family()`、manifest の
+#: `confound_axes`）は変更しない。
+EXPECTED_NUISANCE_AXIS_COVERAGE_REQUIRED: dict[str, tuple[str, ...]] = {
+    "F0_CONTROL": ("context", "duration_s", "gain_dbfs", "noise_snr_db"),
+    "FORMANT_GT": ("context", "duration_s", "gain_dbfs", "noise_snr_db"),
+    "TILT_GT": ("context", "duration_s", "noise_snr_db"),
+    "APERIODICITY_GT": ("duration_s",),
+    "RESONANCE_GT": (),
+    "TRANSITION_GT": ("duration_s", "noise_snr_db"),
+    "IDENTITY_CAUSAL_SWEEP": (),
+}
+
+
+def test_nuisance_axis_coverage_required_pairs_match_frozen_table() -> None:
+    """secret 非依存の regression lock: 456 セル canonical matrix で
+    coverage 制約対象になる (family, nuisance_axis) の集合を固定する
+    （`EXPECTED_NUISANCE_AXIS_COVERAGE_REQUIRED` と同値）。"""
+    rows = build_matrix()
+    row_inputs = _row_inputs_for_split(rows, STRATUM_FACTOR_NAMES)
+    for family in axes.FAMILY_ORDER:
+        fam_key = family.value
+        fam_rows = [r for r in row_inputs if r.family == fam_key]
+        required = _required_pairs(fam_rows)
+        required_nuisance_axes = tuple(
+            sorted(value for (axis, value) in required if axis == "nuisance_axis")
+        )
+        assert required_nuisance_axes == EXPECTED_NUISANCE_AXIS_COVERAGE_REQUIRED[fam_key], fam_key
 
 
 def test_no_pin_path_is_unaffected_by_pinning_machinery() -> None:
@@ -382,11 +481,12 @@ def test_realized_split_manifest_round_trip_preserves_pin_for_verify_split() -> 
     rows = build_matrix()
     row_inputs = _row_inputs_for_split(rows, STRATUM_FACTOR_NAMES)
     secret = DUMMY_SECRETS[0]
-    holdout_sweeps = pin_holdout_sweeps_by_family(rows, secret)
+    # v1.1 §V3.5: use the degradation-aware entry point (same as
+    # `c0_freeze.armed_freeze()`) — `TILT_GT`'s nominal k_hold is not
+    # coverage-feasible for this secret once `nuisance_axis` coverage is in
+    # play (see `test_realize_split_pin_integration_full_matrix`'s docstring).
+    holdout_sweeps, realized = _pin_and_realize_holdout(rows, row_inputs, secret, STRATUM_FACTOR_NAMES)
     pinned_ids = _pinned_row_ids(holdout_sweeps)
-    realized = realize_split(
-        row_inputs, secret, STRATUM_FACTOR_NAMES, pinned_holdout_row_ids=pinned_ids
-    )
 
     # manifest への書出し（`c0_freeze._attach_freeze_extras()` が実際に行う
     # のと同一の shape）+ `campaign.state` の独立読み戻し。

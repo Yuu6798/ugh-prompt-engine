@@ -67,6 +67,7 @@ from voice_genesis.calibration.fixtures.matrix import (
     build_matrix,
     claim_relevant_fields_by_family,
     declared_sweeps_by_family,
+    invariance_axes_by_family,
 )
 from voice_genesis.calibration.fixtures.matrix import build_matrix as _canonical_build_matrix
 from voice_genesis.calibration.provenance import Ledger
@@ -325,11 +326,19 @@ _GENERATOR_MODULE_RELATIVE_PATH: dict[str, str] = {
 #: UNDERSPEC-CAL-D76（D75 を SUPERSEDE）: `confound_axes` を DIRECTIONAL gate
 #: の sweep_id 宣言として再利用する D18/D75 の写像は誤りだった（nuisance 軸で
 #: 切ると group 内 truth が anchor 固定になり全 pair `delta_truth == 0` —
-#: `sweep_truth_investigation.md`）。`confound_axes` はこの flat 6-tuple の
-#: ままとし、DIRECTIONAL sweep 宣言は下の `declared_sweeps`（def A: truth-core
-#: block の nuisance-constant series、`fixtures.matrix.declared_sweeps_by_
-#: family()`）という別 key へ分離する。
-_CONFOUND_AXES: tuple[str, ...] = ("f0_hz", "sr_hz", "gain_dbfs", "duration_s", "noise_snr_db", "context")
+#: `sweep_truth_investigation.md`）。DIRECTIONAL sweep 宣言は下の
+#: `declared_sweeps`（def A: truth-core block の nuisance-constant series、
+#: `fixtures.matrix.declared_sweeps_by_family()`）という別 key に分離する。
+#:
+#: v1.1 §V3.5（Codex レビュー第 12 巡 P1 採用、2026-09-05）: `confound_axes`
+#: の flat 6-tuple 一律宣言（旧: 全 family に f0_hz/sr_hz を含む同一 6 軸）は
+#: 正典 456 セル行列に f0_hz/sr_hz を名指す単一軸 CONFOUND 行が存在しない
+#: ことと矛盾し、gate4' の invariance pair が当該軸で構造的に 0 件となり
+#: 全 ABSOLUTE 候補が偽失敗していた。`confound_axes` は
+#: `fixtures.matrix.invariance_axes_by_family()`（凍結 matrix の CONFOUND
+#: block から単一軸主効果行が実在する軸のみを機械導出）に置換し、family ごと
+#: に異なる宣言を持つ（`_fixture_specs()` 内で計算）。`c0_validate` が
+#: 再導出との完全一致を検査する（D77 同型）。
 _BOUNDARY_PROBES: tuple[str, ...] = ("f0_hz", "sr_hz", "gain_dbfs", "duration_s", "noise_snr_db")
 
 
@@ -495,6 +504,10 @@ def _fixture_specs(root: Path) -> dict[str, object]:
     #: ——`armed_freeze()` が secret 生成後に full manifest 側（`realized_
     #: split` と同じ非-core 節）へ別途添付する（下記 `armed_freeze()` 参照）。
     claim_relevant = claim_relevant_fields_by_family(canonical_rows)
+    #: v1.1 §V3.5: gate4' invariance 軸を凍結 matrix から family ごとに機械
+    #: 導出する（`declared_sweeps`/`claim_relevant` と同じ「差し替えから
+    #: 独立させた `_canonical_build_matrix()` 入口」を使う）。
+    invariance_axes = invariance_axes_by_family(canonical_rows)
     specs: dict[str, object] = {}
     for family in FixtureFamily:
         rel_path = _GENERATOR_MODULE_RELATIVE_PATH[family.value]
@@ -509,7 +522,7 @@ def _fixture_specs(root: Path) -> dict[str, object]:
             "generator_version": "1",
             "generator_hash": generator_hash,
             "known_truth_field": _KNOWN_TRUTH_FIELD[family.value],
-            "confound_axes": list(_CONFOUND_AXES),
+            "confound_axes": list(invariance_axes.get(family.value, ())),
             "boundary_probes": list(_BOUNDARY_PROBES),
             "negative_controls": negative_controls,
             "declared_sweeps": {

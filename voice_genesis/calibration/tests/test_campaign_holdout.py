@@ -79,6 +79,12 @@ def test_evaluate_absolute_meter_passes_with_clean_synthetic_data() -> None:
 
 
 def test_evaluate_absolute_meter_diagnostic_only_when_gate_fails() -> None:
+    """R13 対応（Codex 第 13 巡 P1 採用、2026-09-05）: gate1 は pass（全
+    PRIMARY instance が揃っており eligible）——ここで fail するのは gate4'
+    のみ（invariance 軸が 1 つも宣言されていない）。設計正本 §11 の
+    `OUTPUT_MISSING` は「PRIMARY 一部 output missing」専用であり、gate1 が
+    通った上での他 gate の正直な fail は理由コード無し（`None`）が正しい
+    （旧実装はここも一律 `OUTPUT_MISSING` としており、本 PR で是正）。"""
     observations = _absolute_pass_observations()
     margins = holdout_stage.build_instance_margins(observations)
     instance_ids = [m.instance_id for m in margins]
@@ -98,8 +104,42 @@ def test_evaluate_absolute_meter_diagnostic_only_when_gate_fails() -> None:
         min_count_met=True,
     )
     assert result.terminal_status == TerminalStatus.DIAGNOSTIC_ONLY.value
+    assert result.reason_code is None
+    assert result.gate_detail["passed"] is False
+
+
+def test_evaluate_absolute_meter_diagnostic_only_output_missing_when_gate1_fails() -> None:
+    """R13 対応の対照ケース: gate1 自体が fail（観測 PRIMARY instance 集合が
+    凍結宣言と一致しない——ここでは 1 instance を丸ごと落とす）した場合のみ
+    `reason_code == "OUTPUT_MISSING"` になることを固定する。"""
+    observations = _absolute_pass_observations()
+    margins = holdout_stage.build_instance_margins(observations)
+    instance_ids = [m.instance_id for m in margins]
+    # declare one extra expected instance that has no observation at all.
+    expected_ids = [*instance_ids, "missing-instance"]
+
+    pairs = [
+        InvariancePair(pair_id=f"p{i}", axis="axis-a", ds=0.0, e_use_i0=1.0, e_use_ia=1.0)
+        for i in range(5)
+    ]
+    result = holdout_stage.evaluate_absolute_meter(
+        MeterId.M2_SPECTRAL_TILT.value,
+        ClaimCeiling.ABSOLUTE,
+        selected_candidate_id="FAKE-CAND",
+        per_instance_margins=margins,
+        u_rep=0.01,
+        u_proc=0.005,
+        invariance_pairs_by_axis={"axis-a": pairs},
+        declared_invariance_axes=("axis-a",),
+        expected_primary_instance_ids=expected_ids,
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.terminal_status == TerminalStatus.DIAGNOSTIC_ONLY.value
     assert result.reason_code == "OUTPUT_MISSING"
     assert result.gate_detail["passed"] is False
+    assert any("gate1" in reason for reason in result.gate_detail["failure_reasons"])
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +242,82 @@ def test_evaluate_directional_meter_passes_with_clean_synthetic_data() -> None:
     )
     assert result.terminal_status == TerminalStatus.CALIBRATED_DIRECTIONAL.value
     assert result.gate_detail["passed"] is True
+
+
+def test_evaluate_directional_meter_diagnostic_only_reason_none_when_sweep_fully_observed() -> None:
+    """R13 対応（Codex 第 13 巡 P1 採用、2026-09-05）: 宣言済み sweep は
+    5 件の observed pair を全て持つ（欠落なし）——control failure だけで
+    正直に fail する場合、設計正本 §11 の `OUTPUT_MISSING`（PRIMARY 一部
+    output missing 専用）は該当せず `reason_code` は `None`。"""
+    pairs = [
+        DirectionalPair(
+            pair_id=f"p{i}",
+            delta_truth=float(i + 1),
+            delta_output=float(i + 1) * 2.0,
+            u_gt_i=0.01,
+            u_num_i=0.01,
+            u_gt_j=0.01,
+            u_num_j=0.01,
+            correct_sign=True,
+            is_adjacent=True,
+            sweep_id="sweep-a",
+        )
+        for i in range(5)
+    ]
+    result = holdout_stage.evaluate_directional_meter(
+        MeterId.M5_TRANSITION.value,
+        ClaimCeiling.DIRECTIONAL,
+        selected_candidate_id="FAKE-DIR-CAND",
+        pairs=pairs,
+        u_rep=0.01,
+        u_proc=0.01,
+        expected_sweep_ids=("sweep-a",),
+        expected_adjacent_pair_ids={"sweep-a": [p.pair_id for p in pairs]},
+        negative_control_failures=1,  # honest control failure, not a coverage gap
+        positive_control_failures=0,
+        units_commensurate=False,
+    )
+    assert result.terminal_status == TerminalStatus.DIAGNOSTIC_ONLY.value
+    assert result.reason_code is None
+    assert result.gate_detail["passed"] is False
+    assert "negative control failures != 0" in result.gate_detail["failure_reasons"]
+
+
+def test_evaluate_directional_meter_output_missing_when_expected_sweep_unobserved() -> None:
+    """R13 対応の対照ケース: `expected_sweep_ids` に宣言された sweep のうち
+    1 件が観測 pair を 1 件も持たない（真の PRIMARY output 欠落）場合のみ
+    `reason_code == "OUTPUT_MISSING"` になることを固定する。"""
+    pairs = [
+        DirectionalPair(
+            pair_id=f"p{i}",
+            delta_truth=float(i + 1),
+            delta_output=float(i + 1) * 2.0,
+            u_gt_i=0.01,
+            u_num_i=0.01,
+            u_gt_j=0.01,
+            u_num_j=0.01,
+            correct_sign=True,
+            is_adjacent=True,
+            sweep_id="sweep-a",
+        )
+        for i in range(5)
+    ]
+    result = holdout_stage.evaluate_directional_meter(
+        MeterId.M5_TRANSITION.value,
+        ClaimCeiling.DIRECTIONAL,
+        selected_candidate_id="FAKE-DIR-CAND",
+        pairs=pairs,
+        u_rep=0.01,
+        u_proc=0.01,
+        expected_sweep_ids=("sweep-a", "sweep-b"),  # sweep-b has 0 observed pairs
+        expected_adjacent_pair_ids={"sweep-a": [p.pair_id for p in pairs], "sweep-b": ["x"]},
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+    )
+    assert result.terminal_status == TerminalStatus.DIAGNOSTIC_ONLY.value
+    assert result.reason_code == "OUTPUT_MISSING"
+    assert result.gate_detail["passed"] is False
 
 
 def test_diagnostic_only_close_for_m4() -> None:
@@ -795,6 +911,105 @@ def test_control_detection_for_family_counts_false_fire_and_non_fire() -> None:
     assert detection.positive_control_failures == 5
 
 
+def test_control_detection_for_family_negative_control_fully_missing_counts_as_failure() -> None:
+    """v1.1 §V3.6 (Codex round 12 P1 ADOPT): a negative-control instance with
+    zero own records at all (never measured — e.g. dropped by
+    `render_and_measure_holdout()`) must count as a failure (fired=True,
+    FDR0 numerator), not as a clean non-detection success. The old `all()`
+    -based predicate mapped an empty group to `False` (=success)."""
+    candidate = _tilt_candidate()
+    pos1 = _matrix_row("pos-1", family="TILT_GT", block="TRUTH_CORE", positive_control=True)
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = [pos1, neg1]
+    assignment = {"pos-1": Split.HOLDOUT, "neg-1": Split.HOLDOUT}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "pos-1", probe_index, field="tilt_db_per_oct", value=-6.0
+        )
+        # neg-1 has zero own records for every probe -> fully missing instances.
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.n_neg == 5
+    assert detection.fdr0 == 1.0
+    assert detection.negative_control_failures == 5
+
+
+def test_control_detection_for_family_negative_control_mixed_detection_and_missing_is_failure() -> None:
+    """v1.1 §V3.6 (Codex round 12 P1 ADOPT): within one negative-control
+    instance's repeats, a genuine false-fire mixed with missing/invalid
+    repeats must still count as a failure (any-fire semantics,
+    `candidates.adapter.negative_control_false_fire()`). The old `all()`
+    -based predicate let the missing repeats mask the real false-fire
+    (`all([True, False, False]) == False` -> incorrectly "success")."""
+    candidate = _tilt_candidate()
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+
+    # one probe_index's repeat group mixes a real detection with 2
+    # missing/invalid repeats -- not uniformly missing, not uniformly fired.
+    records = [
+        measure_stage.MeasurementRecord(
+            row_id="neg-1",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="within",
+            repeat_index=0,
+            process_id="within-process",
+            output=MeterOutput(values={"tilt_db_per_oct": -3.0}),  # real false-fire
+        ),
+        measure_stage.MeasurementRecord(
+            row_id="neg-1",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="within",
+            repeat_index=1,
+            process_id="within-process",
+            output=MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING),
+        ),
+        measure_stage.MeasurementRecord(
+            row_id="neg-1",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="fresh",
+            repeat_index=0,
+            process_id="fresh-process-0",
+            output=MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING),
+        ),
+    ]
+    # pad with 4 more cleanly-quiet probes so N_neg does not gate the result.
+    for probe_index in range(1, 5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            missing=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 1
+    assert detection.fdr0 == pytest.approx(1.0 / 5.0)
+
+
 def test_build_invariance_pairs_for_family_pairs_confound_row_against_anchor() -> None:
     candidate = _tilt_candidate()
     anchor = _matrix_row(
@@ -830,6 +1045,45 @@ def test_build_invariance_pairs_for_family_pairs_confound_row_against_anchor() -
     for pair in pairs_by_axis["sr_hz"]:
         assert pair.axis == "sr_hz"
         assert pair.ds == pytest.approx(0.0)  # anchor and confound agree perfectly
+
+
+def test_build_invariance_pairs_for_family_pairs_even_when_anchor_homes_outside_holdout() -> None:
+    """R15 対応（Codex 第 15 巡 P1 採用、2026-09-05）: anchor 行は split
+    非依存の共有 control として扱う——anchor の home split が CALIBRATION
+    でも、varied（CONFOUND）行さえ HOLDOUT に home すれば pair は
+    構造的に消えない（5 件 = PROBE_REPEATS）。"""
+    candidate = _tilt_candidate()
+    anchor = _matrix_row(
+        "anchor-1", family="TILT_GT", block="TRUTH_CORE", positive_control=True,
+        slope_db_per_oct=-6.0,
+    )
+    confound = _matrix_row(
+        "confound-1", family="TILT_GT", block="CONFOUND", nuisance_tag="sr_hz=8000",
+        slope_db_per_oct=-6.0,
+    )
+    matrix_rows = [anchor, confound]
+    # anchor homes to CALIBRATION -- the pre-fix implementation required
+    # both sides in HOLDOUT and would silently drop every pair here.
+    assignment = {"anchor-1": Split.CALIBRATION, "confound-1": Split.HOLDOUT}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for row_id in ("anchor-1", "confound-1"):
+        for probe_index in range(5):
+            records += _within_fresh_record(
+                candidate.candidate_id, row_id, probe_index, field="tilt_db_per_oct", value=-6.0
+            )
+
+    e_use_row = _e_use_row(candidate.construct, mode="absolute")
+    pairs_by_axis = holdout_stage.build_invariance_pairs_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+        declared_axes=("sr_hz",),
+        e_use_row=e_use_row,
+    )
+    assert len(pairs_by_axis["sr_hz"]) == 5  # 1 pair per probe_index
 
 
 def test_build_invariance_pairs_for_family_undeclared_axis_and_missing_anchor_are_empty() -> None:

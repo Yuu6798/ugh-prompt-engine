@@ -144,6 +144,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import math
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
@@ -160,6 +161,7 @@ from .fixtures.matrix import (
     claim_relevant_fields_by_family,
     declared_sweeps_by_family,
     holdout_pin_params_by_family,
+    invariance_axes_by_family,
     truth_identity_for_row,
 )
 #: §V2.2 縮退規則（2026-09-04 追補）: `c0_freeze._fixture_specs()` は
@@ -812,6 +814,22 @@ class C0ValidationResult:
     #: v1.1 §V2.3: `_check_holdout_sweeps_realized_membership()` の
     #: violation 列（`violation="holdout_pin_not_in_holdout_split"`）。
     holdout_pin_membership_violations: tuple[SweepManifestViolationDetail, ...] = field(
+        default_factory=tuple
+    )
+    #: v1.1 §V3.5: `_check_invariance_axes_match()` の violation 列
+    #: （`violation="invariance_axis_declaration_mismatch"`）。manifest の
+    #: `frozen_design.fixture_spec.<FAMILY>.confound_axes` 宣言値が
+    #: `fixtures.matrix.invariance_axes_by_family()` の機械導出値と一致
+    #: しない場合に非空になる（D77/claim_relevant_fields 同型）。
+    invariance_axis_violations: tuple[SweepManifestViolationDetail, ...] = field(
+        default_factory=tuple
+    )
+    #: v1.1 §V3.3 末尾: `_check_u_gt_u_num_bounds()` の violation 列
+    #: （`violation="u_bound_missing_or_invalid"`）。非 ABSENT family の
+    #: `u_gt_bound`/`u_num_bound`/`*_formula` の存在・有限非負・非空文字列を
+    #: 検査する（キー自体が manifest に無い legacy manifest は対象外——
+    #: version-aware。値はあるが欠陥がある場合のみ fail-closed）。
+    u_gt_u_num_bound_violations: tuple[SweepManifestViolationDetail, ...] = field(
         default_factory=tuple
     )
 
@@ -1670,6 +1688,160 @@ def _check_claim_relevant_fields_match(
     return tuple(violations)
 
 
+def _check_invariance_axes_match(
+    manifest: Mapping[str, object],
+) -> tuple[SweepManifestViolationDetail, ...]:
+    """v1.1 §V3.5（Codex レビュー第 12 巡 P1 採用）: `frozen_design.
+    fixture_spec.<FAMILY>.confound_axes`（gate4' invariance 軸宣言）の宣言値
+    が、凍結 matrix から `fixtures.matrix.invariance_axes_by_family()` で
+    機械導出される値と完全一致することを検査する
+    （`_check_declared_sweep_declaration_match()`/`_check_claim_relevant_
+    fields_match()` と同じ「宣言でなく実体との一致を検査する」規約——D77
+    同型）。`confound_axes` 自体の非空 list 形状は `_check_fixture_spec_
+    nested_keys()`/`_shape_violation()`（`_LIST_SHAPE_FIELDS`）が既に検査
+    済みのため、ここでは値そのものが family 固有の正しい導出値と一致するか
+    のみを検査する（欠落/hollow/非 list はここでは扱わない）。
+    """
+    # §V2.2 縮退規則と同じ理由で `_canonical_build_matrix` を使う。
+    rows = _canonical_build_matrix()
+    derived = invariance_axes_by_family(rows)
+    violations: list[SweepManifestViolationDetail] = []
+    for family in fixture_axes.FixtureFamily:
+        fam = family.value
+        found, entry = _resolve(manifest, f"frozen_design.fixture_spec.{fam}")
+        if not found or not isinstance(entry, Mapping):
+            continue
+        declared_raw = entry.get("confound_axes")
+        if declared_raw is None or _is_hollow(declared_raw):
+            continue
+        expected = tuple(sorted(derived.get(fam, ())))
+        if not isinstance(declared_raw, (list, tuple)) or isinstance(declared_raw, (str, bytes)):
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="invariance_axis_declaration_mismatch",
+                    family=fam,
+                    sweep_id="",
+                    expected_count=len(expected),
+                    actual_count=0,
+                    detail=(
+                        f"frozen_design.fixture_spec.{fam}.confound_axes must be a list of "
+                        "axis names"
+                    ),
+                )
+            )
+            continue
+        actual = tuple(sorted(str(v) for v in declared_raw))
+        if actual != expected:
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="invariance_axis_declaration_mismatch",
+                    family=fam,
+                    sweep_id="",
+                    expected_count=len(expected),
+                    actual_count=len(actual),
+                    detail=(
+                        f"frozen_design.fixture_spec.{fam}.confound_axes declares "
+                        f"{list(actual)!r}, expected {list(expected)!r} (machine-derived "
+                        "gate4' invariance axes from the frozen matrix, v1.1 §V3.5)"
+                    ),
+                )
+            )
+    return tuple(violations)
+
+
+#: v1.1 §V3.3 末尾: `u_gt_bound`/`u_num_bound` が `"ABSENT:<reason>"` marker
+#: のみ許容される 2 family（`c0_freeze._U_ABSENT_REASON` と同じ集合——物理
+#: gate 入力を持たない）。
+_U_GT_U_NUM_ABSENT_ONLY_FAMILIES: frozenset[str] = frozenset(
+    {"RESONANCE_GT", "IDENTITY_CAUSAL_SWEEP"}
+)
+
+
+def _check_u_gt_u_num_bounds(
+    manifest: Mapping[str, object],
+) -> tuple[SweepManifestViolationDetail, ...]:
+    """v1.1 §V3.3 末尾（本 PR で新設）: 非 ABSENT family
+    （F0_CONTROL/FORMANT_GT/TILT_GT/APERIODICITY_GT/TRANSITION_GT）は
+    `frozen_design.fixture_spec.<FAMILY>.u_gt_bound`/`.u_num_bound` が
+    有限非負の number として存在し、対応する `.u_gt_bound_formula`/
+    `.u_num_bound_formula` の導出式文字列も非空で存在することを要求する。
+    RESONANCE_GT/IDENTITY_CAUSAL_SWEEP（`_U_GT_U_NUM_ABSENT_ONLY_FAMILIES`）
+    は `"ABSENT:<reason>"` 文字列のみを許可する（`c0_freeze._U_ABSENT_
+    REASON` と同じ 2 family——物理 gate 入力を持たない）。
+
+    **version-aware**: `u_gt_bound`/`u_num_bound` は `FIXTURE_SPEC_REQUIRED_
+    KEYS` に含まれない任意キーである（v1.0 §V3.3 実装以前に構築された
+    manifest fixture・legacy campaign を壊さないため）。キー自体が
+    manifest に存在しない場合はここでは fail-closed にしない——**キーが
+    存在するのに値が欠陥（型不正・負・非有限・formula 欠落）である場合の
+    み** violation を積む。"""
+    violations: list[SweepManifestViolationDetail] = []
+    for family in fixture_axes.FixtureFamily:
+        fam = family.value
+        found, entry = _resolve(manifest, f"frozen_design.fixture_spec.{fam}")
+        if not found or not isinstance(entry, Mapping):
+            continue
+        for base_key in ("u_gt_bound", "u_num_bound"):
+            if base_key not in entry:
+                continue  # legacy manifest predating v1.1 §V3.3 -- not blocked here.
+            value = entry.get(base_key)
+            formula_key = f"{base_key}_formula"
+            formula = entry.get(formula_key)
+            if fam in _U_GT_U_NUM_ABSENT_ONLY_FAMILIES:
+                if not _is_absent_marker(value):
+                    violations.append(
+                        SweepManifestViolationDetail(
+                            violation="u_bound_missing_or_invalid",
+                            family=fam,
+                            sweep_id=base_key,
+                            expected_count=0,
+                            actual_count=0,
+                            detail=(
+                                f"frozen_design.fixture_spec.{fam}.{base_key} must be an "
+                                f"{_ABSENT_PREFIX!r}-prefixed marker for this family "
+                                "(v1.1 §V3.3), got " + repr(value)
+                            ),
+                        )
+                    )
+                    continue
+            else:
+                value_ok = (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(float(value))
+                    and float(value) >= 0.0
+                )
+                if not value_ok:
+                    violations.append(
+                        SweepManifestViolationDetail(
+                            violation="u_bound_missing_or_invalid",
+                            family=fam,
+                            sweep_id=base_key,
+                            expected_count=0,
+                            actual_count=0,
+                            detail=(
+                                f"frozen_design.fixture_spec.{fam}.{base_key} must be a "
+                                f"non-negative finite number, got {value!r} (v1.1 §V3.3)"
+                            ),
+                        )
+                    )
+            if not isinstance(formula, str) or formula.strip() == "":
+                violations.append(
+                    SweepManifestViolationDetail(
+                        violation="u_bound_missing_or_invalid",
+                        family=fam,
+                        sweep_id=formula_key,
+                        expected_count=0,
+                        actual_count=0,
+                        detail=(
+                            f"frozen_design.fixture_spec.{fam}.{formula_key} must be a "
+                            "non-empty derivation-formula string (v1.1 §V3.3)"
+                        ),
+                    )
+                )
+    return tuple(violations)
+
+
 def _check_holdout_pin_feasibility(
     manifest: Mapping[str, object],
 ) -> tuple[SweepManifestViolationDetail, ...]:
@@ -1828,7 +2000,25 @@ def _check_holdout_sweeps_declaration_match(
         # 維持する（後方互換）。
         if found_holdout and split_secret is not None and fam in params:
             p = params[fam]
-            if not p.pin_exempt and hollow:
+            # v1.1 §V3.5 実装時発見（2026-09-05）: `p.pin_exempt` は matrix
+            # 構造のみで決まる静的概念（`cap<1`）であり、段 2 coverage repair
+            # が secret 依存で `degradation_floor`（claim 非被覆 family では
+            # 0）まで完全縮退した「実行時の」ゼロ pin（`p.pin_exempt=False`
+            # のまま起こりうる——nuisance_axis coverage 制約導入後、
+            # `TILT_GT` で実際に観測される）とは別軸である。空宣言の正当性は
+            # 「再導出結果そのものが空か」（`full_pin` — 既に再実行済みの
+            # 正規縮退ループの出力、静的 `pin_exempt` を包含する）で判定
+            # しなければ、正当な完全縮退を fail-closed で誤検出する
+            # （逆に、宣言と再導出のどちらも空でない/どちらも空、の不一致は
+            # 後続の per-sweep_id 完全一致検査が別途捕捉するため、ここでの
+            # 判定を緩めても改竄検出力は落ちない）。
+            rederivation_indicates_empty = (
+                canonical_rederivation_error is None
+                and full_pin is not None
+                and not full_pin.get(fam)
+            )
+            legitimately_empty = p.pin_exempt or rederivation_indicates_empty
+            if not legitimately_empty and hollow:
                 violations.append(
                     SweepManifestViolationDetail(
                         violation="holdout_pin_declaration_mismatch",
@@ -1838,9 +2028,11 @@ def _check_holdout_sweeps_declaration_match(
                         actual_count=0,
                         detail=(
                             f"holdout_sweeps.{fam} declaration is missing or empty, but "
-                            f"family is not pin-exempt (k_hold={p.k_hold} >= 1) — a "
-                            "non-exempt family's holdout pin declaration must be present "
-                            "and non-empty (fail-closed, §V2.2)"
+                            f"family is not pin-exempt (k_hold={p.k_hold} >= 1) and the "
+                            "split_secret re-derivation does not itself produce an empty "
+                            "pin set — a non-exempt family's holdout pin declaration must "
+                            "be present and non-empty unless legitimately degraded to zero "
+                            "(fail-closed, §V2.2)"
                         ),
                     )
                 )
@@ -2029,6 +2221,8 @@ def validate_c0_manifest(
     sweep_violations = _check_declared_sweep_truth_levels(manifest)
     sweep_mismatch_violations = _check_declared_sweep_declaration_match(manifest)
     claim_relevant_violations = _check_claim_relevant_fields_match(manifest)
+    invariance_axis_violations = _check_invariance_axes_match(manifest)
+    u_gt_u_num_violations = _check_u_gt_u_num_bounds(manifest)
     holdout_pin_feasibility_violations = _check_holdout_pin_feasibility(manifest)
     holdout_pin_declaration_violations = _check_holdout_sweeps_declaration_match(
         manifest, split_secret
@@ -2051,6 +2245,8 @@ def validate_c0_manifest(
         or sweep_violations
         or sweep_mismatch_violations
         or claim_relevant_violations
+        or invariance_axis_violations
+        or u_gt_u_num_violations
         or holdout_pin_feasibility_violations
         or holdout_pin_declaration_violations
         or holdout_pin_membership_violations
@@ -2069,6 +2265,8 @@ def validate_c0_manifest(
         sweep_declaration_violations=sweep_violations,
         sweep_declaration_mismatch_violations=sweep_mismatch_violations,
         claim_relevant_field_violations=claim_relevant_violations,
+        invariance_axis_violations=invariance_axis_violations,
+        u_gt_u_num_bound_violations=u_gt_u_num_violations,
         holdout_pin_feasibility_violations=holdout_pin_feasibility_violations,
         holdout_pin_declaration_violations=holdout_pin_declaration_violations,
         holdout_pin_membership_violations=holdout_pin_membership_violations,

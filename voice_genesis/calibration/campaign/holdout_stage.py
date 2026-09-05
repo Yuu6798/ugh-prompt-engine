@@ -281,13 +281,35 @@ def control_detection_for_family(
       Split.HOLDOUT, family=family)`（memo「gate 5 の FDR0/FNR1 = holdout に
       home する control instance」の holdout 版）。
 
-    判定 predicate は `_detected_output()`（`selection_stage._detected()` と
-    同一定義）を instance 単位へ畳み込む: その instance の own record が
-    1 件以上あり、かつ **全 repeat** が detected の場合のみ「検出した」と
-    数える（1 repeat でも非検出なら instance 全体を非検出——単一 flaky
-    repeat による誤 detection を避ける、ABSOLUTE gate1 の `usable_primary_
-    instances` 全件一致規約と対称な設計判断）。record が 1 件も無い
-    instance は非検出（保守的既定）。"""
+    判定 predicate は positive/negative で非対称（v1.1 §V3.6、Codex レビュー
+    第 12 巡 P1 採用、2026-09-05 — 旧実装は両側とも `_all_detected()`（ALL
+    repeat が detected の場合のみ「発火」）を共有しており、negative control
+    では次の 2 経路で「missing/invalid の分子算入」（v1.0 §10.1）に違反して
+    いた: (a) instance の own record が 1 件も無い（`render_and_measure_
+    holdout()` が測定を落とした等）場合を `False`＝非発火＝成功と誤って
+    写像していた、(b) 複数 repeat のうち一部が実際に発火（`_detected_output`
+    True）していても、他の repeat が missing/invalid（`_detected_output`
+    False）であれば `all()` が `False` を返し、実在する偽検出を非発火＝
+    成功へ隠蔽していた:
+
+    - **positive control**（`_positive_detected()`）: 全 repeat が detected
+      の場合のみ「発火（成功）」——1 repeat でも missing/invalid なら
+      instance 全体を不発火（失敗）とする（ABSOLUTE gate1 の
+      `usable_primary_instances` 全件一致規約と対称）。record が 1 件も
+      無い instance は不発火（失敗）。
+    - **negative control**（`_negative_fired()`）: **いずれか 1 repeat でも**
+      detected（`_detected_output` True。真の偽検出）なら「発火（失敗）」
+      （`candidates.adapter.negative_control_false_fire()` と同じ any-fire
+      規約）。record が 1 件も無い instance も「発火（失敗）」——missing
+      repeat を「非検出＝成功」に丸め込まない。全 repeat が
+      missing_reason 付きで一貫して静穏（`_detected_output` False）な
+      instance のみが「不発火（成功）」——これは round 30 ADOPT
+      (`[UNDERSPEC-CAL-D67]`) が正当と認めた「一貫した非検出」の定義と
+      同じ判定基準を再利用する（missing_reason は「候補が正しく無音を
+      報告した」ことと「候補が測定に失敗した」ことの両方を同じ値で表現する
+      ため、両者は型システム上区別できない——本関数はいずれの場合も
+      any-fire が無ければ成功として扱う、v1.0 §8 の既存 any-fire 規約通り）。
+    """
     neg_instances = fixture_controls.negative_control_instances(matrix_rows, family=family)
     pos_instances = fixture_controls.positive_detection_instances(
         matrix_rows, assignment, Split.HOLDOUT, family=family
@@ -297,18 +319,24 @@ def control_detection_for_family(
     for r in own_records:
         by_instance.setdefault((r.row_id, r.probe_index), []).append(r)
 
-    def _all_detected(instance: tuple[str, int]) -> bool:
+    def _positive_detected(instance: tuple[str, int]) -> bool:
         group = by_instance.get(instance)
         if not group:
             return False
         return all(_detected_output(r.output) for r in group)
 
+    def _negative_fired(instance: tuple[str, int]) -> bool:
+        group = by_instance.get(instance)
+        if not group:
+            return True  # missing entirely -> count as failure (v1.1 §V3.6)
+        return any(_detected_output(r.output) for r in group)
+
     neg_outcomes = {
-        instance_id_str(row_id, probe_index): _all_detected((row_id, probe_index))
+        instance_id_str(row_id, probe_index): _negative_fired((row_id, probe_index))
         for row_id, probe_index in neg_instances
     }
     pos_outcomes = {
-        instance_id_str(row_id, probe_index): _all_detected((row_id, probe_index))
+        instance_id_str(row_id, probe_index): _positive_detected((row_id, probe_index))
         for row_id, probe_index in pos_instances
     }
     result = detection_rates(neg_outcomes, pos_outcomes, control_gate="APPLICABLE")
@@ -342,10 +370,28 @@ def build_invariance_pairs_for_family(
     を持つ family の designated anchor（`fixtures.controls.
     positive_controls_by_family()`。2 件中 1 本目/2 本目を `nuisance_tag` の
     `A2:` 接頭辞で判別）とペアにする——`observables.nuisance_ds` の
-    「anchor error / varied error」そのもの。両側とも `Split.HOLDOUT` に
-    home し、かつ usable な出力を持つ `probe_index` のみを 1
-    `InvariancePair` とする（それ以外は黙ってスキップする——gate4' 自体が
-    `<5 pairs` を FAIL として検出するため、母集団を人為的に水増ししない）。
+    「anchor error / varied error」そのもの。
+
+    v1.1 §V3.5 追補（Codex レビュー第 15 巡 P1 採用、2026-09-05）: **anchor
+    行は split 非依存の共有 control として扱う**（negative control と同型
+    — anchor は TRUTH_CORE の positive control 行であり、home split が
+    CALIBRATION/SELECTION なら C1 で、HOLDOUT なら C4 で、いずれも既に
+    render・測定済み: `render_and_measure_holdout()` が
+    `fixtures.controls.positive_controls_by_family()` の全 probe instance
+    を per-family 測定対象へ union している）。旧実装は varied（CONFOUND）
+    行・anchor 行の**両方**が `Split.HOLDOUT` に home することを要求して
+    おり、HMAC split が変異行を HOLDOUT・対応する anchor を CALIBRATION/
+    SELECTION へ割り当てた場合（構造的に起こりうる——anchor の split 割当は
+    varied 行の割当と独立）、anchor 側の own record が存在せず pair が
+    黙って全滅していた（gate4' 自体は `<5 pairs` で正直に FAIL するため
+    「バグとして気づかれにくい静かな失敗」だった）。本追補は **varied 行
+    のみ** `Split.HOLDOUT` を要求し、anchor 行は home split を問わず
+    （measurement さえ存在すれば）ペアの対象とする——seal/leakage 境界は
+    動かさない（HOLDOUT 行を unseal 前に露出させるわけではなく、C1 で
+    render 済みの anchor 行を読むだけ）。usable な出力を持つ `probe_index`
+    のみを 1 `InvariancePair` とする（それ以外は黙ってスキップする——
+    gate4' 自体が `<5 pairs` を FAIL として検出するため、母集団を人為的に
+    水増ししない）。
     """
     positive_by_family = fixture_controls.positive_controls_by_family(matrix_rows)
     anchor_row_ids = positive_by_family.get(family, ())
@@ -383,7 +429,10 @@ def build_invariance_pairs_for_family(
         anchor_row_id = anchors_by_truth.get((prefix, truth))
         if anchor_row_id is None:
             continue
-        if assignment.get(mr.row_id) != Split.HOLDOUT or assignment.get(anchor_row_id) != Split.HOLDOUT:
+        # v1.1 §V3.5 追補: only the varied (CONFOUND) row must home to
+        # HOLDOUT — the anchor is a split-independent shared control (see
+        # docstring above), so its own home split is irrelevant here.
+        if assignment.get(mr.row_id) != Split.HOLDOUT:
             continue
         e_use_value = absolute_e_use_value(e_use_row, truth)
         if e_use_value is None:
@@ -1206,8 +1255,20 @@ def evaluate_absolute_meter(
         absolute_gates_passed=gate.passed,
         directional_gates_passed=False,
     )
+    #: R13 対応（Codex 第 13 巡 P1 採用、2026-09-05）: 設計正本 §11 は
+    #: `OUTPUT_MISSING` を「score 計算可能だが PRIMARY 一部 output missing で
+    #: gate 不通過」専用に予約する。旧実装は cascade 5 (else -> DIAGNOSTIC_
+    #: ONLY) の全経路（accuracy/invariance/control gate の正直な fail を
+    #: 含む）を一律 `OUTPUT_MISSING` としており、完全・有限な観測で単に
+    #: gate2'/gate_max'/gate3/gate4'/gate5 が閾値を満たさなかっただけの
+    #: ケースまで「output が missing」と偽って記録していた。`gate1_all_
+    #: eligible` こそが「PRIMARY output の完全性」を表す唯一のフラグ
+    #: （§10.3 gate1: 「全 PRIMARY instance が eligible」）——これが False の
+    #: ときのみ真の部分欠落として `OUTPUT_MISSING` を立て、gate1 が通った上で
+    #: 他の gate が正直に fail した場合は理由コード無し（`None`）とし、
+    #: `gate_detail.failure_reasons` に落ちた gate の内訳を残す。
     reason = None
-    if status == TerminalStatus.DIAGNOSTIC_ONLY:
+    if status == TerminalStatus.DIAGNOSTIC_ONLY and not gate.gate1_all_eligible:
         reason = MissingReason.OUTPUT_MISSING.value
     return MeterHoldoutResult(
         meter_id=meter_id,
@@ -1278,7 +1339,21 @@ def evaluate_directional_meter(
         absolute_gates_passed=False,
         directional_gates_passed=gate.passed,
     )
-    reason = MissingReason.OUTPUT_MISSING.value if status == TerminalStatus.DIAGNOSTIC_ONLY else None
+    #: R13 対応（Codex 第 13 巡 P1 採用、2026-09-05）: `evaluate_absolute_
+    #: meter()` と同じ欠陥（cascade 5 の全経路を一律 `OUTPUT_MISSING` として
+    #: いた）を DIRECTIONAL 側でも修正する。DIRECTIONAL に ABSOLUTE の
+    #: `gate1_all_eligible` に相当する単一フラグは無いため、「宣言済み
+    #: sweep のうち 1 件でも観測 pair が 0 件（`observed_sweep_ids` に
+    #: 含まれない）」を真の PRIMARY output 欠落として扱う——完全に測定
+    #: された全 sweep が resolvability/reversal/control 判定で正直に
+    #: fail した場合は理由コード無し（`None`）とする。
+    observed_sweep_ids = {p.sweep_id for p in pairs}
+    missing_sweep_coverage = bool(set(expected_sweep_ids) - observed_sweep_ids)
+    reason = (
+        MissingReason.OUTPUT_MISSING.value
+        if status == TerminalStatus.DIAGNOSTIC_ONLY and missing_sweep_coverage
+        else None
+    )
     return MeterHoldoutResult(
         meter_id=meter_id,
         terminal_status=status.value,
@@ -1454,11 +1529,31 @@ def render_and_measure_holdout(
     # population `c4_holdout_instances()` already covers (positive controls
     # are ordinary TRUTH_CORE rows). Union, not replace, so every existing
     # consumer of `instances_by_family`/`results` sees a strict superset.
+    #
+    # v1.1 §V3.5 追補（Codex レビュー第 15 巡 P1 採用、2026-09-05）: gate4'
+    # の designated anchor（`fixtures.controls.positive_controls_by_family()`
+    # の family あたり 2 行）も、negative control と同じ「split 非依存の
+    # 共有 control」として union する。理由: HMAC split で変異 CONFOUND 行が
+    # HOLDOUT に home し、対応する anchor 行が CALIBRATION/SELECTION に home
+    # した場合、`build_invariance_pairs_for_family()` は anchor 側の own
+    # record が無いため pair を 1 件も作れず（`_per_instance_output_repeats`
+    # が空を返す）gate4' が黙って全滅していた。anchor 行は TRUTH_CORE 行
+    # として C1 で（home split が CALIBRATION/SELECTION の場合）既に render
+    # 済みであり、HOLDOUT に home する場合は既存の `c4_holdout_instances()`
+    # 母集団に既に含まれる——いずれの場合も本 union は seal/leakage 境界を
+    # 動かさない（HOLDOUT 行の unseal 前露出は生じない。C1 で render 済みの
+    # 行を C4 で測定するだけ）。
+    anchor_row_ids_by_family = fixture_controls.positive_controls_by_family(matrix_rows)
     instances_by_family = {
         family: tuple(
             sorted(
                 frozenset(workunits.c4_holdout_instances(matrix_rows, assignment, family=family))
                 | fixture_controls.negative_control_instances(matrix_rows, family=family)
+                | {
+                    (row_id, probe_index)
+                    for row_id in anchor_row_ids_by_family.get(family, ())
+                    for probe_index in range(fixture_controls.PROBE_REPEATS)
+                }
             )
         )
         for family, _candidates in family_order

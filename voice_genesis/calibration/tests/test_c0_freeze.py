@@ -138,16 +138,38 @@ def test_dry_run_determinism_same_manifest_core_sha(tmp_path: Path) -> None:
     assert report1.manifest_core_sha == report2.manifest_core_sha
 
 
-def test_fixture_spec_confound_axes_is_the_flat_invariance_axis_tuple() -> None:
-    """UNDERSPEC-CAL-D76 (supersedes D75 ruling (1)): `confound_axes` reverts
-    to the flat, family-uniform 6-tuple (gate4' invariance-axis declaration
-    only) — D75's `declared_sweeps_by_family()`-as-`confound_axes` mapping
-    was a category error (nuisance axis != DIRECTIONAL sweep)."""
+def test_fixture_spec_confound_axes_is_machine_derived_per_family() -> None:
+    """v1.1 §V3.5 (Codex round 12 P1 ADOPT, supersedes the flat 6-tuple this
+    test previously locked in): `confound_axes` is no longer a family-uniform
+    6-tuple. The old flat tuple (f0_hz/sr_hz/gain_dbfs/duration_s/
+    noise_snr_db/context) declared f0_hz/sr_hz as invariance axes even though
+    the canonical 456-cell matrix has no single-axis CONFOUND row naming
+    either field (`axes.CANONICAL_NUISANCE_SEQUENCE` only varies gain_dbfs/
+    duration_s/noise_snr_db/context; f0_hz/sr_hz only move together in
+    `TARGETED_INTERACTIONS`), so gate4' always saw 0 pairs on those two axes
+    and every ABSOLUTE candidate failed structurally. `confound_axes` must
+    now equal `fixtures.matrix.invariance_axes_by_family()` per family."""
+    from voice_genesis.calibration.fixtures.matrix import (
+        build_matrix as _build_matrix_for_expected,
+    )
+    from voice_genesis.calibration.fixtures.matrix import invariance_axes_by_family
+
     manifest = c0_freeze.build_manifest(_REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02")
     fixture_spec = manifest["frozen_design"]["fixture_spec"]
-    expected = ["f0_hz", "sr_hz", "gain_dbfs", "duration_s", "noise_snr_db", "context"]
-    for entry in fixture_spec.values():
-        assert list(entry["confound_axes"]) == expected
+    expected = invariance_axes_by_family(_build_matrix_for_expected())
+    for family, entry in fixture_spec.items():
+        assert list(entry["confound_axes"]) == list(expected[family])
+    # regression lock on the canonical 456-cell derivation (Codex round 12
+    # report table): f0_hz/sr_hz never appear (no single-axis CONFOUND row
+    # names them), and per-family exclusions propagate from
+    # `_build_confound_block(exclude_axis_family=...)`.
+    assert expected["F0_CONTROL"] == ("context", "duration_s", "gain_dbfs", "noise_snr_db")
+    assert expected["FORMANT_GT"] == ("context", "duration_s", "gain_dbfs", "noise_snr_db")
+    assert expected["TILT_GT"] == ("context", "duration_s", "gain_dbfs", "noise_snr_db")
+    assert expected["APERIODICITY_GT"] == ("context", "duration_s", "gain_dbfs")
+    assert expected["RESONANCE_GT"] == ("context", "duration_s", "gain_dbfs", "noise_snr_db")
+    assert expected["TRANSITION_GT"] == ("duration_s", "gain_dbfs", "noise_snr_db")
+    assert expected["IDENTITY_CAUSAL_SWEEP"] == ("context", "duration_s", "gain_dbfs", "noise_snr_db")
 
 
 def test_fixture_spec_declared_sweeps_matches_declared_sweeps_by_family() -> None:
@@ -510,18 +532,44 @@ def test_armed_freeze_holdout_sweeps_is_non_core_and_matches_k_hold(
     assignment = full_manifest["realized_split"]["assignment"]
     for family in FixtureFamily:
         family_sweeps = holdout_sweeps[family.value]
-        assert len(family_sweeps) == params[family.value].k_hold, family.value
+        # v1.1 §V3.5 実装時発見（2026-09-05）: `TILT_GT` の `nuisance_axis`
+        # coverage 制約は nominal k_hold では非 pin HOLDOUT 枠に収まらず、
+        # §V2.2 縮退規則（`splitter.pin_and_realize_holdout()`）が全 secret
+        # で決定論的に k_hold を 1 段階縮退させて解決する（`degradation_floor`
+        # は不変——被覆保証は弱めていない）。よってここは `<=` で検査する
+        # （`test_k_hold_matches_v2_2_frozen_table` が nominal 値自体は
+        # 別途固定済み）。
+        assert len(family_sweeps) <= params[family.value].k_hold, family.value
+        assert len(family_sweeps) >= 1, family.value
         for member_row_ids in family_sweeps.values():
             for rid in member_row_ids:
                 assert assignment[rid] == "HOLDOUT", (family.value, rid)
 
-    # end-to-end: the secret-independent structural checks (matched against
-    # `declared_sweeps`/k_hold) and the realized-membership check both pass
-    # against this real, production-shaped manifest.
-    validation = c0_validate.validate_c0_manifest(full_manifest)
-    assert validation.holdout_pin_declaration_violations == ()
-    assert validation.holdout_pin_membership_violations == ()
-    assert validation.holdout_pin_feasibility_violations == ()
+    # end-to-end: the realized-membership check passes against this real,
+    # production-shaped manifest regardless of secret. The secret-dependent
+    # full re-derivation (the check `armed_freeze()` itself performs, per
+    # `c0_freeze.armed_freeze()`'s own `validate_c0_manifest(..., split_
+    # secret=...)` call) also passes. v1.1 §V3.5 実装時発見（2026-09-05）:
+    # the secret-*independent* structural check (`split_secret=None`)
+    # cannot verify a legitimate `nuisance_axis`-coverage-driven degradation
+    # (`TILT_GT` always degrades k_hold 2->1 for the canonical matrix, per
+    # `_check_holdout_sweeps_declaration_match()`'s own docstring on this
+    # known limitation) — so it is expected, not a defect, that only
+    # `TILT_GT` mismatches there.
+    validation_no_secret = c0_validate.validate_c0_manifest(full_manifest)
+    assert {v.family for v in validation_no_secret.holdout_pin_declaration_violations} == {
+        "TILT_GT"
+    }
+    assert validation_no_secret.holdout_pin_membership_violations == ()
+    assert validation_no_secret.holdout_pin_feasibility_violations == ()
+
+    split_secret_bytes = (result.secret_dir / "split_secret.bin").read_bytes()
+    validation_with_secret = c0_validate.validate_c0_manifest(
+        full_manifest, split_secret=split_secret_bytes
+    )
+    assert validation_with_secret.holdout_pin_declaration_violations == ()
+    assert validation_with_secret.holdout_pin_membership_violations == ()
+    assert validation_with_secret.holdout_pin_feasibility_violations == ()
 
 
 def test_armed_freeze_manifest_core_sha_mismatch_refused(tmp_path: Path, clean_checkout: None) -> None:

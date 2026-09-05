@@ -16,19 +16,32 @@ feasibility()` / `_check_holdout_sweeps_declaration_match()` /
 from __future__ import annotations
 
 from voice_genesis.calibration import c0_validate, vocab
+from voice_genesis.calibration.c0_freeze import STRATUM_FACTOR_NAMES, _row_inputs_for_split
 from voice_genesis.calibration.fixtures.matrix import (
     build_matrix,
     claim_relevant_fields_by_family,
     declared_sweeps_by_family,
+    invariance_axes_by_family,
     pin_holdout_sweeps_by_family,
 )
+from voice_genesis.calibration.splitter import pin_and_realize_holdout
 from voice_genesis.calibration.vocab import Split
 
 _ROWS = build_matrix()
+_ROW_INPUTS = _row_inputs_for_split(_ROWS, STRATUM_FACTOR_NAMES)
 _DERIVED_CLAIM_RELEVANT = claim_relevant_fields_by_family(_ROWS)
+_DERIVED_INVARIANCE_AXES = invariance_axes_by_family(_ROWS)
 _DECLARED_SWEEPS = declared_sweeps_by_family(_ROWS)
 _SECRET = b"\x42" * 32
-_PINNED = pin_holdout_sweeps_by_family(_ROWS, _SECRET)
+#: v1.1 §V3.5 実装時発見（2026-09-05）: `_check_holdout_sweeps_declaration_
+#: match()` は `splitter.pin_and_realize_holdout()`（縮退リトライ込み、
+#: `c0_freeze.armed_freeze()` と同一入口）で再導出照合する——`TILT_GT` は
+#: `nuisance_axis` coverage 制約により nominal k_hold=2 では coverage
+#: 修復不能で全 secret 決定論的に k_hold=1 へ縮退するため、この fixture も
+#: 生の `pin_holdout_sweeps_by_family()`（nominal、縮退なし）ではなく同じ
+#: 縮退込みの入口で pin を計算しなければ、"正しい宣言" のはずの fixture
+#: 自体が再導出照合で mismatch 扱いになる。
+_PINNED, _ = pin_and_realize_holdout(_ROWS, _ROW_INPUTS, _SECRET, STRATUM_FACTOR_NAMES)
 
 
 def _manifest_with_fixture_spec(fixture_spec: dict[str, object]) -> dict[str, object]:
@@ -84,6 +97,185 @@ def test_claim_relevant_fields_non_list_value_blocks() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _check_invariance_axes_match (v1.1 §V3.5)
+# ---------------------------------------------------------------------------
+
+
+def test_invariance_axes_absent_is_not_a_violation() -> None:
+    """`confound_axes` の非空 list 形状は `_LIST_SHAPE_FIELDS` が別途要求する
+    ため、ここではキー欠落そのものは violation にしない。"""
+    manifest = _manifest_with_fixture_spec({"TRANSITION_GT": {}})
+    violations = c0_validate._check_invariance_axes_match(manifest)
+    assert violations == ()
+
+
+def test_invariance_axes_correct_declaration_passes_for_all_families() -> None:
+    manifest = _manifest_with_fixture_spec(
+        {
+            fam: {"confound_axes": list(axes)}
+            for fam, axes in _DERIVED_INVARIANCE_AXES.items()
+        }
+    )
+    violations = c0_validate._check_invariance_axes_match(manifest)
+    assert violations == ()
+
+
+def test_invariance_axes_flat_six_tuple_is_rejected() -> None:
+    """回帰ガード: 旧 `c0_freeze._CONFOUND_AXES` の flat 6-tuple（f0_hz/
+    sr_hz を含む）は、正典 456 セル matrix のどの family の実導出値とも
+    一致しないため、宣言すれば必ず mismatch として fail-closed する。"""
+    stale_flat_tuple = ["f0_hz", "sr_hz", "gain_dbfs", "duration_s", "noise_snr_db", "context"]
+    manifest = _manifest_with_fixture_spec(
+        {"F0_CONTROL": {"confound_axes": stale_flat_tuple}}
+    )
+    violations = c0_validate._check_invariance_axes_match(manifest)
+    assert len(violations) == 1
+    assert violations[0].violation == "invariance_axis_declaration_mismatch"
+    assert violations[0].family == "F0_CONTROL"
+
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert result.invariance_axis_violations == violations
+
+
+def test_invariance_axes_non_list_value_blocks() -> None:
+    manifest = _manifest_with_fixture_spec({"TRANSITION_GT": {"confound_axes": "oops"}})
+    violations = c0_validate._check_invariance_axes_match(manifest)
+    assert len(violations) == 1
+    assert violations[0].family == "TRANSITION_GT"
+
+
+# ---------------------------------------------------------------------------
+# _check_u_gt_u_num_bounds (v1.1 §V3.3 末尾)
+# ---------------------------------------------------------------------------
+
+
+def test_u_gt_u_num_bounds_absent_key_is_not_a_violation() -> None:
+    """v1.0 形式（`u_gt_bound`/`u_num_bound` キー自体が無い legacy manifest）
+    は version-aware にスキップする（後方互換）。"""
+    manifest = _manifest_with_fixture_spec({"TILT_GT": {}})
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert violations == ()
+
+
+def test_u_gt_u_num_bounds_valid_non_absent_family_passes() -> None:
+    manifest = _manifest_with_fixture_spec(
+        {
+            "TILT_GT": {
+                "u_gt_bound": 0.0,
+                "u_gt_bound_formula": "U_GT = 0 (analytic)",
+                "u_num_bound": 0.024,
+                "u_num_bound_formula": "U_num = derive_floor(...)",
+            }
+        }
+    )
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert violations == ()
+
+
+def test_u_gt_u_num_bounds_valid_absent_family_passes() -> None:
+    manifest = _manifest_with_fixture_spec(
+        {
+            "RESONANCE_GT": {
+                "u_gt_bound": "ABSENT:diagnostic_only",
+                "u_gt_bound_formula": "no gate input",
+                "u_num_bound": "ABSENT:diagnostic_only",
+                "u_num_bound_formula": "no gate input",
+            }
+        }
+    )
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert violations == ()
+
+
+def test_u_gt_u_num_bounds_negative_value_blocks() -> None:
+    manifest = _manifest_with_fixture_spec(
+        {
+            "TILT_GT": {
+                "u_gt_bound": -1.0,
+                "u_gt_bound_formula": "bogus",
+                "u_num_bound": 0.024,
+                "u_num_bound_formula": "bogus",
+            }
+        }
+    )
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert len(violations) == 1
+    assert violations[0].violation == "u_bound_missing_or_invalid"
+    assert violations[0].family == "TILT_GT"
+    assert violations[0].sweep_id == "u_gt_bound"
+
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert result.u_gt_u_num_bound_violations == violations
+
+
+def test_u_gt_u_num_bounds_nonfinite_value_blocks() -> None:
+    manifest = _manifest_with_fixture_spec(
+        {
+            "TILT_GT": {
+                "u_gt_bound": float("nan"),
+                "u_gt_bound_formula": "bogus",
+                "u_num_bound": 0.024,
+                "u_num_bound_formula": "bogus",
+            }
+        }
+    )
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert len(violations) == 1
+    assert violations[0].sweep_id == "u_gt_bound"
+
+
+def test_u_gt_u_num_bounds_missing_formula_blocks() -> None:
+    manifest = _manifest_with_fixture_spec(
+        {
+            "TILT_GT": {
+                "u_gt_bound": 0.0,
+                "u_gt_bound_formula": "",  # empty -> blocked
+                "u_num_bound": 0.024,
+                "u_num_bound_formula": "U_num = derive_floor(...)",
+            }
+        }
+    )
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert len(violations) == 1
+    assert violations[0].sweep_id == "u_gt_bound_formula"
+
+
+def test_u_gt_u_num_bounds_absent_family_with_numeric_value_blocks() -> None:
+    """ABSENT-only family（RESONANCE_GT/IDENTITY_CAUSAL_SWEEP）に数値を宣言
+    したら fail-closed（`c0_freeze._U_ABSENT_REASON` の契約違反）。"""
+    manifest = _manifest_with_fixture_spec(
+        {
+            "IDENTITY_CAUSAL_SWEEP": {
+                "u_gt_bound": 0.0,
+                "u_gt_bound_formula": "should have been ABSENT",
+                "u_num_bound": "ABSENT:no_physical_ground_truth",
+                "u_num_bound_formula": "no gate input",
+            }
+        }
+    )
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert len(violations) == 1
+    assert violations[0].family == "IDENTITY_CAUSAL_SWEEP"
+    assert violations[0].sweep_id == "u_gt_bound"
+
+
+def test_u_gt_u_num_bounds_real_c0_freeze_manifest_passes() -> None:
+    """実 `c0_freeze.build_manifest()` の出力が本検査を通過することを固定
+    する（producer/validator 間の契約回帰ガード）。"""
+    from voice_genesis.calibration import c0_freeze
+
+    manifest = c0_freeze.build_manifest(
+        c0_freeze._REPO_ROOT, approvals={}, campaign_date_utc="2026-09-05"
+    )
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert violations == ()
+    axis_violations = c0_validate._check_invariance_axes_match(manifest)
+    assert axis_violations == ()
+
+
+# ---------------------------------------------------------------------------
 # _check_holdout_pin_feasibility
 # ---------------------------------------------------------------------------
 
@@ -116,10 +308,25 @@ def test_holdout_sweeps_absent_is_not_a_violation() -> None:
 
 
 def test_holdout_sweeps_correct_pin_passes_with_and_without_secret() -> None:
+    """v1.1 §V3.5 実装時発見（2026-09-05）: `_PINNED`（`splitter.
+    pin_and_realize_holdout()` の実結果、`_SECRET` で決定論的に再現）は
+    `TILT_GT` が `nuisance_axis` coverage 制約により nominal k_hold=2 から
+    k_hold=1 へ縮退している。secret 非依存の構造検査（`_check_holdout_
+    sweeps_declaration_match(manifest, None)`）はその設計上の限界どおり
+    （関数 docstring 「secret 無しではその縮退が正当だったかを検査できず、
+    単に len(actual) != k_hold として構造 mismatch になる」）`TILT_GT` を
+    構造 mismatch として検出する——これは検証器のバグではなく、正当な
+    縮退を secret 無しでは確認しようがないという既知の制約そのものである。
+    secret 依存の完全再導出照合（本来の正当性確認経路）は全 family で
+    一致する。"""
     manifest = _holdout_sweeps_manifest(_PINNED)
-    # secret 非依存の構造検査（k_hold 数・declared_sweeps との member 一致）。
-    assert c0_validate._check_holdout_sweeps_declaration_match(manifest, None) == ()
-    # secret 依存の完全再導出照合。
+    # secret 非依存の構造検査: 縮退した TILT_GT のみ「nominal k_hold との
+    # 単純比較」で構造 mismatch として検出される（設計上の既知の制約）。
+    without_secret_violations = c0_validate._check_holdout_sweeps_declaration_match(manifest, None)
+    assert {v.family for v in without_secret_violations} == {"TILT_GT"}
+    assert all(v.violation == "holdout_pin_declaration_mismatch" for v in without_secret_violations)
+    # secret 依存の完全再導出照合（縮退の正当性まで検証できる本来の経路）
+    # は全 family で一致する。
     assert c0_validate._check_holdout_sweeps_declaration_match(manifest, _SECRET) == ()
 
     result = c0_validate.validate_c0_manifest(manifest, split_secret=_SECRET)

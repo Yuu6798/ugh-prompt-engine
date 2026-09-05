@@ -1063,6 +1063,89 @@ def claim_relevant_fields_by_family(rows: Sequence[MatrixRow]) -> dict[str, tupl
     return result
 
 
+# ---------------------------------------------------------------------------
+# v1.1 §V3.5 — gate4' invariance 軸の機械導出
+#
+# 実 gate 配線後の監査（Codex レビュー第 12 巡 P1 採用、2026-09-05）: 旧
+# `c0_freeze._CONFOUND_AXES` は全 family に同一の 6 軸（f0_hz/sr_hz/
+# gain_dbfs/duration_s/noise_snr_db/context）を一律宣言していたが、正典
+# 456 セル matrix には f0_hz・sr_hz を名指す単一軸 CONFOUND 行が存在しない
+# （`axes.CANONICAL_NUISANCE_SEQUENCE` の field_name は gain_dbfs/
+# duration_s/noise_snr_db/context のみ——f0_hz/sr_hz は `TARGETED_
+# INTERACTIONS`（2 軸同時摂動）でのみ動く）。宣言軸に f0_hz/sr_hz を含めると
+# `build_invariance_pairs_for_family()` はその軸で 0 pair しか作れず、
+# `gates.absolute_gates()` の「軸ごと >= 5 pairs」判定が構造的に FAIL する
+# （宣言と行列実体の不整合による偽失敗）。
+# ---------------------------------------------------------------------------
+
+
+def single_axis_nuisance_tag_axis(row: FixtureRow) -> str | None:
+    """`row` が CONFOUND block の単一軸主効果行（`nuisance_tag` が
+    `"axis=value"` または `"A2:axis=value"` 形式で 1 軸を名指す行）なら、その
+    軸名を返す。targeted interaction 行（`interaction_tag` 系列、
+    `nuisance_tag is None`）や CONFOUND 以外の block は `None`。
+    `splitter.row_inputs_for_split()`（§V3.5 coverage 制約の `nuisance_axis`
+    stratum key）と `_single_axis_confound_axis_names()` が共有する単一の
+    tag 解析入口（`"A2:"` 接頭辞の扱いを二重実装しない）。
+    """
+    if row.block != "CONFOUND" or row.nuisance_tag is None:
+        return None
+    tag = row.nuisance_tag
+    bare = tag[len("A2:"):] if tag.startswith("A2:") else tag
+    if "=" not in bare:
+        return None
+    return bare.split("=", 1)[0]
+
+
+def _single_axis_confound_axis_names(rows: Sequence[MatrixRow], family: str) -> set[str]:
+    """`family` の CONFOUND block のうち単一軸主効果行（`nuisance_tag` が
+    1 軸を名指す行）が存在する軸名の集合。`"A2:axis=value"` 形式の第 2
+    anchor 行（`_build_confound_block()` の `anchor2_truth` 系列）も同軸として
+    扱う（`"A2:"` 接頭辞を剥がして同じ軸名に畳み込む）。targeted interaction
+    行（2 軸同時摂動、`nuisance_tag is None`）はここでは一切対象にしない。
+    """
+    found: set[str] = set()
+    for mr in rows:
+        row = mr.row
+        if row.family != family:
+            continue
+        axis = single_axis_nuisance_tag_axis(row)
+        if axis is not None:
+            found.add(axis)
+    return found
+
+
+def invariance_axes_by_family(rows: Sequence[MatrixRow]) -> dict[str, tuple[str, ...]]:
+    """v1.1 §V3.5: family ごとの gate4' invariance 軸を凍結 matrix 実体から
+    機械導出する。当該 family の CONFOUND block に単一軸主効果行が存在する
+    軸のみを宣言し、family の truth 軸（`_SWEEP_TRUTH_FIELDS_BY_FAMILY`）は
+    除外する——truth 軸は truth-core block の因子分解にのみ現れ、
+    `_build_confound_block()` の nuisance_tag 系列（`axes.CANONICAL_
+    NUISANCE_SEQUENCE`: gain_dbfs/duration_s/noise_snr_db/context のみ）
+    には構造的に現れないため、この除外は通常は no-op（防御的に明示する）。
+
+    456 セル canonical matrix での帰結（`declared_sweeps_by_family()` と
+    同じく family ごとの `_filtered_nuisance_sequence()`/`exclude_axis_
+    family` の適用差を反映する）: F0_CONTROL/FORMANT_GT/TILT_GT/
+    RESONANCE_GT/IDENTITY_CAUSAL_SWEEP -> `("context", "duration_s",
+    "gain_dbfs", "noise_snr_db")`、APERIODICITY_GT（`exclude_axis_family=
+    "noise"`）-> `("context", "duration_s", "gain_dbfs")`、TRANSITION_GT
+    （`exclude_axis_family="context"`）-> `("duration_s", "gain_dbfs",
+    "noise_snr_db")`。`c0_freeze._fixture_specs()` がこの出力をそのまま
+    `frozen_design.fixture_spec.<FAMILY>.confound_axes` として凍結し、
+    `c0_validate` が再導出との完全一致を検査する（D77/claim_relevant_
+    fields と同型）。
+    """
+    truth_fields_by_family = _SWEEP_TRUTH_FIELDS_BY_FAMILY
+    result: dict[str, tuple[str, ...]] = {}
+    for family in axes.FAMILY_ORDER:
+        fam = family.value
+        found = _single_axis_confound_axis_names(rows, fam)
+        truth_fields = set(truth_fields_by_family.get(fam, ()))
+        result[fam] = tuple(sorted(found - truth_fields))
+    return result
+
+
 class HoldoutPinInfeasible(RuntimeError):
     """§V2.2 の被覆要件が cap `floor((N_hold-1)/r)` 内で充足不能な family
     構成（C0 fail-closed。456 セル canonical matrix では発生しない —

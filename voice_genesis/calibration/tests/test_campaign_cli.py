@@ -3229,7 +3229,14 @@ def test_c4_absolute_gate_wiring_fails_honestly_to_diagnostic_only_with_tiny_e_u
     """AC8(b): identical clean measurement, but E_use shrunk far below
     U_GT+U_num, so gate2'/gate_max' fail honestly (§10.2: no threshold
     relaxation to force a pass) -- `DIAGNOSTIC_ONLY`, not a silent
-    DIAGNOSTIC_ONLY placeholder note."""
+    DIAGNOSTIC_ONLY placeholder note.
+
+    R13 対応（Codex 第 13 巡 P1 採用、2026-09-05）: coverage は完全（gate1
+    pass）で、gate2'/gate_max' のみが正直に fail する——設計正本 §11 の
+    `OUTPUT_MISSING` は「PRIMARY 一部 output missing」専用のため、この
+    ケースの `reason_code` は `None`（cascade 5 の理由コード無し）になる。
+    旧実装は全 DIAGNOSTIC_ONLY 経路を一律 `OUTPUT_MISSING` としていたため、
+    この assertion はその偽った理由コードを固定していた（本 PR で是正）。"""
     campaign, subset, candidate = _build_absolute_gate_campaign(
         tmp_path, monkeypatch, e_use_value=0.0001
     )
@@ -3243,7 +3250,7 @@ def test_c4_absolute_gate_wiring_fails_honestly_to_diagnostic_only_with_tiny_e_u
     per_meter = holdout_events[-1]["per_meter"]
     m2t_result = per_meter[MeterId.M2_SPECTRAL_TILT.value]
     assert m2t_result["terminal_status"] == "DIAGNOSTIC_ONLY", m2t_result
-    assert m2t_result["reason_code"] == "OUTPUT_MISSING"
+    assert m2t_result["reason_code"] is None
     assert m2t_result["selected_candidate_id"] == candidate.candidate_id
     gate_detail = m2t_result["gate_detail"]
     assert gate_detail["passed"] is False
@@ -5648,6 +5655,54 @@ def test_c1_fixtures_retry_after_fixture_valid_is_true_noop(
     assert entries_after == entries_before
 
 
+def test_c1_fixtures_true_noop_still_charges_counters_json_not_ledger(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R15(D) 対応（User 裁定 2026-09-05）: `NOOP_ALREADY_COMPLETE` は
+    round 19 finding #3 の「ledger 増分ゼロ」契約は保つ（前テストで固定
+    済み）が、pre-dispatch CPU（`load_frozen_campaign()` の全 chain 検証を
+    含む）を完全に捨てず `counters.json` の `compute_used` へ加算する
+    （ledger 経由ではなく counters cache 経由の迂回）。"""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    # `counters.json` does not exist yet at this point (`build_tiny_campaign`
+    # never writes it, and no dispatch has run) — absent means 0.
+    compute_before = 0.0
+    entries_before = len(load_frozen_campaign(campaign_dir, secret_root).ledger.entries)
+
+    exit_code = cli.main(
+        [
+            "c1-fixtures",
+            "--campaign-dir",
+            str(campaign_dir),
+            "--secret-dir",
+            str(secret_root),
+            "--approval-dir",
+            str(approval_dir),
+            "--armed",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    assert '"result": "NOOP_ALREADY_COMPLETE"' in out
+
+    compute_after = json.loads(counters_path(campaign_dir).read_text(encoding="utf-8"))[
+        "compute_used"
+    ]
+    assert compute_after > compute_before
+
+    # the ledger-zero-growth contract still holds alongside the cache write.
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    new_entries = list(reloaded.ledger.entries)[entries_before:]
+    assert new_entries == []
+
+
 def _seal_to_unsealed_for_holdout_noop_tests(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[Path, Path, Path]:
@@ -5769,3 +5824,39 @@ def test_c4_holdout_retry_after_campaign_closed_is_phase_order_violation(
 
     entries_after = len(load_frozen_campaign(campaign_dir, secret_root).ledger.entries)
     assert entries_after == entries_before
+
+
+def test_phase_order_violation_still_charges_counters_json_not_ledger(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R15(D) 対応（User 裁定 2026-09-05）: `PHASE_ORDER_VIOLATION` は
+    `test_c4_holdout_retry_after_campaign_closed_is_phase_order_violation`
+    の「zero ledger growth」契約は保つが、pre-dispatch CPU を
+    `counters.json` の `compute_used` へは加算する。"""
+    campaign_dir, secret_root, approval_dir = _seal_to_unsealed_for_holdout_noop_tests(
+        tmp_path, monkeypatch
+    )
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    _seed_closable_holdout(campaign)
+
+    exit_code = cli.main(_armed_close_args(campaign_dir, secret_root, approval_dir))
+    assert exit_code == 0, capsys.readouterr().out
+
+    compute_before = json.loads(counters_path(campaign_dir).read_text(encoding="utf-8"))[
+        "compute_used"
+    ]
+    entries_before = len(load_frozen_campaign(campaign_dir, secret_root).ledger.entries)
+
+    exit_code = cli.main(_armed_c4_holdout_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 1, out
+    assert '"result": "PHASE_ORDER_VIOLATION"' in out
+
+    compute_after = json.loads(counters_path(campaign_dir).read_text(encoding="utf-8"))[
+        "compute_used"
+    ]
+    assert compute_after > compute_before
+
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    new_entries = list(reloaded.ledger.entries)[entries_before:]
+    assert new_entries == []

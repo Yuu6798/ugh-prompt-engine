@@ -44,10 +44,47 @@ from voice_genesis.calibration.fixtures.matrix import (
     MatrixRow,
     holdout_pin_params_by_family,
     pin_holdout_sweeps_by_family,
+    single_axis_nuisance_tag_axis,
 )
 from voice_genesis.calibration.vocab import Split
 
-_COVERAGE_AXES: tuple[str, ...] = ("truth_level", "generator_impl", "boundary_class")
+#: v1.1 §V3.5 追加（Codex レビュー第 12 巡 P1 採用、2026-09-05）: `nuisance_axis`
+#: は CONFOUND block の単一軸主効果行（`fixtures.matrix.
+#: single_axis_nuisance_tag_axis()`）が名指す軸名（例: `"gain_dbfs"`）を値に
+#: 持つ——gate4' invariance 軸ごとに各 split が最低 1 行を持つことを、既存の
+#: count>=3 規則（`_required_pairs()`）でそのまま保証する（TRUTH_CORE/
+#: BOUNDARY/targeted-interaction 行や truth 軸は該当なしで `None`、
+#: coverage 対象から自然に除外される）。
+_COVERAGE_AXES: tuple[str, ...] = (
+    "truth_level",
+    "generator_impl",
+    "boundary_class",
+    "nuisance_axis",
+)
+
+#: v1.1 §V3.5 実装時発見（2026-09-05、456 セル実測）: gate4' の invariance
+#: pair（`campaign.holdout_stage.build_invariance_pairs_for_family()`）は
+#: ABSOLUTE ceiling の meter だけが消費する（`gates.absolute_gates()`）。
+#: `RESONANCE_GT`（§16-1 で全候補 DIAGNOSTIC_ONLY 固定）と
+#: `IDENTITY_CAUSAL_SWEEP`（M6 は DIRECTIONAL-only の founder/trait pair
+#: 評価であり gate4' 自体を一切消費しない。`c0_freeze._U_ABSENT_REASON` の
+#: 2 family と同一集合）は、gate4' に到達すること自体が構造的にないため、
+#: この 2 family へ `nuisance_axis` coverage 制約を課すことは機能的な保護を
+#: 一切生まず、既存の holdout sweep pin 予算（§V2.2）を圧迫するだけの
+#: 純損失になる。実測: `IDENTITY_CAUSAL_SWEEP` は非 pin HOLDOUT 枠
+#: X=4（n_hold=24, k_hold(=4, r=5)*r=20 → 24-20=4）に対し、3 nuisance 軸
+#: （context/duration_s/gain_dbfs/noise_snr_db の 4 軸、うち count>=3 の
+#: 4 軸全て）+ boundary の最小 5 distinct 行が必要で構造的に充足不能——
+#: しかも `degradation_floor`（founder x trait 周辺被覆保護、§V2.2 縮退規則）
+#: が nominal `k_hold` と同値のため縮退の余地が皆無で `HoldoutPinDegradation
+#: Exhausted` が必ず発生し、**456 セル campaign が secret に依らず恒久的に
+#: C0 freeze 不能になる**（`RESONANCE_GT` も X=4/needed=4 のタイトな一致で
+#: 既存の `truth_level=NEGATIVE_CONTROL` 制約と競合し同型の脆さを持つ）。
+#: よってこの 2 family の行は `RowInput.nuisance_axis` を常に `None` に
+#: 保ち（宣言軸自体——`fixtures.matrix.invariance_axes_by_family()`——は
+#: 変更しない。manifest 上の `confound_axes` 宣言は引き続き機械導出される）、
+#: coverage 制約の対象から除外する。
+_GATE4_INAPPLICABLE_FAMILIES: frozenset[str] = frozenset({"RESONANCE_GT", "IDENTITY_CAUSAL_SWEEP"})
 
 #: `truth_level == "TRUTH_CORE"` は他の coverage 軸と異なり、単なる存在保証
 #: (>=1) では不十分（Codex レビュー 2026-09-01 P1 finding #3）: SELECTION/
@@ -72,6 +109,10 @@ class RowInput:
     truth_level: str | None = None
     generator_impl: str | None = None
     boundary_class: str | None = None
+    #: v1.1 §V3.5: CONFOUND block の単一軸主効果行が名指す軸名
+    #: （`fixtures.matrix.single_axis_nuisance_tag_axis()`）。該当しない行
+    #: （TRUTH_CORE/BOUNDARY/targeted-interaction 行）は `None`。
+    nuisance_axis: str | None = None
 
 
 @dataclass(frozen=True)
@@ -718,6 +759,11 @@ def row_inputs_for_split(
                 stratum[name] = fr.generator_impl
             else:
                 stratum[name] = getattr(fr, name, None)
+        nuisance_axis = (
+            single_axis_nuisance_tag_axis(fr)
+            if fr.family not in _GATE4_INAPPLICABLE_FAMILIES
+            else None
+        )
         out.append(
             RowInput(
                 row_id=mrow.row_id,
@@ -726,6 +772,7 @@ def row_inputs_for_split(
                 truth_level=fr.block,
                 generator_impl=fr.generator_impl,
                 boundary_class=mrow.domain.value,
+                nuisance_axis=nuisance_axis,
             )
         )
     return out

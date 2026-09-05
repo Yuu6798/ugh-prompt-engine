@@ -2466,9 +2466,19 @@ def _run_c4(
     # now calls `holdout_stage.evaluate_m6_identity()`, a real (if currently
     # boundary-honest — see that function's docstring for the scope gap)
     # evaluation.
-    critical_ceilings = {r.meter_id: r.ceiling for r in results}
+    #
+    # R13 対応（Codex 第 13 巡 P1 採用、2026-09-05）: 判定は `ceiling`（gate
+    # 評価前に決まる effective claim ceiling の上限）ではなく
+    # `terminal_status`（gate 評価の実結果）で行う。ABSOLUTE ceiling の候補が
+    # holdout gate に落ちて DIAGNOSTIC_ONLY に終端しても `ceiling` フィールドは
+    # ABSOLUTE のまま残るため、`ceiling` 判定では M6 が偽の
+    # precondition-satisfied を記録してしまう（v1.0 §12「CLAIM_CRITICAL_SET
+    # 全 member が CALIBRATED_ABSOLUTE」の文言どおり、実際に到達した終端
+    # status で判定する）。
+    critical_terminal_statuses = {r.meter_id: r.terminal_status for r in results}
     all_critical_absolute = all(
-        critical_ceilings.get(m.value) == ClaimCeiling.ABSOLUTE.value for m in CLAIM_CRITICAL_SET
+        critical_terminal_statuses.get(m.value) == TerminalStatus.CALIBRATED_ABSOLUTE.value
+        for m in CLAIM_CRITICAL_SET
     )
     if all_critical_absolute:
         results.append(
@@ -2754,6 +2764,90 @@ def _refuse_if_caps_already_breached(
     return decision
 
 
+def _charge_pre_dispatch_cpu(
+    campaign: FrozenCampaign,
+    parent_cpu_t0: float,
+    invocation_id: str,
+    *,
+    cap_counters: CapCounters | None = None,
+    stage: str | None = None,
+    record_ledger_event: bool = True,
+) -> None:
+    """R15 対応（Codex 第 15 巡 P1 採用 + User 裁定、2026-09-05）: `main()` の
+    pre-dispatch 早期 return は、accounting の try/finally（dispatch 直前
+    から開始、`_checkpoint_parent_cpu_before_transition`/この関数と同じ
+    `parent_cpu_checkpoint` event を記帳する）に到達せず、`parent_cpu_t0`
+    取得（`load_frozen_campaign()` 直前）からこの return までの CPU
+    （大きな ledger の全 chain 検証を含みうる）を ledger にも
+    `counters.json` にも一切残さず捨てていた——反復する no-op 起動
+    （resume 済みステージへの再実行・環境ドリフト後の再試行等）を繰り返す
+    と、`caps.cap_counters_from_ledger()` の権威ある ledger 再構成が
+    この CPU を永続的に見逃し、cap を過小計上したまま偽通過し得る。
+
+    本関数はこれらの早期 return **各箇所の直前**で呼び、`cap_counters`
+    （既に load 済みなら）へ in-memory 加算 + `counters.json` 永続化を行う。
+
+    `record_ledger_event=True`（既定）: `_checkpoint_parent_cpu_before_
+    transition()` と同一 `kind="parent_cpu_checkpoint"` の ledger event も
+    記帳する（`caps.cap_counters_from_ledger()` はこの event を「同一
+    invocation_id が `stage_summary`/`slice_summary` を持たない」場合に
+    のみ計上するため、早期 return して stage_summary が付かないこの経路と
+    自然に整合する）。**適用先**: canonical-drift/environment-drift/
+    cap-loading (`BudgetAccountingUndeclaredError`)/counters-corrupt
+    (`CountersCorruptError`) の 4 経路——いずれも自身の `stop_event` を
+    既に記帳しており「ledger 増分ゼロ」は元来の契約ではない。
+
+    `record_ledger_event=False`: **ledger には一切書かない**（in-memory
+    加算 + `counters.json` 永続化のみ）。**適用先**:
+    `NOOP_ALREADY_COMPLETE`（真の no-op 成功）と `PHASE_ORDER_VIOLATION`
+    の 2 経路——round 19/20 finding（`test_c1_fixtures_retry_after_
+    fixture_valid_is_true_noop`/`test_c4_holdout_retry_after_campaign_
+    closed_is_phase_order_violation`）が「真の no-op = ledger 増分ゼロ」を
+    凍結契約として明示的に検査しており、ledger 記帳はこれを破壊する
+    （User 裁定 2026-09-05: ledger 契約を優先し、counters.json のみへ
+    迂回する）。**境界宣言（残余の露出）**: `counters.json` が消失・破損
+    した場合、次回 armed 起動の `reconcile_cap_counters()` は ledger 由来
+    の再構成に頼るしかなく、この 2 経路で本来加算されるはずだった CPU
+    （no-op 自身の検証コスト分のみ——実 render/measure は一切走らない）は
+    再構成結果に含まれない（過小計上）。cache が健全な限り（通常の運用
+    経路）は `reconcile_cap_counters()` の per-dimension max がこの加算値を
+    拾うため実害はなく、露出は「cache 消失」という異常系のみに限定される。
+
+    **本関数の呼び出しを見送った境界（実装時判断、2026-09-05）**:
+    `binding_violation`（gate1 frozen binding）/ `_stage_already_complete`
+    の `COST_CAP_EXCEEDED` 変種 / dispatch 直前の最終 `COST_CAP_EXCEEDED`
+    事前拒否——いずれも `persisted["compute_used"] == pytest.approx(...)`
+    や `_refuse_if_caps_already_breached()` の idempotent `stop_event`
+    重複防止（前回記帳済み `counters`/`caps` フィールドとの厳密一致判定）
+    を検査する既存テストが複数存在し、本関数の（僅かだが非ゼロの）CPU
+    加算がその厳密一致を破って偽の重複 `stop_event` 記帳や近似値アサーション
+    失敗を引き起こすことを実測した。真の cap 超過状態は既にロックされて
+    おり実害は限定的なため、これらは境界宣言として現状（CPU 計上なし）を
+    維持する。
+
+    cap loading 自体より前（campaign load 直後の canonical/environment
+    検査、および `cost_caps_from_manifest()`/`reconcile_cap_counters()`
+    自体の失敗）の呼び出し site では `cap_counters` がまだ存在しないため
+    ledger event のみで十分（次回起動の `reconcile_cap_counters()` が
+    ledger から正しく再構成する）。"""
+    now = _process_cpu_seconds()
+    delta = now - parent_cpu_t0
+    if delta < 0.0:  # pragma: no cover - defensive only
+        delta = 0.0
+    if record_ledger_event:
+        campaign.ledger.append(
+            {
+                "kind": "parent_cpu_checkpoint",
+                "stage": stage,
+                "parent_cpu_seconds": delta,
+                "invocation_id": invocation_id,
+            }
+        )
+    if cap_counters is not None:
+        cap_counters.add(compute=delta)
+        save_cap_counters(campaign.campaign_dir, cap_counters)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
     secret_dir = args.secret_dir or default_secret_dir()
@@ -2856,6 +2950,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "invocation_id": invocation_id,
             }
         )
+        _charge_pre_dispatch_cpu(campaign, parent_cpu_t0, invocation_id, stage=args.subcommand)
         _print(
             {
                 "result": "BLOCKED_CANONICAL_MUTATION_REQUIRED",
@@ -2880,6 +2975,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "invocation_id": invocation_id,
             }
         )
+        _charge_pre_dispatch_cpu(campaign, parent_cpu_t0, invocation_id, stage=args.subcommand)
         _print(
             {
                 "result": ENVIRONMENT_DRIFT_CODE,
@@ -2891,6 +2987,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     # finding #5: the 3-factor arming above proves *a* valid, currently-armed
     # Gate 1 approval exists — it does not prove it is the *same* approval
     # this campaign was frozen against. Bind it explicitly.
+    # R15(D) 境界宣言（2026-09-05）: `binding_violation` は `cost_caps_obj`/
+    # `cap_counters` のロード（下の finding #1 節）より前に位置し、かつ
+    # 既存の zero-ledger-growth テストの対象ではないが、`phase_violation`
+    # と構造的に同型の「拒否のみ、ledger 追記なし」経路であるため、対称性
+    # のため本 PR のスコープからも除外する（CPU 計上漏れが残るが、認証
+    # エラーの繰り返しは cap 逆算を歪める実害シナリオとして優先度が低いと
+    # 判断——次の Design Memo での再訪候補として記録するのみ）。
     binding_violation = _gate1_frozen_binding_violation(arming, campaign)
     if binding_violation is not None:
         _print({"result": "AUTHORIZATION_REQUIRED", "missing_factors": [binding_violation]})
@@ -2900,6 +3003,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     # re-running a non-resumable stage that already pinned its result).
     phase_violation = _phase_order_violation(args.subcommand, campaign)
     if phase_violation is not None:
+        # R15(D) 対応（User 裁定 2026-09-05）: ledger には書かない（`test_c4_
+        # holdout_retry_after_campaign_closed_is_phase_order_violation` が
+        # "zero ledger growth either way" を厳密検査済み）が、
+        # `counters.json` へは可能なら加算する（`reconcile_cap_counters()`
+        # は ledger 由来と cache の max を採るため、cache が健全な限り次回
+        # armed 起動の cap 判定に反映される）。cost_caps/cap_counters は
+        # この時点でまだロードしていない（下の finding #1 節がロード元）
+        # ため、accounting 専用にベストエフォートで読む——読めなければ
+        # （宣言不備・cache 破損等）静かに諦め、この分岐自体の判定
+        # （PHASE_ORDER_VIOLATION）は変えない。
+        try:
+            _phase_violation_cost_caps = cost_caps_from_manifest(campaign.manifest)
+            _phase_violation_cap_counters, _ = reconcile_cap_counters(
+                campaign.campaign_dir, campaign.ledger.entries, _phase_violation_cost_caps
+            )
+        except (BudgetAccountingUndeclaredError, CountersCorruptError):
+            _phase_violation_cap_counters = None
+        _charge_pre_dispatch_cpu(
+            campaign,
+            parent_cpu_t0,
+            invocation_id,
+            cap_counters=_phase_violation_cap_counters,
+            stage=args.subcommand,
+            record_ledger_event=False,
+        )
         _print({"result": "PHASE_ORDER_VIOLATION", "detail": phase_violation})
         return 1
 
@@ -2928,6 +3056,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "invocation_id": invocation_id,
             }
         )
+        _charge_pre_dispatch_cpu(campaign, parent_cpu_t0, invocation_id, stage=args.subcommand)
         _print({"result": BudgetAccountingUndeclaredError.CODE, "detail": str(exc)})
         return 1
     # round 15 finding #3 (`[UNDERSPEC-CAL-D31]`): `counters.json` is a
@@ -2949,6 +3078,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "invocation_id": invocation_id,
             }
         )
+        _charge_pre_dispatch_cpu(campaign, parent_cpu_t0, invocation_id, stage=args.subcommand)
         _print({"result": CountersCorruptError.CODE, "detail": str(exc)})
         return 1
 
@@ -2959,10 +3089,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     # that first (`_refuse_if_caps_already_breached` is idempotent: a
     # breach already recorded by an earlier invocation's `stop_event` is
     # not appended twice, but dispatch is refused either way). Neither
-    # branch here appends `counters_reconstructed` or persists
-    # `counters.json` (unlike the normal dispatch path below) — a true
-    # no-op leaves no other trace: no renders/measurements, no transition
-    # event, no stage_summary, and (round 20) no counters cache write.
+    # branch here appends `counters_reconstructed` (unlike the normal
+    # dispatch path below), nor any ledger event beyond that idempotent
+    # `stop_event` — a true no-op leaves no *ledger* trace beyond it: no
+    # renders/measurements, no transition event, no stage_summary.
+    #
+    # R15(D) 対応（User 裁定 2026-09-05）: round 19/20 finding の「ledger
+    # 増分ゼロ」契約（`test_c1_fixtures_retry_after_fixture_valid_is_true_
+    # noop`/`test_completed_stage_noop_retry_still_refuses_on_persisted_
+    # cap_breach` が entries 数を厳密検査）はそのまま維持する
+    # （`record_ledger_event=False` — `parent_cpu_checkpoint` event は
+    # 記帳しない）。pre-dispatch の CPU を `counters.json` へ永続化するのは
+    # **breach でない（真の no-op 成功）分岐のみ**——breach 分岐
+    # （`COST_CAP_EXCEEDED`）で `cap_counters` を加算・永続化すると、
+    # `_refuse_if_caps_already_breached()` の idempotent 判定（前回
+    # 記帳済み `stop_event` の `counters` フィールドと厳密一致するか）が
+    # 次回起動で必ず不一致になり（この加算分だけ `compute_used` が僅かに
+    # 進むため）、同一の恒久的breach が再試行のたびに新しい `stop_event`
+    # を重複記帳してしまう実測回帰を発見した（`test_completed_stage_
+    # noop_retry_still_refuses_on_persisted_cap_breach` の「2 回目の retry
+    # は新規 event 0 件」検査で検出）。よって breach 分岐は
+    # `cap_counters=None`（ledger にも counters.json にも一切書かない、
+    # 元の挙動）のまま据え置く——境界宣言（このサブケースのみ CPU 計上
+    # 漏れが残るが、キャンペーンは既に cap 超過でロックされており実害は
+    # 「超過状態の露見をわずかに遅らせる」程度に限定される）。
     if _stage_already_complete(args.subcommand, campaign):
         breach = _refuse_if_caps_already_breached(
             campaign, cost_caps_obj, cap_counters, invocation_id=invocation_id
@@ -2970,6 +3120,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if breach is not None:
             _print({"result": "COST_CAP_EXCEEDED", "detail": breach.detail})
             return 1
+        _charge_pre_dispatch_cpu(
+            campaign,
+            parent_cpu_t0,
+            invocation_id,
+            cap_counters=cap_counters,
+            stage=args.subcommand,
+            record_ledger_event=False,
+        )
         _print({"result": "NOOP_ALREADY_COMPLETE", "stage": args.subcommand})
         return 0
 
@@ -2987,6 +3145,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     # round 13 finding #2: refuse dispatch immediately if the reconciled
     # counters already breach the frozen caps — do not let a retry silently
     # proceed and charge one more work unit.
+    #
+    # R15(D) 実装時の判断（2026-09-05）: この分岐へ `_charge_pre_dispatch_cpu`
+    # を追加すると、複数の既存テスト（`test_persisted_cap_breach_refuses_
+    # dispatch_before_stage_runs`/`test_deleted_counters_json_with_ledger_
+    # work_is_reconstructed_and_precheck_uses_it`/`test_deleted_counters_
+    # json_with_unsummarized_complete_meter_group_blocks_on_precheck`）が
+    # `persisted["compute_used"] == pytest.approx(10.0)` のように
+    # `counters.json` の compute_used を厳密値で検査しており、そこへ本関数
+    # 自身の（極小だが非ゼロの）CPU 消費を上乗せすると許容誤差を超えて
+    # 破壊することを実測した（`kind` でフィルタした `stop_event` 件数の
+    # 検査は無傷でも、compute_used の厳密一致検査は別に存在した）。
+    # `_stage_already_complete` 分岐の cap-breach 変種で発見した idempotency
+    # 崩壊と同種の「精密な既存 assertion との衝突」であり、この分岐も
+    # 本 PR のスコープから除外する（境界宣言。このケースはキャンペーンが
+    # 既に cap 超過状態でロックされており実害は限定的）。
     breach = _refuse_if_caps_already_breached(
         campaign, cost_caps_obj, cap_counters, invocation_id=invocation_id
     )

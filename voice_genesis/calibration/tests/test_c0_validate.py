@@ -13,7 +13,11 @@ import pytest
 from voice_genesis.calibration import c0_validate, streams, vocab
 from voice_genesis.calibration.candidates import registry as candidate_registry
 from voice_genesis.calibration.fixtures import axes as fixture_axes
-from voice_genesis.calibration.fixtures.matrix import build_matrix, declared_sweeps_by_family
+from voice_genesis.calibration.fixtures.matrix import (
+    build_matrix,
+    declared_sweeps_by_family,
+    invariance_axes_by_family,
+)
 
 _MEASUREMENT_DIRECTORY_STATUS = "ABSENT:legacy_path=voice_genesis/harness/measure_v3.py"
 
@@ -97,6 +101,15 @@ def _real_declared_sweeps_by_family() -> dict[str, dict[str, tuple[str, ...]]]:
     return declared_sweeps_by_family(build_matrix())
 
 
+@functools.lru_cache(maxsize=1)
+def _real_invariance_axes_by_family() -> dict[str, tuple[str, ...]]:
+    """凍結 matrix から実際に導出される family ごとの gate4' invariance 軸
+    （v1.1 §V3.5）を一度だけ計算しキャッシュする（`declared_sweeps` と同じ
+    理由: `_check_invariance_axes_match()` の完全一致検査を満たす値を
+    生成する必要があり、汎用 placeholder list では通過し得ない）。"""
+    return invariance_axes_by_family(build_matrix())
+
+
 def _shape_valid_nested_value(key: str, seed: str) -> object:
     """`c0_validate._shape_violation` (BOUNDED shape validation,
     `[UNDERSPEC-CAL-C18]`) が要求する形状を満たす、`key`/`seed` に応じた
@@ -104,7 +117,14 @@ def _shape_valid_nested_value(key: str, seed: str) -> object:
     人間可読な文字列 `f"{seed}_{key}"` を返す。"""
     if key.endswith("_hash") or key.endswith("_sha256"):
         return hashlib.sha256(f"{seed}_{key}".encode("utf-8")).hexdigest()
-    if key in ("confound_axes", "boundary_probes", "negative_controls", "stop_rules"):
+    if key == "confound_axes":
+        # v1.1 §V3.5: この key だけは placeholder ではなく、
+        # `_check_invariance_axes_match()` の完全一致検査を満たす実際の
+        # 凍結 matrix 導出値を返す必要がある（`declared_sweeps` と同じ理由。
+        # `seed` は `family.value.lower()` — fixture_spec のみが本 key を
+        # 持つため meter_specs 側からこの分岐に到達することはない）。
+        return list(_real_invariance_axes_by_family().get(seed.upper(), ()))
+    if key in ("boundary_probes", "negative_controls", "stop_rules"):
         return [f"{seed}_{key}_0", f"{seed}_{key}_1"]
     if key == "parameter_grid":
         return {f"{seed}_{key}_axis": [0, 1]}
