@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import gzip
 import hashlib
 import threading
@@ -827,6 +828,91 @@ def test_recovery_branch_blocks_concurrent_append_and_rejects_stale_appender(
         # 書き込みに至る前に fail-closed するため中身は空のままである。
         assert ledger_path.read_bytes() == b""
     assert _has_authoritative_copy(campaign_dir)
+
+
+# ---------------------------------------------------------------------------
+# R17 fix (PR #346 round 17 採用, "Lock before checking for campaign
+# closure"): R15 が回復判定ブロックと (1)-(4) のフレッシュ archive ブロック
+# の両方をロック区間へ統合した後もなお、その *直前* に置かれていた
+# closed-campaign 検査自体（R9 fix 節）は `_ledger_write_lock()` を取得する
+# 前に `ledger_path.read_bytes()` を実行していた。この検査完了直後・ロック
+# 獲得前の一瞬に別スレッドが `campaign_closed` を append すると検出されず、
+# closed campaign を誤って archive してしまっていた。
+# ---------------------------------------------------------------------------
+
+
+def test_closed_campaign_appended_before_lock_acquisition_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R17 の核心回帰: `ensure_archived()` が実際に安定ロックを取得しよう
+    とする直前（＝修正前の実装ならば closed-campaign 検査が既に完了して
+    しまっていたはずの瞬間）に割り込ませた
+    `Ledger.append({"kind": "campaign_closed"})` を、archiver が正しく
+    検出して `ArchiveError` を送出し、gz/sidecar を一切作らず・原本も
+    archiver 自身によっては一切変更しないことを固定する。
+
+    修正前（closed-campaign 検査がロック取得より前に実行される実装）では、
+    この位置での append は検査完了より後に発生するため検出されず、archiver
+    はそのまま closed campaign を archive してしまっていた（本テストはその
+    回帰を再現する: `_ledger_write_lock` の実際の獲得だけを遅延させ、検査
+    そのものの実行位置がロックの内側か外側かで結果が変わることを固定する）。
+    """
+    campaign_dir = tmp_path / "RUN10-CAL-fake-abort"
+    original_bytes = _build_tiny_ledger(campaign_dir, n=3)
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    sidecar_path = campaign_dir / archive.SIDECAR_FILENAME
+
+    real_lock = archive._ledger_write_lock
+    about_to_lock = threading.Event()
+    release_lock_attempt = threading.Event()
+
+    @contextlib.contextmanager
+    def _delayed_lock(path: Path):
+        about_to_lock.set()
+        assert release_lock_attempt.wait(timeout=5), "test never released the lock attempt"
+        with real_lock(path):
+            yield
+
+    monkeypatch.setattr(archive, "_ledger_write_lock", _delayed_lock)
+
+    archiver_errors: list[BaseException] = []
+
+    def _run_archiver() -> None:
+        try:
+            archive.ensure_archived(campaign_dir)
+        except BaseException as exc:  # noqa: BLE001 - captured for the main thread
+            archiver_errors.append(exc)
+
+    archiver_thread = threading.Thread(target=_run_archiver)
+    archiver_thread.start()
+    assert about_to_lock.wait(timeout=5), "archiver never reached the lock acquisition point"
+
+    # archiver はまだ安定ロックを取得していない（`_delayed_lock` が
+    # `release_lock_attempt` 待ちでブロック中）。この隙に、独立した別の
+    # `Ledger` インスタンス（別スレッド相当）から `campaign_closed` を
+    # 通常運用どおり append する——このロック取り合い自体は正常に完了する。
+    Ledger(ledger_path).append({"kind": "campaign_closed"})
+
+    release_lock_attempt.set()
+    archiver_thread.join(timeout=5)
+    assert not archiver_thread.is_alive()
+
+    assert len(archiver_errors) == 1, f"expected exactly one ArchiveError, got {archiver_errors}"
+    assert isinstance(archiver_errors[0], archive.ArchiveError)
+    assert "campaign_closed" in str(archiver_errors[0])
+
+    # gz/sidecar は一切作られておらず、原本は append 済みの内容のまま
+    # archiver によって一切変更されていない（正典喪失ゼロ）。
+    assert not gz_path.exists()
+    assert not sidecar_path.exists()
+    assert ledger_path.is_file()
+    on_disk = ledger_path.read_bytes()
+    assert on_disk.startswith(original_bytes)
+    assert on_disk != original_bytes
+    assert not (campaign_dir / archive._STAGING_GZ_FILENAME).exists()
+    assert not (campaign_dir / archive._STAGING_SIDECAR_FILENAME).exists()
+    assert not (campaign_dir / archive._STAGING_LEDGER_FILENAME).exists()
 
 
 def test_ensure_archived_rearchives_when_original_extended_during_archival(

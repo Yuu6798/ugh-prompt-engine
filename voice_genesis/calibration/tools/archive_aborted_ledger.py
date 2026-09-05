@@ -137,6 +137,27 @@ race の**回復経路版**が未閉塞のまま残っていた。
 せよ、append は「ロック区間の外側で完全に先行して完了し、この関数の
 どの読み取りにも既に反映されている」か「この関数の判定・削除がすべて
 確定してロックが解放されるまで待たされる」のいずれかに必ず整列する。
+
+R17 fix（PR #346 round 17、Codex 採用, "Lock before checking for campaign
+closure"）: R15 は回復判定ブロックと (1)-(4) のフレッシュ archive
+ブロックの両方をロック区間へ統合したが、その直前に置かれた
+closed-campaign 検査（本 docstring の R9 fix 節）自体は、統合後もなお
+`_ledger_write_lock()` を取得する前に `ledger_path.read_bytes()` を実行
+していた。この検査が「closed ではない」と判定した直後・ロック獲得前の
+一瞬に、別スレッド/プロセスの `Ledger.append()` が `campaign_closed`
+event を追記すると、以後の回復判定・snapshot・検証・公開・unlink は
+すべてロック内で直列化されているにも関わらず、closed 化した campaign を
+そのまま archive してしまう——R9 が塞いだはずの「closed campaign を
+誤って archive する」窓が、ロック取得前のこの検査自体にだけ再び開いて
+いた。
+
+本 fix は `_ledger_write_lock(ledger_path)` の取得位置をこの closed-
+campaign 検査より前に繰り上げ、検査・回復判定・snapshot・検証・公開・
+unlink の全区間を単一の `with` の下に統合した。`Ledger.append()` は
+R14 により ledger 本体を open する前に同じ安定ロックの獲得を待たされる
+契約になっているため、この検査自体も「append が完全に先行して完了し
+反映された状態」か「この関数の判定・削除がすべて確定してロックが解放
+されるまで待たされた状態」のいずれかでしか実行されなくなる。
 """
 
 from __future__ import annotations
@@ -571,51 +592,74 @@ def ensure_archived(campaign_dir: Path) -> ArchiveResult:
     # archiving staging discarded further below).
     _discard_if_exists(staging_ledger_path)
 
-    # R9 fix (PR #346 round 9 採用): a CLOSED campaign's ledger is the
-    # immutable canonical record (module docstring) and must never be
-    # archived. Checked here, first, before any of the recovery-branch
-    # logic below runs and before any write/staging/delete this function
-    # could otherwise perform — a caller mistake (pointing this tool at a
-    # still-canonical closed campaign whose original is still present)
-    # fails closed with the directory completely untouched.
-    if ledger_path.is_file() and _ledger_bytes_contain_campaign_closed(
-        ledger_path.read_bytes()
-    ):
-        raise ArchiveError(
-            f"{campaign_dir}: ledger.jsonl contains a campaign_closed event — "
-            "closed campaigns are immutable canonical records and must never "
-            "be archived"
-        )
-
-    # R15 fix (PR #346 round 15, Codex 採用, "Lock recovery before reading
-    # the residual ledger"): 安定ロック（`_ledger_write_lock()`。R14 で
-    # `Ledger.append()` と共有するよう変更した同一ロック）を、ここ——
-    # closed-campaign 検査の直後・`ledger_path`/`gz_path`/`sidecar_path` を
-    # 読む前——で一度だけ取得し、以下の回復判定ブロックと (1)-(4) の
-    # フレッシュ archive ブロックの**両方**をこの単一 `with` の下に置く。
+    # R17 fix (PR #346 round 17, Codex 採用, "Lock before checking for
+    # campaign closure"): R15 は回復判定ブロックと (1)-(4) のフレッシュ
+    # archive ブロックの両方をロック区間へ統合したが、その直前に置かれた
+    # closed-campaign 検査自体は `_ledger_write_lock()` を取得する前に
+    # `ledger_path.read_bytes()` を実行していた。この検査が「closed では
+    # ない」と判定した直後、ロック獲得前の一瞬に別スレッド/プロセスの
+    # `Ledger.append()` が `campaign_closed` event を追記すると、以後の
+    # 回復判定・snapshot・検証・公開・unlink はすべてロック内で直列化
+    # されているにも関わらず、closed 化した campaign をそのまま archive
+    # してしまう——R9 が塞いだはずの「closed campaign を誤って archive
+    # する」窓が、ロック取得前のこの検査自体にだけ再び開いていた。
     #
-    # R12/R14 が排他化したのは (1)-(4) の区間（原本 bytes 読み取り〜
-    # 原本 unlink）のみで、回復判定ブロック（検証済み公開物が既にある場合の
-    # 残存 `ledger.jsonl` 読取・sha 照合・`_reconcile_diverged_original()`
-    # 経由の再 archive・`unlink`）はロック外で実行されていた。この区間の
-    # 途中で `Ledger.append()` が割り込むと、(a) 追記が sha 不一致として
-    # 検出されないまま無条件 `unlink()` に飲まれて恒久喪失するか、
-    # (b) 検出されて `_reconcile_diverged_original()` が再 archive を
-    # 始めた直後に別の追記が来て、その新規追記が再 archive の snapshot にも
-    # 含まれず次の `unlink()` で失われる、という R12 と同型の race が
-    # 回復経路にも存在した。
-    #
-    # ロック取得位置を関数入口（この位置）に統一することで、以後の
-    # 回復判定・再 archive・(1)-(4) のフレッシュ archive は常にこの単一の
-    # ロック保持区間の内側で直列に実行される——`Ledger.append()` は
-    # `ledger_path` を open する前に同じロックの獲得を待たされるため、
-    # この関数がどちらの分岐を辿るにせよ、append は「完全に先行して完了し
-    # 読み取りに反映される」か「この関数の判定・削除がすべて確定してから
-    # 実行される」のいずれかに必ず整列する（正典喪失ゼロ）。同一ロック
-    # ファイルへの二重 `flock` は自己デッドロックするため、旧来 (1)-(4)
-    # だけを囲んでいた内側の `with _ledger_write_lock(ledger_path):` は
-    # 削除し、この外側の `with` 一つに統合した。
+    # 本 fix は `_ledger_write_lock()` の取得位置をこの検査より前に移し、
+    # closed-campaign 検査・回復判定・snapshot・検証・公開・unlink の
+    # 全区間を単一の `with` の下に統合した。`Ledger.append()` は R14 に
+    # より ledger 本体を open する前に同じ安定ロックの獲得を待たされる
+    # ため、この検査自体も「append が完全に先行して完了し反映された
+    # 状態」か「この関数の判定・削除がすべて確定してロックが解放される
+    # まで待たされた状態」のいずれかでしか実行されなくなる。
     with _ledger_write_lock(ledger_path):
+        # R9 fix (PR #346 round 9 採用): a CLOSED campaign's ledger is the
+        # immutable canonical record (module docstring) and must never be
+        # archived. Checked here, first, before any of the recovery-branch
+        # logic below runs and before any write/staging/delete this function
+        # could otherwise perform — a caller mistake (pointing this tool at a
+        # still-canonical closed campaign whose original is still present)
+        # fails closed with the directory completely untouched. R17 fix:
+        # this read now happens under the stable lock acquired above — see
+        # the R17 fix note above this `with` for why an unlocked read here
+        # was unsafe.
+        if ledger_path.is_file() and _ledger_bytes_contain_campaign_closed(
+            ledger_path.read_bytes()
+        ):
+            raise ArchiveError(
+                f"{campaign_dir}: ledger.jsonl contains a campaign_closed event — "
+                "closed campaigns are immutable canonical records and must never "
+                "be archived"
+            )
+
+        # R15 fix (PR #346 round 15, Codex 採用, "Lock recovery before reading
+        # the residual ledger"): 安定ロック（`_ledger_write_lock()`。R14 で
+        # `Ledger.append()` と共有するよう変更した同一ロック）の下で、以下の
+        # 回復判定ブロックと (1)-(4) のフレッシュ archive ブロックの
+        # **両方**を実行する（R17 でロック取得位置を上記 closed-campaign
+        # 検査の前まで繰り上げたため、この検査も同じロック区間に含まれる）。
+        #
+        # R12/R14 が排他化したのは (1)-(4) の区間（原本 bytes 読み取り〜
+        # 原本 unlink）のみで、回復判定ブロック（検証済み公開物が既にある場合の
+        # 残存 `ledger.jsonl` 読取・sha 照合・`_reconcile_diverged_original()`
+        # 経由の再 archive・`unlink`）はロック外で実行されていた。この区間の
+        # 途中で `Ledger.append()` が割り込むと、(a) 追記が sha 不一致として
+        # 検出されないまま無条件 `unlink()` に飲まれて恒久喪失するか、
+        # (b) 検出されて `_reconcile_diverged_original()` が再 archive を
+        # 始めた直後に別の追記が来て、その新規追記が再 archive の snapshot にも
+        # 含まれず次の `unlink()` で失われる、という R12 と同型の race が
+        # 回復経路にも存在した。
+        #
+        # ロック取得位置を関数入口（closed-campaign 検査の前。R17）に統一
+        # することで、以後の closed-campaign 検査・回復判定・再 archive・
+        # (1)-(4) のフレッシュ archive は常にこの単一のロック保持区間の
+        # 内側で直列に実行される——`Ledger.append()` は `ledger_path` を
+        # open する前に同じロックの獲得を待たされるため、この関数がどの
+        # 分岐を辿るにせよ、append は「完全に先行して完了し読み取りに
+        # 反映される」か「この関数の判定・削除がすべて確定してから実行
+        # される」のいずれかに必ず整列する（正典喪失ゼロ）。同一ロック
+        # ファイルへの二重 `flock` は自己デッドロックするため、旧来 (1)-(4)
+        # だけを囲んでいた内側の `with _ledger_write_lock(ledger_path):` は
+        # 削除し、この外側の `with` 一つに統合した。
         has_gz = gz_path.is_file()
         has_sidecar = sidecar_path.is_file()
 
