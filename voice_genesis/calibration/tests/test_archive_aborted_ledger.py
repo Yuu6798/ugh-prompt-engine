@@ -149,8 +149,9 @@ def test_recovers_from_interruption_after_verification_before_publish(tmp_path: 
     staging_gz.write_bytes(archive._write_gzip_bytes(original_bytes))
     staging_sidecar.write_text(archive._sidecar_text(expected_sha), encoding="utf-8")
     # 検証自体を明示的に走らせておく（副作用が無いことの確認を兼ねる）。
-    verified_sha = archive._verify_gz_sidecar_pair(staging_gz, staging_sidecar)
+    verified_sha, verified_bytes = archive._verify_gz_sidecar_pair(staging_gz, staging_sidecar)
     assert verified_sha == expected_sha
+    assert verified_bytes == original_bytes
 
     result = archive.ensure_archived(campaign_dir)
     assert result.action == "archived"
@@ -880,7 +881,7 @@ def test_recovery_branch_blocks_concurrent_append_and_rejects_stale_appender(
     real_verify = archive._verify_gz_sidecar_pair
     call_count = {"n": 0}
 
-    def _blocking_verify(gz: Path, sidecar: Path) -> str:
+    def _blocking_verify(gz: Path, sidecar: Path) -> tuple[str, bytes]:
         call_count["n"] += 1
         if call_count["n"] == 1:
             # 回復分岐（`has_gz and has_sidecar`）の最初の検証呼び出し —

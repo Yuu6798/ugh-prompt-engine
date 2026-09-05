@@ -143,7 +143,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import gzip
 import hashlib
 import json
 import math
@@ -2627,6 +2626,24 @@ def _legacy_v1_0_opt_in_verified(
     ことを要求する（生スキャンでは「どこかに 1 行あれば真」だったのを、
     正規の閉鎖手順が必ず末尾に置く event の位置まで絞り込む）。
 
+    R26 対応（Codex 第 26 巡 P2 採用、"Reuse the verified gzip snapshot for
+    identity checking"）: R25-1 (b) までの実装は aborted 経路で `ledger.
+    jsonl.gz` を 2 回読んでいた——1 回目は `archive_aborted_ledger.
+    _verify_gz_sidecar_pair()` が内部で読んで sidecar sha256/実伸長/chain
+    検証を通し、2 回目はその後段でこの関数自身が freeze identity
+    （manifest_sha/manifest_core_sha）照合のために改めて
+    `gz_path.read_bytes()` + `gzip.decompress()` していた。この 2 回の読取の
+    間に on-disk の gz が差し替わると、sidecar/chain 検証はバージョン A に
+    対して通り、freeze identity 照合はバージョン B に対して行われる——B が
+    chain-valid かつ同一 genesis identity を持つ限り、**sidecar 未検証の
+    ペア**で legacy opt-in が True になり得た（R16 が確立した「単一読取の
+    同一バイト列から導出する」原則の欠落と同型）。修正は gz を 1 回だけ
+    バイト列として読み、`_verify_gz_sidecar_pair(gz_path, sidecar_path,
+    gz_bytes=gz_bytes)` にその同じバイト列を渡して検証させ（内部での
+    再読取を回避）、戻り値の伸長済みバイト列をそのまま freeze identity
+    照合にも使う——sidecar 検証・chain 検証・identity 照合のすべてが同一の
+    1 回だけ読んだバイト列から導出される。
+
     R25-1 対応（Codex 第 25 巡 P2 採用、2026-09-05,
     "Bind legacy opt-in to the manifest being validated"）: R24-2 までの
     実装は「`manifest_path` の親 campaign directory の ledger が
@@ -2708,21 +2725,26 @@ def _legacy_v1_0_opt_in_verified(
     gz_path = campaign_dir / archive_aborted_ledger.GZ_FILENAME
     sidecar_path = campaign_dir / archive_aborted_ledger.SIDECAR_FILENAME
     if gz_path.is_file():
+        # R26: gz を 1 回だけバイト列として読み、sidecar/chain 検証と
+        # freeze identity 照合の両方をこの同一バイト列から行う（後段で
+        # `gz_path` を再度読み直さない——読取間の差し替え TOCTOU を遮断）。
         try:
-            archive_aborted_ledger._verify_gz_sidecar_pair(gz_path, sidecar_path)
+            gz_bytes = gz_path.read_bytes()
+        except OSError:
+            return False
+        try:
+            _verified_sha, decompressed = archive_aborted_ledger._verify_gz_sidecar_pair(
+                gz_path, sidecar_path, gz_bytes=gz_bytes
+            )
         except archive_aborted_ledger.ArchiveError:
             return False
         # sidecar sha256 一致・gz 実伸長・伸長結果の chain 検証まで通った
         # ——`ensure_archived()` が公開前に要求するのと同じ 4 点がすべて
         # 揃っている（D100/c0e466c の「公開は検証成功後にのみ」契約と整合）。
         # R25-1: そのうえで、伸長結果の genesis event の freeze identity を
-        # (a) で検証した manifest と突き合わせる（`_verify_gz_sidecar_pair`
-        # 自体は sha256/chain のみ検証し中身の identity までは見ないため、
-        # ここで改めて伸長・parse する）。
-        try:
-            decompressed = gzip.decompress(gz_path.read_bytes())
-        except OSError:
-            return False
+        # (a) で検証した manifest と突き合わせる。R26: `decompressed` は
+        # 上記の検証がまさに通した対象そのもの（`_verify_gz_sidecar_pair`
+        # の戻り値）であり、ここで `gz_path` を読み直すことはしない。
         tmp_fd, tmp_name = tempfile.mkstemp(
             dir=str(gz_path.parent), prefix=".legacy-opt-in-verify-", suffix=".jsonl"
         )
