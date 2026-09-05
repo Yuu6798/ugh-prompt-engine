@@ -856,6 +856,42 @@ def test_base_document_pin_rejects_missing_base_document_sha_field(tmp_path: Pat
 
 def test_verify_base_document_pin_directly_ok(tmp_path: Path) -> None:
     """`_verify_base_document_pin()` 単体呼び出しでも、無改変コピーなら空
-    reasons（pin 成立）を返す。"""
+    reasons（pin 成立）を返す。R16 対応で v1.1 バイト列は呼び出し側が渡す。"""
     repo_root = _write_base_pin_fixture_repo(tmp_path / "repo")
-    assert approvals._verify_base_document_pin(repo_root) == []
+    design_doc_bytes = (repo_root / approvals.DESIGN_DOC_RELATIVE_PATH).read_bytes()
+    assert approvals._verify_base_document_pin(repo_root, design_doc_bytes) == []
+
+
+def test_load_approval_reads_design_doc_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R16 対応（Codex PR #346 第 16 巡指摘）: `load_approval()` は v1.1
+    統治文書を **1 回だけ** 読み、その同一バイト列から design_doc_sha256 と
+    `_verify_base_document_pin()` の front matter 解析の両方を導出する。
+    hash 導出と pin 検証が別々の読取に基づくと、その間隔で文書が差し替わり
+    「hash は版 A・base pin は版 B」の組み合わせで承認が通り得た
+    （承認 provenance の汚染）。`Path.read_bytes` の呼び出し回数を数え、
+    v1.1 パスに対する呼び出しがちょうど 1 回であることを固定する。
+    """
+    repo_root = _write_base_pin_fixture_repo(tmp_path / "repo")
+    approval_dir = tmp_path / "approvals"
+    approval_dir.mkdir()
+    _write_gate1_for_repo_root(approval_dir, repo_root)
+
+    design_doc_path = repo_root / approvals.DESIGN_DOC_RELATIVE_PATH
+    read_bytes_calls: list[Path] = []
+    original_read_bytes = Path.read_bytes
+
+    def counting_read_bytes(self: Path) -> bytes:
+        read_bytes_calls.append(self)
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counting_read_bytes)
+
+    result = approvals.load_approval(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, approval_dir, repo_root=repo_root
+    )
+    assert result.approved is True, result.reasons
+
+    design_doc_reads = [p for p in read_bytes_calls if p == design_doc_path]
+    assert len(design_doc_reads) == 1, read_bytes_calls

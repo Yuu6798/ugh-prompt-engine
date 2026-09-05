@@ -84,7 +84,7 @@ def _parse_front_matter(text: str) -> Mapping[str, Any] | None:
     return data
 
 
-def _verify_base_document_pin(repo_root: Path) -> list[str]:
+def _verify_base_document_pin(repo_root: Path, design_doc_bytes: bytes) -> list[str]:
     """v1.1 統治文書（`DESIGN_DOC_RELATIVE_PATH`）の front matter が宣言する
     `base_document_sha256` と、checkout 上の基底文書
     （`BASE_DESIGN_DOC_RELATIVE_PATH` = v1.0）の実測 sha256 の一致を検証する
@@ -95,15 +95,23 @@ def _verify_base_document_pin(repo_root: Path) -> list[str]:
     `load_approval()` に組み込む。不一致・欠落・パース不能はすべて
     fail-closed の reason 文字列として返す（空リストは pin 成立、つまり
     「未承認にする理由がない」ことを意味する — 承認そのものが成り立つかは
-    呼び出し側の他の検査と合わせて判定される）。"""
+    呼び出し側の他の検査と合わせて判定される）。
+
+    `design_doc_bytes` は呼び出し側（`load_approval()`）が v1.1 統治文書を
+    **1 回だけ** 読み取ったバイト列をそのまま受け取る。本関数はここで
+    v1.1 を再度読まない — hash 算出用の読取と front matter 解析用の読取を
+    分けると、その間隔で文書が差し替わった場合に「hash は版 A・base pin は
+    版 B」の組み合わせで承認が成立し得る（Codex PR #346 第 16 巡指摘。承認
+    provenance の汚染）。同一バッファから両方を導出することでこの穴を閉じる。
+    """
     reasons: list[str] = []
     design_doc_path = repo_root / DESIGN_DOC_RELATIVE_PATH
     try:
-        design_doc_text = design_doc_path.read_text(encoding="utf-8")
-    except OSError as exc:
+        design_doc_text = design_doc_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
         return [
-            f"base_document_sha256: cannot read design doc {design_doc_path} "
-            f"for front matter: {exc}"
+            f"base_document_sha256: cannot decode design doc {design_doc_path} "
+            f"as utf-8: {exc}"
         ]
 
     front_matter = _parse_front_matter(design_doc_text)
@@ -237,8 +245,17 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _read_design_doc(repo_root: Path) -> bytes:
+    """v1.1 統治文書（`DESIGN_DOC_RELATIVE_PATH`）を 1 回だけ読み込む。
+    呼び出し側（`load_approval()`）はこの同一バイト列から sha256 と front
+    matter（`_verify_base_document_pin()`）の両方を導出し、別々の読取に
+    基づく TOCTOU（読取間の差し替え）で「hash は版 A・base pin は版 B」が
+    承認を通ってしまう穴（Codex PR #346 第 16 巡指摘）を閉じる。"""
+    return (repo_root / DESIGN_DOC_RELATIVE_PATH).read_bytes()
+
+
 def _current_design_doc_sha256(repo_root: Path) -> str:
-    return _sha256_file(repo_root / DESIGN_DOC_RELATIVE_PATH)
+    return hashlib.sha256(_read_design_doc(repo_root)).hexdigest()
 
 
 def _current_memo_sha256(repo_root: Path) -> str:
@@ -419,11 +436,17 @@ def load_approval(
     declared_design_sha = _require_sha256_hex(payload, "design_doc_sha256", reasons)
     declared_memo_sha = _require_sha256_hex(payload, "memo_sha256", reasons)
 
+    # R16 対応: v1.1 は 1 回だけ読み、同じバイト列を hash（ここ）と
+    # front matter 解析（`_verify_base_document_pin()`、下方で再利用）の
+    # 両方に使う（読取を分けない = TOCTOU 閉塞）。
+    design_doc_bytes: bytes | None
     try:
-        actual_design_sha = _current_design_doc_sha256(root)
+        design_doc_bytes = _read_design_doc(root)
+        actual_design_sha = hashlib.sha256(design_doc_bytes).hexdigest()
         actual_memo_sha = _current_memo_sha256(root)
     except OSError as exc:
         reasons.append(f"cannot read pinned source documents for hash verification: {exc}")
+        design_doc_bytes = None
         actual_design_sha = actual_memo_sha = None
 
     if (
@@ -450,7 +473,11 @@ def load_approval(
     # §V6「基底文書の実行時 pin」: 承認ファイル自体の shape/hash 検査とは独立に、
     # checkout 上の v1.1/v1.0 バイト列の整合を毎回検証する（承認ファイルの
     # 内容に関わらず必須 — v1.0 の事後改変を無効化する経路がこれ以外にない）。
-    reasons.extend(_verify_base_document_pin(root))
+    # design_doc_bytes が None（上の読取が OSError で失敗）のときは、その
+    # 事実が既に reasons に積まれているため fail-closed は成立済み — ここで
+    # 改めて v1.1 を読み直しはしない（R16: 読取を 1 回に固定する）。
+    if design_doc_bytes is not None:
+        reasons.extend(_verify_base_document_pin(root, design_doc_bytes))
 
     if reasons:
         return ApprovalLoadResult(
