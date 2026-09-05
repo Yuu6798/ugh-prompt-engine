@@ -304,11 +304,11 @@ class LedgerChainInvalidError(RuntimeError):
 
 class LedgerArchivedError(LedgerChainInvalidError):
     """`Ledger.append()` が、`self.path`（`ledger.jsonl`）が存在せず、かつ
-    同一ディレクトリに検証済み archive ペア（`<name>.gz` + `<name>.sha256`
-    sidecar。`tools/archive_aborted_ledger.py::ensure_archived()` が
-    campaign_closed 後に原本を置換した状態）が存在する場合に送出する
-    （Codex レビュー PR #346 round 19 指摘, "Refuse to recreate a ledger
-    after archival", 採用）。
+    同一ディレクトリに archive 成果物（`<name>.gz` および/または
+    `<name>.sha256` sidecar。`tools/archive_aborted_ledger.py::
+    ensure_archived()` が campaign_closed 後に原本を置換した状態）が
+    残っている場合に送出する（Codex レビュー PR #346 round 19 指摘,
+    "Refuse to recreate a ledger after archival", 採用）。
 
     修正前は、欠落した `path` を「まだ何も書かれていない新規 chain」と
     区別せずに `a+b` で `open()` していたため、archive 済み campaign へ
@@ -320,17 +320,46 @@ class LedgerArchivedError(LedgerChainInvalidError):
     2 つの provenance artifact（公開済み gz/sidecar と、それに含まれない
     event を持つ新規 ledger.jsonl）が残ってしまう。
 
+    R25-2 fix (Codex PR #346 round 25 finding (2) 採用, "Reject appends
+    when either archive artifact remains"): 修正前はこのガードが gz と
+    sidecar の**両方**が揃っている場合にしか発火しなかった（`and`）。
+    完了済み archive が sidecar だけを失うと（gz のみ残存）、`path` 不在の
+    まま append() が素通りして新しい genesis `ledger.jsonl` を作ってしまい、
+    次の `ensure_archived()` 呼び出しはその新規 chain 自体が
+    chain-valid であることしか確認しないため、これを canonical な原本だと
+    誤認して唯一の正典だった gz を削除しうる（campaign 履歴の永久喪失）。
+    gz/sidecar のどちらか一方でも残っていれば「archive 済みだが片方の
+    成果物が失われた」状態であり、まっさらな新規 campaign（archive
+    成果物が一切無い状態）とは区別できないため、いずれか一方の存在だけで
+    fail-closed する（`or`）。この場合、呼び出し側は自動リトライせず、
+    欠けた成果物を明示的に復旧（例えば残存 gz+sidecar から
+    `ledger.jsonl` を復元する、または `tools/archive_aborted_ledger.py`
+    側の手動回復手順を実行する）してから append をやり直す必要がある。
+
     本チェックは `LedgerChainInvalidError` と同じ安定ロック（`<name>.lock`。
     R14 fix）を保持したまま行うため、`ensure_archived()` の公開+unlink と
     この存在判定はロックにより直列化され、判定が古い状態を見て誤判定する
-    競合は生じない。archive ペアが存在しない純粋な新規 campaign の初期化
-    （C0 freeze の genesis ledger 作成）はこのエラーの対象外であり、従来
-    どおり `append()` から新規 `ledger.jsonl` を作成できる。"""
+    競合は生じない。archive 成果物が一切存在しない純粋な新規 campaign の
+    初期化（C0 freeze の genesis ledger 作成）はこのエラーの対象外であり、
+    従来どおり `append()` から新規 `ledger.jsonl` を作成できる。"""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, gz_present: bool = True, sidecar_present: bool = True) -> None:
+        gz_name = f"{path.name}.gz"
+        sidecar_name = f"{path.name}.sha256"
+        if gz_present and sidecar_present:
+            artifact_detail = f"an archived pair ({gz_name} + {sidecar_name}) already exists"
+        elif gz_present:
+            artifact_detail = (
+                f"only {gz_name} remains ({sidecar_name} is missing) — partial archive "
+                "recovery is required"
+            )
+        else:
+            artifact_detail = (
+                f"only {sidecar_name} remains ({gz_name} is missing) — partial archive "
+                "recovery is required"
+            )
         detail = (
-            f"ledger file is missing but an archived pair ({path.name}.gz + "
-            f"{path.name}.sha256) already exists in {path.parent}; this campaign "
+            f"ledger file is missing but {artifact_detail} in {path.parent}; this campaign "
             "has been archived and its ledger must not be recreated — the "
             "archived gz/sidecar pair is the sole canonical record"
         )
@@ -1415,8 +1444,29 @@ class Ledger:
                 if path_missing:
                     gz_path = self.path.parent / (self.path.name + ".gz")
                     sidecar_path = self.path.parent / (self.path.name + ".sha256")
-                    if gz_path.is_file() and sidecar_path.is_file():
-                        raise LedgerArchivedError(self.path)
+                    # R25-2 fix (Codex PR #346 round 25 finding (2) 採用,
+                    # "Reject appends when either archive artifact
+                    # remains"): 修正前は両方 (`and`) 揃っている場合にしか
+                    # このガードが発火しなかった。完了済み archive が
+                    # sidecar だけを失うと（gz のみ残存）、`ledger.jsonl`
+                    # 不在のまま append() が素通りして新しい genesis
+                    # ledger.jsonl を作ってしまう——次の `ensure_archived()`
+                    # 呼び出しは、この新規 chain 自体が内部的に chain-valid
+                    # であることしか見ないため、それを canonical な原本だと
+                    # 誤認し、唯一の正典だった gz を破棄しうる（campaign
+                    # 履歴の永久喪失）。gz/sidecar のどちらか一方でも残って
+                    # いれば、それは「archive 済みだが片方が失われた」状態
+                    # であり、新規 genesis を黙って作ってよい「まっさらな
+                    # 新規 campaign」とは区別できないため、`or` に変更して
+                    # fail-closed する——明示的な archive 回復（欠けた側の
+                    # 再生成、または `tools/archive_aborted_ledger.py` 側の
+                    # 手動復旧）を先に要求する。
+                    gz_present = gz_path.is_file()
+                    sidecar_present = sidecar_path.is_file()
+                    if gz_present or sidecar_present:
+                        raise LedgerArchivedError(
+                            self.path, gz_present=gz_present, sidecar_present=sidecar_present
+                        )
                 with self.path.open("a+b") as f:
                     # R14 fix, defense-in-depth: even under the stable lock
                     # above, re-verify that the path we just opened still

@@ -19,6 +19,8 @@ from pathlib import Path
 
 from voice_genesis.calibration import c0_validate, vocab
 from voice_genesis.calibration.c0_freeze import STRATUM_FACTOR_NAMES, _row_inputs_for_split
+from voice_genesis.calibration.canonical import canonical_json
+from voice_genesis.calibration.canonical import manifest_sha as canonical_manifest_sha
 from voice_genesis.calibration.fixtures import axes as fixture_axes
 from voice_genesis.calibration.fixtures import uncertainty as fixture_uncertainty
 from voice_genesis.calibration.fixtures.matrix import (
@@ -640,7 +642,7 @@ def test_legacy_v1_0_opt_in_not_verified_without_manifest_path() -> None:
     """`manifest_path=None`（in-memory manifest、`c0_freeze.dry_run()`/
     `armed_freeze()` の呼び出し方）では `allow_legacy_v1_0=True` を渡しても
     opt-in が有効化されない（fail-closed）。"""
-    assert c0_validate._legacy_v1_0_opt_in_verified(None) is False
+    assert c0_validate._legacy_v1_0_opt_in_verified({}, None) is False
 
 
 def _write_chain_valid_ledger(ledger_path: Path, payloads: list[dict[str, object]]) -> None:
@@ -654,25 +656,55 @@ def _write_chain_valid_ledger(ledger_path: Path, payloads: list[dict[str, object
         ledger.append(payload)
 
 
+def _write_manifest_and_freeze_identity(
+    campaign_dir: Path, manifest: dict[str, object]
+) -> tuple[Path, str, str]:
+    """`manifest` を `c0_freeze.py` と同じ規約
+    (`canonical_json(full_manifest)`) で `c0_manifest.json` に書き出し、
+    その `manifest_sha`/`manifest_core_sha` を返す（R25-1 のテストが
+    `_legacy_v1_0_opt_in_verified()` の (a)/(b) 束縛を満たす genesis event
+    を組み立てるための共通ヘルパー）。"""
+    from voice_genesis.calibration import c0_freeze
+
+    manifest_path = campaign_dir / "c0_manifest.json"
+    manifest_path.write_text(canonical_json(manifest), encoding="utf-8")
+    manifest_sha = canonical_manifest_sha(manifest)
+    manifest_core_sha = c0_freeze.manifest_core_sha(manifest)
+    return manifest_path, manifest_sha, manifest_core_sha
+
+
 def test_legacy_v1_0_opt_in_verified_for_gz_archived_campaign(tmp_path: Path) -> None:
     """R24-2 対応（Codex 第 24 巡 P2 採用, 2026-09-05）: aborted 判定は
     `archive_aborted_ledger._verify_gz_sidecar_pair()` を共有するため、
     fabricated な `ledger.jsonl.gz`（本物の gzip ですらない）ではもう
     True にならない——本物の `ensure_archived()` 出力（sidecar sha256 一致・
-    実伸長・chain 検証済み）でのみ opt-in できることを確認する。"""
+    実伸長・chain 検証済み）でのみ opt-in できることを確認する。
+
+    R25-1 対応: ledger の genesis event が manifest 自身の
+    manifest_sha/manifest_core_sha を記録している場合に限り True になる。"""
     campaign_dir = tmp_path / "campaign"
     campaign_dir.mkdir()
-    manifest_path = campaign_dir / "c0_manifest.json"
-    manifest_path.write_text("{}", encoding="utf-8")
+    manifest = {"frozen_design": {}}
+    manifest_path, manifest_sha, manifest_core_sha = _write_manifest_and_freeze_identity(
+        campaign_dir, manifest
+    )
     ledger_path = campaign_dir / "ledger.jsonl"
     _write_chain_valid_ledger(
-        ledger_path, [{"kind": "c0_freeze"}, {"kind": "holdout_executed_valid"}]
+        ledger_path,
+        [
+            {
+                "kind": "c0_freeze",
+                "manifest_sha": manifest_sha,
+                "manifest_core_sha": manifest_core_sha,
+            },
+            {"kind": "holdout_executed_valid"},
+        ],
     )
     result = archive_aborted_ledger.ensure_archived(campaign_dir)
     assert result.action == "archived"
     assert not ledger_path.is_file()  # ensure_archived removes the original
 
-    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is True
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest, manifest_path) is True
 
 
 def test_legacy_v1_0_opt_in_not_verified_for_fabricated_gz(tmp_path: Path) -> None:
@@ -681,10 +713,10 @@ def test_legacy_v1_0_opt_in_not_verified_for_fabricated_gz(tmp_path: Path) -> No
     ことを固定する。"""
     campaign_dir = tmp_path / "campaign"
     campaign_dir.mkdir()
-    manifest_path = campaign_dir / "c0_manifest.json"
-    manifest_path.write_text("{}", encoding="utf-8")
+    manifest: dict[str, object] = {}
+    manifest_path, _, _ = _write_manifest_and_freeze_identity(campaign_dir, manifest)
     (campaign_dir / "ledger.jsonl.gz").write_bytes(b"\x1f\x8b\x00")
-    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is False
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest, manifest_path) is False
 
 
 def test_legacy_v1_0_opt_in_not_verified_for_gz_sidecar_mismatch(tmp_path: Path) -> None:
@@ -693,31 +725,48 @@ def test_legacy_v1_0_opt_in_not_verified_for_gz_sidecar_mismatch(tmp_path: Path)
     opt-in できない。"""
     campaign_dir = tmp_path / "campaign"
     campaign_dir.mkdir()
-    manifest_path = campaign_dir / "c0_manifest.json"
-    manifest_path.write_text("{}", encoding="utf-8")
+    manifest: dict[str, object] = {}
+    manifest_path, manifest_sha, manifest_core_sha = _write_manifest_and_freeze_identity(
+        campaign_dir, manifest
+    )
     ledger_path = campaign_dir / "ledger.jsonl"
-    _write_chain_valid_ledger(ledger_path, [{"kind": "c0_freeze"}])
+    _write_chain_valid_ledger(
+        ledger_path,
+        [{"kind": "c0_freeze", "manifest_sha": manifest_sha, "manifest_core_sha": manifest_core_sha}],
+    )
     archive_aborted_ledger.ensure_archived(campaign_dir)
 
     sidecar_path = campaign_dir / archive_aborted_ledger.SIDECAR_FILENAME
     sidecar_path.write_text("0" * 64 + "  ledger.jsonl\n", encoding="utf-8")
 
-    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is False
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest, manifest_path) is False
 
 
 def test_legacy_v1_0_opt_in_verified_for_campaign_closed_ledger(tmp_path: Path) -> None:
     """R24-2 対応: closed 判定は `provenance.Ledger.load_with_verification()`
     の chain 検証 (`chain.ok`) を通り、かつ**末尾** entry が
-    `campaign_closed` である本物の chain-valid ledger でのみ True になる。"""
+    `campaign_closed` である本物の chain-valid ledger でのみ True になる。
+    R25-1 対応: genesis event の freeze identity が manifest と一致する
+    ことも要求される。"""
     campaign_dir = tmp_path / "campaign"
     campaign_dir.mkdir()
-    manifest_path = campaign_dir / "c0_manifest.json"
-    manifest_path.write_text("{}", encoding="utf-8")
+    manifest = {"frozen_design": {}}
+    manifest_path, manifest_sha, manifest_core_sha = _write_manifest_and_freeze_identity(
+        campaign_dir, manifest
+    )
     ledger_path = campaign_dir / "ledger.jsonl"
     _write_chain_valid_ledger(
-        ledger_path, [{"kind": "c0_freeze"}, {"kind": "campaign_closed"}]
+        ledger_path,
+        [
+            {
+                "kind": "c0_freeze",
+                "manifest_sha": manifest_sha,
+                "manifest_core_sha": manifest_core_sha,
+            },
+            {"kind": "campaign_closed"},
+        ],
     )
-    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is True
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest, manifest_path) is True
 
 
 def test_legacy_v1_0_opt_in_not_verified_for_raw_unchained_campaign_closed_line(
@@ -729,12 +778,12 @@ def test_legacy_v1_0_opt_in_not_verified_for_raw_unchained_campaign_closed_line(
     True になっていたが、chain 検証が必須になった今は False になる。"""
     campaign_dir = tmp_path / "campaign"
     campaign_dir.mkdir()
-    manifest_path = campaign_dir / "c0_manifest.json"
-    manifest_path.write_text("{}", encoding="utf-8")
+    manifest: dict[str, object] = {}
+    manifest_path, _, _ = _write_manifest_and_freeze_identity(campaign_dir, manifest)
     (campaign_dir / "ledger.jsonl").write_text(
         '{"payload": {"kind": "campaign_closed"}}\n', encoding="utf-8"
     )
-    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is False
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest, manifest_path) is False
 
 
 def test_legacy_v1_0_opt_in_not_verified_for_campaign_closed_not_at_tail(tmp_path: Path) -> None:
@@ -743,25 +792,102 @@ def test_legacy_v1_0_opt_in_not_verified_for_campaign_closed_not_at_tail(tmp_pat
     `campaign_closed` を必ず最後に置く（`campaign/close_stage.py` 参照）。"""
     campaign_dir = tmp_path / "campaign"
     campaign_dir.mkdir()
-    manifest_path = campaign_dir / "c0_manifest.json"
-    manifest_path.write_text("{}", encoding="utf-8")
+    manifest: dict[str, object] = {}
+    manifest_path, manifest_sha, manifest_core_sha = _write_manifest_and_freeze_identity(
+        campaign_dir, manifest
+    )
     ledger_path = campaign_dir / "ledger.jsonl"
     _write_chain_valid_ledger(
         ledger_path,
-        [{"kind": "c0_freeze"}, {"kind": "campaign_closed"}, {"kind": "meter_call"}],
+        [
+            {
+                "kind": "c0_freeze",
+                "manifest_sha": manifest_sha,
+                "manifest_core_sha": manifest_core_sha,
+            },
+            {"kind": "campaign_closed"},
+            {"kind": "meter_call"},
+        ],
     )
-    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is False
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest, manifest_path) is False
 
 
 def test_legacy_v1_0_opt_in_not_verified_for_open_campaign(tmp_path: Path) -> None:
     campaign_dir = tmp_path / "campaign"
     campaign_dir.mkdir()
-    manifest_path = campaign_dir / "c0_manifest.json"
-    manifest_path.write_text("{}", encoding="utf-8")
+    manifest: dict[str, object] = {}
+    manifest_path, _, _ = _write_manifest_and_freeze_identity(campaign_dir, manifest)
     (campaign_dir / "ledger.jsonl").write_text(
         '{"payload": {"kind": "meter_call"}}\n', encoding="utf-8"
     )
-    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is False
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest, manifest_path) is False
+
+
+def test_legacy_v1_0_opt_in_not_verified_for_manifest_path_byte_mismatch(tmp_path: Path) -> None:
+    """R25-1 (a): `manifest_path` の on-disk バイト列が in-memory `manifest`
+    の正規化 JSON と食い違う場合は、ledger 側が chain-valid/closed であっても
+    opt-in が成立しない（「in-memory manifest が path の内容と異なる」ケース
+    の fail-closed）。"""
+    campaign_dir = tmp_path / "campaign"
+    campaign_dir.mkdir()
+    on_disk_manifest = {"frozen_design": {}, "campaign_meta": {"note": "on-disk"}}
+    manifest_path, manifest_sha, manifest_core_sha = _write_manifest_and_freeze_identity(
+        campaign_dir, on_disk_manifest
+    )
+    ledger_path = campaign_dir / "ledger.jsonl"
+    _write_chain_valid_ledger(
+        ledger_path,
+        [
+            {
+                "kind": "c0_freeze",
+                "manifest_sha": manifest_sha,
+                "manifest_core_sha": manifest_core_sha,
+            },
+            {"kind": "campaign_closed"},
+        ],
+    )
+
+    # 呼び出し元が実際に検証しようとしている in-memory manifest が、path の
+    # 内容と異なる（他 campaign の manifest を誤って渡した/path が後から
+    # 書き換えられた、を模す）。
+    different_in_memory_manifest = {"frozen_design": {}, "campaign_meta": {"note": "in-memory"}}
+    assert (
+        c0_validate._legacy_v1_0_opt_in_verified(different_in_memory_manifest, manifest_path)
+        is False
+    )
+
+
+def test_legacy_v1_0_opt_in_not_verified_when_reusing_another_campaigns_archive(
+    tmp_path: Path,
+) -> None:
+    """R25-1 (b) の直接再現——finding が指摘した攻撃経路: 他 campaign
+    (`donor`) の正規 closed archive ledger を、revision marker の無い別
+    manifest (`victim`) の隣にコピーするだけでは opt-in が成立しない
+    （ledger 自体は chain-valid/closed でも、genesis event の freeze
+    identity が victim の manifest と一致しないため）。"""
+    donor_dir = tmp_path / "donor"
+    donor_dir.mkdir()
+    donor_manifest = {"frozen_design": {}, "campaign_meta": {"campaign_date_utc": "2026-01-01"}}
+    _, donor_sha, donor_core_sha = _write_manifest_and_freeze_identity(donor_dir, donor_manifest)
+    donor_ledger_path = donor_dir / "ledger.jsonl"
+    _write_chain_valid_ledger(
+        donor_ledger_path,
+        [
+            {"kind": "c0_freeze", "manifest_sha": donor_sha, "manifest_core_sha": donor_core_sha},
+            {"kind": "campaign_closed"},
+        ],
+    )
+
+    victim_dir = tmp_path / "victim"
+    victim_dir.mkdir()
+    victim_manifest = {"frozen_design": {}, "campaign_meta": {"campaign_date_utc": "2026-02-02"}}
+    victim_manifest_path, _, _ = _write_manifest_and_freeze_identity(victim_dir, victim_manifest)
+    # donor の正規 closed ledger をそのまま victim の隣へ流用する。
+    (victim_dir / "ledger.jsonl").write_bytes(donor_ledger_path.read_bytes())
+
+    assert (
+        c0_validate._legacy_v1_0_opt_in_verified(victim_manifest, victim_manifest_path) is False
+    )
 
 
 def test_validate_c0_manifest_allow_legacy_v1_0_end_to_end(tmp_path: Path) -> None:
@@ -771,11 +897,20 @@ def test_validate_c0_manifest_allow_legacy_v1_0_end_to_end(tmp_path: Path) -> No
     campaign_dir = tmp_path / "campaign"
     campaign_dir.mkdir()
     manifest = {"frozen_design": {}}
-    manifest_path = campaign_dir / "c0_manifest.json"
-    manifest_path.write_text("{}", encoding="utf-8")
+    manifest_path, manifest_sha, manifest_core_sha = _write_manifest_and_freeze_identity(
+        campaign_dir, manifest
+    )
     ledger_path = campaign_dir / "ledger.jsonl"
     _write_chain_valid_ledger(
-        ledger_path, [{"kind": "c0_freeze"}, {"kind": "campaign_closed"}]
+        ledger_path,
+        [
+            {
+                "kind": "c0_freeze",
+                "manifest_sha": manifest_sha,
+                "manifest_core_sha": manifest_core_sha,
+            },
+            {"kind": "campaign_closed"},
+        ],
     )
 
     without_flag = c0_validate.validate_c0_manifest(manifest)

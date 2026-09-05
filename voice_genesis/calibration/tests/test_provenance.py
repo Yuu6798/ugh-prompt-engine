@@ -415,6 +415,52 @@ def test_ledger_append_refuses_to_recreate_ledger_after_archival(tmp_path) -> No
     )
 
 
+def test_ledger_append_refuses_to_recreate_ledger_when_only_gz_remains(tmp_path) -> None:
+    """R25-2 fix (Codex PR #346 round 25 finding (2) 採用, "Reject appends
+    when either archive artifact remains"): 完了済み archive が sidecar
+    だけを失った場合（gz のみ残存）でも、`path` 不在のまま `append()` が
+    新しい genesis ledger を作ってはならない——次の `ensure_archived()` が
+    その新規 chain を canonical だと誤認して唯一の gz を破棄しうる
+    （campaign 履歴の永久喪失）。gz/sidecar のどちらか一方でも残っていれば
+    fail-closed する（修正前は両方揃っている場合にしか発火しなかった）。"""
+    campaign_dir = tmp_path / "RUN-archived-gz-only"
+    campaign_dir.mkdir()
+    ledger_path = campaign_dir / "ledger.jsonl"
+    gz_path = campaign_dir / "ledger.jsonl.gz"
+    gz_path.write_bytes(b"fake-gz-payload")
+    gz_bytes_before = gz_path.read_bytes()
+
+    stale_ledger = Ledger(ledger_path)
+    with pytest.raises(LedgerArchivedError) as excinfo:
+        stale_ledger.append({"kind": "meter_call", "row_id": "r0"})
+    assert isinstance(excinfo.value, LedgerChainInvalidError)
+    assert "only ledger.jsonl.gz remains" in excinfo.value.detail
+
+    assert not ledger_path.exists()
+    assert gz_path.read_bytes() == gz_bytes_before
+
+
+def test_ledger_append_refuses_to_recreate_ledger_when_only_sidecar_remains(tmp_path) -> None:
+    """R25-2 fix: 対称ケース——sidecar だけが残存し gz を失った場合も同様に
+    fail-closed する（片方だけの残存は、両方が既に無い「まっさらな新規
+    campaign」とは区別できないため）。"""
+    campaign_dir = tmp_path / "RUN-archived-sidecar-only"
+    campaign_dir.mkdir()
+    ledger_path = campaign_dir / "ledger.jsonl"
+    sidecar_path = campaign_dir / "ledger.jsonl.sha256"
+    sidecar_path.write_text("0" * 64 + "  ledger.jsonl\n", encoding="utf-8")
+    sidecar_text_before = sidecar_path.read_text(encoding="utf-8")
+
+    stale_ledger = Ledger(ledger_path)
+    with pytest.raises(LedgerArchivedError) as excinfo:
+        stale_ledger.append({"kind": "meter_call", "row_id": "r0"})
+    assert isinstance(excinfo.value, LedgerChainInvalidError)
+    assert "only ledger.jsonl.sha256 remains" in excinfo.value.detail
+
+    assert not ledger_path.exists()
+    assert sidecar_path.read_text(encoding="utf-8") == sidecar_text_before
+
+
 def test_ledger_append_creates_genesis_ledger_when_no_archive_pair_present(tmp_path) -> None:
     """archive ペア（`<name>.gz`/`<name>.sha256`）が存在しない、真に新規の
     campaign ディレクトリでは `append()` が従来どおり genesis（`seq=0`）

@@ -1224,3 +1224,5 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
 | | `c0_validate.py` | `scan_calibration_tree_inventory()`（設計文書2件の inventory union） | D95 |
 | （v1.1 の直接改訂ではないが同時期の運用是正: cap 会計 R7/R9/R15-D） | `campaign/cli.py`, `campaign/caps.py` | `_checkpoint_parent_cpu_before_transition()`, `cap_counters_from_ledger()` | D96 |
 | （同上: replay 検証器の legacy 互換） | `provenance.py` | `_c0_freeze_ordering_violation()`, `_verified_holdout_unseal_detail()` | D97 |
+| §V3.3 追補（R25-1: legacy opt-in を manifest 自己 hash + ledger freeze identity に束縛） / §V4 追補（R25-2: archive 成果物が片方でも残れば append 拒否） | `c0_validate.py` | `_legacy_v1_0_opt_in_verified()` | D103 |
+| | `provenance.py` | `Ledger.append()`（create-on-append の archive 判定を `or` へ）, `LedgerArchivedError` | D103 |

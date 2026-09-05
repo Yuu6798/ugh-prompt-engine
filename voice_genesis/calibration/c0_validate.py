@@ -143,18 +143,22 @@ from __future__ import annotations
 
 import argparse
 import ast
+import gzip
 import hashlib
 import json
 import math
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import approvals, streams, vocab
 from .candidates import registry as candidate_registry
+from .canonical import manifest_sha as _canonical_manifest_sha
 from .fixtures import axes as fixture_axes
 from .fixtures import uncertainty as fixture_uncertainty
 #: R24-2 対応（Codex 第 24 巡 P2 採用, 2026-09-05）: `_legacy_v1_0_opt_in_
@@ -162,7 +166,13 @@ from .fixtures import uncertainty as fixture_uncertainty
 #: ledger chain 検証）を `tools.archive_aborted_ledger`/`provenance.Ledger`
 #: と共有するための import。`provenance.py`/`tools/archive_aborted_
 #: ledger.py` はいずれも `c0_validate` を import しないため循環 import には
-#: ならない。
+#: ならない。`canonical.py` も同様に葉モジュール（本ファイルを import
+#: しない）のため、`manifest_sha()` をトップレベルで import できる
+#: （R25-1 対応、Codex 第 25 巡 P2 採用, 2026-09-05）。`c0_freeze.py` は
+#: 逆に `c0_validate` を import するため `manifest_core_sha()` はトップ
+#: レベルでは import できず、`_legacy_v1_0_opt_in_verified()` 内で遅延
+#: import する（両モジュールが完全にロードされた後の実行時にのみ評価
+#: されるため循環 import を起こさない）。
 from .provenance import Ledger
 from .tools import archive_aborted_ledger
 from .fixtures.matrix import (
@@ -2583,7 +2593,9 @@ def _check_holdout_sweeps_realized_membership(
     return tuple(violations)
 
 
-def _legacy_v1_0_opt_in_verified(manifest_path: Path | str | None) -> bool:
+def _legacy_v1_0_opt_in_verified(
+    manifest: Mapping[str, object], manifest_path: Path | str | None
+) -> bool:
     """R22-1 対応（Codex 第 22 巡 finding (1)）: `allow_legacy_v1_0=True` を
     「campaign directory 上に既に存在する manifest ファイルであり、かつその
     campaign の ledger が closed（chain 検証が通り、末尾 event の
@@ -2614,14 +2626,85 @@ def _legacy_v1_0_opt_in_verified(manifest_path: Path | str | None) -> bool:
     に加え、entries の**末尾**（`entries[-1]`）が `campaign_closed` である
     ことを要求する（生スキャンでは「どこかに 1 行あれば真」だったのを、
     正規の閉鎖手順が必ず末尾に置く event の位置まで絞り込む）。
+
+    R25-1 対応（Codex 第 25 巡 P2 採用、2026-09-05,
+    "Bind legacy opt-in to the manifest being validated"）: R24-2 までの
+    実装は「`manifest_path` の親 campaign directory の ledger が
+    closed/aborted である」ことだけを検証しており、その ledger が
+    **`manifest_path`/`manifest` 自身の freeze 履歴である**ことは一切
+    確認していなかった。他 campaign の正規 closed/aborted archive
+    （`ledger.jsonl` または `ledger.jsonl.gz`+sidecar）を revision marker
+    無しの manifest の隣にコピーするだけで、無関係な ledger の
+    chain-valid 性を借りて legacy 免除が成立してしまう（v1.1 の
+    uncertainty 系検証を丸ごとスキップできる）。加えて in-memory
+    `manifest`（呼び出し元が実際に検証しようとしている値）が
+    `manifest_path` の on-disk 内容と一致することも未確認だった。
+
+    修正は 2 段の束縛を追加する（いずれか一方でも欠けたら `False`）:
+
+    (a) **manifest 自己 hash の一致**: `manifest_path` の生バイト列の
+        sha256 が、in-memory `manifest` から計算した
+        `canonical.manifest_sha()` と一致することを要求する。
+        `c0_freeze.py` は `c0_manifest.json` を常に
+        `canonical_json(full_manifest)` で書き込むため、改変されていない
+        限りこの 2 値は厳密に一致する。不一致は「in-memory manifest が
+        path の内容と異なる」ことを意味し、他 campaign の manifest を
+        誤って渡した・path 側だけ後から書き換えられた、のいずれかで
+        fail-closed する。
+
+    (b) **ledger の freeze identity の一致**: ledger の genesis event
+        （`entries[0]`、`payload.kind == "c0_freeze"`）に記録された
+        `manifest_sha`/`manifest_core_sha` が、(a) で検証した manifest から
+        計算した値（`manifest_sha` は (a) と同じ
+        `canonical.manifest_sha()`、`manifest_core_sha` は
+        `c0_freeze.manifest_core_sha()`）と一致することを要求する。これに
+        より、ledger 自体は chain-valid でも「この manifest を freeze した
+        ものではない」場合（他 campaign の archive の使い回し）を検出する。
+        `c0_freeze.py` は `c0_validate` を import するため
+        `manifest_core_sha()` は遅延 import する（循環 import 回避）。
     """
     if manifest_path is None:
         return False
     path = Path(manifest_path)
     if not path.is_file():
         return False
-    campaign_dir = path.parent
 
+    # R25-1 (a): path のバイト列と in-memory manifest の正規化 JSON が
+    # 一致することを要求する。
+    try:
+        path_bytes = path.read_bytes()
+    except OSError:
+        return False
+    path_sha = hashlib.sha256(path_bytes).hexdigest()
+    try:
+        in_memory_manifest_sha = _canonical_manifest_sha(manifest)
+    except Exception:  # noqa: BLE001 - 正規化不能な manifest も opt-in 不可扱い
+        return False
+    if path_sha != in_memory_manifest_sha:
+        return False
+
+    # R25-1 (b): `c0_freeze.manifest_core_sha()` は `c0_validate` を
+    # import する `c0_freeze` モジュールの関数のため、ここでのみ遅延
+    # import する（モジュール先頭での import は循環 import を起こす）。
+    from voice_genesis.calibration import c0_freeze as _c0_freeze
+
+    try:
+        expected_core_sha = _c0_freeze.manifest_core_sha(manifest)
+    except Exception:  # noqa: BLE001 - core payload 導出不能も opt-in 不可扱い
+        return False
+
+    def _freeze_identity_matches(entries: Sequence[object]) -> bool:
+        if not entries:
+            return False
+        genesis_payload = entries[0].payload
+        if not isinstance(genesis_payload, Mapping) or genesis_payload.get("kind") != "c0_freeze":
+            return False
+        return (
+            genesis_payload.get("manifest_sha") == in_memory_manifest_sha
+            and genesis_payload.get("manifest_core_sha") == expected_core_sha
+        )
+
+    campaign_dir = path.parent
     gz_path = campaign_dir / archive_aborted_ledger.GZ_FILENAME
     sidecar_path = campaign_dir / archive_aborted_ledger.SIDECAR_FILENAME
     if gz_path.is_file():
@@ -2632,7 +2715,29 @@ def _legacy_v1_0_opt_in_verified(manifest_path: Path | str | None) -> bool:
         # sidecar sha256 一致・gz 実伸長・伸長結果の chain 検証まで通った
         # ——`ensure_archived()` が公開前に要求するのと同じ 4 点がすべて
         # 揃っている（D100/c0e466c の「公開は検証成功後にのみ」契約と整合）。
-        return True
+        # R25-1: そのうえで、伸長結果の genesis event の freeze identity を
+        # (a) で検証した manifest と突き合わせる（`_verify_gz_sidecar_pair`
+        # 自体は sha256/chain のみ検証し中身の identity までは見ないため、
+        # ここで改めて伸長・parse する）。
+        try:
+            decompressed = gzip.decompress(gz_path.read_bytes())
+        except OSError:
+            return False
+        tmp_fd, tmp_name = tempfile.mkstemp(
+            dir=str(gz_path.parent), prefix=".legacy-opt-in-verify-", suffix=".jsonl"
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(tmp_fd, "wb") as f:
+                f.write(decompressed)
+            decompressed_ledger, decompressed_chain = Ledger.load_with_verification(tmp_path)
+        except Exception:  # noqa: BLE001 - 検証不能も「legacy opt-in 不可」扱い
+            return False
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        if not decompressed_chain.ok:
+            return False
+        return _freeze_identity_matches(decompressed_ledger.entries)
 
     ledger_path = campaign_dir / "ledger.jsonl"
     if not ledger_path.is_file():
@@ -2647,7 +2752,11 @@ def _legacy_v1_0_opt_in_verified(manifest_path: Path | str | None) -> bool:
     if not entries:
         return False
     tail_payload = entries[-1].payload
-    return isinstance(tail_payload, Mapping) and tail_payload.get("kind") == "campaign_closed"
+    if not (isinstance(tail_payload, Mapping) and tail_payload.get("kind") == "campaign_closed"):
+        return False
+    # R25-1 (b): closed campaign についても genesis event の freeze
+    # identity を manifest と突き合わせる。
+    return _freeze_identity_matches(entries)
 
 
 def validate_c0_manifest(
@@ -2661,14 +2770,16 @@ def validate_c0_manifest(
 
     `allow_legacy_v1_0`（R22-1、既定 False）: `frozen_design.design_revision`
     marker が無い/一致しない legacy (v1.0) manifest の検証を明示的に許可する
-    opt-in。`_legacy_v1_0_opt_in_verified(manifest_path)` が「on-disk の
+    opt-in。`_legacy_v1_0_opt_in_verified(manifest, manifest_path)` が「on-disk の
     closed/aborted campaign manifest である」ことを確認できた場合にのみ実際に
     有効化される——`manifest_path` を渡さない、または campaign が
     closed/aborted と確認できない場合は `True` を渡しても legacy 扱いに
     ならない（fail-closed）。`c0_freeze.dry_run()`/`armed_freeze()` が呼ぶ
     新規 freeze 経路はこの引数を一切渡さない（常に v1.1 必須のまま）。
     """
-    legacy_design_revision_ok = allow_legacy_v1_0 and _legacy_v1_0_opt_in_verified(manifest_path)
+    legacy_design_revision_ok = allow_legacy_v1_0 and _legacy_v1_0_opt_in_verified(
+        manifest, manifest_path
+    )
     missing_required = _check_required_blocking(
         manifest, legacy_design_revision_ok=legacy_design_revision_ok
     )

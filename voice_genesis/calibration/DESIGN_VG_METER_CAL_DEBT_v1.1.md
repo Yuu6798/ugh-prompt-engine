@@ -474,6 +474,19 @@ missing/invalid があれば当該 instance は **偽検出（失敗）側**に�
   `862dec28` は 1 バイトも変更しない）。
 - git-lfs は導入しない（実行環境に未導入・proxy 制約。50 MB 超の非圧縮 ledger を
   新規 commit しないことを運用で担保する）。
+- **R25-2 追補（Codex 第 25 巡 P2 採用、2026-09-05, "Reject appends when
+  either archive artifact remains"）**: `provenance.Ledger.append()` の
+  create-on-append 経路（原本 `ledger.jsonl` が存在しない場合の archive 済み
+  判定）は、修正前は `ledger.jsonl.gz` **と** sidecar の**両方**が揃っている
+  場合にしか fail-closed しなかった。完了済み archive が sidecar だけを
+  失うと（gz のみ残存）append が素通りして新しい genesis ledger を作成し、
+  次の `ensure_archived()` 呼び出しがその新規 chain を canonical と誤認して
+  唯一の gz を削除しうる（campaign 履歴の永久喪失）。gz/sidecar の**いずれか
+  一方でも**存在すれば `LedgerArchivedError` で fail-closed し、明示的な
+  archive 回復を先に要求するよう修正した。`tools/archive_aborted_ledger.py`
+  側の「片方のみ存在」分岐（R22-3 で refusal 化済み）との整合を監査し、本
+  fix により新規 genesis を誤って canonical 扱いする経路が append() の入口
+  で塞がれたことを確認した。
 
 ## V5. correction record — D82 / D87 / D88 / D90（コード是正の設計追認）
 
@@ -522,6 +535,17 @@ checkout 上の `DESIGN_VG_METER_CAL_DEBT_v1.0.md` の実測 sha256 の一致**�
 成果物で opt-in を騙り得た。`archive_aborted_ledger._verify_gz_sidecar_pair()`
 （sidecar 一致・実伸長・chain 検証）と `provenance.Ledger.load_with_
 verification()`（chain 検証 + 末尾 `campaign_closed`）による実検証へ置換した。
+
+**R25-1 追補（Codex 第 25 巡 P2 採用、2026-09-05, "Bind legacy opt-in to the
+manifest being validated"）**: R24-2 までの実検証は「ledger が closed/aborted
+である」ことしか確認しておらず、その ledger が**検証対象の manifest 自身の**
+freeze 履歴であることは未確認だった。他 campaign の正規 closed/aborted archive
+（chain-valid な ledger）を revision marker 無しの manifest の隣にコピーする
+だけで、無関係な ledger の正当性を借りて opt-in が成立し得た。
+`_legacy_v1_0_opt_in_verified()` に (a) `manifest_path` の生バイト列の sha256
+と in-memory manifest の `canonical.manifest_sha()` の一致、(b) ledger の
+genesis event (`c0_freeze`) に記録された `manifest_sha`/`manifest_core_sha`
+がその manifest から計算した値と一致すること、の 2 段の束縛を追加した。
 
 ## V7. 裁定
 
