@@ -198,8 +198,9 @@ secret の引きに依存して C0 freeze が確率的に失敗する欠陥が�
   弱めない）、それ以外の family では 0（= pin 免除）。実現された k は manifest の
   `holdout_sweeps` の宣言数として自動的に記録され、c0_validate の再導出照合は
   同一の縮退規則を再実行して一致を検査する。
-- 正典 456 セル matrix では全 family が満額 k_hold で feasible（§V2.2 の表の
-  とおり）であり、本縮退規則は挙動を変えない。
+- 正典 456 セル matrix では、§V3.5 の nuisance 軸 coverage 制約を加えた後、
+  TILT_GT のみが本縮退規則により k_hold 2 → 1 に縮退し（§V3.5 適用範囲の項）、
+  他 6 family は満額 k_hold で feasible。
 
 （N_hold = §5.2 の family holdout 目標行数。式の完全形は下記「被覆要件」の
 max_field_cardinality 項を含む。456 セル canonical matrix での値:
@@ -380,6 +381,15 @@ duration / noise / context）を invariance 軸として一律宣言する一方
   CONFOUND 行を最低 1 行持つことを段 2 の coverage 制約に加える（`_COVERAGE_AXES`
   へ nuisance 軸キーを追加。既存の swap 修復で充足、不能は fail-closed）。これにより
   holdout で各宣言軸が ≥ 5 pair（1 行 × 5 probe）を構造的に持ち得る。
+  **適用範囲**（実装時確定、2026-09-05）: 本制約は gate 4' が適用され得る family
+  （ABSOLUTE ceiling に到達し得る family）のみに課す。RESONANCE_GT（§16-1 で
+  DIAGNOSTIC_ONLY 固定）と IDENTITY_CAUSAL_SWEEP（§4.2 で物理 GT なし・ABSOLUTE 禁止）
+  は gate 4' の対象外であり、制約を課すと C0 freeze が構造的に不能になるため除外する。
+  **正典 456 セルでの帰結**: TILT_GT は holdout 12 行のうち pin sweep（5 行）と
+  4 nuisance 軸 × 1 行の両立が k_hold=2 では不能なため、§V2.2 の縮退規則により
+  **k_hold = 1**（5 truth level を保持し DIRECTIONAL の構造条件は充足）に決定論的に
+  縮退する。他 6 family は満額 k_hold のまま。§V2.2 の表の TILT_GT=2 は本追補で
+  上書きされる。
 - **anchor の共有測定**（Codex レビュー第 15 巡 P1 採用、2026-09-05）: pair の
   anchor 側（family の指定 positive anchor 行）が HOLDOUT 以外の split に home すると
   pair が全滅する。指定 anchor 行は negative control と同じく **split 非依存の共有
