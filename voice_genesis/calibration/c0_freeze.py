@@ -58,17 +58,20 @@ from voice_genesis.calibration.canonical import manifest_sha as _full_manifest_s
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
 from voice_genesis.calibration.fixtures.controls import ControlClass
 from voice_genesis.calibration.fixtures.matrix import (
+    HoldoutPinDegradationExhausted,
     HoldoutPinInfeasible,
     MatrixRow,
     _negative_applicable,
     build_matrix,
     claim_relevant_fields_by_family,
     declared_sweeps_by_family,
+    holdout_pin_params_by_family,
     pin_holdout_sweeps_by_family,
 )
 from voice_genesis.calibration.fixtures.matrix import build_matrix as _canonical_build_matrix
 from voice_genesis.calibration.provenance import Ledger
 from voice_genesis.calibration.splitter import (
+    CoverageRepairInfeasible,
     RealizedSplitMap,
     RowInput,
     SwapRecord,
@@ -897,6 +900,66 @@ def _row_inputs_for_split(
     return out
 
 
+def _pin_and_realize_holdout(
+    matrix_rows: Sequence[MatrixRow],
+    row_inputs: Sequence[RowInput],
+    split_secret: bytes,
+    stratum_factor_names: Sequence[str],
+) -> tuple[dict[str, dict[str, tuple[str, ...]]], RealizedSplitMap]:
+    """§V2.2 段 1 + 段 2 実行部（縮退規則、2026-09-04 追補）。
+
+    `pin_holdout_sweeps_by_family()`（段 1）→ `realize_split()`（段 2）の順に
+    試み、段 2 が `CoverageRepairInfeasible` で落ちた場合（pin 選抜の結果
+    として family 合計補正/coverage 修復が不能になった場合）は、当該
+    family の `k_hold` を 1 ずつ決定論的に下げて段 1 から再選抜し、段 2 を
+    再試行する。縮退の下限は family の `degradation_floor`
+    （`holdout_pin_params_by_family()` 参照 — claim 被覆 family
+    （max_field_cardinality > 1）は max_field_cardinality、それ以外は 0）で、
+    これを割り込む縮退が必要になった場合は `HoldoutPinDegradationExhausted`
+    を送出する（fail-closed、未捕捉のまま `armed_freeze()` の外へ漏らさない
+    — 呼び出し側が捕捉して `FreezeOutcome.VALIDATION_BLOCKED` へ変換する）。
+
+    `HoldoutPinInfeasible`（cap>=1 だが被覆要件が cap を超える構造的欠陥）は
+    縮退対象ではなくそのまま呼び出し側へ伝播する（従来どおり）。
+
+    実現された k は戻り値の `holdout_sweeps` の宣言数（宣言 sweep 数）
+    としてそのまま表れる（「宣言数 = 実現 k」）——`c0_validate.
+    _check_holdout_sweeps_declaration_match()` が同じ規約で再導出照合する。
+    """
+    params = holdout_pin_params_by_family(matrix_rows)
+    k_hold_overrides: dict[str, int] = {}
+    while True:
+        holdout_sweeps = pin_holdout_sweeps_by_family(
+            matrix_rows, split_secret, k_hold_overrides=k_hold_overrides or None
+        )
+        pinned_holdout_row_ids = frozenset(
+            rid
+            for family_sweeps in holdout_sweeps.values()
+            for member_row_ids in family_sweeps.values()
+            for rid in member_row_ids
+        )
+        try:
+            realized = realize_split(
+                row_inputs,
+                split_secret,
+                stratum_factor_names,
+                pinned_holdout_row_ids=pinned_holdout_row_ids,
+            )
+        except CoverageRepairInfeasible as exc:
+            fam = exc.family
+            if fam is None or fam not in params:
+                raise
+            current_k = k_hold_overrides.get(fam, params[fam].k_hold)
+            floor = params[fam].degradation_floor
+            if current_k <= floor:
+                raise HoldoutPinDegradationExhausted(
+                    fam, floor=floor, attempted_k=current_k
+                ) from exc
+            k_hold_overrides[fam] = current_k - 1
+            continue
+        return holdout_sweeps, realized
+
+
 def _realized_split_to_dict(realized: RealizedSplitMap) -> dict[str, object]:
     return {
         "stratum_factor_names": list(realized.stratum_factor_names),
@@ -1418,17 +1481,23 @@ def armed_freeze(
     matrix_rows = build_matrix()
     row_inputs = _row_inputs_for_split(matrix_rows, STRATUM_FACTOR_NAMES)
 
-    # v1.1 §V2.2 段 1: holdout sweep pinning は split_secret 依存
+    # v1.1 §V2.2 段 1+段 2: holdout sweep pinning は split_secret 依存
     # （HMAC(split_secret, ...)）のため、split_secret が確定した直後・
     # realize_split() の直前でここで初めて計算できる。被覆要件が cap 内で
     # 充足不能な family 構成（456 セルでは発生しない、防御的経路）は
-    # `HoldoutPinInfeasible` を fail-closed な `VALIDATION_BLOCKED` へ変換
-    # する（`c0_validate._check_holdout_pin_feasibility()` が manifest 非
-    # 依存に同じ構造をあらかじめ検査するため、実運用ではこの except 節へ
-    # 到達する前に上流の `validate_c0_manifest()`/Gate 2 レビューで発見
-    # される想定だが、二重の防御として残す）。
+    # `HoldoutPinInfeasible` を、段 2 修復不能が縮退下限まで解消しない場合は
+    # `HoldoutPinDegradationExhausted` を、それぞれ fail-closed な
+    # `VALIDATION_BLOCKED` へ変換する（`c0_validate._check_holdout_pin_
+    # feasibility()` が manifest 非依存に同じ構造をあらかじめ検査するため、
+    # 実運用ではこの except 節へ到達する前に上流の `validate_c0_manifest()`/
+    # Gate 2 レビューで発見される想定だが、二重の防御として残す）。縮退
+    # リトライ本体（cap<1 pin 免除 / 段 2 CoverageRepairInfeasible 時の
+    # 決定論的 k 縮退）は `_pin_and_realize_holdout()`（§V2.2 縮退規則、
+    # 2026-09-04 追補）に委譲する。
     try:
-        holdout_sweeps = pin_holdout_sweeps_by_family(matrix_rows, split_secret)
+        holdout_sweeps, realized = _pin_and_realize_holdout(
+            matrix_rows, row_inputs, split_secret, STRATUM_FACTOR_NAMES
+        )
     except HoldoutPinInfeasible as exc:
         return ArmedFreezeResult(
             outcome=FreezeOutcome.VALIDATION_BLOCKED,
@@ -1440,18 +1509,17 @@ def armed_freeze(
             detail=f"holdout sweep pin coverage requirement infeasible: {exc}",
             gate2_arming=gate2_arming,
         )
-    pinned_holdout_row_ids = frozenset(
-        rid
-        for family_sweeps in holdout_sweeps.values()
-        for member_row_ids in family_sweeps.values()
-        for rid in member_row_ids
-    )
-    realized = realize_split(
-        row_inputs,
-        split_secret,
-        STRATUM_FACTOR_NAMES,
-        pinned_holdout_row_ids=pinned_holdout_row_ids,
-    )
+    except HoldoutPinDegradationExhausted as exc:
+        return ArmedFreezeResult(
+            outcome=FreezeOutcome.VALIDATION_BLOCKED,
+            campaign_id=campaign_id,
+            manifest_core_sha=core_sha,
+            manifest_sha=None,
+            campaign_dir=None,
+            secret_dir=None,
+            detail=f"holdout sweep pin degradation exhausted: {exc}",
+            gate2_arming=gate2_arming,
+        )
     realized_split_dict = _realized_split_to_dict(realized)
 
     full_manifest = _attach_freeze_extras(

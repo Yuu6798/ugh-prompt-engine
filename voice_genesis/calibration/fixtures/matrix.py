@@ -1066,7 +1066,13 @@ def claim_relevant_fields_by_family(rows: Sequence[MatrixRow]) -> dict[str, tupl
 class HoldoutPinInfeasible(RuntimeError):
     """§V2.2 の被覆要件が cap `floor((N_hold-1)/r)` 内で充足不能な family
     構成（C0 fail-closed。456 セル canonical matrix では発生しない —
-    `holdout_pin_params_by_family()` の実測値表を参照）。"""
+    `holdout_pin_params_by_family()` の実測値表を参照）。
+
+    縮退規則（2026-09-04 追補）採用後は `cap < 1` の family はこの例外では
+    なく pin 免除（`HoldoutPinParams.pin_exempt`）へ倒れるため、本例外が
+    実際に発生するのは `cap >= 1` かつ `max_field_cardinality > cap`
+    （＝holdout に pin 用の余地はあるが被覆要件を満たすには足りない）場合
+    のみに縮小した。"""
 
     def __init__(self, family: str, *, max_field_cardinality: int, cap: int) -> None:
         self.family = family
@@ -1077,6 +1083,29 @@ class HoldoutPinInfeasible(RuntimeError):
             f"needs max_field_cardinality={max_field_cardinality} pinned sweep(s) but "
             f"cap floor((N_hold-1)/r)={cap} is smaller — infeasible, refusing to pin "
             "(fail-closed, §V2.2)"
+        )
+
+
+class HoldoutPinDegradationExhausted(RuntimeError):
+    """§V2.2 縮退規則（2026-09-04 追補）: 段 2（`splitter.realize_split()` の
+    coverage repair）が pin 選抜の結果として修復不能になり、k_hold を 1 ずつ
+    下げて再試行しても、`family` の縮退下限（`degradation_floor` —
+    claim 被覆 family（`max_field_cardinality > 1`: FORMANT_GT/
+    IDENTITY_CAUSAL_SWEEP）では `max_field_cardinality`、それ以外は 0）を
+    割り込む縮退が必要になった場合の fail-closed 構造化例外。被覆保証を
+    静かに弱めない（R2/R4 巡で採用した被覆保証の維持）。呼び出し側
+    （`c0_freeze._pin_and_realize_holdout()`）はこれを捕捉して
+    `FreezeOutcome.VALIDATION_BLOCKED` へ変換し、未捕捉のまま
+    `armed_freeze()` の外へ漏らさない。"""
+
+    def __init__(self, family: str, *, floor: int, attempted_k: int) -> None:
+        self.family = family
+        self.floor = floor
+        self.attempted_k = attempted_k
+        super().__init__(
+            f"matrix: holdout sweep pin degradation for family {family!r} would need "
+            f"k_hold={attempted_k}, which is below the coverage-guarantee degradation "
+            f"floor {floor} — refusing to degrade further (fail-closed, §V2.2 縮退規則)"
         )
 
 
@@ -1092,8 +1121,20 @@ class HoldoutPinParams:
     n_hold: int  # N_hold = family total の 25%（§5.2。456 セルでは常に整数）
     max_field_cardinality: int  # stratum-key field の値数の最大（無ければ 1）
     cap: int  # floor((N_hold - 1) / r)
-    feasible: bool  # max_field_cardinality <= cap
-    k_hold: int  # min(max(floor(0.25*S+0.5), 1, max_field_cardinality), cap)
+    feasible: bool  # pin_exempt or (max_field_cardinality <= cap)
+    k_hold: int  # min(max(floor(0.25*S+0.5), 1, max_field_cardinality), cap)。
+    # pin_exempt な family は 0。
+    #: §V2.2 縮退規則（2026-09-04 追補）: `cap < 1`（holdout が sweep 1 本 +
+    #: 非 sweep 行 1 行すら収容できない）family は pin 免除（k_hold=0・
+    #: `HoldoutPinInfeasible` を送出しない）。456 セル canonical matrix では
+    #: 全 family とも False（`test_k_hold_matches_v2_2_frozen_table` 参照）。
+    pin_exempt: bool = False
+    #: §V2.2 縮退規則 2nd bullet: 段 2 修復不能時に k_hold を 1 ずつ下げる
+    #: 縮退リトライの下限。claim 被覆 family（`max_field_cardinality > 1`:
+    #: FORMANT_GT/IDENTITY_CAUSAL_SWEEP）は `max_field_cardinality`
+    #: （被覆保証を静かに弱めない）、それ以外の family は 0（= pin 免除まで
+    #: 縮退可能）。
+    degradation_floor: int = 0
 
 
 def holdout_pin_params_by_family(rows: Sequence[MatrixRow]) -> dict[str, HoldoutPinParams]:
@@ -1121,9 +1162,19 @@ def holdout_pin_params_by_family(rows: Sequence[MatrixRow]) -> dict[str, Holdout
         total = axes.FAMILY_COUNTS[family][3]
         n_hold = total // 4
         cap = (n_hold - 1) // member_rows_per_sweep
-        feasible = max_field_cardinality <= cap
-        ideal = math.floor(0.25 * sweep_count + 0.5)
-        k_hold = min(max(ideal, 1, max_field_cardinality), cap)
+        degradation_floor = max_field_cardinality if max_field_cardinality > 1 else 0
+        # §V2.2 縮退規則（2026-09-04 追補）: cap<1（holdout が sweep 1 本 +
+        # 非 sweep 行 1 行すら収容できない）は、被覆要件の大小に関わらず
+        # 無条件で pin 免除する — `HoldoutPinInfeasible` はこの下で
+        # `cap>=1 だが max_field_cardinality>cap` の場合にのみ発生する。
+        pin_exempt = cap < 1
+        if pin_exempt:
+            feasible = True
+            k_hold = 0
+        else:
+            feasible = max_field_cardinality <= cap
+            ideal = math.floor(0.25 * sweep_count + 0.5)
+            k_hold = min(max(ideal, 1, max_field_cardinality), cap)
         result[fam] = HoldoutPinParams(
             family=fam,
             sweep_count=sweep_count,
@@ -1133,6 +1184,8 @@ def holdout_pin_params_by_family(rows: Sequence[MatrixRow]) -> dict[str, Holdout
             cap=cap,
             feasible=feasible,
             k_hold=k_hold,
+            pin_exempt=pin_exempt,
+            degradation_floor=degradation_floor,
         )
     return result
 
@@ -1259,17 +1312,31 @@ def _pin_plain_topk(
 
 
 def pin_holdout_sweeps_by_family(
-    rows: Sequence[MatrixRow], split_secret: bytes
+    rows: Sequence[MatrixRow],
+    split_secret: bytes,
+    *,
+    k_hold_overrides: Mapping[str, int] | None = None,
 ) -> dict[str, dict[str, tuple[str, ...]]]:
     """§V2.2 段 1: family ごとに declared sweep から `k_hold` 個を HOLDOUT
     専属 sweep として pin する。戻り値は `declared_sweeps_by_family()` と
     同型（`family -> {sweep_id: (member row_id, ...)}`）だが、各 family は
-    pin された sweep のみを含む部分集合を持つ（宣言 sweep が無い family は
-    空 dict）。
+    pin された sweep のみを含む部分集合を持つ（宣言 sweep が無い family、
+    pin 免除 family、`k_hold_overrides` で 0 まで縮退した family は空
+    dict）。
 
     被覆要件が cap `floor((N_hold-1)/r)` 内で充足不能な family 構成は
     `HoldoutPinInfeasible` で fail-closed する（456 セル canonical matrix
-    では発生しない）。
+    では発生しない）。`cap < 1` の family は本関数に到達する前に
+    `holdout_pin_params_by_family()` が pin 免除（`k_hold=0`）と判定して
+    いるため、この例外を送出しない。
+
+    `k_hold_overrides`（§V2.2 縮退規則、2026-09-04 追補）: 段 2
+    （`splitter.realize_split()`）の coverage repair が pin 選抜の結果として
+    修復不能になったときの決定論的再選抜リトライ用。family ごとに nominal
+    `k_hold` を上書きする（`c0_freeze._pin_and_realize_holdout()` が使う）。
+    上書き値が当該 family の `degradation_floor` を下回る場合は
+    `HoldoutPinDegradationExhausted` で fail-closed する（claim 被覆
+    family の被覆保証を静かに弱めない）。
     """
     groups = _sweep_groups(rows)
     params = holdout_pin_params_by_family(rows)
@@ -1282,6 +1349,16 @@ def pin_holdout_sweeps_by_family(
             result[fam] = {}
             continue
         p = params[fam]
+        k_hold = p.k_hold
+        if k_hold_overrides is not None and fam in k_hold_overrides:
+            k_hold = k_hold_overrides[fam]
+            if k_hold < p.degradation_floor:
+                raise HoldoutPinDegradationExhausted(
+                    fam, floor=p.degradation_floor, attempted_k=k_hold
+                )
+        if p.pin_exempt or k_hold <= 0:
+            result[fam] = {}
+            continue
         if not p.feasible:
             raise HoldoutPinInfeasible(
                 fam, max_field_cardinality=p.max_field_cardinality, cap=p.cap
@@ -1289,18 +1366,18 @@ def pin_holdout_sweeps_by_family(
         stratum_fields = _SWEEP_STRATUM_KEY_FIELDS_BY_FAMILY.get(fam, ())
         if stratum_fields == ("generator_impl",):
             pinned_ids = _pin_single_field_stratum(
-                family_sweeps, split_secret, "generator_impl", p.k_hold
+                family_sweeps, split_secret, "generator_impl", k_hold
             )
         elif stratum_fields == ("founder_id", "trait"):
-            pinned_ids = _pin_identity_founder_trait(family_sweeps, split_secret, p.k_hold)
+            pinned_ids = _pin_identity_founder_trait(family_sweeps, split_secret, k_hold)
         else:
             claim_fields = claim_fields_by_family.get(fam, ())
             if claim_fields:
                 pinned_ids = _pin_claim_round_robin(
-                    family_sweeps, split_secret, claim_fields, p.k_hold
+                    family_sweeps, split_secret, claim_fields, k_hold
                 )
             else:
-                pinned_ids = _pin_plain_topk(family_sweeps, split_secret, p.k_hold)
+                pinned_ids = _pin_plain_topk(family_sweeps, split_secret, k_hold)
         result[fam] = {
             sid: tuple(sorted(mr.row_id for mr in family_sweeps[sid])) for sid in pinned_ids
         }

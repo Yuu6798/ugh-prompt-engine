@@ -26,13 +26,16 @@ import pytest
 
 from voice_genesis.calibration.c0_freeze import (
     STRATUM_FACTOR_NAMES,
+    _pin_and_realize_holdout,
     _realized_split_to_dict,
     _row_inputs_for_split,
 )
 from voice_genesis.calibration.campaign.state import _realized_split_from_manifest
 from voice_genesis.calibration.fixtures import axes
 from voice_genesis.calibration.fixtures.matrix import (
+    HoldoutPinDegradationExhausted,
     HoldoutPinInfeasible,
+    _sweep_groups,
     build_matrix,
     claim_relevant_fields_by_family,
     declared_sweeps_by_family,
@@ -271,10 +274,16 @@ def test_no_pin_path_is_unaffected_by_pinning_machinery() -> None:
 
 def test_holdout_pin_infeasible_when_cap_below_required_cardinality() -> None:
     """`IDENTITY_CAUSAL_SWEEP` 型（founder x trait 2-field stratum key）を、
-    N_hold を極端に小さくした合成 matrix で再現し、cap
-    `floor((N_hold-1)/r)` が `max_field_cardinality`（founder 4 値）を
-    下回る場合に `HoldoutPinInfeasible` が fail-closed で送出されることを
-    確認する（456 セルでは発生しない経路の直接検証）。"""
+    N_hold を小さくした合成 matrix で再現し、cap `floor((N_hold-1)/r)` が
+    `max_field_cardinality`（founder 4 値）を下回る**が `cap>=1`**（＝pin
+    免除の対象外）の場合に `HoldoutPinInfeasible` が fail-closed で送出
+    されることを確認する（456 セルでは発生しない経路の直接検証）。
+
+    §V2.2 縮退規則（2026-09-04 追補）で `cap<1` は pin 免除に倒れるように
+    なったため、本テストの cap は意図的に `>=1` に据える（`cap<1` の
+    exempt シナリオは `test_holdout_pin_cap_below_one_is_pin_exempt` が
+    別途固定する）。
+    """
     import voice_genesis.calibration.fixtures.matrix as matrix_mod
 
     rows = [
@@ -292,16 +301,69 @@ def test_holdout_pin_infeasible_when_cap_below_required_cardinality() -> None:
 
     original_counts = matrix_mod.axes.FAMILY_COUNTS
     tiny_counts = dict(original_counts)
-    # r=5 (IDENTITY member_rows_per_sweep) のとき N_hold=4 なら
-    # cap=floor((4-1)/5)=0 < max_field_cardinality(4) -> infeasible。
-    tiny_counts[FixtureFamily.IDENTITY_CAUSAL_SWEEP] = (60, 24, 12, 16)
+    # r=5 (IDENTITY member_rows_per_sweep) のとき N_hold=8 (total=32) なら
+    # cap=floor((8-1)/5)=1 < max_field_cardinality(4)、かつ cap>=1 なので
+    # pin 免除ではなく genuine infeasible -> HoldoutPinInfeasible。
+    tiny_counts[FixtureFamily.IDENTITY_CAUSAL_SWEEP] = (60, 24, 12, 32)
     matrix_mod.axes.FAMILY_COUNTS = tiny_counts
     try:
         params = holdout_pin_params_by_family(rows)
+        assert params["IDENTITY_CAUSAL_SWEEP"].cap == 1
+        assert params["IDENTITY_CAUSAL_SWEEP"].pin_exempt is False
         assert params["IDENTITY_CAUSAL_SWEEP"].feasible is False
         with pytest.raises(HoldoutPinInfeasible) as excinfo:
             pin_holdout_sweeps_by_family(rows, DUMMY_SECRETS[0])
         assert excinfo.value.family == "IDENTITY_CAUSAL_SWEEP"
+    finally:
+        matrix_mod.axes.FAMILY_COUNTS = original_counts
+
+
+def test_holdout_pin_cap_below_one_is_pin_exempt() -> None:
+    """§V2.2 縮退規則（2026-09-04 追補）1st bullet: `cap < 1`（holdout が
+    sweep 1 本 + 非 sweep 行 1 行すら収容できない family）は
+    `HoldoutPinInfeasible` ではなく pin 免除（`k_hold=0`、pin 集合空）へ
+    倒れる——claim 被覆 family（IDENTITY_CAUSAL_SWEEP, max_field_cardinality
+    =4 > 1）でも例外なく適用される（1st bullet は claim 被覆 family を
+    除外していない。claim 被覆 family の下限保護は縮退リトライ側
+    （`degradation_floor`）の話であり、cap<1 の初期免除ゲートとは別）。
+    `pin_holdout_sweeps_by_family()` は例外を送出せず空 dict を返し、
+    `realize_split()` は pin 制約なしの v1.0 相当の 3-way 割当のみで成功
+    する。"""
+    import voice_genesis.calibration.fixtures.matrix as matrix_mod
+
+    from voice_genesis.calibration.c0_freeze import STRATUM_FACTOR_NAMES, _row_inputs_for_split
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily
+    from voice_genesis.calibration.splitter import realize_split, verify_split
+
+    rows = [
+        mr
+        for mr in build_matrix()
+        if mr.row.family == "IDENTITY_CAUSAL_SWEEP" and mr.row.block == "TRUTH_CORE"
+    ]
+    assert rows
+
+    original_counts = matrix_mod.axes.FAMILY_COUNTS
+    tiny_counts = dict(original_counts)
+    # r=5 のとき N_hold=4 (total=16) なら cap=floor((4-1)/5)=0 < 1 -> exempt。
+    tiny_counts[FixtureFamily.IDENTITY_CAUSAL_SWEEP] = (60, 24, 12, 16)
+    matrix_mod.axes.FAMILY_COUNTS = tiny_counts
+    try:
+        params = holdout_pin_params_by_family(rows)
+        p = params["IDENTITY_CAUSAL_SWEEP"]
+        assert p.cap == 0
+        assert p.pin_exempt is True
+        assert p.feasible is True
+        assert p.k_hold == 0
+
+        pinned = pin_holdout_sweeps_by_family(rows, DUMMY_SECRETS[0])
+        assert pinned["IDENTITY_CAUSAL_SWEEP"] == {}
+
+        full_rows = list(build_matrix())
+        row_inputs = _row_inputs_for_split(full_rows, STRATUM_FACTOR_NAMES)
+        realized = realize_split(
+            row_inputs, DUMMY_SECRETS[0], STRATUM_FACTOR_NAMES, pinned_holdout_row_ids=frozenset()
+        )
+        assert verify_split(row_inputs, DUMMY_SECRETS[0], realized) is True
     finally:
         matrix_mod.axes.FAMILY_COUNTS = original_counts
 
@@ -338,3 +400,140 @@ def test_realized_split_manifest_round_trip_preserves_pin_for_verify_split() -> 
     # 挙動）は、pin を使った実 assignment を「改竄」として誤検出する。
     without_pin_field = dataclasses.replace(roundtripped, pinned_holdout_row_ids=frozenset())
     assert verify_split(row_inputs, secret, without_pin_field) is False
+
+
+# ---------------------------------------------------------------------------
+# §V2.2 縮退規則（2026-09-04 追補）: 段 2 修復不能時の決定論的 k 縮退
+# （`c0_freeze._pin_and_realize_holdout()` — CI flaky 根治の本体）。
+# ---------------------------------------------------------------------------
+
+
+def _f0_control_single_sweep_matrix() -> tuple:
+    """F0_CONTROL TRUTH_CORE の 3 declared sweep（`sr_hz` 別、各 4 member）の
+    うち 1 個（`sr_hz=24000`、4 行）だけを抜き出した合成 matrix。S=1・r=4
+    という縮退した宣言構造を作る（secret に依らず常に同じ 1 sweep が
+    pin 対象になる — 選抜の当たり判定を排除して縮退リトライ自体を
+    決定論的に再現するため）。"""
+    rows = build_matrix()
+    truth_core = [
+        mr for mr in rows if mr.row.family == "F0_CONTROL" and mr.row.block == "TRUTH_CORE"
+    ]
+    groups = _sweep_groups(truth_core)["F0_CONTROL"]
+    return tuple(groups["sr_hz=24000"])
+
+
+def test_stage2_infeasible_degrades_k_and_records_zero_pin_for_non_coverage_family() -> None:
+    """§V2.2 縮退規則 2nd bullet: 段 2 (`realize_split`) の family 合計補正が
+    pin 選抜の結果として修復不能 (`CoverageRepairInfeasible`) になったとき、
+    非 claim-coverage family（F0_CONTROL, `degradation_floor=0`）は
+    k_hold=1(nominal) -> 0 へ縮退して freeze が成功する。実現された k
+    （縮退後 0）は `holdout_sweeps` の宣言数（空 dict）としてそのまま
+    表れる（「宣言数 = 実現 k」）。"""
+    import voice_genesis.calibration.fixtures.matrix as matrix_mod
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily
+
+    synth = _f0_control_single_sweep_matrix()
+    assert len(synth) == 4
+
+    original_counts = matrix_mod.axes.FAMILY_COUNTS
+    tiny_counts = dict(original_counts)
+    # n_hold=8 (total=32) -> cap=floor((8-1)/4)=1 -> k_hold=1（非 exempt、
+    # non-cap-below-one）。S=1 の唯一の sweep(r=4) を丸ごと pin すると
+    # family 合計 4 行の目標 (CAL:2/SEL:1/HOLD:1) に対し 4 行全部が pin 済み
+    # HOLDOUT になり、非 pin の movable な行が 1 件も無く
+    # `CoverageRepairInfeasible(axis="family_total")` へ必ず落ちる。
+    tiny_counts[FixtureFamily.F0_CONTROL] = (12, 24, 12, 32)
+    matrix_mod.axes.FAMILY_COUNTS = tiny_counts
+    try:
+        params = holdout_pin_params_by_family(synth)
+        p = params["F0_CONTROL"]
+        assert (p.k_hold, p.cap, p.pin_exempt, p.degradation_floor) == (1, 1, False, 0)
+
+        row_inputs = _row_inputs_for_split(synth, STRATUM_FACTOR_NAMES)
+        for secret in DUMMY_SECRETS[:6]:
+            holdout_sweeps, realized = _pin_and_realize_holdout(
+                synth, row_inputs, secret, STRATUM_FACTOR_NAMES
+            )
+            # 縮退の帰結: k=0 まで下がり、宣言される pin sweep は 0 個
+            # （「宣言数 = 実現 k」）。
+            assert holdout_sweeps["F0_CONTROL"] == {}
+            # pin 制約が外れた通常の v1.0 3-way 割当で成功している
+            # （family 合計 4 行が丁度 CAL:2/SEL:1/HOLD:1 に収まる）。
+            counts = {Split.CALIBRATION: 0, Split.SELECTION: 0, Split.HOLDOUT: 0}
+            for r in row_inputs:
+                counts[realized.assignment[r.row_id]] += 1
+            assert counts == {Split.CALIBRATION: 2, Split.SELECTION: 1, Split.HOLDOUT: 1}
+            assert verify_split(row_inputs, secret, realized) is True
+    finally:
+        matrix_mod.axes.FAMILY_COUNTS = original_counts
+
+
+def test_stage2_infeasible_at_degradation_floor_is_structured_fail_closed() -> None:
+    """§V2.2 縮退規則 2nd bullet 但し書き: claim 被覆 family
+    （IDENTITY_CAUSAL_SWEEP, `max_field_cardinality=4`）は、実 canonical
+    matrix でも `degradation_floor == k_hold == 4`（縮退の余地がゼロ）。
+    段 2 が修復不能になった場合、1 度も k を下げられずに
+    `HoldoutPinDegradationExhausted`（構造化例外）で fail-closed する
+    ——被覆保証を静かに弱めて k=3 以下へ縮退したりしない。未捕捉のまま
+    `armed_freeze()` の外へ漏れないことも確認する（`_pin_and_realize_
+    holdout()` 呼び出し側だけがこの例外を捕捉できる、という契約の直接
+    検証）。
+
+    合成データは real canonical matrix の IDENTITY_CAUSAL_SWEEP
+    TRUTH_CORE 60 行（全 12 sweep、pin アルゴリズムの選抜ロジックには
+    一切手を加えない）+ CONFOUND をわずか 4 行だけに絞ったもの
+    （real 24 行 -> 4 行）。FAMILY_COUNTS は monkeypatch しない（k_hold=4
+    は 456 セル canonical と同じ実測値のまま）——family 内の実行数を
+    減らすだけで、pin 4 sweep (20 行) が HOLDOUT 目標を超過し、非 pin の
+    movable な行が 4 行の confound だけでは family 合計補正を賄いきれず
+    `CoverageRepairInfeasible` に落ちることを利用する。"""
+    rows = build_matrix()
+    truth_core = [
+        mr for mr in rows if mr.row.family == "IDENTITY_CAUSAL_SWEEP" and mr.row.block == "TRUTH_CORE"
+    ]
+    confound = [
+        mr for mr in rows if mr.row.family == "IDENTITY_CAUSAL_SWEEP" and mr.row.block == "CONFOUND"
+    ]
+    assert len(truth_core) == 60
+    assert len(confound) >= 4
+    synth = tuple(truth_core) + tuple(confound[:4])
+
+    params = holdout_pin_params_by_family(synth)
+    p = params["IDENTITY_CAUSAL_SWEEP"]
+    assert (p.k_hold, p.degradation_floor, p.pin_exempt) == (4, 4, False)
+
+    row_inputs = _row_inputs_for_split(synth, STRATUM_FACTOR_NAMES)
+    for secret in DUMMY_SECRETS[:6]:
+        with pytest.raises(HoldoutPinDegradationExhausted) as excinfo:
+            _pin_and_realize_holdout(synth, row_inputs, secret, STRATUM_FACTOR_NAMES)
+        assert excinfo.value.family == "IDENTITY_CAUSAL_SWEEP"
+        assert excinfo.value.floor == 4
+        assert excinfo.value.attempted_k == 4
+
+
+def test_stage2_degradation_is_deterministic_for_a_fixed_secret() -> None:
+    """§V2.2 縮退規則の決定論性: 同一 secret を複数回与えても
+    `_pin_and_realize_holdout()` の縮退結果（`holdout_sweeps` と
+    `realized.assignment`/`realized_sha`）は完全に同一になる。"""
+    import voice_genesis.calibration.fixtures.matrix as matrix_mod
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily
+
+    synth = _f0_control_single_sweep_matrix()
+    original_counts = matrix_mod.axes.FAMILY_COUNTS
+    tiny_counts = dict(original_counts)
+    tiny_counts[FixtureFamily.F0_CONTROL] = (12, 24, 12, 32)
+    matrix_mod.axes.FAMILY_COUNTS = tiny_counts
+    try:
+        row_inputs = _row_inputs_for_split(synth, STRATUM_FACTOR_NAMES)
+        secret = DUMMY_SECRETS[3]
+        results = [
+            _pin_and_realize_holdout(synth, row_inputs, secret, STRATUM_FACTOR_NAMES)
+            for _ in range(3)
+        ]
+        first_sweeps, first_realized = results[0]
+        for sweeps, realized in results[1:]:
+            assert sweeps == first_sweeps
+            assert dict(realized.assignment) == dict(first_realized.assignment)
+            assert realized.realized_sha == first_realized.realized_sha
+    finally:
+        matrix_mod.axes.FAMILY_COUNTS = original_counts

@@ -161,6 +161,22 @@ from .fixtures.matrix import (
     pin_holdout_sweeps_by_family,
     truth_identity_for_row,
 )
+#: §V2.2 縮退規則（2026-09-04 追補）: `c0_freeze._fixture_specs()` は
+#: `frozen_design.fixture_spec.<FAMILY>.declared_sweeps`/
+#: `claim_relevant_fields` を、テストが `fixtures.matrix.build_matrix`
+#: （このモジュールの `build_matrix` も同じ束縛）を差し替えても影響を受けない
+#: 別名 `_canonical_build_matrix` から意図的に導出する（c0_freeze.py 自身の
+#: 同名エイリアスと同じ規約——「差し替えから独立させる」）。本モジュールの
+#: 3 検査（`_check_declared_sweep_truth_levels`/`_check_declared_sweep_
+#: declaration_match`/`_check_claim_relevant_fields_match`）は manifest の
+#: その frozen 節と突き合わせる比較器であるため、同じ「常に real matrix」の
+#: 入口をこのエイリアス経由で使う。対して holdout sweep pin 関連の 2 検査
+#: （`_check_holdout_pin_feasibility`/`_check_holdout_sweeps_declaration_
+#: match`）は `armed_freeze()` が実際に pin/split した行集合と突き合わせる
+#: ため、`build_matrix`（差し替え可能な束縛）を引き続き使う——`armed_freeze()`
+#: 自身の pin 計算 (`c0_freeze.py` の `matrix_rows = build_matrix()`) も同じ
+#: 差し替え可能な参照を使うため、対応関係が一致する。
+from .fixtures.matrix import build_matrix as _canonical_build_matrix
 from .gates import MIN_RESOLVABLE_PAIRS_PER_SWEEP
 
 # ---------------------------------------------------------------------------
@@ -1418,7 +1434,10 @@ def _check_declared_sweep_truth_levels(
     INVALID` を SUPERSEDE）。
     """
     del manifest  # 構造検査: 凍結 matrix 生成器自体から直接導出する
-    rows = build_matrix()
+    # §V2.2 縮退規則: manifest の frozen_design 節と同じ「常に real matrix」
+    # の入口（`_canonical_build_matrix`）を使う——`build_matrix`（差し替え
+    # 可能）ではない。
+    rows = _canonical_build_matrix()
     row_by_id = {mr.row_id: mr.row for mr in rows}
     declared = declared_sweeps_by_family(rows)
     violations: list[SweepManifestViolationDetail] = []
@@ -1512,7 +1531,8 @@ def _check_declared_sweep_declaration_match(
     「宣言が実体と一致しない」という同一の意味論のため `violation` 値は
     区別しない）。
     """
-    rows = build_matrix()
+    # §V2.2 縮退規則: 上と同じ理由で `_canonical_build_matrix` を使う。
+    rows = _canonical_build_matrix()
     derived = declared_sweeps_by_family(rows)
     violations: list[SweepManifestViolationDetail] = []
     for family in fixture_axes.FixtureFamily:
@@ -1592,7 +1612,8 @@ def _check_claim_relevant_fields_match(
     が別途捕捉する）。宣言されていれば実体と一致しなければならない、という
     任意フィールドとして扱う。
     """
-    rows = build_matrix()
+    # §V2.2 縮退規則: 上と同じ理由で `_canonical_build_matrix` を使う。
+    rows = _canonical_build_matrix()
     derived = claim_relevant_fields_by_family(rows)
     violations: list[SweepManifestViolationDetail] = []
     for family in fixture_axes.FixtureFamily:
@@ -1690,13 +1711,27 @@ def _check_holdout_sweeps_declaration_match(
     `declared_sweeps_by_family()` に実在しその member row_id が完全一致する
     こと。secret 依存の「どの sweep が選ばれたか」まではこの経路では検査
     できない。
+
+    §V2.2 縮退規則（2026-09-04 追補）: `c0_freeze._pin_and_realize_holdout()`
+    が段 2 修復不能により family の k_hold を nominal 値から縮退させている
+    ことがある（「実現された k は宣言数として自動的に記録される」——宣言数
+    = 実現 k）。本関数は `split_secret` がある場合、家族ごとの宣言 pin 数
+    （`len(actual)`）が nominal `k_hold` と異なり、かつ縮退規則が許す範囲
+    （`degradation_floor <= 宣言数 < k_hold`、pin_exempt family は除く）に
+    収まっているときに限り、その宣言数を `k_hold_overrides` として
+    `pin_holdout_sweeps_by_family()` の再導出に渡す——`_pin_and_realize_
+    holdout()` が実際に使ったのと同一の縮退規則・同一の入口（
+    `pin_holdout_sweeps_by_family()`）で再選抜するため、縮退が正当な場合は
+    再導出結果が宣言と厳密一致する。範囲外の宣言数（縮退の必要なく水増し・
+    水減らしされた偽の宣言）は nominal `k_hold` のまま再導出するため、
+    以降の per-sweep_id 照合で確実に不一致として検出される。
     """
     found_holdout, holdout_section = _resolve(manifest, "holdout_sweeps")
     rows = build_matrix()
     declared = declared_sweeps_by_family(rows)
     params = holdout_pin_params_by_family(rows)
-    full_pin = pin_holdout_sweeps_by_family(rows, split_secret) if split_secret is not None else None
-    violations: list[SweepManifestViolationDetail] = []
+
+    declared_raw_by_family: dict[str, object] = {}
     for family in fixture_axes.FixtureFamily:
         fam = family.value
         declared_raw: object = None
@@ -1706,6 +1741,32 @@ def _check_holdout_sweeps_declaration_match(
             found, entry = _resolve(manifest, f"frozen_design.fixture_spec.{fam}")
             if found and isinstance(entry, Mapping):
                 declared_raw = entry.get("holdout_sweeps")
+        declared_raw_by_family[fam] = declared_raw
+
+    k_hold_overrides: dict[str, int] = {}
+    if split_secret is not None:
+        for fam, raw in declared_raw_by_family.items():
+            p = params.get(fam)
+            if p is None or p.pin_exempt:
+                continue
+            if raw is None or _is_hollow(raw) or not isinstance(raw, Mapping):
+                continue
+            normalized = _normalize_declared_sweeps(raw)
+            if normalized is None:
+                continue
+            declared_count = len(normalized)
+            if declared_count != p.k_hold and p.degradation_floor <= declared_count < p.k_hold:
+                k_hold_overrides[fam] = declared_count
+
+    full_pin = (
+        pin_holdout_sweeps_by_family(rows, split_secret, k_hold_overrides=k_hold_overrides or None)
+        if split_secret is not None
+        else None
+    )
+    violations: list[SweepManifestViolationDetail] = []
+    for family in fixture_axes.FixtureFamily:
+        fam = family.value
+        declared_raw = declared_raw_by_family[fam]
         if declared_raw is None or _is_hollow(declared_raw) or not isinstance(declared_raw, Mapping):
             continue
 

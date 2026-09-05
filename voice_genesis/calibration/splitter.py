@@ -240,13 +240,32 @@ class CoverageRepairInfeasible(RuntimeError):
     donor を 1 件も見つけられない場合も、`axis="family_total"` として同型で
     送出する（修復不能は既存 `CoverageRepairInfeasible` 同型で fail-closed
     する、という v1.1 の指示に従う）。
+
+    `family`（縮退規則採用、2026-09-04 追補）: この違反が発生した family 名。
+    `axis="family_total"` では従来から `value` が family 名そのものだったが、
+    `axis` が通常の coverage 軸（`truth_level`/`generator_impl`/
+    `boundary_class`）の場合は `value` はその軸の値であり family 名ではない
+    ため、呼び出し側（`realize_split()`）が現在処理中の family を明示的に
+    渡す。`fixtures.matrix` の holdout sweep pin 縮退リトライ
+    （`c0_freeze._pin_and_realize_holdout()`）が「どの family の k_hold を
+    下げて再選抜すべきか」を一意に決定するために使う。省略時は `None`
+    （既存呼び出し・テストの後方互換を壊さない）。
     """
 
-    def __init__(self, axis: str, value: Any, target_split: Split, detail: str) -> None:
+    def __init__(
+        self,
+        axis: str,
+        value: Any,
+        target_split: Split,
+        detail: str,
+        *,
+        family: str | None = None,
+    ) -> None:
         self.axis = axis
         self.value = value
         self.target_split = target_split
         self.detail = detail
+        self.family = family if family is not None else (value if axis == "family_total" else None)
         super().__init__(
             f"splitter: no feasible donor/victim assignment for {axis}={value!r} "
             f"-> {target_split.value}: {detail}"
@@ -261,6 +280,7 @@ def _repair_coverage(
     *,
     pinned_row_ids: frozenset[str] = frozenset(),
     hold_forbidden_row_ids: frozenset[str] = frozenset(),
+    family: str | None = None,
 ) -> list[SwapRecord]:
     """v1.1 §V2.2 段 2 採用: `pinned_row_ids`（段 1 の pin 行。donor/victim
     いずれの候補からも常に除外し不動とする）と `hold_forbidden_row_ids`
@@ -268,6 +288,9 @@ def _repair_coverage(
     からのみ除外——「pin 外の truth-core 行の holdout 割当は 0」を repair
     フェーズでも維持する）を新設。両集合とも既定は空 frozenset で、v1.0
     以来の呼び出し（pin 機構を使わない）はこれまでと完全に同一の挙動になる。
+    `family`（縮退規則採用、2026-09-04 追補）は fail-closed 時に送出する
+    `CoverageRepairInfeasible.family` へそのまま転記するためだけの引数
+    （既定 `None` — 省略した既存呼び出しは挙動不変）。
     """
     swaps: list[SwapRecord] = []
     guard = 0
@@ -368,6 +391,7 @@ def _repair_coverage(
                     "resolves this violation without breaking another coverage "
                     "constraint (assignment left unmodified)"
                 ),
+                family=family,
             )
 
         donor, victim = chosen
@@ -597,6 +621,7 @@ def realize_split(
                 required_pairs,
                 pinned_row_ids=pinned_holdout_row_ids,
                 hold_forbidden_row_ids=frozenset(hold_forbidden_row_ids_local),
+                family=family,
             )
         )
 

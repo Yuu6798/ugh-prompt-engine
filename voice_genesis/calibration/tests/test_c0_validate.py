@@ -788,6 +788,14 @@ def test_starved_matrix_blocks_with_manifest_incomplete_and_truth_level_detail(
     `BLOCKED_C0_SWEEP_DECLARATION_INVALID` を SUPERSEDE）で fail-closed し、
     事由は `sweep_declaration_violations` の `SweepManifestViolationDetail`
     （`violation="sweep_truth_level_insufficient"`）に残る。
+
+    `_check_declared_sweep_truth_levels()` は manifest 非依存の構造検査
+    （「matrix 生成ロジック自体が §10.4 の前提を構造的に満たせるか」）であり、
+    §V2.2 縮退規則の実装（2026-09-04 追補）以降 `c0_validate.py` 内で
+    `_canonical_build_matrix`（テストの `build_matrix` 差し替えから意図的に
+    独立させたエイリアス — `c0_freeze._fixture_specs()` と同じ規約）を読む
+    ため、本テストも同じエイリアスを差し替える（`build_matrix` 差し替えは
+    holdout sweep pin 関連の 2 検査にのみ効くようになった）。
     """
     from voice_genesis.calibration.fixtures.matrix import (
         build_matrix as real_build_matrix,
@@ -800,7 +808,7 @@ def test_starved_matrix_blocks_with_manifest_incomplete_and_truth_level_detail(
     assert len(member_row_ids) == 5, member_row_ids
     to_drop = set(member_row_ids[2:])  # keep 2 of 5 -> 2 distinct truth levels
     starved = [mr for mr in rows if mr.row_id not in to_drop]
-    monkeypatch.setattr(c0_validate, "build_matrix", lambda: starved)
+    monkeypatch.setattr(c0_validate, "_canonical_build_matrix", lambda: starved)
 
     violations = c0_validate._check_declared_sweep_truth_levels({})
     assert len(violations) == 1

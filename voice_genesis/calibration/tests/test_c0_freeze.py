@@ -2169,6 +2169,36 @@ def test_armed_freeze_through_full_campaign_cli_never_hits_blocked_leakage(
     canonical-row-coverage checks (§7) stay internally self-consistent —
     the point under test (split_frozen wiring) is exercised exactly as in
     production, only the row *count* is reduced for tractability.
+
+    Note (§V2.2 縮退規則 fix, `ci_fail_994fb24.md`): `c0_validate.py` now
+    resolves `build_matrix` through two independent bindings, mirroring
+    `c0_freeze.py`'s own `build_matrix`/`_canonical_build_matrix` split:
+    its sweep-declaration/claim-relevant-field checks (which compare
+    against `frozen_design.fixture_spec`, itself always derived from the
+    real matrix by `c0_freeze._fixture_specs()`) read the fixed
+    `_canonical_build_matrix` alias, while only its two holdout-sweep-pin
+    checks (`_check_holdout_pin_feasibility`/`_check_holdout_sweeps_
+    declaration_match` — which compare against `holdout_sweeps`, itself
+    derived from whatever `build_matrix()` `armed_freeze()` actually pinned
+    against) read the swappable `build_matrix` name. So `c0_validate` is
+    added as a 4th monkeypatch site below, safely — it only affects the
+    two holdout-pin checks now, matching what `armed_freeze()` pinned
+    against in this test, without disturbing the other families' (still
+    real-matrix-based) frozen declarations.
+
+    Before that split existed, `armed_freeze()`'s holdout-sweep pin
+    (`fixtures.matrix.pin_holdout_sweeps_by_family()`), applied to this
+    degenerate 4-row F0_CONTROL slice, non-deterministically hit either a
+    stage-2 `CoverageRepairInfeasible` (uncaught) or a spurious
+    `BLOCKED_C0_MANIFEST_INCOMPLETE` (this test's `c0_validate` binding was
+    reading the *real* 456-row matrix while `armed_freeze()` had pinned
+    against the tiny one). §V2.2's `cap < 1` pin-exemption + stage-2 k
+    degradation (`fixtures.matrix.holdout_pin_params_by_family()`/
+    `c0_freeze._pin_and_realize_holdout()`) now makes
+    `holdout_sweeps["F0_CONTROL"]` freeze empty deterministically for this
+    matrix regardless of `split_secret`, and the `c0_validate` binding
+    split above lets its re-derivation agree with that. See
+    `DESIGN_VG_METER_CAL_DEBT_v1.1.md` §V2.2「縮退規則」.
     """
     import voice_genesis.calibration.fixtures.matrix as matrix_mod
     from voice_genesis.calibration.campaign import cli as campaign_cli
@@ -2186,11 +2216,15 @@ def test_armed_freeze_through_full_campaign_cli_never_hits_blocked_leakage(
     def fake_build_matrix() -> list[object]:
         return list(tiny_matrix)
 
-    # All 3 binding sites `build_matrix()` reaches from the freeze/CLI/
-    # leakage-check path (see docstring above).
+    # All 4 binding sites `build_matrix()` reaches from the freeze/CLI/
+    # validate/leakage-check path (see docstring above — `c0_validate`'s
+    # *swappable* `build_matrix` binding only feeds its two holdout-pin
+    # checks; its `_canonical_build_matrix` binding for the other checks
+    # stays real, unaffected by this patch).
     monkeypatch.setattr(matrix_mod, "build_matrix", fake_build_matrix)
     monkeypatch.setattr(c0_freeze, "build_matrix", fake_build_matrix)
     monkeypatch.setattr(campaign_cli, "build_matrix", fake_build_matrix)
+    monkeypatch.setattr(c0_validate, "build_matrix", fake_build_matrix)
 
     approval_dir = tmp_path / "approvals"
     secret_dir = tmp_path / "secrets"
