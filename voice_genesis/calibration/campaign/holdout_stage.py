@@ -259,11 +259,29 @@ class GateInputError(RuntimeError):
 
 
 def _detected_output(output: measure_stage.adapter.MeterOutput) -> bool:
-    """`campaign.selection_stage._detected()` と同一定義（missing_reason/
-    ineligible のいずれでも説明されない finite 出力を「検出した」とみなす）
-    を本モジュールから独立に持つ（private helper を跨 module 参照しない
-    既存方針）。"""
-    return output.missing_reason is None and not output.ineligible
+    """`campaign.selection_stage._detected()` を基にした「検出した」判定を
+    本モジュールから独立に持つ（private helper を跨 module 参照しない
+    既存方針）。missing_reason/ineligible のいずれでも説明されず、かつ
+    **`values` が非空で全値が有限**な出力のみを「検出した」とみなす。
+
+    round 20 finding #2 追補（Codex レビュー第 20 巡 P1 採用、2026-09-05）:
+    `campaign.selection_stage._detected()` は `values` の非空性を検査しない
+    （`missing_reason is None and not ineligible` のみ）ため、型システム上は
+    `missing_reason=None, ineligible=False, values={}`（「候補は正常に実行
+    され、かつ何も見つからなかった」という、missing_reason にも ineligible
+    にも頼らない有効な非検出）を「検出した」と誤判定しうる。全 candidate
+    実装（`PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY` が宣言する必須
+    field を持つ）は現状この状態を produce しないため実挙動への影響は無いが、
+    `_negative_fired()`/`_positive_detected()` が要求する「有効な出力が
+    存在し、かつ発火していない」という negative control 成功条件
+    （下記 `control_detection_for_family()` docstring 参照）を型として
+    正しく表現できるようにするための最小差分。`values` を検査しない旧定義を
+    `_positive_detected()`（`all()`）にも共有していたが、`values={}` は
+    positive control 上でも「非検出」の一種であり non-fire（失敗）に写像
+    されるべきなので、この変更は positive 側の既存契約とも整合する。"""
+    if output.missing_reason is not None or output.ineligible:
+        return False
+    return bool(output.values) and all(math.isfinite(v) for v in output.values.values())
 
 
 def _per_instance_output_repeats(
@@ -356,15 +374,32 @@ def control_detection_for_family(
       detected（`_detected_output` True。真の偽検出）なら「発火（失敗）」
       （`candidates.adapter.negative_control_false_fire()` と同じ any-fire
       規約）。record が 1 件も無い instance も「発火（失敗）」——missing
-      repeat を「非検出＝成功」に丸め込まない。全 repeat が
-      missing_reason 付きで一貫して静穏（`_detected_output` False）な
-      instance のみが「不発火（成功）」——これは round 30 ADOPT
-      (`[UNDERSPEC-CAL-D67]`) が正当と認めた「一貫した非検出」の定義と
-      同じ判定基準を再利用する（missing_reason は「候補が正しく無音を
-      報告した」ことと「候補が測定に失敗した」ことの両方を同じ値で表現する
-      ため、両者は型システム上区別できない——本関数はいずれの場合も
-      any-fire が無ければ成功として扱う、v1.0 §8 の既存 any-fire 規約通り）。
-    """
+      repeat を「非検出＝成功」に丸め込まない。
+
+      round 20 finding #2 追補（Codex レビュー第 20 巡 P1 採用、2026-09-05、
+      「fresh evidence」— round 12 対応後も残っていた穴）: 上記 round 12
+      対応は instance の own record が **1 件も無い**（group 自体が空）場合
+      のみを失敗へ倒したが、**group が非空で、その中身が missing_reason/
+      ineligible の repeat のみ**（`_detected_output` が全 record で False）
+      のケースは旧実装のまま「非発火（成功）」に丸め込まれ続けていた
+      （`any()` が空集合でなく False の列に対しても False を返すため）。
+      v1.1 §V3.6 の一次契約文（`observables.detection_rates()` docstring
+      「missing/invalid は caller が failure polarity に写像して渡す」/
+      本モジュール `DESIGN_VG_METER_CAL_DEBT_v1.1.md` §V3.6「negative
+      control instance の repeat に missing/invalid があれば当該 instance
+      は偽検出（失敗）側に数え…欠落を非検出＝成功に写像する実装は禁止」）
+      は record 単位の missing/invalid を無条件に失敗側へ算入することを
+      要求しており、round 30 ADOPT (`[UNDERSPEC-CAL-D67]`) の「一貫した
+      非検出は正当」という別文脈（`candidates.adapter.
+      within_fresh_process_mismatch()` — within/fresh 一致検査という
+      **別の fail filter**）の定義をこちらへ横流しするのは誤りだった。
+      本関数の「不発火（成功）」は **`_detected_output()`（`values` が
+      非空かつ有限）で False になる record が 1 件も無く、かつ 1 件でも
+      missing_reason/ineligible の record が無い**場合のみに限定する——
+      missing_reason はいずれかの record に立った時点で（他の record が
+      たとえ非検出の有効出力でも）instance 全体を失敗へ倒す（下記 (b) 参照。
+      §V3.6 の「missing/invalid が 1 つでもあれば分子算入」を repeat 単位で
+      厳密に適用する）。"""
     neg_instances = fixture_controls.negative_control_instances(matrix_rows, family=family)
     pos_instances = fixture_controls.positive_detection_instances(
         matrix_rows, assignment, Split.HOLDOUT, family=family
@@ -375,6 +410,15 @@ def control_detection_for_family(
         by_instance.setdefault((r.row_id, r.probe_index), []).append(r)
 
     def _positive_detected(instance: tuple[str, int]) -> bool:
+        # round 20 finding #2 audit (positive side, no analogous hole found):
+        # `all()` already requires every repeat to be `_detected_output()`
+        # True for "fired (success)" — a single missing_reason/ineligible
+        # repeat (or, after the `_detected_output()` refinement above, a
+        # repeat with an empty `values` dict) already makes `all()` False,
+        # correctly landing on non-fire (failure) per §V3.6's positive-side
+        # contract ("positive control の missing/invalid は不発火（失敗）
+        # 側に数え"). Unlike `_negative_fired()`, there is no "all not-
+        # detected -> success" fallback here to misclassify.
         group = by_instance.get(instance)
         if not group:
             return False
@@ -384,6 +428,13 @@ def control_detection_for_family(
         group = by_instance.get(instance)
         if not group:
             return True  # missing entirely -> count as failure (v1.1 §V3.6)
+        if any(r.output.missing_reason is not None or r.output.ineligible for r in group):
+            # round 20 finding #2: any missing/invalid repeat enters the
+            # failure numerator unconditionally, even if other repeats in
+            # the same group are a genuine, valid non-detection (or even a
+            # real false-fire — either way this instance is already a
+            # failure, so the specific reason does not change the outcome).
+            return True
         return any(_detected_output(r.output) for r in group)
 
     neg_outcomes = {
@@ -1488,6 +1539,57 @@ def selection_failed_closed_meter(meter_id: str) -> MeterHoldoutResult:
 # ---------------------------------------------------------------------------
 
 
+def c4_measured_instances_for_family(
+    matrix_rows: Sequence[MatrixRow],
+    assignment: Mapping[str, object],
+    *,
+    family: str,
+) -> frozenset[tuple[str, int]]:
+    """v1.1 §V3.2/§V3.5 が C4 で実際に測定する instance の全量（single source
+    of truth）。`render_and_measure_holdout()` の per-family measure 呼び出し
+    と `cli._run_c4` の F0 prepass（`_build_f0_by_instance()`）の両方が本関数
+    を通して同じ集合を得る（二重定義禁止 — round 20 finding #1 採用）。
+
+    round 20 finding #1（Codex レビュー第 20 巡 P1 採用、2026-09-05）:
+    旧実装は `cli._run_c4` 側の F0 prepass 用 `all_instances` を
+    `workunits.c4_holdout_instances()` のみから構築しており、
+    `render_and_measure_holdout()` 自身が union する下記 2 種の
+    split 非依存 shared control（§V3.2 negative control / §V3.5 designated
+    anchor）を欠いていた。選抜候補が F0 依存のとき、これら shared control
+    instance の測定呼び出しは選抜済み F0 candidate の instance 単位出力
+    ではなく `f0_hz=None`（`f0_by_instance` に該当 instance が無いため
+    `.get()` が None を返す）を受け取り、依存実装が欠測/フォールバック結果を
+    返して gate 5（invariance）を汚染し、CALIBRATION/SELECTION に home する
+    anchor の invariance pair を消していた。
+
+    union の内訳（`render_and_measure_holdout()` が実際に測定する集合と同一）:
+
+    - `workunits.c4_holdout_instances(matrix_rows, assignment, family=family)`:
+      通常の HOLDOUT PRIMARY/BOUNDARY 行（non-control）。
+    - `fixtures.controls.negative_control_instances(matrix_rows, family=family)`:
+      negative control（split 非依存、§V3.2 一次事実）。
+    - `fixtures.controls.positive_controls_by_family()` が返す family あたり
+      designated anchor 行 × `PROBE_REPEATS`: split 非依存の共有
+      positive-control anchor（§V3.5 追補）。
+
+    F0 が unusable と分類された instance（`cli._build_f0_by_instance()` が
+    返す `f0_unusable_instances`）は本関数の対象外——それらは既存の明示
+    unusable 分類（`f0_missing_reason`）に従うため、`f0_hz=None` が黙って
+    渡る経路にはならない。本関数はあくまで「どの instance を測定するか」の
+    集合を決めるだけで、F0 の usability 判定そのものには関与しない。
+    """
+    anchor_row_ids = fixture_controls.positive_controls_by_family(matrix_rows).get(family, ())
+    return (
+        frozenset(workunits.c4_holdout_instances(matrix_rows, assignment, family=family))
+        | fixture_controls.negative_control_instances(matrix_rows, family=family)
+        | {
+            (row_id, probe_index)
+            for row_id in anchor_row_ids
+            for probe_index in range(fixture_controls.PROBE_REPEATS)
+        }
+    )
+
+
 def render_and_measure_holdout(
     campaign: FrozenCampaign,
     matrix_rows: Sequence[MatrixRow],
@@ -1632,19 +1734,13 @@ def render_and_measure_holdout(
     # 母集団に既に含まれる——いずれの場合も本 union は seal/leakage 境界を
     # 動かさない（HOLDOUT 行の unseal 前露出は生じない。C1 で render 済みの
     # 行を C4 で測定するだけ）。
-    anchor_row_ids_by_family = fixture_controls.positive_controls_by_family(matrix_rows)
+    #
+    # round 20 finding #1 採用: この union の定義そのものは
+    # `c4_measured_instances_for_family()` へ集約した（`cli._run_c4` の F0
+    # prepass が消費する `all_instances` も同じ関数を通す — 二重定義禁止。
+    # 詳細は同関数の docstring）。
     instances_by_family = {
-        family: tuple(
-            sorted(
-                frozenset(workunits.c4_holdout_instances(matrix_rows, assignment, family=family))
-                | fixture_controls.negative_control_instances(matrix_rows, family=family)
-                | {
-                    (row_id, probe_index)
-                    for row_id in anchor_row_ids_by_family.get(family, ())
-                    for probe_index in range(fixture_controls.PROBE_REPEATS)
-                }
-            )
-        )
+        family: tuple(sorted(c4_measured_instances_for_family(matrix_rows, assignment, family=family)))
         for family, _candidates in family_order
     }
 
@@ -1862,6 +1958,7 @@ __all__ = [
     "evaluate_directional_meter",
     "diagnostic_only_close",
     "selection_failed_closed_meter",
+    "c4_measured_instances_for_family",
     "render_and_measure_holdout",
     "resolve_candidates",
     "HoldoutCoverageError",

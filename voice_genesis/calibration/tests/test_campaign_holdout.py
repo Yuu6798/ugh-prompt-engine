@@ -987,11 +987,19 @@ def _within_fresh_record(
     field: str,
     value: float | None,
     missing: bool = False,
+    quiet_valid: bool = False,
 ) -> list[measure_stage.MeasurementRecord]:
+    """`quiet_valid=True` builds a `MeterOutput(values={})` — a well-formed
+    output (`missing_reason=None`, `ineligible=False`) that reports no
+    finding at all, as opposed to `missing=True`'s `missing_reason`-tagged
+    "couldn't produce a value" state (v1.1 §V3.6 round 20 finding #2: the two
+    are no longer interchangeable for negative-control detection — only the
+    former is a legitimate "valid output exists, and it did not fire").
+    """
     output = (
         MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
         if missing
-        else MeterOutput(values={field: value})
+        else MeterOutput(values={}) if quiet_valid else MeterOutput(values={field: value})
     )
     records = [
         measure_stage.MeasurementRecord(
@@ -1028,7 +1036,12 @@ def _tilt_candidate():
 def test_control_detection_for_family_counts_from_holdout_records() -> None:
     """gate5 の control 母集団: negative control は split に依らず全件、
     positive control は `Split.HOLDOUT` に home する truth-core 行のみ
-    （v1.1 §V3.2 の一次事実）。"""
+    （v1.1 §V3.2 の一次事実）。negative control 側は `quiet_valid=True`
+    （`missing_reason=None` の空 `values`）を使う——round 20 finding #2 採用
+    後、`missing=True`（`missing_reason` 付き）は無条件に失敗へ倒れるため
+    （`test_control_detection_for_family_negative_control_all_missing_
+    reason_is_failure` 参照）、本テストが検証したい「クリーンな non-fire
+    母集団で FDR0=0」を表現するには非検出だが有効な出力が要る。"""
     candidate = _tilt_candidate()
     pos1 = _matrix_row("pos-1", family="TILT_GT", block="TRUTH_CORE", positive_control=True)
     pos2 = _matrix_row(
@@ -1064,7 +1077,7 @@ def test_control_detection_for_family_counts_from_holdout_records() -> None:
         for probe_index in range(5):
             records += _within_fresh_record(
                 candidate.candidate_id, row_id, probe_index, field="tilt_db_per_oct", value=None,
-                missing=True,
+                quiet_valid=True,
             )
     # the SELECTION-homed positive-control anchor's records must never count
     # toward N_pos even though the candidate happens to have output for it.
@@ -1164,7 +1177,15 @@ def test_control_detection_for_family_negative_control_mixed_detection_and_missi
     repeats must still count as a failure (any-fire semantics,
     `candidates.adapter.negative_control_false_fire()`). The old `all()`
     -based predicate let the missing repeats mask the real false-fire
-    (`all([True, False, False]) == False` -> incorrectly "success")."""
+    (`all([True, False, False]) == False` -> incorrectly "success").
+
+    Padding probes use `quiet_valid=True` (not `missing=True`): after round 20
+    finding #2, a `missing_reason`-tagged repeat is itself an unconditional
+    failure (see `test_control_detection_for_family_negative_control_all_
+    missing_reason_is_failure`), so `missing=True` padding would no longer
+    isolate this test's actual subject (a real detection surviving mixed with
+    missing repeats) — every padding probe would fail too, for an unrelated
+    reason."""
     candidate = _tilt_candidate()
     neg1 = _matrix_row(
         "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
@@ -1204,8 +1225,46 @@ def test_control_detection_for_family_negative_control_mixed_detection_and_missi
             output=MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING),
         ),
     ]
-    # pad with 4 more cleanly-quiet probes so N_neg does not gate the result.
+    # pad with 4 more cleanly-quiet (valid, non-detected) probes so N_neg
+    # does not gate the result and so the padding itself does not fail.
     for probe_index in range(1, 5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            quiet_valid=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 1
+    assert detection.fdr0 == pytest.approx(1.0 / 5.0)
+
+
+def test_control_detection_for_family_negative_control_all_missing_reason_is_failure() -> None:
+    """v1.1 §V3.6 (Codex round 20 P1 ADOPT — fresh evidence after round 12):
+    a negative-control instance whose group is *non-empty* but every repeat
+    is `missing_reason`-tagged (own records exist, none is a genuine
+    detection) must still count as a failure, not a "clean non-detection"
+    success. Round 12 only fixed the *empty group* case (round 12's own
+    `..._fully_missing_counts_as_failure` test above); it left this
+    non-empty-but-entirely-missing case mapped to success, which is the exact
+    gap the round 20 review flagged (`any(_detected_output(...))` over an
+    all-False sequence is still `False`). Test (a) of the round 20 fix set."""
+    candidate = _tilt_candidate()
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(5):
         records += _within_fresh_record(
             candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
             missing=True,
@@ -1219,8 +1278,195 @@ def test_control_detection_for_family_negative_control_mixed_detection_and_missi
         records=records,
     )
     assert detection.n_neg == 5
+    assert detection.negative_control_failures == 5
+    assert detection.fdr0 == 1.0
+
+
+def test_control_detection_for_family_negative_control_one_invalid_repeat_fails_despite_rest_quiet() -> None:
+    """v1.1 §V3.6 (Codex round 20 P1 ADOPT): a single missing/invalid repeat
+    enters the failure numerator even when every *other* repeat in the same
+    instance group is a genuine, valid non-detection (`quiet_valid`) — the
+    contract is "any missing/invalid repeat", not "the majority" or "the
+    aggregate". Test (b) of the round 20 fix set."""
+    candidate = _tilt_candidate()
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+
+    records = [
+        measure_stage.MeasurementRecord(
+            row_id="neg-1",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="within",
+            repeat_index=0,
+            process_id="within-process",
+            output=MeterOutput(values={}),  # valid, quiet
+        ),
+        measure_stage.MeasurementRecord(
+            row_id="neg-1",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="within",
+            repeat_index=1,
+            process_id="within-process",
+            output=MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING),  # the one invalid repeat
+        ),
+        measure_stage.MeasurementRecord(
+            row_id="neg-1",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="fresh",
+            repeat_index=0,
+            process_id="fresh-process-0",
+            output=MeterOutput(values={}),  # valid, quiet
+        ),
+    ]
+    # pad with 4 more genuinely clean (valid, quiet) probes.
+    for probe_index in range(1, 5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            quiet_valid=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.n_neg == 5
     assert detection.negative_control_failures == 1
     assert detection.fdr0 == pytest.approx(1.0 / 5.0)
+
+
+def test_control_detection_for_family_negative_control_all_valid_and_quiet_is_success() -> None:
+    """v1.1 §V3.6 (Codex round 20 P1 ADOPT): the only remaining "non-fire
+    (success)" shape after the round 20 fix — every repeat produces a
+    well-formed output (`missing_reason=None`, `ineligible=False`) that
+    reports no finding at all (`values={}`), i.e. "a valid output exists, and
+    it did not fire". Test (c) of the round 20 fix set — this is the
+    regression guard proving the fix does not collapse into "always fail"."""
+    candidate = _tilt_candidate()
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            quiet_valid=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 0
+    assert detection.fdr0 == 0.0
+
+
+def test_control_detection_for_family_positive_control_audit_no_analogous_hole() -> None:
+    """v1.1 §V3.6 (Codex round 20 P1 ADOPT, positive-side audit): unlike
+    `_negative_fired()`, `_positive_detected()`'s `all()`-based predicate has
+    no "all not-detected -> success" fallback to misclassify — a single
+    missing/invalid (or, per the `_detected_output()` refinement, a valid but
+    empty `values={}`) repeat already makes `all()` False, correctly landing
+    on non-fire (failure). This test fixes 3 instances covering the 3 ways a
+    repeat can be non-detected (missing_reason, ineligible, valid-but-empty)
+    each mixed with an otherwise-fully-detected group, confirming all 3 are
+    failures — no round 20 style gap exists on the positive side.
+    Test (d) of the round 20 fix set."""
+    candidate = _tilt_candidate()
+    pos1 = _matrix_row("pos-1", family="TILT_GT", block="TRUTH_CORE", positive_control=True)
+    pos2 = _matrix_row(
+        "pos-2", family="TILT_GT", block="TRUTH_CORE", positive_control=True, domain=Domain.PRIMARY
+    )
+    pos3 = _matrix_row(
+        "pos-3", family="TILT_GT", block="TRUTH_CORE", positive_control=False, domain=Domain.PRIMARY
+    )
+    matrix_rows = [pos1, pos2, pos3]
+    assignment = {"pos-1": Split.HOLDOUT, "pos-2": Split.HOLDOUT, "pos-3": Split.HOLDOUT}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(5):
+        # pos-1: one repeat missing_reason-tagged, rest detected.
+        records += [
+            measure_stage.MeasurementRecord(
+                row_id="pos-1", probe_index=probe_index, candidate_id=candidate.candidate_id,
+                repeat_kind="within", repeat_index=0, process_id="within-process",
+                output=MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING),
+            ),
+            measure_stage.MeasurementRecord(
+                row_id="pos-1", probe_index=probe_index, candidate_id=candidate.candidate_id,
+                repeat_kind="within", repeat_index=1, process_id="within-process",
+                output=MeterOutput(values={"tilt_db_per_oct": -6.0}),
+            ),
+            measure_stage.MeasurementRecord(
+                row_id="pos-1", probe_index=probe_index, candidate_id=candidate.candidate_id,
+                repeat_kind="fresh", repeat_index=0, process_id="fresh-process-0",
+                output=MeterOutput(values={"tilt_db_per_oct": -6.0}),
+            ),
+        ]
+        # pos-2: one repeat ineligible, rest detected.
+        records += [
+            measure_stage.MeasurementRecord(
+                row_id="pos-2", probe_index=probe_index, candidate_id=candidate.candidate_id,
+                repeat_kind="within", repeat_index=0, process_id="within-process",
+                output=MeterOutput(ineligible=True, ineligible_reason="INELIGIBLE_DEPENDENCY_ABSENT"),
+            ),
+            measure_stage.MeasurementRecord(
+                row_id="pos-2", probe_index=probe_index, candidate_id=candidate.candidate_id,
+                repeat_kind="within", repeat_index=1, process_id="within-process",
+                output=MeterOutput(values={"tilt_db_per_oct": -6.0}),
+            ),
+            measure_stage.MeasurementRecord(
+                row_id="pos-2", probe_index=probe_index, candidate_id=candidate.candidate_id,
+                repeat_kind="fresh", repeat_index=0, process_id="fresh-process-0",
+                output=MeterOutput(values={"tilt_db_per_oct": -6.0}),
+            ),
+        ]
+        # pos-3: one repeat valid-but-empty, rest detected.
+        records += [
+            measure_stage.MeasurementRecord(
+                row_id="pos-3", probe_index=probe_index, candidate_id=candidate.candidate_id,
+                repeat_kind="within", repeat_index=0, process_id="within-process",
+                output=MeterOutput(values={}),
+            ),
+            measure_stage.MeasurementRecord(
+                row_id="pos-3", probe_index=probe_index, candidate_id=candidate.candidate_id,
+                repeat_kind="within", repeat_index=1, process_id="within-process",
+                output=MeterOutput(values={"tilt_db_per_oct": -6.0}),
+            ),
+            measure_stage.MeasurementRecord(
+                row_id="pos-3", probe_index=probe_index, candidate_id=candidate.candidate_id,
+                repeat_kind="fresh", repeat_index=0, process_id="fresh-process-0",
+                output=MeterOutput(values={"tilt_db_per_oct": -6.0}),
+            ),
+        ]
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.n_pos == 15  # pos-1 + pos-2 + pos-3, 5 probes each
+    assert detection.positive_control_failures == 15  # every instance non-fires
+    assert detection.fnr1 == 1.0
 
 
 def test_build_invariance_pairs_for_family_pairs_confound_row_against_anchor() -> None:

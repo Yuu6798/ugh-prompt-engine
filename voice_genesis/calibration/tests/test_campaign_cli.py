@@ -3058,12 +3058,25 @@ def _tilt_row(
 
 
 def _tilt_records(
-    candidate_id: str, row_id: str, *, truth: float, missing: bool = False, n_probes: int = 5
+    candidate_id: str,
+    row_id: str,
+    *,
+    truth: float,
+    missing: bool = False,
+    quiet_valid: bool = False,
+    n_probes: int = 5,
 ) -> list[measure_stage.MeasurementRecord]:
+    """`quiet_valid=True` builds `MeterOutput(values={})` — a well-formed,
+    non-`missing_reason` output that reports no finding at all. v1.1 §V3.6
+    round 20 finding #2: a `missing_reason`-tagged repeat (`missing=True`) is
+    now an unconditional negative-control failure
+    (`holdout_stage._negative_fired()`), so a "clean, zero-error" negative
+    control fixture must use `quiet_valid` instead to still reach a genuine
+    non-fire (success)."""
     output = (
         MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
         if missing
-        else MeterOutput(values={"tilt_db_per_oct": truth})
+        else MeterOutput(values={}) if quiet_valid else MeterOutput(values={"tilt_db_per_oct": truth})
     )
     records: list[measure_stage.MeasurementRecord] = []
     for probe_index in range(n_probes):
@@ -3183,12 +3196,17 @@ def _build_absolute_gate_campaign(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         {"kind": "selection_frozen", "selected_by_family": {"TILT_GT": candidate.candidate_id}}
     )
 
+    # v1.1 §V3.6 round 20 finding #2: `quiet_valid` (not `missing=True`) for
+    # the negative controls — a well-behaved, zero-error candidate's genuine
+    # non-fire, which `holdout_stage._negative_fired()` now requires to reach
+    # a real non-fire (success); `missing=True` (`missing_reason` set) is an
+    # unconditional failure post-fix (see that function's docstring).
     records = (
         _tilt_records(candidate.candidate_id, "anchor-6", truth=-6.0)
         + _tilt_records(candidate.candidate_id, "anchor-12", truth=-12.0)
         + _tilt_records(candidate.candidate_id, "confound-sr", truth=-6.0)
-        + _tilt_records(candidate.candidate_id, "neg-a", truth=0.0, missing=True)
-        + _tilt_records(candidate.candidate_id, "neg-b", truth=0.0, missing=True)
+        + _tilt_records(candidate.candidate_id, "neg-a", truth=0.0, quiet_valid=True)
+        + _tilt_records(candidate.candidate_id, "neg-b", truth=0.0, quiet_valid=True)
     )
     monkeypatch.setattr(
         cli.holdout_stage, "render_and_measure_holdout", lambda *a, **kw: {"TILT_GT": records}
@@ -3258,6 +3276,82 @@ def test_c4_absolute_gate_wiring_fails_honestly_to_diagnostic_only_with_tiny_e_u
         "gate2" in reason or "gate_max" in reason for reason in gate_detail["failure_reasons"]
     )
     assert "UNDERSPEC-CAL-D17" not in json.dumps(m2t_result)
+
+
+def test_c4_f0_prepass_covers_shared_control_instances_for_f0_dependent_family(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.1 §V3.2/§V3.5 (Codex round 20 P1 ADOPT finding #1): when the
+    selected candidate for a family is F0-dependent (TILT_GT's HARMONIC_OLS
+    here — `algorithm_family in measure_stage.F0_DEPENDENT_ALGORITHM_
+    FAMILIES`), the F0 prepass (`_build_f0_by_instance`, invoked through the
+    `f0_prepass` closure `_run_c4` hands to `render_and_measure_holdout()`)
+    must measure the selected F0 candidate on the same expanded instance set
+    `render_and_measure_holdout()` itself dispatches per family
+    (`holdout_stage.c4_measured_instances_for_family()`: HOLDOUT rows ∪
+    split-independent negative control ∪ split-independent shared anchor) —
+    not only `workunits.c4_holdout_instances()`.
+
+    `_build_absolute_gate_campaign()`'s fixture already has 2 negative-control
+    rows (`neg-a`/`neg-b`, `NEGATIVE_CONTROL` block, so `workunits.
+    c4_holdout_instances()` structurally excludes them via its `control_
+    row_ids` filter regardless of home split) — the pre-fix `all_instances`
+    omitted their instances entirely, so their eventual measurement calls in
+    `control_detection_for_family()`'s gate 5 accounting received
+    `f0_hz=None` instead of the selected F0 candidate's own per-instance
+    output."""
+    campaign, subset, candidate = _build_absolute_gate_campaign(tmp_path, monkeypatch, e_use_value=2.0)
+    assert candidate.algorithm_family in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+
+    captured_all_instances: list[frozenset[tuple[str, int]]] = []
+
+    def _capturing_build_f0_by_instance(campaign_arg, all_instances_arg, *args, **kwargs):
+        captured_all_instances.append(frozenset(all_instances_arg))
+        return {}, frozenset()
+
+    monkeypatch.setattr(cli, "_build_f0_by_instance", _capturing_build_f0_by_instance)
+
+    # Same records `_build_absolute_gate_campaign()` wires internally (its own
+    # `render_and_measure_holdout` stub is overridden below so the
+    # `f0_prepass` closure this test cares about actually runs).
+    # v1.1 §V3.6 round 20 finding #2: `quiet_valid` (not `missing=True`) for
+    # the negative controls — a well-behaved, zero-error candidate's genuine
+    # non-fire, which `holdout_stage._negative_fired()` now requires to reach
+    # a real non-fire (success); `missing=True` (`missing_reason` set) is an
+    # unconditional failure post-fix (see that function's docstring).
+    records = (
+        _tilt_records(candidate.candidate_id, "anchor-6", truth=-6.0)
+        + _tilt_records(candidate.candidate_id, "anchor-12", truth=-12.0)
+        + _tilt_records(candidate.candidate_id, "confound-sr", truth=-6.0)
+        + _tilt_records(candidate.candidate_id, "neg-a", truth=0.0, quiet_valid=True)
+        + _tilt_records(candidate.candidate_id, "neg-b", truth=0.0, quiet_valid=True)
+    )
+
+    def _stub_render_and_measure_holdout(campaign_arg, matrix_rows_arg, **kwargs):
+        f0_prepass = kwargs.get("f0_prepass")
+        if f0_prepass is not None:
+            f0_prepass()
+        return {"TILT_GT": records}
+
+    monkeypatch.setattr(
+        cli.holdout_stage, "render_and_measure_holdout", _stub_render_and_measure_holdout
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    assert captured_all_instances, "the F0 prepass closure must have run"
+    seen = captured_all_instances[0]
+    expected = holdout_stage.c4_measured_instances_for_family(
+        subset, campaign.realized_split.assignment, family="TILT_GT"
+    )
+    # the F0 prepass's instance set must be a superset of (in this fixture,
+    # exactly) the same expanded set `render_and_measure_holdout()` measures.
+    assert expected <= seen
+    for row_id in ("neg-a", "neg-b", "anchor-6", "anchor-12"):
+        assert any(inst[0] == row_id for inst in seen), (
+            f"{row_id} missing from F0 prepass instance set"
+        )
 
 
 def test_c4_primary_all_missing_closes_not_evaluable_despite_usable_boundary(

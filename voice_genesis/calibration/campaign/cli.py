@@ -1844,11 +1844,23 @@ def _run_c4(
             for row_id in member_row_ids:
                 row_id_to_sweep_id.setdefault(family_value, {})[row_id] = sweep_id
     row_by_id = {mr.row_id: mr.row for mr in matrix_rows}
+    # round 20 finding #1 (adopted): the F0 prepass must measure the same
+    # expanded instance set `holdout_stage.render_and_measure_holdout()`
+    # actually dispatches per family (HOLDOUT rows ∪ split-independent
+    # negative control ∪ split-independent shared anchor, §V3.2/§V3.5) — not
+    # only `workunits.c4_holdout_instances()`. The old narrower set left
+    # those shared control instances' measurement calls with `f0_hz=None`
+    # instead of the selected F0 candidate's own output, corrupting gate 5
+    # and dropping invariance pairs for anchors homed to CALIBRATION/
+    # SELECTION. `c4_measured_instances_for_family()` is the single source
+    # of truth both call sites now share (no duplicate definition).
     all_instances = sorted(
         {
             inst
             for family in candidates_by_family
-            for inst in workunits.c4_holdout_instances(matrix_rows, assignment, family=family)
+            for inst in holdout_stage.c4_measured_instances_for_family(
+                matrix_rows, assignment, family=family
+            )
         }
     )
     f0_by_instance: dict[tuple[str, int], float] = {}
