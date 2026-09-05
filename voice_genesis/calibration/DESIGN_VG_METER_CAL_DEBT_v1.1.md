@@ -357,6 +357,41 @@ precondition 判定のみ実評価とし、結果は正直な `NOT_EVALUABLE / I
 （`gate_detail` に境界宣言と pin 済み cell 列挙）で閉じる。cross-family 測定ユニットと
 pair 設計の規定は **v1.2 の設計課題**として登録し、本 campaign の close はこれを待たない。
 
+### V3.5 追補 — gate 4' invariance 軸の宣言と pair 構成（Codex レビュー第 12 巡 P1 採用、2026-09-05）
+
+実 gate 配線後の監査で、現行 C0 が全 family に同一の 6 軸（f0_hz / sr_hz / gain /
+duration / noise / context）を invariance 軸として一律宣言する一方、正典 456 セル
+行列には f0_hz・sr_hz を名指す単一軸 CONFOUND 行が無く、targeted interaction 行は
+単一軸 tag を持たないため、gate 4' の pair が当該軸で常に 0 件となり、**全 ABSOLUTE
+候補が「軸あたり 5 pair 未満」で構造的に偽失敗する**ことが判明した。v1.0 §10.1 の
+「truth 自体が変わる軸は invariance 対象に混ぜない」「invariance 軸ごとに >= 5 pairs」
+を、行列の実体に接地して次のとおり運用化する:
+
+- **宣言軸の機械導出**: family の invariance 軸は、当該 family の CONFOUND block に
+  **単一軸の主効果行（`nuisance_tag` が 1 軸を名指す行）が存在する軸**のみを C0 で
+  宣言する（family の truth 軸は除外。例: F0_CONTROL の f0_hz は truth）。宣言は
+  `fixtures.matrix` からの機械導出値とし、c0_validate が manifest 宣言との完全一致を
+  照合する（D77 の declared_sweeps と同型）。targeted interaction 行（2 軸同時摂動）は
+  単一軸 invariance の pair に用いず、failure boundary 診断（§10.1）の材料に留める。
+- **pair の単位は instance**: invariance pair は `(anchor instance, 同 probe_index の
+  単一軸変異 instance)` で数える（probe repeat は独立 seed の別実現であり、§6 の
+  「probe repeat = 分散推定の単位」と整合）。1 holdout 行 = PROBE_REPEATS(5) pair。
+- **coverage 制約の追加**: (family, 宣言 invariance 軸) ごとに、各 split が単一軸
+  CONFOUND 行を最低 1 行持つことを段 2 の coverage 制約に加える（`_COVERAGE_AXES`
+  へ nuisance 軸キーを追加。既存の swap 修復で充足、不能は fail-closed）。これにより
+  holdout で各宣言軸が ≥ 5 pair（1 行 × 5 probe）を構造的に持ち得る。
+- **§10.1 の意味論は不変**: 未達軸が 1 つでもあれば ABSOLUTE 不可（実測で pair が
+  欠落した場合は従来どおり正直に fail）。本追補は「宣言と行列の不整合による構造的
+  偽失敗」だけを除去する。
+
+### V3.6 追補 — control 出力欠落の分子算入（同 P1 採用、2026-09-05）
+
+v1.0 §10.1「control 出力の missing/invalid は分子に算入（分母から除外しない）」を
+gate 5 の実装契約として再確認する: negative control instance の repeat に
+missing/invalid があれば当該 instance は **偽検出（失敗）側**に数え、positive control
+の missing/invalid は **不発火（失敗）側**に数える。欠落を「非検出 = 成功」に写像する
+実装は禁止（偽 CALIBRATED 経路）。
+
 ## V4. 破棄 campaign ledger の圧縮保全（運用規約）
 
 - 破棄（abort）裁定済み campaign の `ledger.jsonl` は、非圧縮バイト列の SHA-256 を
