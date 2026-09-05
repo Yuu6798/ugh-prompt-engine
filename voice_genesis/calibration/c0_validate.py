@@ -1798,6 +1798,16 @@ def _check_u_gt_u_num_bounds(
       含む）はキー自体の欠落を引き続き fail-closed にしない——**キーが
       存在するのに値が欠陥**（型不正・負・非有限・formula 欠落）である
       場合のみ violation を積む（従来どおり）。
+
+    **R21 追補**（Codex 第 21 巡採用、2026-09-05）: v1.1 manifest では
+    `u_gt_bound_unit`/`u_num_bound_unit`（`campaign/holdout_stage.
+    units_commensurate_for_family()` が §10.4 条件 (c) の可換性判定に
+    直接消費する sibling キー）も検査対象にする——非 ABSENT family は
+    `fixtures.axes.TRUTH_UNIT_BY_FAMILY`（producer 側 `c0_freeze.py` と
+    同一の機械導出源）との厳密一致を、ABSENT-only family は `"n/a"` 固定を
+    要求する。欠落・改変を素通しすると、候補宣言 unit と偶然一致する
+    forged unit が条件 (c) を成立させ偽の `CALIBRATED_DIRECTIONAL` を
+    許してしまう。legacy manifest（marker 無し）はこの検査の対象外。
     """
     is_v1_1 = _is_v1_1_manifest(manifest)
     violations: list[SweepManifestViolationDetail] = []
@@ -1808,10 +1818,11 @@ def _check_u_gt_u_num_bounds(
             continue
         for base_key in ("u_gt_bound", "u_num_bound"):
             formula_key = f"{base_key}_formula"
+            unit_key = f"{base_key}_unit"
             if base_key not in entry:
                 if not is_v1_1:
                     continue  # legacy manifest predating v1.1 §V3.3 -- not blocked here.
-                for missing_key in (base_key, formula_key):
+                for missing_key in (base_key, formula_key, unit_key):
                     violations.append(
                         SweepManifestViolationDetail(
                             violation="u_bound_missing_or_invalid",
@@ -1881,6 +1892,48 @@ def _check_u_gt_u_num_bounds(
                         ),
                     )
                 )
+            # R21 対応（Codex 第 21 巡採用、2026-09-05）: `campaign/holdout_stage.
+            # units_commensurate_for_family()` が §10.4 条件 (c) の可換性判定に
+            # 直接消費する `u_gt_bound_unit`/`u_num_bound_unit` を、v1.1 manifest
+            # に限り `fixtures.axes.TRUTH_UNIT_BY_FAMILY`（producer 側と同一の
+            # 機械導出源）に照合する。欠落・改変（例: 別 family/候補の unit へ
+            # すり替え）を検出せずに通すと、正規化後に候補宣言 unit と偶然
+            # 一致する自己整合な forged manifest が条件 (c) を成立させ、偽の
+            # CALIBRATED_DIRECTIONAL を許してしまう（本 finding）。ABSENT-only
+            # family（RESONANCE_GT/IDENTITY_CAUSAL_SWEEP）は `"n/a"` 固定を
+            # 期待する（gate4' 対象外であり、`units_commensurate_for_family()`
+            # 自体もこの sentinel を「非 string 相当」として保守側 False へ
+            # 落とす契約——`campaign/holdout_stage.py` は本 PR の対象外のため
+            # 無改変）。
+            if is_v1_1:
+                expected_unit = (
+                    "n/a"
+                    if fam in _U_GT_U_NUM_ABSENT_ONLY_FAMILIES
+                    else fixture_axes.TRUTH_UNIT_BY_FAMILY.get(fam)
+                )
+                unit_value = entry.get(unit_key)
+                unit_ok = (
+                    unit_key in entry
+                    and isinstance(unit_value, str)
+                    and expected_unit is not None
+                    and unit_value.strip() == expected_unit
+                )
+                if not unit_ok:
+                    violations.append(
+                        SweepManifestViolationDetail(
+                            violation="u_bound_missing_or_invalid",
+                            family=fam,
+                            sweep_id=unit_key,
+                            expected_count=0,
+                            actual_count=0,
+                            detail=(
+                                f"frozen_design.fixture_spec.{fam}.{unit_key} must equal "
+                                f"{expected_unit!r} (v1.1 §V3.3 truth-unit machine "
+                                "derivation, fixtures.axes.TRUTH_UNIT_BY_FAMILY; R21), got "
+                                f"{unit_value!r}"
+                            ),
+                        )
+                    )
     return tuple(violations)
 
 

@@ -299,13 +299,20 @@ def test_u_gt_u_num_bounds_real_c0_freeze_manifest_passes() -> None:
 
 def test_u_gt_u_num_bounds_v1_1_manifest_missing_both_bounds_blocks() -> None:
     """finding の再現ケース: v1.1 の完全 manifest から `u_gt_bound`/
-    `u_num_bound`（と両 formula）を丸ごと消すと、v1.0 legacy 経路のように
-    黙って `continue` せず、4 件 (bound x2 + formula x2) の violation が
-    出て fail-closed になる。"""
+    `u_num_bound`（と両 formula・両 unit）を丸ごと消すと、v1.0 legacy 経路
+    のように黙って `continue` せず、6 件 (bound x2 + formula x2 + unit x2)
+    の violation が出て fail-closed になる。"""
     manifest = _v1_1_manifest_with_fixture_spec({"TILT_GT": {}})
     violations = c0_validate._check_u_gt_u_num_bounds(manifest)
     sweep_ids = {v.sweep_id for v in violations}
-    assert sweep_ids == {"u_gt_bound", "u_gt_bound_formula", "u_num_bound", "u_num_bound_formula"}
+    assert sweep_ids == {
+        "u_gt_bound",
+        "u_gt_bound_formula",
+        "u_gt_bound_unit",
+        "u_num_bound",
+        "u_num_bound_formula",
+        "u_num_bound_unit",
+    }
     assert all(v.family == "TILT_GT" for v in violations)
     assert all(v.violation == "u_bound_missing_or_invalid" for v in violations)
 
@@ -315,19 +322,20 @@ def test_u_gt_u_num_bounds_v1_1_manifest_missing_both_bounds_blocks() -> None:
 
 
 def test_u_gt_u_num_bounds_v1_1_manifest_missing_one_bound_blocks() -> None:
-    """v1.1 manifest から `u_num_bound`（+ その formula）だけを消しても検出
-    される（`u_gt_bound` 側は無傷）。"""
+    """v1.1 manifest から `u_num_bound`（+ その formula・unit）だけを消しても
+    検出される（`u_gt_bound` 側は完備のため無傷）。"""
     manifest = _v1_1_manifest_with_fixture_spec(
         {
             "TILT_GT": {
                 "u_gt_bound": 0.0,
                 "u_gt_bound_formula": "U_GT = 0 (analytic)",
+                "u_gt_bound_unit": "db_per_oct",
             }
         }
     )
     violations = c0_validate._check_u_gt_u_num_bounds(manifest)
     sweep_ids = {v.sweep_id for v in violations}
-    assert sweep_ids == {"u_num_bound", "u_num_bound_formula"}
+    assert sweep_ids == {"u_num_bound", "u_num_bound_formula", "u_num_bound_unit"}
     assert all(v.family == "TILT_GT" for v in violations)
 
 
@@ -340,26 +348,110 @@ def test_u_gt_u_num_bounds_legacy_manifest_missing_bounds_still_not_blocked() ->
     assert violations == ()
 
 
-def test_u_gt_u_num_bounds_v1_1_manifest_complete_passes() -> None:
-    """完全な v1.1 manifest（全 family、両 bound + formula 具備）は
-    violation を出さない。"""
+def _complete_v1_1_fixture_spec() -> dict[str, object]:
     fixture_spec: dict[str, object] = {}
-    for family_id in ("F0_CONTROL", "FORMANT_GT", "TILT_GT", "APERIODICITY_GT", "TRANSITION_GT"):
+    unit_by_family = {
+        "F0_CONTROL": "hz",
+        "FORMANT_GT": "hz",
+        "TILT_GT": "db_per_oct",
+        "APERIODICITY_GT": "dimensionless_fraction",
+        "TRANSITION_GT": "dimensionless_magnitude",
+    }
+    for family_id, unit in unit_by_family.items():
         fixture_spec[family_id] = {
             "u_gt_bound": 0.0,
             "u_gt_bound_formula": "U_GT = 0 (analytic)",
+            "u_gt_bound_unit": unit,
             "u_num_bound": 0.024,
             "u_num_bound_formula": "U_num = derive_floor(...)",
+            "u_num_bound_unit": unit,
         }
     for family_id in ("RESONANCE_GT", "IDENTITY_CAUSAL_SWEEP"):
         fixture_spec[family_id] = {
             "u_gt_bound": "ABSENT:diagnostic_only",
             "u_gt_bound_formula": "no gate input",
+            "u_gt_bound_unit": "n/a",
             "u_num_bound": "ABSENT:diagnostic_only",
             "u_num_bound_formula": "no gate input",
+            "u_num_bound_unit": "n/a",
         }
-    manifest = _v1_1_manifest_with_fixture_spec(fixture_spec)
+    return fixture_spec
+
+
+def test_u_gt_u_num_bounds_v1_1_manifest_complete_passes() -> None:
+    """完全な v1.1 manifest（全 family、両 bound + formula + unit 具備）は
+    violation を出さない。"""
+    manifest = _v1_1_manifest_with_fixture_spec(_complete_v1_1_fixture_spec())
     assert c0_validate._is_v1_1_manifest(manifest)
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert violations == ()
+
+
+# ---------------------------------------------------------------------------
+# _check_u_gt_u_num_bounds -- R21 (Codex 第 21 巡採用): v1.1 manifest では
+# u_gt_bound_unit/u_num_bound_unit も fixtures.axes.TRUTH_UNIT_BY_FAMILY と
+# 照合し、欠落・改変を fail-closed にする（campaign/holdout_stage.
+# units_commensurate_for_family() が §10.4 条件 (c) に直接消費するため）。
+# ---------------------------------------------------------------------------
+
+
+def test_u_gt_u_num_bounds_v1_1_manifest_missing_unit_blocks() -> None:
+    """(e) 完全な v1.1 manifest から `u_gt_bound_unit` だけを消すと検出
+    される（bound/formula 自体は無傷）。"""
+    fixture_spec = _complete_v1_1_fixture_spec()
+    del fixture_spec["TILT_GT"]["u_gt_bound_unit"]  # type: ignore[index]
+    manifest = _v1_1_manifest_with_fixture_spec(fixture_spec)
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert len(violations) == 1
+    assert violations[0].family == "TILT_GT"
+    assert violations[0].sweep_id == "u_gt_bound_unit"
+    assert violations[0].violation == "u_bound_missing_or_invalid"
+
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert result.u_gt_u_num_bound_violations == violations
+
+
+def test_u_gt_u_num_bounds_v1_1_manifest_altered_unit_blocks() -> None:
+    """(f) 完全な v1.1 manifest の `u_num_bound_unit` を別 family/候補の単位
+    （`hz` -> `db_per_oct`)へ改竄すると検出される（forged unit が候補宣言
+    unit と正規化後に一致してしまう `units_commensurate_for_family()` の
+    偽陽性経路を塞ぐ本 finding の再現）。"""
+    fixture_spec = _complete_v1_1_fixture_spec()
+    fixture_spec["F0_CONTROL"]["u_num_bound_unit"] = "db_per_oct"  # type: ignore[index]
+    manifest = _v1_1_manifest_with_fixture_spec(fixture_spec)
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert len(violations) == 1
+    assert violations[0].family == "F0_CONTROL"
+    assert violations[0].sweep_id == "u_num_bound_unit"
+
+
+def test_u_gt_u_num_bounds_v1_1_manifest_absent_family_wrong_unit_blocks() -> None:
+    """ABSENT-only family の unit は `"n/a"` 固定を要求する——数値相当の unit
+    へ改竄したら検出される。"""
+    fixture_spec = _complete_v1_1_fixture_spec()
+    fixture_spec["RESONANCE_GT"]["u_gt_bound_unit"] = "hz"  # type: ignore[index]
+    manifest = _v1_1_manifest_with_fixture_spec(fixture_spec)
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert len(violations) == 1
+    assert violations[0].family == "RESONANCE_GT"
+    assert violations[0].sweep_id == "u_gt_bound_unit"
+
+
+def test_u_gt_u_num_bounds_legacy_manifest_missing_unit_not_blocked() -> None:
+    """legacy (v1.0, marker 無し) manifest は unit フィールドの欠落も検査
+    対象外のまま（R20-3 のキー欠落と同じ後方互換規約）。"""
+    manifest = _manifest_with_fixture_spec(
+        {
+            "TILT_GT": {
+                "u_gt_bound": 0.0,
+                "u_gt_bound_formula": "U_GT = 0 (analytic)",
+                "u_num_bound": 0.024,
+                "u_num_bound_formula": "U_num = derive_floor(...)",
+            }
+        }
+    )
+    assert not c0_validate._is_v1_1_manifest(manifest)
     violations = c0_validate._check_u_gt_u_num_bounds(manifest)
     assert violations == ()
 

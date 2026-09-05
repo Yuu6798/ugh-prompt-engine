@@ -377,13 +377,11 @@ _TRUTH_SCALE_MAX: dict[str, float] = {
     FixtureFamily.TRANSITION_GT.value: max(axes.TRANSITION_SEVERITY_MAGNITUDE.values()),
 }
 
-_TRUTH_UNIT: dict[str, str] = {
-    FixtureFamily.F0_CONTROL.value: "hz",
-    FixtureFamily.FORMANT_GT.value: "hz",
-    FixtureFamily.TILT_GT.value: "db_per_oct",
-    FixtureFamily.APERIODICITY_GT.value: "dimensionless_fraction",
-    FixtureFamily.TRANSITION_GT.value: "dimensionless_magnitude",
-}
+#: R21 対応（Codex 第 21 巡採用、2026-09-05）: `fixtures.axes.TRUTH_UNIT_
+#: BY_FAMILY` へ昇格・公開した機械導出源をそのまま使う（旧: このモジュール
+#: 内 private literal。`c0_validate._check_u_gt_u_num_bounds()` が v1.1
+#: manifest で unit 照合する際の期待値と同一ソースであることを保証する）。
+_TRUTH_UNIT: dict[str, str] = axes.TRUTH_UNIT_BY_FAMILY
 
 #: U_GT/U_num が構造的に gate 入力にならない family（§V3.3）。
 #: `declared_u_gt_u_num_for_family()` はこの文字列を非 numeric として黙って

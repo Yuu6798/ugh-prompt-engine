@@ -354,6 +354,12 @@ campaign 成立要件とする:
   書き込み、`c0_validate._check_u_gt_u_num_bounds()` はこの marker を持つ manifest
   でのみキー自体の欠落も fail-closed 対象にする。marker が無い manifest（既存 closed
   campaign 3 件を含む v1.0 形式）は従来どおりキー欠落を許容する。
+- **R21 追補**（Codex 第 21 巡採用、2026-09-05）: `u_gt_bound_unit`/`u_num_bound_unit`
+  （`campaign/holdout_stage.units_commensurate_for_family()` が §10.4 条件 (c) に直接
+  消費する sibling キー）も同じ v1.1 marker 経由で必須化し、`fixtures.axes.
+  TRUTH_UNIT_BY_FAMILY`（producer/validator 共有の機械導出源）との一致を要求する
+  （ABSENT-only family は `"n/a"` 固定）——欠落・改竄を素通しすると forged unit が
+  候補宣言 unit と偶然一致し偽の `CALIBRATED_DIRECTIONAL` を許すため。
 
 ### V3.4 追補 — M6 の測定経路は v1.2 へ繰延（境界宣言、2026-09-05）
 

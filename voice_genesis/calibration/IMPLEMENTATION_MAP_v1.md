@@ -1208,6 +1208,7 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
 | | `campaign/holdout_stage.py` | `declared_u_gt_u_num_for_family()`（消費側、既存後方互換 scalar 契約のまま無改変） | D93 |
 | | `c0_validate.py` | `_check_u_gt_u_num_bounds()`（R20-3: `_is_v1_1_manifest()` による version-aware 必須化） | D93/D98 |
 | §V3.3 追補（R20-3: v1.1 manifest 判別 marker） | `c0_freeze.py` | `build_manifest()`（`frozen_design.design_revision`/`design_doc_sha256`）, `_design_doc_sha256()` | D98 |
+| §V3.3 追補（R21: unit 照合の共有機械導出源） | `fixtures/axes.py` | `TRUTH_UNIT_BY_FAMILY`（`c0_freeze.py` の旧 private `_TRUTH_UNIT` を昇格・公開） | D98 |
 | §V3.5（gate4' invariance 軸の宣言・pair 構成） | `fixtures/matrix.py` | `single_axis_nuisance_tag_axis()`, `invariance_axes_by_family()` | D93 |
 | | `campaign/holdout_stage.py` | `build_invariance_pairs_for_family()`（instance 単位 pair + anchor 共有測定） | D93 |
 | | `splitter.py` | `_COVERAGE_AXES`（`"nuisance_axis"` 追加）, `_GATE4_INAPPLICABLE_FAMILIES` | D93 |
