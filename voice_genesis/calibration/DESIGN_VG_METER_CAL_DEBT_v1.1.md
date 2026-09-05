@@ -547,6 +547,8 @@ freeze 履歴であることは未確認だった。他 campaign の正規 close
 genesis event (`c0_freeze`) に記録された `manifest_sha`/`manifest_core_sha`
 がその manifest から計算した値と一致すること、の 2 段の束縛を追加した。
 
+legacy opt-in の検証は gz（aborted）/ ledger.jsonl（closed）を単一読取し、pair 検証・chain 検証・freeze identity 照合を同一バイト列から行う（R26、D104）。
+
 ## V7. 裁定
 
 ```yaml
