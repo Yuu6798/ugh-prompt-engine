@@ -12,6 +12,7 @@ from voice_genesis.calibration.provenance import (
     CampaignIdentity,
     CodeIdentity,
     Ledger,
+    LedgerArchivedError,
     LedgerChainInvalidError,
     LedgerEntry,
     LedgerTruncatedTailError,
@@ -379,6 +380,56 @@ def test_ledger_append_refuses_when_middle_entry_tampered(tmp_path) -> None:
     assert excinfo.value.tamper_at_seq == 0
 
     assert path.read_text(encoding="utf-8") == before
+
+
+def test_ledger_append_refuses_to_recreate_ledger_after_archival(tmp_path) -> None:
+    """[Codex レビュー PR #346 round 19 採用, "Refuse to recreate a ledger
+    after archival"] `path`（`ledger.jsonl`）が存在せず、同一ディレクトリに
+    検証済み archive ペア（`<name>.gz` + `<name>.sha256`。
+    `tools/archive_aborted_ledger.py::ensure_archived()` が原本を置換した
+    後の状態）が存在する場合、`append()` は genesis ledger を新規作成せず
+    `LedgerArchivedError`（`LedgerChainInvalidError` のサブクラス）で
+    fail-closed する。ディレクトリには一切ファイルを作らない。"""
+    campaign_dir = tmp_path / "RUN-archived"
+    campaign_dir.mkdir()
+    ledger_path = campaign_dir / "ledger.jsonl"
+    (campaign_dir / "ledger.jsonl.gz").write_bytes(b"fake-gz-payload")
+    (campaign_dir / "ledger.jsonl.sha256").write_text(
+        "0" * 64 + "  ledger.jsonl\n", encoding="utf-8"
+    )
+    gz_bytes_before = (campaign_dir / "ledger.jsonl.gz").read_bytes()
+    sidecar_text_before = (campaign_dir / "ledger.jsonl.sha256").read_text(encoding="utf-8")
+
+    stale_ledger = Ledger(ledger_path)
+    with pytest.raises(LedgerArchivedError) as excinfo:
+        stale_ledger.append({"kind": "meter_call", "row_id": "r0"})
+    assert isinstance(excinfo.value, LedgerChainInvalidError)
+
+    # ledger.jsonl は作られておらず、公開済み gz/sidecar も無傷のまま
+    # （append() が獲得する専用ロックファイル `ledger.jsonl.lock` は append
+    # の成否に関わらず作られる副作用であり、本アサーションの対象外）。
+    assert not ledger_path.exists()
+    assert (campaign_dir / "ledger.jsonl.gz").read_bytes() == gz_bytes_before
+    assert (campaign_dir / "ledger.jsonl.sha256").read_text(encoding="utf-8") == (
+        sidecar_text_before
+    )
+
+
+def test_ledger_append_creates_genesis_ledger_when_no_archive_pair_present(tmp_path) -> None:
+    """archive ペア（`<name>.gz`/`<name>.sha256`）が存在しない、真に新規の
+    campaign ディレクトリでは `append()` が従来どおり genesis（`seq=0`）
+    ledger を作成できる（`LedgerArchivedError` の対象は archive 済みの場合
+    のみで、C0 freeze の初期化経路を塞いではならない）。"""
+    campaign_dir = tmp_path / "RUN-fresh"
+    campaign_dir.mkdir()
+    ledger_path = campaign_dir / "ledger.jsonl"
+
+    ledger = Ledger(ledger_path)
+    entry = ledger.append({"kind": "meter_call", "row_id": "r0"})
+
+    assert entry.seq == 0
+    assert ledger_path.is_file()
+    assert Ledger(ledger_path).verify_chain().ok is True
 
 
 def test_ledger_verify_chain_ok_with_missing_final_newline_flag(tmp_path) -> None:

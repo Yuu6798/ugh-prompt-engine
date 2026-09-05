@@ -16,7 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from voice_genesis.calibration.provenance import Ledger, LedgerChainInvalidError
+from voice_genesis.calibration.provenance import (
+    Ledger,
+    LedgerArchivedError,
+    LedgerChainInvalidError,
+)
 from voice_genesis.calibration.tools import archive_aborted_ledger as archive
 
 
@@ -505,11 +509,19 @@ def test_ensure_archived_refuses_inconsistent_leftover_original_and_keeps_both(
     sidecar_path.write_text(sidecar_text_before, encoding="utf-8")
 
     # 残存原本を、公開済み archive とは無関係な chain へ丸ごと置き換える
-    # （byte-prefix にならない不整合）。
+    # （byte-prefix にならない不整合）。R19 fix（本テストファイル対象の
+    # 変更）後は `Ledger.append()` 自体が「path 不在 + 検証済み archive ペア
+    # 存在」を `LedgerArchivedError` で拒否するため、この不整合原本は
+    # 無関係な別ディレクトリで独立に作った ledger の bytes をそのまま
+    # 書き込んで用意する — ここで検査したいのは `ensure_archived()` 側の
+    # byte-prefix 不整合検出であり、`Ledger.append()` の新規作成可否では
+    # ない（それは R19 の対象そのもので、他所で別途検証する）。
     ledger_path = campaign_dir / archive.LEDGER_FILENAME
     ledger_path.unlink()
-    Ledger(ledger_path).append({"kind": "unrelated_event", "i": 999})
-    mismatched_bytes = ledger_path.read_bytes()
+    scratch_ledger_path = tmp_path / "scratch-unrelated" / "ledger.jsonl"
+    Ledger(scratch_ledger_path).append({"kind": "unrelated_event", "i": 999})
+    mismatched_bytes = scratch_ledger_path.read_bytes()
+    ledger_path.write_bytes(mismatched_bytes)
     assert mismatched_bytes != original_bytes
     assert not mismatched_bytes.startswith(original_bytes)
 
@@ -1026,3 +1038,56 @@ def test_cli_main_reports_failure_without_raising(
     assert rc == 1
     err = capsys.readouterr().err
     assert "FAILED" in err
+
+
+# ---------------------------------------------------------------------------
+# R19: ensure_archived() -> Ledger.append() 統合（"Refuse to recreate a
+# ledger after archival"）
+# ---------------------------------------------------------------------------
+
+
+def test_ledger_append_after_ensure_archived_does_not_create_contradicting_artifact(
+    tmp_path: Path,
+) -> None:
+    """`ensure_archived()` が原本 `ledger.jsonl` を検証済み `ledger.jsonl.gz`
+    + sidecar へ置換した後、そのディレクトリを指す `Ledger.append()` は
+    genesis ledger を黙って新規作成してはならない（R19 が塞いだ経路: 修正前
+    は append が成功を報告しつつ、その event は公開済み gz に無く、次回
+    `ensure_archived()` が新規 ledger.jsonl を非 prefix 乖離として拒否する
+    ——矛盾する 2 つの provenance artifact が残っていた）。
+
+    本テストは、修正後の `append()` が `LedgerArchivedError` で fail-closed
+    し、(1) `ledger.jsonl` が作成されないこと、(2) 公開済み gz/sidecar が
+    無傷のまま残ること、(3) 以後の `ensure_archived()` 呼び出しが矛盾なく
+    `already_archived` を返し続けることを固定する。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-abort"
+    _build_tiny_ledger(campaign_dir, n=3)
+
+    result = archive.ensure_archived(campaign_dir)
+    assert result.action == "archived"
+
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    sidecar_path = campaign_dir / archive.SIDECAR_FILENAME
+    assert not ledger_path.is_file()
+    gz_bytes_before = gz_path.read_bytes()
+    sidecar_text_before = sidecar_path.read_text(encoding="utf-8")
+
+    stray_ledger = Ledger(ledger_path)
+    with pytest.raises(LedgerArchivedError):
+        stray_ledger.append({"kind": "meter_call", "row_id": "post-archive"})
+
+    # append 自体が何も書いていない: ledger.jsonl は依然として不在で、
+    # 公開済み gz/sidecar も一切変更されていない。
+    assert not ledger_path.is_file()
+    assert gz_path.read_bytes() == gz_bytes_before
+    assert sidecar_path.read_text(encoding="utf-8") == sidecar_text_before
+
+    # 矛盾する artifact が残っていないことの直接証拠: 再度 ensure_archived()
+    # を呼んでも矛盾なく `already_archived` を返し、公開物はそのまま。
+    follow_up = archive.ensure_archived(campaign_dir)
+    assert follow_up.action == "already_archived"
+    assert follow_up.sha256 == result.sha256
+    assert not ledger_path.is_file()
+    assert gz_path.read_bytes() == gz_bytes_before
+    assert sidecar_path.read_text(encoding="utf-8") == sidecar_text_before

@@ -302,6 +302,41 @@ class LedgerChainInvalidError(RuntimeError):
         )
 
 
+class LedgerArchivedError(LedgerChainInvalidError):
+    """`Ledger.append()` が、`self.path`（`ledger.jsonl`）が存在せず、かつ
+    同一ディレクトリに検証済み archive ペア（`<name>.gz` + `<name>.sha256`
+    sidecar。`tools/archive_aborted_ledger.py::ensure_archived()` が
+    campaign_closed 後に原本を置換した状態）が存在する場合に送出する
+    （Codex レビュー PR #346 round 19 指摘, "Refuse to recreate a ledger
+    after archival", 採用）。
+
+    修正前は、欠落した `path` を「まだ何も書かれていない新規 chain」と
+    区別せずに `a+b` で `open()` していたため、archive 済み campaign へ
+    append すると genesis（`seq=0`）の新しい `ledger.jsonl` を黙って作って
+    しまっていた。append 自体は成功を報告するが、その event は既に公開
+    済みの gz snapshot には存在せず、以後の `ensure_archived()` 呼び出しは
+    新しい `ledger.jsonl` が公開済み gz の厳密な byte-prefix 拡張ではない
+    ため非 prefix 乖離として拒否する — 同一 campaign について矛盾する
+    2 つの provenance artifact（公開済み gz/sidecar と、それに含まれない
+    event を持つ新規 ledger.jsonl）が残ってしまう。
+
+    本チェックは `LedgerChainInvalidError` と同じ安定ロック（`<name>.lock`。
+    R14 fix）を保持したまま行うため、`ensure_archived()` の公開+unlink と
+    この存在判定はロックにより直列化され、判定が古い状態を見て誤判定する
+    競合は生じない。archive ペアが存在しない純粋な新規 campaign の初期化
+    （C0 freeze の genesis ledger 作成）はこのエラーの対象外であり、従来
+    どおり `append()` から新規 `ledger.jsonl` を作成できる。"""
+
+    def __init__(self, path: Path) -> None:
+        detail = (
+            f"ledger file is missing but an archived pair ({path.name}.gz + "
+            f"{path.name}.sha256) already exists in {path.parent}; this campaign "
+            "has been archived and its ledger must not be recreated — the "
+            "archived gz/sidecar pair is the sole canonical record"
+        )
+        super().__init__(path, detail, None)
+
+
 class LedgerTruncatedTailError(RuntimeError):
     """`Ledger.append()` が、既存ファイルの末尾が truncated（write 中断で不完全な
     最終行）だと検出した際に送出する。既存の破損した bytes へ盲目的に追記して
@@ -1335,6 +1370,53 @@ class Ledger:
         with open(lock_path, "a+", encoding="utf-8") as lock_f:
             fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
             try:
+                # R19 fix (Codex PR #346 round 19 採用, "Refuse to recreate a
+                # ledger after archival"): once `ensure_archived()`
+                # (`tools/archive_aborted_ledger.py`) has published a
+                # verified `<name>.gz` + `<name>.sha256` sidecar pair for
+                # this campaign and unlinked the original `self.path`, that
+                # gz/sidecar pair is the sole canonical record. The plain
+                # `self.path.open("a+b")` below does not distinguish "this
+                # path was never created" (a legitimate C0-freeze genesis
+                # ledger) from "this path was archived away" — both look
+                # like "file absent" — so it would silently `open()` a brand
+                # new, empty chain and let this append() create a fresh
+                # `seq=0` genesis ledger. That append reports success, but
+                # the event it wrote is absent from the already-published
+                # gz snapshot; the next `ensure_archived()` call then finds
+                # a `ledger.jsonl` whose content is not a strict byte-prefix
+                # extension of the published gz and rejects it as a
+                # non-prefix divergence — two irreconcilable provenance
+                # artifacts for the same campaign, exactly the corruption
+                # this ledger exists to make impossible. Checked here, under
+                # the same stable lock file that `ensure_archived()` takes
+                # before it reads/unlinks `self.path` (module docstring R14
+                # fix), so the "does an archive pair already exist" question
+                # is answered atomically with respect to any concurrent
+                # archiver: either the archiver's publish+unlink is fully
+                # visible here, or it has not started yet and this append()
+                # proceeds as an ordinary create against a path that has no
+                # archive pair (freeing this branch to fire only when the
+                # archive truly is authoritative). A pure fresh-campaign
+                # initialization (no archive pair present) is unaffected and
+                # still creates a new genesis ledger as before.
+                # Existence is probed via `os.stat()` + `except
+                # FileNotFoundError` (the same idiom the defense-in-depth
+                # inode re-check below uses) rather than `Path.exists()`,
+                # which swallows only errno-tagged `OSError`s — a
+                # `FileNotFoundError` raised without an errno (as a test
+                # double might) would otherwise propagate through
+                # `Path.exists()` uncaught.
+                try:
+                    os.stat(self.path)
+                    path_missing = False
+                except FileNotFoundError:
+                    path_missing = True
+                if path_missing:
+                    gz_path = self.path.parent / (self.path.name + ".gz")
+                    sidecar_path = self.path.parent / (self.path.name + ".sha256")
+                    if gz_path.is_file() and sidecar_path.is_file():
+                        raise LedgerArchivedError(self.path)
                 with self.path.open("a+b") as f:
                     # R14 fix, defense-in-depth: even under the stable lock
                     # above, re-verify that the path we just opened still
