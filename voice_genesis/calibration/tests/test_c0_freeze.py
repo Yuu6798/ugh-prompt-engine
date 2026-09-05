@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -188,6 +189,77 @@ def test_fixture_spec_claim_relevant_fields_matches_machine_derivation() -> None
         assert fixture_spec[family.value]["claim_relevant_fields"] == list(
             derived[family.value]
         )
+
+
+# ---------------------------------------------------------------------------
+# v1.1 §V3.3 (WP2e): U_GT / U_num C0 freeze
+# ---------------------------------------------------------------------------
+
+_U_ABSENT_FAMILIES = {"RESONANCE_GT", "IDENTITY_CAUSAL_SWEEP"}
+_U_NUMERIC_FAMILIES = {
+    "F0_CONTROL",
+    "FORMANT_GT",
+    "TILT_GT",
+    "APERIODICITY_GT",
+    "TRANSITION_GT",
+}
+
+
+def test_fixture_spec_u_gt_u_num_present_with_formula_for_all_families() -> None:
+    """v1.1 §V3.3: 全 7 family が `u_gt_bound`/`u_num_bound` を、値と導出式
+    (`*_formula`) + 単位 (`*_unit`) を併記して凍結する（v1.0 §10.2「値と
+    導出式の両方」要件）。`manifest_core_sha` の対象である `frozen_design.
+    fixture_spec` に載ることも確認する（dry-run/armed 双方が共有する
+    `build_manifest()` の core payload そのもの）。"""
+    manifest = c0_freeze.build_manifest(_REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02")
+    fixture_spec = manifest["frozen_design"]["fixture_spec"]
+    assert set(fixture_spec) == _U_ABSENT_FAMILIES | _U_NUMERIC_FAMILIES
+    for family_name, entry in fixture_spec.items():
+        for key in ("u_gt_bound", "u_num_bound"):
+            assert key in entry, f"{family_name} missing {key}"
+            assert isinstance(entry[f"{key}_formula"], str) and entry[f"{key}_formula"]
+            assert isinstance(entry[f"{key}_unit"], str) and entry[f"{key}_unit"]
+
+
+def test_fixture_spec_u_gt_u_num_values_are_finite_nonneg_or_absent() -> None:
+    """非 ABSENT family は non-negative finite number、ABSENT family は
+    `declared_u_gt_u_num_for_family()` が非 numeric として弾く
+    `"ABSENT:<reason>"` 文字列に限定される（v1.1 §V3.3）。"""
+    manifest = c0_freeze.build_manifest(_REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02")
+    fixture_spec = manifest["frozen_design"]["fixture_spec"]
+    for family_name in _U_NUMERIC_FAMILIES:
+        entry = fixture_spec[family_name]
+        for key in ("u_gt_bound", "u_num_bound"):
+            value = entry[key]
+            assert isinstance(value, (int, float)) and not isinstance(value, bool), (
+                family_name,
+                key,
+                value,
+            )
+            assert math.isfinite(value) and value >= 0.0, (family_name, key, value)
+    for family_name in _U_ABSENT_FAMILIES:
+        entry = fixture_spec[family_name]
+        for key in ("u_gt_bound", "u_num_bound"):
+            assert isinstance(entry[key], str) and entry[key].startswith("ABSENT:")
+
+
+def test_fixture_spec_u_gt_u_num_canonical_values_regression_lock() -> None:
+    """456 セル canonical fixture design での実値表を固定する（回帰ガード）。
+    `c0_freeze.py`/`fixtures/axes.py` の凍結定数を変えたら、この期待値も
+    設計判断として明示的に見直すこと（値の意味は WP2e 報告に記載）。"""
+    manifest = c0_freeze.build_manifest(_REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02")
+    fixture_spec = manifest["frozen_design"]["fixture_spec"]
+    expected = {
+        "F0_CONTROL": (0.0, pytest.approx(0.523251)),
+        "FORMANT_GT": (0.0, pytest.approx(3.0)),
+        "TILT_GT": (0.0, pytest.approx(0.024)),
+        "APERIODICITY_GT": (pytest.approx(0.06363961030678927), pytest.approx(0.0006)),
+        "TRANSITION_GT": (0.0, pytest.approx(0.00065)),
+    }
+    for family_name, (expected_u_gt, expected_u_num) in expected.items():
+        entry = fixture_spec[family_name]
+        assert entry["u_gt_bound"] == expected_u_gt, family_name
+        assert entry["u_num_bound"] == expected_u_num, family_name
 
 
 def test_dry_run_gate1_approved_reduces_blocking(tmp_path: Path) -> None:

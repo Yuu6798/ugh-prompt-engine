@@ -122,31 +122,31 @@ def declared_axes_for_family(manifest: Mapping[str, object], family: str) -> tup
 def declared_u_gt_u_num_for_family(
     manifest: Mapping[str, object], family: str
 ) -> tuple[float, float] | None:
-    """v1.1 §V3.2: ABSOLUTE/DIRECTIONAL 実 gate の `U_GT[i]`/`U_num[i]`
+    """v1.1 §V3.2/§V3.3: ABSOLUTE/DIRECTIONAL 実 gate の `U_GT[i]`/`U_num[i]`
     （設計正本 §10.2「generator truth の保守上限」「PCM 量子化・浮動小数・
     宣言分解能から機械導出」）を campaign 実測から組み立てる唯一の入口。
 
-    **実地調査の結果（本 WP の一次事実）**: 現行 `c0_freeze.py`（本 WP の対象
-    外ファイル）は `frozen_design.fixture_spec.<FAMILY>` に `confound_axes`/
-    `declared_sweeps`/`generator_hash` 等は凍結するが、per-family の数値
-    `U_GT`/`U_num` 保守上限は **まだ凍結していない**
-    （`campaigns/RUN10-CAL-20260904-862dec28/c0_manifest.json` 実測で確認
-    済み）。本関数はこの現実に合わせ、`frozen_design.fixture_spec.<FAMILY>`
-    に `u_gt_bound`/`u_num_bound`（いずれも non-negative finite な
-    number）という後方互換の任意キーを読む——欠落している既存 manifest
-    （閉 campaign 含む）を壊さず、値が無い/型不正/負/非有限のいずれかなら
-    `None` を返すのみに留める。
+    **v1.1 §V3.3 実装後（追記, 本 WP）**: `c0_freeze._fixture_specs()` が
+    non-ABSENT な 5 family（F0_CONTROL/FORMANT_GT/TILT_GT/APERIODICITY_GT/
+    TRANSITION_GT）について `frozen_design.fixture_spec.<FAMILY>.u_gt_bound`/
+    `.u_num_bound` を plain number として populate するようになった（値と
+    導出式は `.u_gt_bound_formula`/`.u_num_bound_formula`/`*_unit` の
+    sibling キーに併記——本関数はこれらを読まず、既存の scalar 契約のみを
+    読む）。RESONANCE_GT/IDENTITY_CAUSAL_SWEEP は gate 入力を持たないため
+    `"ABSENT:<reason>"` 文字列を凍結する——非 numeric なので本関数は以下と
+    同じ理由で黙って `None` を返す。
+
+    本関数はこの `frozen_design.fixture_spec.<FAMILY>` に `u_gt_bound`/
+    `u_num_bound`（いずれも non-negative finite な number）という後方互換
+    キーを読む——欠落している既存 manifest（閉 campaign 含む。§V3.3 実装
+    以前に freeze された campaign 等）を壊さず、値が無い/型不正/負/非有限の
+    いずれかなら `None` を返すのみに留める。
 
     呼び出し側（`build_absolute_gate_inputs`/`build_directional_gate_
     inputs`）はこれを§11「C0 入力側 critical missing → NOT_EVALUABLE/
-    INPUT_MISSING」として扱う。これは正直な結果である: `c0_freeze.py` が
-    このキーを実際に populate するまで、本番 campaign の ABSOLUTE/
-    DIRECTIONAL gate は構造的に `INPUT_MISSING` へ倒れる——閾値を緩めて
-    これを迂回することは §10.2 により禁止される（これは本 WP の意図的な
-    スコープ境界であり、報告に明記する）。テスト fixture
-    （`tests/_campaign_fixture.py`）は `c0_freeze.py` を経由せず manifest を
-    直接組み立てるため、このキーを注入して gate 全通過シナリオを検証
-    できる。"""
+    INPUT_MISSING」として扱う。テスト fixture（`tests/_campaign_fixture.py`）
+    は `c0_freeze.py` を経由せず manifest を直接組み立てるため、このキーを
+    注入して gate 全通過シナリオを検証できる。"""
     frozen_design = manifest.get("frozen_design")
     if not isinstance(frozen_design, Mapping):
         return None

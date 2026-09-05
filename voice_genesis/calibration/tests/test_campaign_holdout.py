@@ -498,6 +498,95 @@ def test_declared_u_gt_u_num_for_family_rejects_invalid_u_gt(bad_u_gt: object) -
     assert holdout_stage.declared_u_gt_u_num_for_family(manifest, "TILT_GT") is None
 
 
+def test_declared_u_gt_u_num_for_family_reads_real_c0_freeze_manifest() -> None:
+    """v1.1 §V3.3 (WP2e): `c0_freeze._fixture_specs()` now populates
+    `u_gt_bound`/`u_num_bound` for the 5 non-ABSENT families, and this is
+    the exact reader `declared_u_gt_u_num_for_family()` consumes — no
+    consumer-side format change was needed (the producer matches the
+    existing plain-number scalar contract). ABSENT families (RESONANCE_GT /
+    IDENTITY_CAUSAL_SWEEP) correctly read back as `None` (their frozen value
+    is the non-numeric string `"ABSENT:<reason>"`)."""
+    from voice_genesis.calibration import c0_freeze
+
+    manifest = c0_freeze.build_manifest(
+        c0_freeze._REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02"
+    )
+    for family_name in (
+        "F0_CONTROL",
+        "FORMANT_GT",
+        "TILT_GT",
+        "APERIODICITY_GT",
+        "TRANSITION_GT",
+    ):
+        result = holdout_stage.declared_u_gt_u_num_for_family(manifest, family_name)
+        assert result is not None, family_name
+        u_gt, u_num = result
+        assert u_gt >= 0.0 and u_num >= 0.0, family_name
+    for family_name in ("RESONANCE_GT", "IDENTITY_CAUSAL_SWEEP"):
+        assert holdout_stage.declared_u_gt_u_num_for_family(manifest, family_name) is None
+
+
+def test_evaluate_absolute_meter_reaches_calibrated_absolute_with_c0_frozen_tilt_bounds() -> None:
+    """E2E-lite (WP2e AC-d): reproduces
+    `test_evaluate_absolute_meter_passes_with_clean_synthetic_data` but with
+    `u_gt`/`u_num` swapped from ad hoc test doubles (0.001/0.001) for the
+    *actual* v1.1 §V3.3 C0-frozen TILT_GT bounds (`c0_freeze.build_manifest()`
+    → `declared_u_gt_u_num_for_family()`) — proving the real frozen numbers
+    are small enough, relative to a realistic E_use, to let a clean candidate
+    reach `CALIBRATED_ABSOLUTE` (the debt this WP exists to unblock; WP2c's
+    `declared_u_gt_u_num_for_family()` returned `None` for every production
+    manifest before this WP populated the keys)."""
+    from voice_genesis.calibration import c0_freeze
+
+    real_manifest = c0_freeze.build_manifest(
+        c0_freeze._REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02"
+    )
+    u_gt, u_num = holdout_stage.declared_u_gt_u_num_for_family(real_manifest, "TILT_GT")
+    real_tilt_spec = real_manifest["frozen_design"]["fixture_spec"]["TILT_GT"]
+    assert (u_gt, u_num) == (real_tilt_spec["u_gt_bound"], real_tilt_spec["u_num_bound"])
+    assert u_gt == 0.0
+    assert u_num < 1.0  # far smaller than a realistic E_use -- gate2'/gate3 stay slack
+
+    observations = [
+        holdout_stage.RawInstanceObservation(
+            instance_id=f"i{i}",
+            domain=Domain.PRIMARY,
+            truth=100.0 + i,
+            per_process_repeats={
+                "within-process": [100.0 + i, 100.01 + i, 99.99 + i],
+                "fresh-process-0": [100.005 + i],
+                "fresh-process-1": [100.005 + i],
+            },
+            u_gt=u_gt,
+            u_num=u_num,
+            e_use=1.0,
+        )
+        for i in range(12)
+    ]
+    margins = holdout_stage.build_instance_margins(observations)
+    instance_ids = [m.instance_id for m in margins]
+    pairs = [
+        InvariancePair(pair_id=f"p{i}", axis="axis-a", ds=0.0, e_use_i0=1.0, e_use_ia=1.0)
+        for i in range(5)
+    ]
+    result = holdout_stage.evaluate_absolute_meter(
+        MeterId.M2_SPECTRAL_TILT.value,
+        ClaimCeiling.ABSOLUTE,
+        selected_candidate_id="FAKE-TILT-CAND",
+        per_instance_margins=margins,
+        u_rep=0.01,
+        u_proc=0.005,
+        invariance_pairs_by_axis={"axis-a": pairs},
+        declared_invariance_axes=("axis-a",),
+        expected_primary_instance_ids=instance_ids,
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.terminal_status == TerminalStatus.CALIBRATED_ABSOLUTE.value
+    assert result.gate_detail["passed"] is True
+
+
 def test_instance_id_str_round_trips_row_and_probe() -> None:
     assert holdout_stage.instance_id_str("row-1", 3) == "row-1#3"
     assert holdout_stage.instance_id_str("row-1", 3) != holdout_stage.instance_id_str("row-1", 4)

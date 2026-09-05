@@ -29,11 +29,13 @@ import fcntl
 import hashlib
 import importlib.metadata as importlib_metadata
 import json
+import math
 import os
 import platform
 import secrets
 import shutil
 import subprocess
+import sys
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -41,7 +43,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from voice_genesis.calibration import c0_validate, e_use_table, streams, vocab
+from voice_genesis.calibration import c0_validate, e_use_table, streams, tolerance, vocab
 from voice_genesis.calibration.approvals import (
     GATE_SHORT_NAME,
     ArmingDecision,
@@ -55,6 +57,7 @@ from voice_genesis.calibration.candidates import registry
 from voice_genesis.calibration.candidates.registry import Candidate
 from voice_genesis.calibration.canonical import canonical_json
 from voice_genesis.calibration.canonical import manifest_sha as _full_manifest_sha
+from voice_genesis.calibration.fixtures import axes
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
 from voice_genesis.calibration.fixtures.controls import ControlClass
 from voice_genesis.calibration.fixtures.matrix import (
@@ -330,6 +333,150 @@ _CONFOUND_AXES: tuple[str, ...] = ("f0_hz", "sr_hz", "gain_dbfs", "duration_s", 
 _BOUNDARY_PROBES: tuple[str, ...] = ("f0_hz", "sr_hz", "gain_dbfs", "duration_s", "noise_snr_db")
 
 
+# ---------------------------------------------------------------------------
+# v1.1 §V3.3 追補: U_GT / U_num の C0 凍結（実装時発見、2026-09-05）
+# ---------------------------------------------------------------------------
+
+#: [UNDERSPEC-CAL-V01] 設計正本 v1.1 §V3.3 は「16-bit PCM 量子化（-96 dBFS 相当
+#: の加法雑音、宣言 gain に対して相対化）の当該 construct 単位への伝播量」を
+#: family ごとの閉形式で求めるよう指示するが、振幅領域の量子化雑音から
+#: 各 construct（Hz / dB_per_oct / 無次元比率など単位も物理的性質も異なる）
+#: への厳密な伝達関数は正本非規定であり、推定器ごとの実測較正（本 WP の
+#: スコープ外）を要する。本実装は「振幅領域の相対雑音比を、construct の真値
+#: スケールへ unity-gain（伝達係数 1）で転写する」という単純化を全 family
+#: 共通で採用する（実際の伝達係数はほとんどの推定器で 1 未満と見込まれるため、
+#: この単純化は過大側＝保守側に倒れる。§10.2「過大は許容・過小は禁止」に整合）。
+#: 相対雑音比は「その family が取りうる最も静かな宣言 gain（boundary gain の
+#: 最小値）」で相対化する（gain が低いほど PCM 量子化雑音の相対寄与が大きく
+#: なるため、これが worst-case = 最も保守的）。
+_PCM_NOISE_FLOOR_DBFS: float = -96.0
+_WORST_CASE_GAIN_DBFS: float = min(axes.BOUNDARY_GAIN_DBFS)
+_PCM_RELATIVE_NOISE_FRACTION: float = 10.0 ** ((_PCM_NOISE_FLOOR_DBFS - _WORST_CASE_GAIN_DBFS) / 20.0)
+_FLOAT64_EPS: float = sys.float_info.epsilon
+
+#: family の generator truth が取りうる最大絶対値（§V3.3「truth の最大絶対値で
+#: 保守化」）。RESONANCE_GT / IDENTITY_CAUSAL_SWEEP は U_GT/U_num とも ABSENT
+#: のため含まない。
+_TRUTH_SCALE_MAX: dict[str, float] = {
+    FixtureFamily.F0_CONTROL.value: max(axes.PRIMARY_F0_HZ + axes.BOUNDARY_F0_HZ),
+    FixtureFamily.FORMANT_GT.value: max(
+        pole for pole_set in axes.FORMANT_POLE_SETS_HZ for pole in pole_set
+    ),
+    FixtureFamily.TILT_GT.value: max(abs(s) for s in axes.TILT_SLOPES_DB_PER_OCT),
+    FixtureFamily.APERIODICITY_GT.value: max(axes.APERIODICITY_FRACTIONS),
+    FixtureFamily.TRANSITION_GT.value: max(axes.TRANSITION_SEVERITY_MAGNITUDE.values()),
+}
+
+_TRUTH_UNIT: dict[str, str] = {
+    FixtureFamily.F0_CONTROL.value: "hz",
+    FixtureFamily.FORMANT_GT.value: "hz",
+    FixtureFamily.TILT_GT.value: "db_per_oct",
+    FixtureFamily.APERIODICITY_GT.value: "dimensionless_fraction",
+    FixtureFamily.TRANSITION_GT.value: "dimensionless_magnitude",
+}
+
+#: U_GT/U_num が構造的に gate 入力にならない family（§V3.3）。
+#: `declared_u_gt_u_num_for_family()` はこの文字列を非 numeric として黙って
+#: `None` 扱いする（isinstance(str, (int, float)) は False）ため、値の型を
+#: 変える必要なく正しく `NOT_EVALUABLE/INPUT_MISSING` へ倒れる。
+_U_ABSENT_REASON: dict[str, str] = {
+    FixtureFamily.RESONANCE_GT.value: "ABSENT:diagnostic_only",
+    FixtureFamily.IDENTITY_CAUSAL_SWEEP.value: "ABSENT:no_physical_ground_truth",
+}
+
+
+def _u_gt_bound_for_family(family: FixtureFamily) -> tuple[object, str, str]:
+    """v1.1 §V3.3 の family 別 `U_GT`（generator truth の保守上限）。
+    `(value, formula, unit)` を返す。`value` は non-negative finite float
+    （`declared_u_gt_u_num_for_family()` がそのまま読む）か `"ABSENT:<reason>"`
+    文字列（gate 入力にならない family）。"""
+    absent_reason = _U_ABSENT_REASON.get(family.value)
+    if absent_reason is not None:
+        return (
+            absent_reason,
+            f"{family.value} has no ABSOLUTE/DIRECTIONAL gate input (v1.1 §V3.3): "
+            f"{absent_reason}",
+            "n/a",
+        )
+    if family in (FixtureFamily.F0_CONTROL, FixtureFamily.FORMANT_GT, FixtureFamily.TILT_GT):
+        return (
+            0.0,
+            "U_GT = 0 (truth realized by exact float64 analytic synthesis at "
+            "generation time; residual absorbed by the U_num float_eps term)",
+            _TRUTH_UNIT[family.value],
+        )
+    if family is FixtureFamily.TRANSITION_GT:
+        sr_min = min(axes.PRIMARY_SR_HZ + axes.BOUNDARY_SR_HZ)
+        join_time_bound = 0.5 / sr_min
+        formula = (
+            "discontinuity_magnitude (the frozen scalar; matches the unit of the only "
+            "wired M5_TRANSITION primary_output field, dimensionless_magnitude): "
+            "U_GT = 0 (analytic instantaneous amplitude-step assignment at generation "
+            "time; residual absorbed by the U_num float_eps term). Informational only, "
+            "not folded into this scalar (different unit; no currently wired candidate "
+            "uses it as primary_output — see [UNDERSPEC-CAL-V02] in the WP report): "
+            f"join_time_s U_GT = 0.5/sr_hz, worst case at sr_hz={sr_min} => "
+            f"{join_time_bound!r} s."
+        )
+        return 0.0, formula, _TRUTH_UNIT[family.value]
+    if family is FixtureFamily.APERIODICITY_GT:
+        fraction_max = max(axes.APERIODICITY_FRACTIONS)
+        duration_min = min(axes.PRIMARY_DURATION_S + axes.BOUNDARY_DURATION_S)
+        sr_min = min(axes.PRIMARY_SR_HZ + axes.BOUNDARY_SR_HZ)
+        n_min = duration_min * sr_min
+        value = fraction_max * 3.0 * math.sqrt(2.0 / n_min)
+        formula = (
+            "U_GT = fraction * 3 * sqrt(2/N), N = duration_s * sr_hz (finite-length "
+            "noise realization; 3-sigma conservative upper bound on the chi-square "
+            f"fluctuation around the declared fraction); family bound uses "
+            f"fraction={fraction_max!r} (max truth-core fraction) and N={n_min!r} "
+            f"(duration_s={duration_min!r} x sr_hz={sr_min!r}, both family minima, "
+            f"conservative) => {value!r}"
+        )
+        return value, formula, _TRUTH_UNIT[family.value]
+    raise AssertionError(f"unhandled family for U_GT: {family!r}")  # pragma: no cover
+
+
+def _u_num_bound_for_family(family: FixtureFamily) -> tuple[object, str, str]:
+    """v1.1 §V3.3 の family 別 `U_num`（PCM 量子化・浮動小数・宣言分解能から
+    機械導出）。`tolerance.derive_floor()` をそのまま使う。`meter_declared_
+    resolution` は C0 時点では候補未選抜のため 0 固定とする——
+    `declared_u_gt_u_num_for_family(manifest, family)` は候補（parameter
+    JSON）を一切受け取らないシグネチャのため、選抜後の候補宣言分解能を
+    上乗せする経路は現行消費側では構造的に組み込めない（[UNDERSPEC-CAL-V02]、
+    WP 報告に明記）。"""
+    absent_reason = _U_ABSENT_REASON.get(family.value)
+    if absent_reason is not None:
+        return (
+            absent_reason,
+            f"{family.value} has no ABSOLUTE/DIRECTIONAL gate input (v1.1 §V3.3): "
+            f"{absent_reason}",
+            "n/a",
+        )
+    truth_max = _TRUTH_SCALE_MAX[family.value]
+    pcm_quantization_step = 2.0 * _PCM_RELATIVE_NOISE_FRACTION * truth_max
+    float_eps_bound = _FLOAT64_EPS * truth_max
+    value, floor_formula = tolerance.derive_floor(
+        pcm_quantization_step=pcm_quantization_step,
+        float_eps_bound=float_eps_bound,
+        meter_declared_resolution=None,
+    )
+    formula = (
+        f"U_num = tolerance.derive_floor(pcm_quantization_step=2*"
+        f"{_PCM_RELATIVE_NOISE_FRACTION!r}*|truth|_max, float_eps_bound=float64_eps*"
+        "|truth|_max, meter_declared_resolution=0). pcm term = 16-bit/-96dBFS "
+        f"quantization noise floor relativized to worst declared gain "
+        f"({_WORST_CASE_GAIN_DBFS!r} dBFS boundary; unity-gain transfer to construct "
+        f"units, conservative per [UNDERSPEC-CAL-V01]) x |truth|_max={truth_max!r} "
+        f"({family.value}). float term = float64 eps ({_FLOAT64_EPS!r}) x "
+        f"|truth|_max={truth_max!r}. meter_declared_resolution=0 at C0 (candidate not "
+        "yet selected; post-selection declared resolution is not incorporated by the "
+        "current declared_u_gt_u_num_for_family(manifest, family) consumer signature "
+        f"— out of scope for this WP, see [UNDERSPEC-CAL-V02]). {floor_formula}"
+    )
+    return value, formula, _TRUTH_UNIT[family.value]
+
+
 def _fixture_specs(root: Path) -> dict[str, object]:
     #: UNDERSPEC-CAL-D76 ruling (2): declared sweep の宣言は「凍結 matrix
     #: 生成器 (`fixtures.matrix.build_matrix`) が設計として何を宣言するか」を
@@ -356,6 +503,8 @@ def _fixture_specs(root: Path) -> dict[str, object]:
             cc.value for cc in ControlClass if _negative_applicable(family, cc.value)
         )
         family_sweeps = declared_sweeps.get(family.value, {})
+        u_gt_value, u_gt_formula, u_gt_unit = _u_gt_bound_for_family(family)
+        u_num_value, u_num_formula, u_num_unit = _u_num_bound_for_family(family)
         specs[family.value] = {
             "generator_version": "1",
             "generator_hash": generator_hash,
@@ -368,6 +517,18 @@ def _fixture_specs(root: Path) -> dict[str, object]:
                 for sweep_id, member_row_ids in sorted(family_sweeps.items())
             },
             "claim_relevant_fields": list(claim_relevant.get(family.value, ())),
+            #: v1.1 §V3.3: `u_gt_bound`/`u_num_bound` は
+            #: `holdout_stage.declared_u_gt_u_num_for_family()` が既に読む
+            #: 後方互換 plain-number キー（型はそのまま非負 finite float か
+            #: `ABSENT:<reason>` 文字列）。値と導出式文字列を併記する v1.0
+            #: §10.2 の要件は、同じ scalar 契約を壊さない sibling キー
+            #: (`*_formula`/`*_unit`) として満たす。
+            "u_gt_bound": u_gt_value,
+            "u_gt_bound_formula": u_gt_formula,
+            "u_gt_bound_unit": u_gt_unit,
+            "u_num_bound": u_num_value,
+            "u_num_bound_formula": u_num_formula,
+            "u_num_bound_unit": u_num_unit,
         }
     return specs
 
