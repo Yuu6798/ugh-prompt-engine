@@ -313,6 +313,50 @@ campaign 成立要件とする:
   正当な終端であり、通過のための閾値調整は §10.2（結果後付けの禁止）により引き続き
   禁止。
 
+### V3.3 追補 — U_GT / U_num の C0 凍結（実装時発見、2026-09-05）
+
+§V3.2 の配線実装（commit c8dbd5b）で、現行 `c0_freeze` が v1.0 §10.2 の
+`U_GT[i]`（generator truth の保守上限）と `U_num[i]`（PCM 量子化・浮動小数・宣言分解能
+からの機械導出）を manifest に一切凍結していないことが判明した（`862dec28` の
+`c0_manifest.json` 実測）。実 gate はこれを `NOT_EVALUABLE / INPUT_MISSING` として
+正直に扱うため、**凍結しない限り全 ABSOLUTE gate が入力欠落で終端し debt は構造的に
+返済不能**である。よって次 campaign の C0 freeze までに以下を凍結対象へ追加する
+（`frozen_design.fixture_spec.<FAMILY>.u_gt_bound` / `.u_num_bound`。値と導出式文字列
+を併記し `manifest_core_sha` に含める）:
+
+- **U_num[construct]** = `tolerance.derive_floor(pcm_term, float_term,
+  meter_declared_resolution)`（既存の機械導出。3 項の max）。`pcm_term` は 16-bit PCM
+  量子化（−96 dBFS 相当の加法雑音、宣言 gain に対して相対化）の当該 construct 単位への
+  伝播量を family ごとの閉形式で与える（式は manifest に文字列で記録）。`float_term` =
+  float64 eps × |truth|。`meter_declared_resolution` は選抜候補の parameter JSON が
+  分解能を宣言していればその値、無ければ 0（`TOLERANCE_FLOOR_LIMITED` と同型の付記）。
+  U_num は gate に加算的に入るため過大は fail 側（保守方向）であり許容、過小は禁止。
+- **U_GT[family]**（generator truth の保守上限、fixture 行単位）:
+  - F0_CONTROL / FORMANT_GT / TILT_GT: 真値は float64 の解析的合成で実現されるため
+    `U_GT = 0`（残差は `float_term` が吸収する旨を導出式に明記）。
+  - TRANSITION_GT: `join_time_s` は sample 境界に量子化されるため `U_GT = 0.5 / sr_hz`
+    [s]。`discontinuity_magnitude` は解析的指定で `0`。
+  - APERIODICITY_GT: 有限長雑音の実現パワーは宣言 fraction の周りで χ² 分布に従って
+    揺らぐため、`U_GT = fraction × 3 × sqrt(2 / N)`（N = duration_s × sr_hz、3σ 相対
+    偏差の保守上限）。
+  - RESONANCE_GT: §16-1 で DIAGNOSTIC_ONLY 固定のため gate 入力にならない（記録は
+    `ABSENT:diagnostic_only`）。IDENTITY_CAUSAL_SWEEP: 物理 GT なし（§4.2）=
+    `ABSENT:no_physical_ground_truth`。
+- c0_validate は非 ABSENT family について両キーの存在・有限非負・導出式文字列の存在を
+  検査し、欠落は `BLOCKED_C0_MANIFEST_INCOMPLETE` 経由で fail-closed（閉語彙は不変）。
+
+### V3.4 追補 — M6 の測定経路は v1.2 へ繰延（境界宣言、2026-09-05）
+
+§12 の `m6_distance()` は IDENTITY_CAUSAL_SWEEP の founder pair に対する
+CLAIM_CRITICAL_SET 3 meter の実測 component vector と null pair 母集団を要求するが、
+現行 campaign は IDENTITY 行を claim-critical meter で測定しておらず（family→meter
+写像に IDENTITY が無い）、「どの行を A/B とするか」「null pair をどう構成するか」の
+実験設計も v1.0/v1.1 で操作的に規定されていない。M6 は CLAIM_CRITICAL_SET 外
+（`DEBT_DISCHARGED` に無関係）で RUN11 の独立 conjunct であるため、本 campaign では
+precondition 判定のみ実評価とし、結果は正直な `NOT_EVALUABLE / INPUT_MISSING`
+（`gate_detail` に境界宣言と pin 済み cell 列挙）で閉じる。cross-family 測定ユニットと
+pair 設計の規定は **v1.2 の設計課題**として登録し、本 campaign の close はこれを待たない。
+
 ## V4. 破棄 campaign ledger の圧縮保全（運用規約）
 
 - 破棄（abort）裁定済み campaign の `ledger.jsonl` は、非圧縮バイト列の SHA-256 を
