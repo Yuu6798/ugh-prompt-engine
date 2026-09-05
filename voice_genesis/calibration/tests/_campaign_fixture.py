@@ -17,6 +17,7 @@ import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from voice_genesis.calibration import approvals
 from voice_genesis.calibration.c0_freeze import split_frozen_event_payload
 from voice_genesis.calibration.canonical import canonical_json
 from voice_genesis.calibration.canonical import manifest_sha as _manifest_sha
@@ -91,8 +92,12 @@ def _canonical_candidates_section(repo_root: Path | None = None) -> dict[str, di
     }
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-DESIGN_DOC_PATH = _REPO_ROOT / "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.0.md"
-MEMO_DOC_PATH = _REPO_ROOT / "voice_genesis/calibration/IMPLEMENTATION_MAP_v1.md"
+#: v1.1 統治文書切替（§V6, 2026-09-04）: pin 対象文書は `approvals` モジュール
+#: の定数を経由して解決する（ハードコードすると `DESIGN_DOC_RELATIVE_PATH` の
+#: 切替に追随できず、`approvals.load_approval()` の design_doc_sha256 照合が
+#: 常に不一致になる）。
+DESIGN_DOC_PATH = _REPO_ROOT / approvals.DESIGN_DOC_RELATIVE_PATH
+MEMO_DOC_PATH = _REPO_ROOT / approvals.MEMO_RELATIVE_PATH
 
 
 def design_doc_sha256() -> str:
@@ -141,6 +146,9 @@ def build_tiny_campaign(
     dependencies: Mapping[str, str] | None = None,
     frozen_inputs: Mapping[str, object] | None = None,
     freeze_event_time_utc: str | None = "2026-09-02T00:00:00+00:00",
+    holdout_sweeps: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
+    fixture_spec: Mapping[str, Mapping[str, object]] | None = None,
+    force_holdout_row_ids: Sequence[str] | None = None,
 ) -> tuple[Path, Path]:
     """`(campaign_dir, secret_dir_root)` を組み立てて返す。
 
@@ -171,7 +179,30 @@ def build_tiny_campaign(
     （round 20 採用 (2), `[UNDERSPEC-CAL-D47]`: `holdout_stage.load_e_use_rows()`
     の sha256 pin 検証のテスト専用。既定 `None` は manifest に
     `frozen_inputs` キー自体を持たせない）は manifest `frozen_inputs` へ
-    そのまま埋め込まれる。"""
+    そのまま埋め込まれる。`holdout_sweeps`（v1.1 §V2.2/§V2.3 新設、既定
+    `None` は manifest にトップレベル `holdout_sweeps` キー自体を持たせず、
+    `campaign.cli._run_c4` を legacy「全 declared sweep が expected」経路の
+    ままにする——既存の D77 系テストはこの既定を使い、影響を受けない）を
+    渡すと、その member row_id 全てを `realize_split()` の
+    `pinned_holdout_row_ids` として強制的に HOLDOUT へ確定してから
+    manifest のトップレベル non-core `holdout_sweeps` 節へそのまま埋め込む
+    （§V2.3「realized split 上で holdout_sweeps の member に HOLDOUT 非所属
+    行があれば fail-closed」を fixture 側でも満たすため）。
+
+    `fixture_spec`（v1.1 §V3.2 新設、WP2c: c4 実 gate 組み立ての配線）:
+    `{family: {key: value}}` を `frozen_design.fixture_spec.<FAMILY>` へ
+    そのままマージする（既存の空 dict `{}` 既定を上書き）。ABSOLUTE/
+    DIRECTIONAL 実 gate が読む `u_gt_bound`/`u_num_bound`
+    （`holdout_stage.declared_u_gt_u_num_for_family()`）や、gate4' が読む
+    `confound_axes`（`holdout_stage.declared_axes_for_family()`）を注入する
+    のに使う——本番 `c0_freeze.py` はまだ `u_gt_bound`/`u_num_bound` を
+    populate しないため（実地調査で確認済み。`holdout_stage.declared_u_gt_
+    u_num_for_family()` の docstring 参照）、これらのテストはこの fixture
+    引数を介して c0_freeze.py を経由せず直接注入する。`force_holdout_
+    row_ids`（同新設）は `holdout_sweeps` のような sweep 意味論を持たず、
+    与えた row_id を単に `realize_split()` の `pinned_holdout_row_ids` へ
+    追加するだけ——gate4' の invariance pair（anchor + CONFOUND 行）を
+    確実に HOLDOUT へ着地させたいテストで使う。"""
     subset = subset if subset is not None else small_matrix_subset()
     row_inputs = [
         RowInput(
@@ -184,7 +215,18 @@ def build_tiny_campaign(
         )
         for mr in subset
     ]
-    realized = realize_split(row_inputs, split_secret, STRATUM_FACTOR_NAMES)
+    pinned_holdout_row_ids = frozenset(
+        rid
+        for family_sweeps in (holdout_sweeps or {}).values()
+        for member_row_ids in family_sweeps.values()
+        for rid in member_row_ids
+    ) | frozenset(force_holdout_row_ids or ())
+    realized = realize_split(
+        row_inputs,
+        split_secret,
+        STRATUM_FACTOR_NAMES,
+        pinned_holdout_row_ids=pinned_holdout_row_ids,
+    )
 
     manifest: dict[str, object] = {
         "campaign_meta": {"campaign_date_utc": "2026-09-02"},
@@ -215,7 +257,9 @@ def build_tiny_campaign(
         },
         "realized_split_sha": realized.realized_sha,
         "frozen_design": {
-            "fixture_spec": {},
+            "fixture_spec": {
+                family: dict(spec) for family, spec in (fixture_spec or {}).items()
+            },
             "cost_caps": dict(gate1_cost_caps)
             if gate1_cost_caps is not None
             else dict(DEFAULT_GATE1_COST_CAPS),
@@ -236,6 +280,11 @@ def build_tiny_campaign(
         manifest["dependencies"] = dict(dependencies)
     if frozen_inputs is not None:
         manifest["frozen_inputs"] = dict(frozen_inputs)
+    if holdout_sweeps is not None:
+        manifest["holdout_sweeps"] = {
+            family: {sid: list(rids) for sid, rids in sweeps.items()}
+            for family, sweeps in holdout_sweeps.items()
+        }
 
     campaigns_dir = tmp_path / "campaigns"
     secret_root = tmp_path / "secrets"

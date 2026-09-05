@@ -332,6 +332,25 @@ def generate_template(path: Path, candidates: Iterable[Candidate]) -> list[EUseE
     return rows
 
 
+def find_row(
+    rows: Sequence[EUseEvidenceRow], *, construct_id: str, unit: str, domain: str
+) -> EUseEvidenceRow | None:
+    """v1.1 §V3.2 (D17 close): C4 の実 gate 組み立てが、選択済み candidate の
+    `(construct, unit, domain)` キーに対応する E_use evidence 行を凍結
+    `e_use_table.json`（`holdout_stage.load_e_use_rows()`）から引く際に使う
+    唯一の入口。`validate_e_use_table()` は表全体の key 集合が registry と
+    厳密一致することを要求するが、本関数はその不変条件に依存しない単純な
+    線形探索——`(construct_id, unit, domain)` に一致する行が **ちょうど 1 件**
+    でなければ `None`（0 件 = 未凍結、複数件 = 重複行——いずれも fail-closed
+    の入力側 missing として呼び出し側が扱う）。"""
+    matches = [
+        row for row in rows if (row.construct_id, row.unit, row.domain) == (construct_id, unit, domain)
+    ]
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
 def auto_ceiling(row: EUseEvidenceRow, has_apriori_truth_order: bool) -> ClaimCeiling | None:
     """設計正本 §10.2 の自動 ceiling: `row.evidence_class != UNJUSTIFIED` の
     行には適用対象がない（`None` を返す — 呼び出し側は通常経路の ceiling 判定
@@ -444,5 +463,6 @@ __all__ = [
     "replace_source_hash",
     "unique_construct_unit_domain",
     "generate_template",
+    "find_row",
     "auto_ceiling",
 ]

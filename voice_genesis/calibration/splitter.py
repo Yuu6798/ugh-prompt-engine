@@ -39,9 +39,52 @@ from dataclasses import dataclass
 from typing import Any
 
 from voice_genesis.calibration.canonical import manifest_sha
+from voice_genesis.calibration.fixtures.matrix import (
+    HoldoutPinDegradationExhausted,
+    MatrixRow,
+    holdout_pin_params_by_family,
+    pin_holdout_sweeps_by_family,
+    single_axis_nuisance_tag_axis,
+)
 from voice_genesis.calibration.vocab import Split
 
-_COVERAGE_AXES: tuple[str, ...] = ("truth_level", "generator_impl", "boundary_class")
+#: v1.1 §V3.5 追加（Codex レビュー第 12 巡 P1 採用、2026-09-05）: `nuisance_axis`
+#: は CONFOUND block の単一軸主効果行（`fixtures.matrix.
+#: single_axis_nuisance_tag_axis()`）が名指す軸名（例: `"gain_dbfs"`）を値に
+#: 持つ——gate4' invariance 軸ごとに各 split が最低 1 行を持つことを、既存の
+#: count>=3 規則（`_required_pairs()`）でそのまま保証する（TRUTH_CORE/
+#: BOUNDARY/targeted-interaction 行や truth 軸は該当なしで `None`、
+#: coverage 対象から自然に除外される）。
+_COVERAGE_AXES: tuple[str, ...] = (
+    "truth_level",
+    "generator_impl",
+    "boundary_class",
+    "nuisance_axis",
+)
+
+#: v1.1 §V3.5 実装時発見（2026-09-05、456 セル実測）: gate4' の invariance
+#: pair（`campaign.holdout_stage.build_invariance_pairs_for_family()`）は
+#: ABSOLUTE ceiling の meter だけが消費する（`gates.absolute_gates()`）。
+#: `RESONANCE_GT`（§16-1 で全候補 DIAGNOSTIC_ONLY 固定）と
+#: `IDENTITY_CAUSAL_SWEEP`（M6 は DIRECTIONAL-only の founder/trait pair
+#: 評価であり gate4' 自体を一切消費しない。`c0_freeze._U_ABSENT_REASON` の
+#: 2 family と同一集合）は、gate4' に到達すること自体が構造的にないため、
+#: この 2 family へ `nuisance_axis` coverage 制約を課すことは機能的な保護を
+#: 一切生まず、既存の holdout sweep pin 予算（§V2.2）を圧迫するだけの
+#: 純損失になる。実測: `IDENTITY_CAUSAL_SWEEP` は非 pin HOLDOUT 枠
+#: X=4（n_hold=24, k_hold(=4, r=5)*r=20 → 24-20=4）に対し、3 nuisance 軸
+#: （context/duration_s/gain_dbfs/noise_snr_db の 4 軸、うち count>=3 の
+#: 4 軸全て）+ boundary の最小 5 distinct 行が必要で構造的に充足不能——
+#: しかも `degradation_floor`（founder x trait 周辺被覆保護、§V2.2 縮退規則）
+#: が nominal `k_hold` と同値のため縮退の余地が皆無で `HoldoutPinDegradation
+#: Exhausted` が必ず発生し、**456 セル campaign が secret に依らず恒久的に
+#: C0 freeze 不能になる**（`RESONANCE_GT` も X=4/needed=4 のタイトな一致で
+#: 既存の `truth_level=NEGATIVE_CONTROL` 制約と競合し同型の脆さを持つ）。
+#: よってこの 2 family の行は `RowInput.nuisance_axis` を常に `None` に
+#: 保ち（宣言軸自体——`fixtures.matrix.invariance_axes_by_family()`——は
+#: 変更しない。manifest 上の `confound_axes` 宣言は引き続き機械導出される）、
+#: coverage 制約の対象から除外する。
+_GATE4_INAPPLICABLE_FAMILIES: frozenset[str] = frozenset({"RESONANCE_GT", "IDENTITY_CAUSAL_SWEEP"})
 
 #: `truth_level == "TRUTH_CORE"` は他の coverage 軸と異なり、単なる存在保証
 #: (>=1) では不十分（Codex レビュー 2026-09-01 P1 finding #3）: SELECTION/
@@ -66,6 +109,10 @@ class RowInput:
     truth_level: str | None = None
     generator_impl: str | None = None
     boundary_class: str | None = None
+    #: v1.1 §V3.5: CONFOUND block の単一軸主効果行が名指す軸名
+    #: （`fixtures.matrix.single_axis_nuisance_tag_axis()`）。該当しない行
+    #: （TRUTH_CORE/BOUNDARY/targeted-interaction 行）は `None`。
+    nuisance_axis: str | None = None
 
 
 @dataclass(frozen=True)
@@ -83,12 +130,25 @@ class SwapRecord:
 
 @dataclass(frozen=True)
 class RealizedSplitMap:
-    """正本となる実現済み row→split 表。"""
+    """正本となる実現済み row→split 表。
+
+    `pinned_holdout_row_ids`（v1.1 §V2.2 段 1: holdout sweep pinning）は
+    `realize_split()` が段 1 で HOLDOUT へ確定的に事前割当てた行の集合を
+    そのまま保持する（往復のため — `verify_split()` はこの値を読み戻して
+    アルゴリズムへ渡し直す）。**意図的に `realized_sha` のハッシュ対象へは
+    含めない**: v1.0 の既存 closed campaign（pin 機構自体が存在しなかった
+    時代の `realized_split.json`）を読み戻して `verify_split()` にかけたとき、
+    payload の形状が変わって sha が食い違う偽 tamper 検出を起こさないため
+    （`assignment` 自体は従来どおりハッシュ対象であり、`pinned_holdout_
+    row_ids` の値が実際の `assignment` と矛盾していれば `verify_split()` の
+    再実行比較が別途検出する——`assignment` が唯一の正本という前提は崩さない）。
+    """
 
     stratum_factor_names: tuple[str, ...]
     assignment: Mapping[str, Split]
     swaps: tuple[SwapRecord, ...]
     realized_sha: str
+    pinned_holdout_row_ids: frozenset[str] = frozenset()
 
 
 def _hmac_hex(secret: bytes, message: str) -> str:
@@ -122,6 +182,27 @@ def _stratum_split_counts(n: int, tie_bit: int) -> dict[Split, int]:
         return {Split.CALIBRATION: 2 * q + 1, Split.SELECTION: q, Split.HOLDOUT: q + 1}
     # r == 3
     return {Split.CALIBRATION: 2 * q + 1, Split.SELECTION: q + 1, Split.HOLDOUT: q + 1}
+
+
+def _two_way_split_counts(n: int) -> dict[Split, int]:
+    """v1.1 §V2.2 段 2: 段 1 の pin で HOLDOUT 枠が全量構成された stratum の
+    残余（非 pin）行専用。largest-remainder 法で `n` を CALIBRATION:
+    SELECTION = 2:1 の比で割当てる（HOLDOUT は常に 0）。
+
+    closed-form 導出 (n = 3q + r): ideal(CAL) = 2n/3, ideal(SEL) = n/3 の
+    端数は r=1 で (CAL 2/3, SEL 1/3) → CAL が大きい端数を取り +1、
+    r=2 で (CAL 1/3, SEL 2/3) → SEL が大きい端数を取り +1。2/3 と 1/3 は
+    代数的に等しくなり得ないため（`_stratum_split_counts` の r=2 と異なり）
+    tie-break 機構は不要。
+    """
+    if n < 0:
+        raise ValueError("_two_way_split_counts: n must be non-negative")
+    q, r = divmod(n, 3)
+    if r == 0:
+        return {Split.CALIBRATION: 2 * q, Split.SELECTION: q, Split.HOLDOUT: 0}
+    if r == 1:
+        return {Split.CALIBRATION: 2 * q + 1, Split.SELECTION: q, Split.HOLDOUT: 0}
+    return {Split.CALIBRATION: 2 * q + 1, Split.SELECTION: q + 1, Split.HOLDOUT: 0}
 
 
 def _axis_value(row: RowInput, axis: str) -> Any:
@@ -200,13 +281,38 @@ class CoverageRepairInfeasible(RuntimeError):
     して振動・誤修復するのを防ぐ）。キャンペーン層では既存語彙
     (`voice_genesis.calibration.vocab.BlockedCode`) の fail-closed コードへ
     マップされる想定であり、本例外自体は新規 vocab code を発行しない。
+
+    v1.1 §V2.2 段 2 採用: `_balance_family_totals()` の家族合計補正が
+    pin 行を不動としたまま・非 pin TRUTH_CORE 行を HOLDOUT へ入れないまま
+    donor を 1 件も見つけられない場合も、`axis="family_total"` として同型で
+    送出する（修復不能は既存 `CoverageRepairInfeasible` 同型で fail-closed
+    する、という v1.1 の指示に従う）。
+
+    `family`（縮退規則採用、2026-09-04 追補）: この違反が発生した family 名。
+    `axis="family_total"` では従来から `value` が family 名そのものだったが、
+    `axis` が通常の coverage 軸（`truth_level`/`generator_impl`/
+    `boundary_class`）の場合は `value` はその軸の値であり family 名ではない
+    ため、呼び出し側（`realize_split()`）が現在処理中の family を明示的に
+    渡す。`fixtures.matrix` の holdout sweep pin 縮退リトライ
+    （`c0_freeze._pin_and_realize_holdout()`）が「どの family の k_hold を
+    下げて再選抜すべきか」を一意に決定するために使う。省略時は `None`
+    （既存呼び出し・テストの後方互換を壊さない）。
     """
 
-    def __init__(self, axis: str, value: Any, target_split: Split, detail: str) -> None:
+    def __init__(
+        self,
+        axis: str,
+        value: Any,
+        target_split: Split,
+        detail: str,
+        *,
+        family: str | None = None,
+    ) -> None:
         self.axis = axis
         self.value = value
         self.target_split = target_split
         self.detail = detail
+        self.family = family if family is not None else (value if axis == "family_total" else None)
         super().__init__(
             f"splitter: no feasible donor/victim assignment for {axis}={value!r} "
             f"-> {target_split.value}: {detail}"
@@ -218,7 +324,21 @@ def _repair_coverage(
     assignment: dict[str, Split],
     secret: bytes,
     required_pairs: Mapping[tuple[str, Any], int],
+    *,
+    pinned_row_ids: frozenset[str] = frozenset(),
+    hold_forbidden_row_ids: frozenset[str] = frozenset(),
+    family: str | None = None,
 ) -> list[SwapRecord]:
+    """v1.1 §V2.2 段 2 採用: `pinned_row_ids`（段 1 の pin 行。donor/victim
+    いずれの候補からも常に除外し不動とする）と `hold_forbidden_row_ids`
+    （非 pin TRUTH_CORE 行。`target_split == Split.HOLDOUT` の donor 候補
+    からのみ除外——「pin 外の truth-core 行の holdout 割当は 0」を repair
+    フェーズでも維持する）を新設。両集合とも既定は空 frozenset で、v1.0
+    以来の呼び出し（pin 機構を使わない）はこれまでと完全に同一の挙動になる。
+    `family`（縮退規則採用、2026-09-04 追補）は fail-closed 時に送出する
+    `CoverageRepairInfeasible.family` へそのまま転記するためだけの引数
+    （既定 `None` — 省略した既存呼び出しは挙動不変）。
+    """
     swaps: list[SwapRecord] = []
     guard = 0
     max_iters = len(assignment) * 3 + 10
@@ -239,7 +359,10 @@ def _repair_coverage(
             (
                 rid
                 for rid, s in assignment.items()
-                if s != target_split and _axis_value(rows_by_id[rid], axis) == value
+                if s != target_split
+                and rid not in pinned_row_ids
+                and not (target_split == Split.HOLDOUT and rid in hold_forbidden_row_ids)
+                and _axis_value(rows_by_id[rid], axis) == value
             ),
             key=lambda rid: _hmac_hex(secret, rid),
         )
@@ -276,7 +399,17 @@ def _repair_coverage(
                 (
                     rid
                     for rid, s in assignment.items()
-                    if s == target_split and rid != cand_donor
+                    if s == target_split
+                    and rid != cand_donor
+                    and rid not in pinned_row_ids
+                    # v1.1 §V2.2: the victim lands in `donor_split` (the
+                    # donor's former split), so if `donor_split` is HOLDOUT
+                    # (the donor was itself pulled *out of* HOLDOUT to
+                    # satisfy `target_split`), a forbidden non-pinned
+                    # TRUTH_CORE victim moving there would violate "pin 外の
+                    # truth-core 行の holdout 割当は 0" just as surely as a
+                    # forbidden donor moving straight into HOLDOUT would.
+                    and not (donor_split == Split.HOLDOUT and rid in hold_forbidden_row_ids)
                 ),
                 key=lambda rid: _hmac_hex(secret, rid),
             )
@@ -305,6 +438,7 @@ def _repair_coverage(
                     "resolves this violation without breaking another coverage "
                     "constraint (assignment left unmodified)"
                 ),
+                family=family,
             )
 
         donor, victim = chosen
@@ -340,7 +474,16 @@ def _balance_family_totals(
     secret: bytes,
     family: str,
     targets: Mapping[Split, int],
+    *,
+    pinned_row_ids: frozenset[str] = frozenset(),
+    hold_forbidden_row_ids: frozenset[str] = frozenset(),
 ) -> list[SwapRecord]:
+    """v1.1 §V2.2 段 2 採用: `pinned_row_ids`/`hold_forbidden_row_ids` は
+    `_repair_coverage()` と同じ意味論（既定は空 frozenset、v1.0 の挙動を
+    完全に保つ）。候補が 1 件も残らない場合は `CoverageRepairInfeasible`
+    （`axis="family_total"`）で fail-closed する（`assignment` は候補探索の
+    前に確定した `chosen` へ書込む直前まで一切変更しない）。
+    """
     moves: list[SwapRecord] = []
     guard = 0
     max_iters = len(assignment) + 10
@@ -359,9 +502,27 @@ def _balance_family_totals(
         excess_split = max(excess, key=lambda k: (diffs[k], k.value))
         deficit_split = min(deficit, key=lambda k: (diffs[k], k.value))
         candidates = sorted(
-            (rid for rid, s in assignment.items() if s == excess_split),
+            (
+                rid
+                for rid, s in assignment.items()
+                if s == excess_split
+                and rid not in pinned_row_ids
+                and not (deficit_split == Split.HOLDOUT and rid in hold_forbidden_row_ids)
+            ),
             key=lambda rid: _hmac_hex(secret, rid),
         )
+        if not candidates:
+            raise CoverageRepairInfeasible(
+                axis="family_total",
+                value=family,
+                target_split=deficit_split,
+                detail=(
+                    f"no movable row available to balance family={family!r} "
+                    f"{excess_split.value}->{deficit_split.value} without moving a "
+                    "pinned holdout-sweep row (immovable) or placing a non-pinned "
+                    "TRUTH_CORE row into HOLDOUT (forbidden by holdout sweep pinning)"
+                ),
+            )
         chosen = candidates[0]
         assignment[chosen] = deficit_split
         moves.append(
@@ -392,13 +553,43 @@ def realize_split(
     rows: Sequence[RowInput],
     split_secret: bytes,
     stratum_factor_names: Sequence[str],
+    *,
+    pinned_holdout_row_ids: frozenset[str] = frozenset(),
 ) -> RealizedSplitMap:
-    """rows を family ごとに 50/25/25 へ決定論的に割り当てる。"""
+    """rows を family ごとに 50/25/25 へ決定論的に割り当てる。
+
+    v1.1 §V2.2 段 2 採用: `pinned_holdout_row_ids`（段 1 の holdout sweep
+    pinning が確定した行集合。既定は空 frozenset — v1.0 以来の呼び出しは
+    このパラメータを渡さず、以下の分岐は一切発火せず従来と完全に同一の
+    3-way largest-remainder のみが動く）を含む stratum は:
+
+    - `pinned_holdout_row_ids` に属する行を無条件で HOLDOUT へ確定する
+      （HMAC 順位に関わらない）。
+    - 残余（非 pin）行は CALIBRATION:SELECTION = 2:1 の largest-remainder
+      のみで割当てる（`_two_way_split_counts`）。HOLDOUT 枠は pin 行のみで
+      全量構成し、非 pin 行の HOLDOUT 割当は 0 のまま固定する
+      （「TRUTH_CORE stratum の HOLDOUT 枠は段 1 の pin 行で全量を構成する」
+      — pin される行は常に同一 family の TRUTH_CORE/PRIMARY 行のみに限られ、
+      それらは常に単一 stratum に収まるため、stratum 単位で「pin 行を
+      含むか」だけを見れば十分）。
+
+    家族合計補正 (`_balance_family_totals`) と coverage 修復
+    (`_repair_coverage`) は `pinned_holdout_row_ids`（不動）と、非 pin かつ
+    `truth_level == "TRUTH_CORE"` の行（HOLDOUT への新規移動を禁止 —
+    `hold_forbidden_row_ids`）を認識して動く。
+    """
     rows_by_id: dict[str, RowInput] = {}
     for r in rows:
         if r.row_id in rows_by_id:
             raise ValueError(f"splitter: duplicate row_id {r.row_id!r}")
         rows_by_id[r.row_id] = r
+
+    unknown_pins = pinned_holdout_row_ids - set(rows_by_id)
+    if unknown_pins:
+        raise ValueError(
+            "splitter: pinned_holdout_row_ids references unknown row_id(s): "
+            f"{sorted(unknown_pins)!r}"
+        )
 
     families = sorted({r.family for r in rows})
     assignment: dict[str, Split] = {}
@@ -408,6 +599,13 @@ def realize_split(
         family_rows = [r for r in rows if r.family == family]
         n = len(family_rows)
         assignment_local: dict[str, Split] = {}
+        #: v1.1 §V2.2 段 2: 非 pin の TRUTH_CORE 行は HOLDOUT へ新規に移動して
+        #: はならない——ただし「pin を実際に使った stratum」の非 pin 兄弟行
+        #: のみが対象（pin 機構自体を使わない呼び出し (`pinned_holdout_
+        #: row_ids=frozenset()`、v1.0 以来の全呼び出し) では、この集合は常に
+        #: 空のまま従来の 3-way 割当を一切妨げない）。stratum ごとに判定
+        #: するため、下の per-stratum ループの中で蓄積する。
+        hold_forbidden_row_ids_local: set[str] = set()
 
         strata: dict[tuple[Any, ...], list[RowInput]] = {}
         for r in family_rows:
@@ -416,16 +614,31 @@ def realize_split(
 
         for key in sorted(strata.keys(), key=lambda k: [repr(x) for x in k]):
             stratum_rows = strata[key]
-            stratum_sorted = sorted(
-                stratum_rows, key=lambda r: _hmac_hex(split_secret, r.row_id)
-            )
-            m = len(stratum_sorted)
-            tie_bit = int(_hmac_hex(split_secret, stratum_sorted[-1].row_id)[-1], 16) % 2
-            counts = _stratum_split_counts(m, tie_bit)
+            pinned_in_stratum = [
+                r for r in stratum_rows if r.row_id in pinned_holdout_row_ids
+            ]
+            free_rows = [
+                r for r in stratum_rows if r.row_id not in pinned_holdout_row_ids
+            ]
+            for r in pinned_in_stratum:
+                assignment_local[r.row_id] = Split.HOLDOUT
+            if pinned_in_stratum:
+                hold_forbidden_row_ids_local.update(r.row_id for r in free_rows)
+            free_sorted = sorted(free_rows, key=lambda r: _hmac_hex(split_secret, r.row_id))
+            m = len(free_sorted)
+            if pinned_in_stratum:
+                counts = _two_way_split_counts(m)
+            else:
+                tie_bit = (
+                    int(_hmac_hex(split_secret, free_sorted[-1].row_id)[-1], 16) % 2
+                    if free_sorted
+                    else 0
+                )
+                counts = _stratum_split_counts(m, tie_bit)
             idx = 0
             for split in (Split.CALIBRATION, Split.SELECTION, Split.HOLDOUT):
                 cnt = counts[split]
-                for r in stratum_sorted[idx : idx + cnt]:
+                for r in free_sorted[idx : idx + cnt]:
                     assignment_local[r.row_id] = split
                 idx += cnt
 
@@ -435,13 +648,28 @@ def realize_split(
         ) % 2
         targets = _stratum_split_counts(n, family_tie_bit)
         all_swaps.extend(
-            _balance_family_totals(assignment_local, split_secret, family, targets)
+            _balance_family_totals(
+                assignment_local,
+                split_secret,
+                family,
+                targets,
+                pinned_row_ids=pinned_holdout_row_ids,
+                hold_forbidden_row_ids=frozenset(hold_forbidden_row_ids_local),
+            )
         )
 
         # constraint (b): coverage of truth_level / generator_impl / boundary_class
         required_pairs = _required_pairs(family_rows)
         all_swaps.extend(
-            _repair_coverage(rows_by_id, assignment_local, split_secret, required_pairs)
+            _repair_coverage(
+                rows_by_id,
+                assignment_local,
+                split_secret,
+                required_pairs,
+                pinned_row_ids=pinned_holdout_row_ids,
+                hold_forbidden_row_ids=frozenset(hold_forbidden_row_ids_local),
+                family=family,
+            )
         )
 
         assignment.update(assignment_local)
@@ -457,6 +685,7 @@ def realize_split(
         assignment=dict(assignment),
         swaps=tuple(all_swaps),
         realized_sha=realized_sha,
+        pinned_holdout_row_ids=frozenset(pinned_holdout_row_ids),
     )
 
 
@@ -464,10 +693,154 @@ def verify_split(
     rows: Sequence[RowInput], secret: bytes, realized: RealizedSplitMap
 ) -> bool:
     """アルゴリズムを再実行し、既存の実現済み表と機械照合する（設計正本 §7:
-    正本は実現済み row→split 表、検証器が必須）。"""
-    recomputed = realize_split(rows, secret, realized.stratum_factor_names)
+    正本は実現済み row→split 表、検証器が必須）。v1.1: `realized.
+    pinned_holdout_row_ids` を読み戻して同じ pin 集合でアルゴリズムを
+    再実行する（`RealizedSplitMap` 自身が pin 入力を保持しているため
+    呼び出し側は改めて渡す必要がない）。"""
+    recomputed = realize_split(
+        rows,
+        secret,
+        realized.stratum_factor_names,
+        pinned_holdout_row_ids=realized.pinned_holdout_row_ids,
+    )
     return (
         dict(recomputed.assignment) == dict(realized.assignment)
         and recomputed.swaps == realized.swaps
         and recomputed.realized_sha == realized.realized_sha
     )
+
+
+# ---------------------------------------------------------------------------
+# §V2.2 holdout sweep pin: 段 1 (`fixtures.matrix.pin_holdout_sweeps_by_
+# family()`) + 段 2 (`realize_split()`) の縮退リトライ共有入口。
+#
+# R10 対応（Codex 第 10 巡 P1 採用、2026-09-05）: 元々 `c0_freeze.py` にのみ
+# 存在した `STRATUM_FACTOR_NAMES` / `_row_inputs_for_split()` /
+# `_pin_and_realize_holdout()` をここへ移設し公開関数化した。
+# `c0_validate._check_holdout_sweeps_declaration_match()` が secret 依存
+# 検証で「公称 k_hold から始まる同一の縮退ループ」を検証側で完全再実行する
+# ための共有入口が必要になったが、`c0_freeze.py` は `c0_validate` を
+# import しているため（生成 → 検証呼び出しの都合上）逆方向の import は
+# できない。両者が依存できる中立モジュールとして `splitter.py`
+# （`fixtures.matrix` にも `c0_freeze`/`c0_validate` にも依存されない側）
+# へ実装を寄せることで、生成と検証が**同一関数**を呼ぶ構造にした（二重
+# 実装の分岐を作らない）。`c0_freeze.py` は後方互換のため
+# `pin_and_realize_holdout as _pin_and_realize_holdout` /
+# `row_inputs_for_split as _row_inputs_for_split` で再輸出する
+# （既存テストの import 元を変更しない）。
+# ---------------------------------------------------------------------------
+
+#: `realize_split()` の stratum 化因子。[UNDERSPEC-CAL-D08] 設計正本 §7 は
+#: 「stratum 因子を C0 で明示列挙」とのみ述べ具体軸は規定しないため、
+#: `_COVERAGE_AXES` のうち row 単位で常に定義される 2 軸（`truth_level`/
+#: `boundary_class`）を採用した（`generator_impl` は FORMANT_GT 以外では
+#: 常に `None` — 定数軸を stratum に含めても意味が薄いため除外）。
+STRATUM_FACTOR_NAMES: tuple[str, ...] = ("truth_level", "boundary_class")
+
+
+def row_inputs_for_split(
+    matrix_rows: Sequence[MatrixRow],
+    stratum_factor_names: Sequence[str] = STRATUM_FACTOR_NAMES,
+) -> list[RowInput]:
+    """`provenance.Ledger.check_leakage` の `canonical_split_inputs` 構築と
+    同一の規約（`truth_level`→`row.block`、`boundary_class`/`domain`→
+    `matrix_row.domain.value`）で `RowInput` を組み立てる。D2 の leakage 検査
+    が独立に再構築する canonical row と一致しなければならないため。"""
+    out: list[RowInput] = []
+    for mrow in matrix_rows:
+        fr = mrow.row
+        stratum: dict[str, object] = {}
+        for name in stratum_factor_names:
+            if name == "truth_level":
+                stratum[name] = fr.block
+            elif name in ("boundary_class", "domain"):
+                stratum[name] = mrow.domain.value
+            elif name == "generator_impl":
+                stratum[name] = fr.generator_impl
+            else:
+                stratum[name] = getattr(fr, name, None)
+        nuisance_axis = (
+            single_axis_nuisance_tag_axis(fr)
+            if fr.family not in _GATE4_INAPPLICABLE_FAMILIES
+            else None
+        )
+        out.append(
+            RowInput(
+                row_id=mrow.row_id,
+                family=fr.family,
+                stratum=stratum,
+                truth_level=fr.block,
+                generator_impl=fr.generator_impl,
+                boundary_class=mrow.domain.value,
+                nuisance_axis=nuisance_axis,
+            )
+        )
+    return out
+
+
+def pin_and_realize_holdout(
+    matrix_rows: Sequence[MatrixRow],
+    row_inputs: Sequence[RowInput],
+    split_secret: bytes,
+    stratum_factor_names: Sequence[str],
+) -> tuple[dict[str, dict[str, tuple[str, ...]]], RealizedSplitMap]:
+    """§V2.2 段 1 + 段 2 実行部（縮退規則、2026-09-04 追補。2026-09-05 に
+    `c0_freeze.py` から本モジュールへ移設・公開化 — モジュール docstring
+    直上の節を参照）。
+
+    `pin_holdout_sweeps_by_family()`（段 1）→ `realize_split()`（段 2）の順に
+    試み、段 2 が `CoverageRepairInfeasible` で落ちた場合（pin 選抜の結果
+    として family 合計補正/coverage 修復が不能になった場合）は、当該
+    family の `k_hold` を 1 ずつ決定論的に下げて段 1 から再選抜し、段 2 を
+    再試行する。縮退の下限は family の `degradation_floor`
+    （`holdout_pin_params_by_family()` 参照 — claim 被覆 family
+    （max_field_cardinality > 1）は max_field_cardinality、それ以外は 0）で、
+    これを割り込む縮退が必要になった場合は `HoldoutPinDegradationExhausted`
+    を送出する（fail-closed、未捕捉のまま呼び出し元の外へ漏らさない —
+    `c0_freeze.armed_freeze()` は捕捉して `FreezeOutcome.VALIDATION_BLOCKED`
+    へ変換し、`c0_validate._check_holdout_sweeps_declaration_match()` は
+    捕捉して宣言のある全 family を fail-closed mismatch 扱いにする）。
+
+    `HoldoutPinInfeasible`（cap>=1 だが被覆要件が cap を超える構造的欠陥）は
+    縮退対象ではなくそのまま呼び出し側へ伝播する（従来どおり）。
+
+    実現された k は戻り値の `holdout_sweeps` の宣言数（宣言 sweep 数）
+    としてそのまま表れる（「宣言数 = 実現 k」）——本関数はパラメータに
+    一切「宣言値」を受け取らない（`matrix_rows`/`row_inputs`/
+    `split_secret`/`stratum_factor_names` のみが入力）——`c0_freeze.
+    armed_freeze()` の生成呼び出しと `c0_validate.
+    _check_holdout_sweeps_declaration_match()` の検証呼び出しは、常に
+    公称 `k_hold` からこのループを起動する同一の呼び出し規約を共有する。
+    """
+    params = holdout_pin_params_by_family(matrix_rows)
+    k_hold_overrides: dict[str, int] = {}
+    while True:
+        holdout_sweeps = pin_holdout_sweeps_by_family(
+            matrix_rows, split_secret, k_hold_overrides=k_hold_overrides or None
+        )
+        pinned_holdout_row_ids = frozenset(
+            rid
+            for family_sweeps in holdout_sweeps.values()
+            for member_row_ids in family_sweeps.values()
+            for rid in member_row_ids
+        )
+        try:
+            realized = realize_split(
+                row_inputs,
+                split_secret,
+                stratum_factor_names,
+                pinned_holdout_row_ids=pinned_holdout_row_ids,
+            )
+        except CoverageRepairInfeasible as exc:
+            fam = exc.family
+            if fam is None or fam not in params:
+                raise
+            current_k = k_hold_overrides.get(fam, params[fam].k_hold)
+            floor = params[fam].degradation_floor
+            if current_k <= floor:
+                raise HoldoutPinDegradationExhausted(
+                    fam, floor=floor, attempted_k=current_k
+                ) from exc
+            k_hold_overrides[fam] = current_k - 1
+            continue
+        return holdout_sweeps, realized

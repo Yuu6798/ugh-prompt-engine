@@ -13,7 +13,12 @@ import pytest
 from voice_genesis.calibration import c0_validate, streams, vocab
 from voice_genesis.calibration.candidates import registry as candidate_registry
 from voice_genesis.calibration.fixtures import axes as fixture_axes
-from voice_genesis.calibration.fixtures.matrix import build_matrix, declared_sweeps_by_family
+from voice_genesis.calibration.fixtures import uncertainty as fixture_uncertainty
+from voice_genesis.calibration.fixtures.matrix import (
+    build_matrix,
+    declared_sweeps_by_family,
+    invariance_axes_by_family,
+)
 
 _MEASUREMENT_DIRECTORY_STATUS = "ABSENT:legacy_path=voice_genesis/harness/measure_v3.py"
 
@@ -97,6 +102,15 @@ def _real_declared_sweeps_by_family() -> dict[str, dict[str, tuple[str, ...]]]:
     return declared_sweeps_by_family(build_matrix())
 
 
+@functools.lru_cache(maxsize=1)
+def _real_invariance_axes_by_family() -> dict[str, tuple[str, ...]]:
+    """凍結 matrix から実際に導出される family ごとの gate4' invariance 軸
+    （v1.1 §V3.5）を一度だけ計算しキャッシュする（`declared_sweeps` と同じ
+    理由: `_check_invariance_axes_match()` の完全一致検査を満たす値を
+    生成する必要があり、汎用 placeholder list では通過し得ない）。"""
+    return invariance_axes_by_family(build_matrix())
+
+
 def _shape_valid_nested_value(key: str, seed: str) -> object:
     """`c0_validate._shape_violation` (BOUNDED shape validation,
     `[UNDERSPEC-CAL-C18]`) が要求する形状を満たす、`key`/`seed` に応じた
@@ -104,7 +118,14 @@ def _shape_valid_nested_value(key: str, seed: str) -> object:
     人間可読な文字列 `f"{seed}_{key}"` を返す。"""
     if key.endswith("_hash") or key.endswith("_sha256"):
         return hashlib.sha256(f"{seed}_{key}".encode("utf-8")).hexdigest()
-    if key in ("confound_axes", "boundary_probes", "negative_controls", "stop_rules"):
+    if key == "confound_axes":
+        # v1.1 §V3.5: この key だけは placeholder ではなく、
+        # `_check_invariance_axes_match()` の完全一致検査を満たす実際の
+        # 凍結 matrix 導出値を返す必要がある（`declared_sweeps` と同じ理由。
+        # `seed` は `family.value.lower()` — fixture_spec のみが本 key を
+        # 持つため meter_specs 側からこの分岐に到達することはない）。
+        return list(_real_invariance_axes_by_family().get(seed.upper(), ()))
+    if key in ("boundary_probes", "negative_controls", "stop_rules"):
         return [f"{seed}_{key}_0", f"{seed}_{key}_1"]
     if key == "parameter_grid":
         return {f"{seed}_{key}_axis": [0, 1]}
@@ -140,14 +161,44 @@ def _full_fixture_spec() -> dict[str, dict[str, object]]:
     （`[UNDERSPEC-CAL-C17]`）。値は `_shape_valid_nested_value` で BOUNDED
     shape validation（`[UNDERSPEC-CAL-C18]`）を満たすよう生成する
     （`generator_hash` は 64 桁 hex、`confound_axes`/`boundary_probes`/
-    `negative_controls` は非空 list）。"""
-    return {
+    `negative_controls` は非空 list）。
+
+    R22-2 対応（Codex 第 22 巡 finding (2)、2026-09-05）: `_complete_manifest()`
+    は `design_revision="1.1"` を付ける v1.1 manifest になったため、
+    `u_gt_bound`/`u_num_bound`（+ 両 formula・両 unit・`u_bound_inputs`）も
+    producer (`c0_freeze._fixture_specs()`) と同一の canonical 関数
+    (`fixtures.uncertainty`) から実導出する——`declared_sweeps`/
+    `confound_axes` と同じ理由（`_check_u_gt_u_num_bounds()` の canonical
+    再導出一致検査を満たす必要があり、汎用 placeholder では通らない）。
+    """
+    spec: dict[str, dict[str, object]] = {
         family.value: {
             key: _shape_valid_nested_value(key, family.value.lower())
             for key in c0_validate.FIXTURE_SPEC_REQUIRED_KEYS
         }
         for family in fixture_axes.FixtureFamily
     }
+    for family in fixture_axes.FixtureFamily:
+        inputs = fixture_uncertainty.gather_u_bound_inputs(family)
+        gt_value, gt_formula = fixture_uncertainty.derive_u_gt_bound(family, inputs)
+        num_value, num_formula = fixture_uncertainty.derive_u_num_bound(family, inputs)
+        unit = (
+            "n/a"
+            if family.value in fixture_uncertainty.U_ABSENT_REASON_BY_FAMILY
+            else fixture_axes.TRUTH_UNIT_BY_FAMILY[family.value]
+        )
+        spec[family.value].update(
+            {
+                "u_gt_bound": gt_value,
+                "u_gt_bound_formula": gt_formula,
+                "u_gt_bound_unit": unit,
+                "u_num_bound": num_value,
+                "u_num_bound_formula": num_formula,
+                "u_num_bound_unit": unit,
+                "u_bound_inputs": inputs,
+            }
+        )
+    return spec
 
 
 def _full_rng_ledger() -> list[dict[str, object]]:
@@ -187,6 +238,10 @@ def _complete_manifest() -> dict[str, object]:
             "resampling_parameters": {"window": ["kaiser", 5.0], "padtype": "constant"},
         },
         "frozen_design": {
+            # R22-1 対応（Codex 第 22 巡 finding (1)）: v1.1 の必須 marker。
+            # 欠落/不一致は REQUIRED_BLOCKING violation になる
+            # （`c0_validate._ALLOWED_DESIGN_REVISIONS`）。
+            "design_revision": "1.1",
             "claim_critical_set": ["M3_FORMANTS", "M2_SPECTRAL_TILT", "M2_APERIODICITY"],
             "meter_specs": _full_meter_specs(),
             "fixture_spec": _full_fixture_spec(),
@@ -788,6 +843,14 @@ def test_starved_matrix_blocks_with_manifest_incomplete_and_truth_level_detail(
     `BLOCKED_C0_SWEEP_DECLARATION_INVALID` を SUPERSEDE）で fail-closed し、
     事由は `sweep_declaration_violations` の `SweepManifestViolationDetail`
     （`violation="sweep_truth_level_insufficient"`）に残る。
+
+    `_check_declared_sweep_truth_levels()` は manifest 非依存の構造検査
+    （「matrix 生成ロジック自体が §10.4 の前提を構造的に満たせるか」）であり、
+    §V2.2 縮退規則の実装（2026-09-04 追補）以降 `c0_validate.py` 内で
+    `_canonical_build_matrix`（テストの `build_matrix` 差し替えから意図的に
+    独立させたエイリアス — `c0_freeze._fixture_specs()` と同じ規約）を読む
+    ため、本テストも同じエイリアスを差し替える（`build_matrix` 差し替えは
+    holdout sweep pin 関連の 2 検査にのみ効くようになった）。
     """
     from voice_genesis.calibration.fixtures.matrix import (
         build_matrix as real_build_matrix,
@@ -800,7 +863,7 @@ def test_starved_matrix_blocks_with_manifest_incomplete_and_truth_level_detail(
     assert len(member_row_ids) == 5, member_row_ids
     to_drop = set(member_row_ids[2:])  # keep 2 of 5 -> 2 distinct truth levels
     starved = [mr for mr in rows if mr.row_id not in to_drop]
-    monkeypatch.setattr(c0_validate, "build_matrix", lambda: starved)
+    monkeypatch.setattr(c0_validate, "_canonical_build_matrix", lambda: starved)
 
     violations = c0_validate._check_declared_sweep_truth_levels({})
     assert len(violations) == 1

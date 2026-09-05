@@ -109,7 +109,7 @@ def run_c3a_f0_selection(
     campaign: FrozenCampaign,
     criteria: Sequence[CandidateCriteria],
     *,
-    fail_filter_reports: Mapping[str, Mapping[str, bool]] | None = None,
+    fail_filter_reports: Mapping[str, Mapping[str, object]] | None = None,
     claim_scope_reports: Mapping[str, Mapping[str, object]] | None = None,
     invocation_id: str | None = None,
 ) -> F0SelectionResult:
@@ -161,7 +161,7 @@ def run_c3b_selection(
     criteria_by_family: Mapping[str, Sequence[CandidateCriteria]],
     *,
     baseline_audit_entry_sha: str,
-    fail_filter_reports_by_family: Mapping[str, Mapping[str, Mapping[str, bool]]] | None = None,
+    fail_filter_reports_by_family: Mapping[str, Mapping[str, Mapping[str, object]]] | None = None,
     claim_scope_reports_by_family: Mapping[str, Mapping[str, Mapping[str, object]]] | None = None,
     invocation_id: str | None = None,
 ) -> SelectionFreezeResult:
@@ -340,7 +340,8 @@ def candidate_fail_filter_report(
     positive_control_row_ids: frozenset[str] = frozenset(),
     expected_coverage_instances: frozenset[tuple[str, int]] = frozenset(),
     within_fresh_tol: float = 0.0,
-) -> dict[str, bool]:
+    noise_only_control_row_ids: frozenset[str] = frozenset(),
+) -> dict[str, bool | float | int | None]:
     """finding #8: `candidates.adapter` の共通 5 fail filter（schema 違反 /
     無説明非有限 / within-process と fresh-process の不一致 / negative
     control 偽検出 / positive control 不発火）を `candidate` の全 record へ
@@ -437,7 +438,29 @@ def candidate_fail_filter_report(
     各 1 件ずつ explained miss を持つだけで `SELECTION_FAILED_CLOSED` に
     落ちかねなかった。判定は record-presence（1 件でも own record があれば
     その instance は covered。値の有無は見ない）へ差し戻し、(a) の母集団
-    拡張のみを維持する。詳細は下の実装コメントを参照。"""
+    拡張のみを維持する。詳細は下の実装コメントを参照。
+
+    v1.1 §V1（F0_CONTROL の C3a に限る negative control fail filter 分割）:
+    `noise_only_control_row_ids`（既定は空 frozenset——C3b や他 family は
+    一切渡さず、従来どおり `negative_control_row_ids` 単一集合が any-fire
+    判定と completeness 判定の両方を兼ねる）が非空のとき、呼び出し側は
+    `negative_control_row_ids` を「決定論的縮退 class（SILENCE/TOO_SHORT/
+    INVALID_SR 等、噪音 seed に依存しない全 class）」のみへ絞り込んで渡す
+    ことを期待する。`negative_control_false_fire`（any-fire ゼロ許容）は
+    引き続き `negative_control_row_ids` のみを母集団とし、NOISE_ONLY 行は
+    この any-fire 判定から除外される。`negative_controls_incomplete`
+    （record 有無の completeness 判定）は安全側に倒し、
+    `negative_control_row_ids | noise_only_control_row_ids` の**和集合**を
+    母集団とする（NOISE_ONLY 行の record 欠落を無言で見逃さない）。
+    NOISE_ONLY 行の検出率は `noise_only_false_detection_rate`
+    （`noise_only_instances_detected / noise_only_instances_total`。
+    母集団が空なら `None`）として追加キーに記録し、v1.0 §8 が宣言済みの
+    lexicographic 基準「voiced false detection rate」の実体として
+    呼び出し側（`campaign/cli.py` の F0 選択経路）が `CandidateCriteria`
+    へ配線する。この 3 キー（`noise_only_false_detection_rate`/
+    `noise_only_instances_detected`/`noise_only_instances_total`）は
+    `FAIL_FILTER_NAMES` に含まれないため `eligible_after_fail_filters()`
+    の判定には一切影響しない（純粋な監査・配線用の追加情報）。"""
     own_records = [r for r in records if r.candidate_id == candidate.candidate_id]
 
     required_field = measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY.get(
@@ -478,9 +501,44 @@ def candidate_fail_filter_report(
     # non-empty intersection — a partial population (some declared rows
     # missing) silently under-counts `neg_detections` and can hide a false
     # fire that only occurs on the missing row.
-    seen_negative_row_ids = {r.row_id for r in own_records if r.row_id in negative_control_row_ids}
-    negative_controls_incomplete = bool(negative_control_row_ids) and not (
-        negative_control_row_ids <= seen_negative_row_ids
+    # v1.1 §V1: completeness is checked over the *union* of the zero-tolerance
+    # `negative_control_row_ids` and the (default-empty) `noise_only_control_
+    # row_ids` — a caller that splits F0_CONTROL's C3a population by control
+    # class must not lose the "every declared negative-control row has a
+    # record" safety net for the NOISE_ONLY subset just because it is exempt
+    # from the any-fire `negative_control_false_fire` filter below.
+    declared_negative_row_ids = negative_control_row_ids | noise_only_control_row_ids
+    seen_negative_row_ids = {r.row_id for r in own_records if r.row_id in declared_negative_row_ids}
+    negative_controls_incomplete = bool(declared_negative_row_ids) and not (
+        declared_negative_row_ids <= seen_negative_row_ids
+    )
+    # v1.1 §V1: NOISE_ONLY detections are excluded from the any-fire
+    # `negative_control_false_fire` filter above and instead consumed as a
+    # rate (v1.0 §8's declared-but-previously-dead "voiced false detection"
+    # lexicographic ranking criterion). The rate is per *instance*
+    # (`(row_id, probe_index)`, §10.1's instance definition), not per raw
+    # record — each instance carries up to 6 `meter_call` records (3
+    # within-process + 3 fresh-process, §6), and `within_fresh_process_
+    # mismatch` (above) already separately audits within/fresh disagreement.
+    # An instance counts as a false detection here if *any* of its own
+    # records detected voicing (fail-closed: one spurious detection among
+    # an instance's repeats still means the instance produced a voiced false
+    # detection). `noise_only_control_row_ids` is empty for every caller
+    # except F0_CONTROL's C3a, so this is a no-op elsewhere.
+    noise_only_detections_by_instance: dict[tuple[str, int], list[bool]] = {}
+    for r in own_records:
+        if r.row_id in noise_only_control_row_ids:
+            noise_only_detections_by_instance.setdefault(
+                (r.row_id, r.probe_index), []
+            ).append(_detected(r.output))
+    noise_only_instances_total = len(noise_only_detections_by_instance)
+    noise_only_instances_detected = sum(
+        1 for dets in noise_only_detections_by_instance.values() if any(dets)
+    )
+    noise_only_false_detection_rate = (
+        noise_only_instances_detected / noise_only_instances_total
+        if noise_only_instances_total
+        else None
     )
     # round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`, supersedes round
     # 28 ADOPT (2) `[UNDERSPEC-CAL-D64]`): instance-granular coverage check
@@ -535,10 +593,16 @@ def candidate_fail_filter_report(
         "positive_rows_absent": positive_rows_absent,
         "negative_controls_incomplete": negative_controls_incomplete,
         "coverage_incomplete": coverage_incomplete,
+        # v1.1 §V1: audit-only keys, not in `FAIL_FILTER_NAMES` — never
+        # consulted by `eligible_after_fail_filters()`. Non-empty only when
+        # the caller (F0_CONTROL's C3a) passes `noise_only_control_row_ids`.
+        "noise_only_false_detection_rate": noise_only_false_detection_rate,
+        "noise_only_instances_detected": noise_only_instances_detected,
+        "noise_only_instances_total": noise_only_instances_total,
     }
 
 
-def eligible_after_fail_filters(report: Mapping[str, bool]) -> bool:
+def eligible_after_fail_filters(report: Mapping[str, object]) -> bool:
     """`candidate_fail_filter_report()` の戻り値から eligibility を導出する:
     7 filter のいずれか 1 つでも発火（True）していれば ineligible。"""
     return not any(report.get(name, False) for name in FAIL_FILTER_NAMES)

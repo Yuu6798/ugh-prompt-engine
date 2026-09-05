@@ -411,6 +411,190 @@ def test_all_negative_control_records_present_is_complete() -> None:
 
 
 # ---------------------------------------------------------------------------
+# v1.1 §V1 (Design Memo AC5): F0_CONTROL's C3a negative control fail filter
+# splits by control class. Deterministic-degenerate classes (SILENCE/
+# TOO_SHORT/INVALID_SR) keep the any-fire zero-tolerance filter; NOISE_ONLY
+# is excluded from it and instead reported as a rate (v1.0 §8's declared
+# "voiced false detection" lexicographic ranking criterion) via the new
+# `noise_only_control_row_ids` parameter.
+# ---------------------------------------------------------------------------
+
+
+def test_v11_zero_tolerance_class_any_fire_still_rejects_with_noise_only_split() -> None:
+    """AC5(a): a false fire on a deterministic-degenerate row (SILENCE here,
+    passed via `negative_control_row_ids`) must still zero-tolerance reject
+    the candidate exactly as before, even when `noise_only_control_row_ids`
+    is also supplied (i.e. splitting the population does not weaken the
+    zero-tolerance side)."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [
+        _record("row-silence", 0, detected=True),  # false fire on SILENCE
+        _record("row-noise-only", 0, detected=False),
+    ]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-silence"}),
+        noise_only_control_row_ids=frozenset({"row-noise-only"}),
+    )
+    assert report["negative_control_false_fire"] is True
+    assert report["negative_controls_incomplete"] is False
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+def test_v11_noise_only_false_fire_does_not_reject_but_reports_rate() -> None:
+    """AC5(b): a candidate that false-fires only on the NOISE_ONLY row(s)
+    must remain eligible (NOISE_ONLY is excluded from the any-fire
+    `negative_control_false_fire` population) while the detection rate is
+    exposed via the new audit-only keys for the caller to wire into the
+    ranking criteria."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    field = measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY[candidate.algorithm_family]
+    # `_instance_records` gives each instance a matched within+fresh pair
+    # (consistent detected/missing status on both sides) so this test
+    # isolates the NOISE_ONLY split, without also tripping
+    # `within_fresh_process_mismatch` (`[UNDERSPEC-CAL-D67]`).
+    records = _instance_records("row-silence", 0, candidate.candidate_id, field=field, missing=True)
+    noise_only_detected = (True, True, False, False, False)  # 2/5 false fires
+    for probe_index, detected in enumerate(noise_only_detected):
+        records += _instance_records(
+            "row-noise-only",
+            probe_index,
+            candidate.candidate_id,
+            field=field,
+            missing=not detected,
+        )
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-silence"}),
+        noise_only_control_row_ids=frozenset({"row-noise-only"}),
+    )
+    assert report["negative_control_false_fire"] is False
+    assert report["negative_controls_incomplete"] is False
+    assert report["noise_only_instances_total"] == 5
+    assert report["noise_only_instances_detected"] == 2
+    assert report["noise_only_false_detection_rate"] == pytest.approx(0.4)
+    assert selection_stage.eligible_after_fail_filters(report) is True
+
+
+def test_v11_noise_only_missing_records_still_reported_as_incomplete() -> None:
+    """The NOISE_ONLY exemption is from the *any-fire* filter only — record
+    completeness (`negative_controls_incomplete`) must still cover the
+    NOISE_ONLY population, via the union of `negative_control_row_ids` and
+    `noise_only_control_row_ids`, so a home-split gap on the NOISE_ONLY row
+    is not silently invisible."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [_record("row-silence", 0, detected=False)]  # NOISE_ONLY row absent entirely
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-silence"}),
+        noise_only_control_row_ids=frozenset({"row-noise-only"}),
+    )
+    assert report["negative_controls_incomplete"] is True
+    assert report["noise_only_instances_total"] == 0
+    assert report["noise_only_false_detection_rate"] is None
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+def test_v11_noise_only_split_is_a_no_op_when_not_declared() -> None:
+    """AC5(d) (unit-level guard): omitting `noise_only_control_row_ids`
+    (the C3b call shape, family selection unrelated to F0_CONTROL) leaves
+    `negative_control_false_fire`/`negative_controls_incomplete` computed
+    over `negative_control_row_ids` alone, exactly as before this change,
+    and reports the new keys as empty/`None`."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [_record("row-a", 0, detected=True)]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-a"}),
+    )
+    assert report["negative_control_false_fire"] is True
+    assert report["noise_only_instances_total"] == 0
+    assert report["noise_only_instances_detected"] == 0
+    assert report["noise_only_false_detection_rate"] is None
+
+
+def test_v11_noise_only_rate_decides_lexicographic_tie_on_error_terms() -> None:
+    """AC5(c): with `primary_normalized_mae`/`signed_bias`/`primary_q95_ae`
+    tied between two ABSOLUTE candidates, the criterion consuming the
+    NOISE_ONLY false-detection rate (`nuisance_sensitivity_max` — the
+    existing ranking-vector slot immediately after the error terms and
+    before `missing_failure_rate`, reused per v1.1 §V1 since `selection.py`
+    is out of this WP's scope) must decide the ranking, exactly matching
+    v1.0 §8's declared order (cents error -> octave-error rate -> voiced
+    false detection rate -> process reproducibility)."""
+    lower_rate = CandidateCriteria(
+        candidate_id="F0-LOWER-NOISE-RATE",
+        ceiling=ClaimCeiling.ABSOLUTE,
+        primary_normalized_mae=0.01,
+        signed_bias=0.001,
+        primary_q95_ae=0.02,
+        nuisance_sensitivity_max=0.2,  # 2/5 NOISE_ONLY false-detection rate
+    )
+    higher_rate = CandidateCriteria(
+        candidate_id="F0-HIGHER-NOISE-RATE",
+        ceiling=ClaimCeiling.ABSOLUTE,
+        primary_normalized_mae=0.01,  # tied
+        signed_bias=0.001,  # tied
+        primary_q95_ae=0.02,  # tied
+        nuisance_sensitivity_max=0.8,  # 4/5 NOISE_ONLY false-detection rate
+    )
+    outcome = select_across_ceilings([lower_rate, higher_rate])
+    assert outcome.outcome == "SELECTED"
+    assert outcome.selected_candidate_id == "F0-LOWER-NOISE-RATE"
+
+
+def test_v11_f0_selection_frozen_payload_records_noise_only_breakdown(tmp_path: Path) -> None:
+    """AC5(e): `f0_selection_frozen`'s `fail_filters_by_candidate` payload
+    must carry the machine-readable control-class breakdown — the
+    zero-tolerance any-fire verdict and the NOISE_ONLY rate/counts — exactly
+    as `candidate_fail_filter_report()` returns them (no re-summarization
+    that would lose the split)."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [
+        _record("row-silence", 0, detected=False),
+        _record("row-noise-only", 0, detected=True),
+        _record("row-noise-only", 1, detected=False),
+        _record("row-noise-only", 2, detected=False),
+        _record("row-noise-only", 3, detected=False),
+        _record("row-noise-only", 4, detected=False),
+    ]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-silence"}),
+        noise_only_control_row_ids=frozenset({"row-noise-only"}),
+    )
+    criteria = [
+        CandidateCriteria(
+            candidate_id="F0-B0-CURRENT",
+            ceiling=ClaimCeiling.ABSOLUTE,
+            primary_normalized_mae=0.01,
+            signed_bias=0.001,
+            primary_q95_ae=0.02,
+            nuisance_sensitivity_max=report["noise_only_false_detection_rate"],
+        )
+    ]
+    result = selection_stage.run_c3a_f0_selection(
+        campaign, criteria, fail_filter_reports={"F0-B0-CURRENT": report}
+    )
+    entry = next(
+        e for e in campaign.ledger.entries if e.entry_sha == result.f0_selection_frozen_entry_sha
+    )
+    recorded = entry.payload["fail_filters_by_candidate"]["F0-B0-CURRENT"]
+    assert recorded["negative_control_false_fire"] is False
+    assert recorded["noise_only_instances_total"] == 5
+    assert recorded["noise_only_instances_detected"] == 1
+    assert recorded["noise_only_false_detection_rate"] == pytest.approx(0.2)
+
+
+# ---------------------------------------------------------------------------
 # round 28 ADOPT (2) (`[UNDERSPEC-CAL-D64]`) "Count rejected F0 instances as
 # missing coverage" → round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`)
 # → round 2 #344 ADOPT (`[UNDERSPEC-CAL-D71]`, amends D68): `coverage_

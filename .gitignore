@@ -74,3 +74,8 @@ voice_genesis/calibration/campaigns/*/renders/
 voice_genesis/calibration/campaigns/*/measurements/
 voice_genesis/calibration/campaigns/.staging-*/
 voice_genesis/calibration/campaigns/.publish.lock
+
+# R14 fix (PR #346 round 14): ledger append/archive の安定ロックファイル
+# (provenance.Ledger.append() / tools/archive_aborted_ledger.py 共有、
+# ledger.jsonl 自身とは別の常設 flock 対象。他 .lock 系と同様コミット禁止)
+voice_genesis/calibration/campaigns/*/ledger.jsonl.lock

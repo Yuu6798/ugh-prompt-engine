@@ -141,20 +141,77 @@ ineligible とする（`d4c_ineligible=True` で表現。BLOCKED code は発行�
 
 from __future__ import annotations
 
+import argparse
 import ast
+import gzip
 import hashlib
 import json
+import math
+import os
 import re
 import subprocess
+import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import streams, vocab
+from . import approvals, streams, vocab
 from .candidates import registry as candidate_registry
+from .canonical import manifest_sha as _canonical_manifest_sha
 from .fixtures import axes as fixture_axes
-from .fixtures.matrix import build_matrix, declared_sweeps_by_family, truth_identity_for_row
+from .fixtures import uncertainty as fixture_uncertainty
+#: R24-2 対応（Codex 第 24 巡 P2 採用, 2026-09-05）: `_legacy_v1_0_opt_in_
+#: verified()` が aborted/closed 判定の実検証（gz+sidecar pair 検証・
+#: ledger chain 検証）を `tools.archive_aborted_ledger`/`provenance.Ledger`
+#: と共有するための import。`provenance.py`/`tools/archive_aborted_
+#: ledger.py` はいずれも `c0_validate` を import しないため循環 import には
+#: ならない。`canonical.py` も同様に葉モジュール（本ファイルを import
+#: しない）のため、`manifest_sha()` をトップレベルで import できる
+#: （R25-1 対応、Codex 第 25 巡 P2 採用, 2026-09-05）。`c0_freeze.py` は
+#: 逆に `c0_validate` を import するため `manifest_core_sha()` はトップ
+#: レベルでは import できず、`_legacy_v1_0_opt_in_verified()` 内で遅延
+#: import する（両モジュールが完全にロードされた後の実行時にのみ評価
+#: されるため循環 import を起こさない）。
+from .provenance import Ledger
+from .tools import archive_aborted_ledger
+from .fixtures.matrix import (
+    HoldoutPinDegradationExhausted,
+    HoldoutPinInfeasible,
+    build_matrix,
+    claim_relevant_fields_by_family,
+    declared_sweeps_by_family,
+    holdout_pin_params_by_family,
+    invariance_axes_by_family,
+    truth_identity_for_row,
+)
+#: §V2.2 縮退規則（2026-09-04 追補）: `c0_freeze._fixture_specs()` は
+#: `frozen_design.fixture_spec.<FAMILY>.declared_sweeps`/
+#: `claim_relevant_fields` を、テストが `fixtures.matrix.build_matrix`
+#: （このモジュールの `build_matrix` も同じ束縛）を差し替えても影響を受けない
+#: 別名 `_canonical_build_matrix` から意図的に導出する（c0_freeze.py 自身の
+#: 同名エイリアスと同じ規約——「差し替えから独立させる」）。本モジュールの
+#: 3 検査（`_check_declared_sweep_truth_levels`/`_check_declared_sweep_
+#: declaration_match`/`_check_claim_relevant_fields_match`）は manifest の
+#: その frozen 節と突き合わせる比較器であるため、同じ「常に real matrix」の
+#: 入口をこのエイリアス経由で使う。対して holdout sweep pin 関連の 2 検査
+#: （`_check_holdout_pin_feasibility`/`_check_holdout_sweeps_declaration_
+#: match`）は `armed_freeze()` が実際に pin/split した行集合と突き合わせる
+#: ため、`build_matrix`（差し替え可能な束縛）を引き続き使う——`armed_freeze()`
+#: 自身の pin 計算 (`c0_freeze.py` の `matrix_rows = build_matrix()`) も同じ
+#: 差し替え可能な参照を使うため、対応関係が一致する。
+from .fixtures.matrix import build_matrix as _canonical_build_matrix
 from .gates import MIN_RESOLVABLE_PAIRS_PER_SWEEP
+#: R10 対応（2026-09-05）: `armed_freeze()` が実際に holdout sweep を
+#: pin/split するのと**同一の**縮退ループ入口（`splitter.
+#: pin_and_realize_holdout()` — 段 1 `pin_holdout_sweeps_by_family()` +
+#: 段 2 `splitter.realize_split()` の統合リトライ本体）を検証側から
+#: 呼ぶための import。`c0_freeze.py` は `c0_validate` を import するため
+#: 逆方向の import はできず、両者が依存できる中立モジュール `splitter.py`
+#: から取る（生成と検証が二重実装に分岐しない構造 — 詳細は
+#: `splitter.py` の該当節 docstring、および
+#: `_check_holdout_sweeps_declaration_match()` の docstring を参照）。
+from .splitter import STRATUM_FACTOR_NAMES, pin_and_realize_holdout, row_inputs_for_split
 
 # ---------------------------------------------------------------------------
 # 二層キー語彙（設計正本 §3.1 / §3.2 の機械可読な写像）
@@ -181,6 +238,16 @@ REQUIRED_BLOCKING_KEYS: tuple[str, ...] = (
     "sample_format.channel_policy",
     "sample_format.resampling_impl",
     "sample_format.resampling_parameters",
+    #: R22-1 対応（Codex 第 22 巡 finding (1)、2026-09-05）: marker 自体を
+    #: REQUIRED_BLOCKING 化する（旧: 欠落は legacy v1.0 として黙って許容して
+    #: いたため、marker を削除/改変するだけで `_is_v1_1_manifest()` が False
+    #: になり、bound/formula/unit 必須化 (R20-3/R21/R22-2) がまるごと無効化
+    #: できてしまっていた）。値の閉語彙判定は `_check_required_blocking()`
+    #: 内の専用分岐（`_ALLOWED_DESIGN_REVISIONS`）で行う——legacy v1.0
+    #: manifest の検証は `validate_c0_manifest(..., allow_legacy_v1_0=True)`
+    #: による明示 opt-in（かつ closed/aborted campaign の on-disk manifest に
+    #: 限定）でのみ許容する。
+    "frozen_design.design_revision",
     "frozen_design.claim_critical_set",
     "frozen_design.meter_specs",
     "frozen_design.fixture_spec",
@@ -547,11 +614,22 @@ def scan_calibration_tree_inventory(repo_root: Path | None = None) -> frozenset[
     （inventory ファイル自体も版管理・監査対象であるため。§3.1「候補 meter・
     generator・schema・test の全 path」に含める必要はないが、inventory の
     自己完結性のため同じ集合に含めておく）。
+
+    v1.1 §V6（統合3, `[UNDERSPEC-CAL-D79]`, WP2d 報告の申し送り）: 統治設計
+    文書 2 本（v1.1 統治正本 `approvals.DESIGN_DOC_RELATIVE_PATH` / 読み取り
+    専用基底 `approvals.BASE_DESIGN_DOC_RELATIVE_PATH`）を scan 結果へ union
+    する — どちらも `.py` ではないため `rglob("*.py")` からは構造的に漏れて
+    おり、v1.1 §V6 が要求する「v1.0/v1.1 両文書を path inventory 検査対象へ」
+    が未実施のままだった。文書パスに対する sha 検査等の意味論は追加しない
+    （既存の inventory 項目と同じ「対象集合に含まれる」以上の扱いを増やさない
+    ——過剰設計しない）。
     """
     root = repo_root if repo_root is not None else _REPO_ROOT
     package_dir = root / "voice_genesis" / "calibration"
     paths = {p.relative_to(root).as_posix() for p in package_dir.rglob("*.py")}
     paths.add((package_dir / PATH_INVENTORY_FILENAME).relative_to(root).as_posix())
+    paths.add(approvals.DESIGN_DOC_RELATIVE_PATH)
+    paths.add(approvals.BASE_DESIGN_DOC_RELATIVE_PATH)
     return frozenset(paths)
 
 
@@ -656,6 +734,19 @@ def _is_absent_marker(value: object) -> bool:
     return isinstance(value, str) and value.startswith(_ABSENT_PREFIX)
 
 
+def _numbers_close(declared: object, derived: object) -> bool:
+    """R22-2 対応: `declared`（manifest 宣言値）と `derived`（canonical
+    再導出値）が両方とも non-bool numeric で、かつ数値的に一致するかを判定する
+    （`math.isclose(rel_tol=1e-9, abs_tol=1e-12)`。過大申告も不一致として
+    拒否する——freeze は決定論的なので厳密等値が正しい）。片方でも非 numeric
+    （例: 型不正な宣言値）なら無条件で False（fail-closed）。"""
+    if isinstance(declared, bool) or isinstance(derived, bool):
+        return False
+    if not isinstance(declared, (int, float)) or not isinstance(derived, (int, float)):
+        return False
+    return math.isclose(float(declared), float(derived), rel_tol=1e-9, abs_tol=1e-12)
+
+
 def _is_hollow(value: object) -> bool:
     """`None` 以外で「実質未記録」とみなす値（空文字列・空 mapping・空 list 等）。
 
@@ -694,6 +785,21 @@ class SweepManifestViolationDetail:
       `frozen_design.fixture_spec.<FAMILY>.declared_sweeps` 宣言値が、凍結
       matrix からの導出値と完全一致しない
       （`_check_declared_sweep_declaration_match()`）。
+    - ``"claim_relevant_field_mismatch"``: v1.1 §V2.2 5th bullet。manifest の
+      `frozen_design.fixture_spec.<FAMILY>.claim_relevant_fields` 宣言値が、
+      凍結 matrix からの機械導出値と一致しない
+      （`_check_claim_relevant_fields_match()`）。
+    - ``"holdout_pin_infeasible"``: v1.1 §V2.2。凍結 matrix 自体が k_hold の
+      被覆要件を cap `floor((N_hold-1)/r)` 内で満たせない構造
+      （`_check_holdout_pin_feasibility()`。456 セルでは発生しない）。
+    - ``"holdout_pin_declaration_mismatch"``: v1.1 §V2.2/§V2.3。manifest の
+      `frozen_design.fixture_spec.<FAMILY>.holdout_sweeps` 宣言値が、
+      split_secret からの再導出（渡された場合）または凍結 matrix の
+      declared_sweeps/k_hold との構造整合（渡されない場合）と一致しない
+      （`_check_holdout_sweeps_declaration_match()`）。
+    - ``"holdout_pin_not_in_holdout_split"``: v1.1 §V2.3。`holdout_sweeps`
+      の member 行が `realized_split.assignment` 上で HOLDOUT に割当てられて
+      いない（`_check_holdout_sweeps_realized_membership()`）。
     """
 
     violation: str
@@ -733,14 +839,62 @@ class C0ValidationResult:
     sweep_declaration_mismatch_violations: tuple[SweepManifestViolationDetail, ...] = field(
         default_factory=tuple
     )
+    #: v1.1 §V2.2 5th bullet: `_check_claim_relevant_fields_match()` の
+    #: violation 列（`violation="claim_relevant_field_mismatch"`）。
+    claim_relevant_field_violations: tuple[SweepManifestViolationDetail, ...] = field(
+        default_factory=tuple
+    )
+    #: v1.1 §V2.2: `_check_holdout_pin_feasibility()` の violation 列
+    #: （`violation="holdout_pin_infeasible"`）。manifest 非依存の構造検査
+    #: （456 セルでは常に空）。
+    holdout_pin_feasibility_violations: tuple[SweepManifestViolationDetail, ...] = field(
+        default_factory=tuple
+    )
+    #: v1.1 §V2.2/§V2.3: `_check_holdout_sweeps_declaration_match()` の
+    #: violation 列（`violation="holdout_pin_declaration_mismatch"`）。
+    holdout_pin_declaration_violations: tuple[SweepManifestViolationDetail, ...] = field(
+        default_factory=tuple
+    )
+    #: v1.1 §V2.3: `_check_holdout_sweeps_realized_membership()` の
+    #: violation 列（`violation="holdout_pin_not_in_holdout_split"`）。
+    holdout_pin_membership_violations: tuple[SweepManifestViolationDetail, ...] = field(
+        default_factory=tuple
+    )
+    #: v1.1 §V3.5: `_check_invariance_axes_match()` の violation 列
+    #: （`violation="invariance_axis_declaration_mismatch"`）。manifest の
+    #: `frozen_design.fixture_spec.<FAMILY>.confound_axes` 宣言値が
+    #: `fixtures.matrix.invariance_axes_by_family()` の機械導出値と一致
+    #: しない場合に非空になる（D77/claim_relevant_fields 同型）。
+    invariance_axis_violations: tuple[SweepManifestViolationDetail, ...] = field(
+        default_factory=tuple
+    )
+    #: v1.1 §V3.3 末尾: `_check_u_gt_u_num_bounds()` の violation 列
+    #: （`violation="u_bound_missing_or_invalid"`）。非 ABSENT family の
+    #: `u_gt_bound`/`u_num_bound`/`*_formula` の存在・有限非負・非空文字列を
+    #: 検査する（キー自体が manifest に無い legacy manifest は対象外——
+    #: version-aware。値はあるが欠陥がある場合のみ fail-closed）。
+    u_gt_u_num_bound_violations: tuple[SweepManifestViolationDetail, ...] = field(
+        default_factory=tuple
+    )
 
     @property
     def is_blocked(self) -> bool:
         return len(self.blocked_codes) > 0
 
 
-def _check_required_blocking(manifest: Mapping[str, object]) -> list[str]:
+def _check_required_blocking(
+    manifest: Mapping[str, object], *, legacy_design_revision_ok: bool = False
+) -> list[str]:
     """REQUIRED_BLOCKING キーのうち欠落・hollow なものを返す。
+
+    `frozen_design.design_revision` は他の REQUIRED_BLOCKING キーと異なり、
+    「非 hollow なら OK」ではなく閉語彙 `_ALLOWED_DESIGN_REVISIONS`（現状
+    `{"1.1"}`）との厳密一致を要求する（R22-1、Codex 第 22 巡 finding (1)）。
+    `legacy_design_revision_ok=True`（`validate_c0_manifest(...,
+    allow_legacy_v1_0=True)` が on-disk の closed/aborted campaign manifest に
+    対してのみ立てる）の場合に限り、marker の欠落・不一致を violation にしない
+    ——それ以外は常に fail-closed（新規 freeze 経路が呼ぶ
+    `validate_c0_manifest()` はこの引数を渡さないため、常に必須のまま）。
 
     `repo.dirty_tree` は「値が False であること」自体が要求（§3.1:
     「dirty-tree=false」）のため、存在していても `True` なら欠落と同様に
@@ -771,6 +925,22 @@ def _check_required_blocking(manifest: Mapping[str, object]) -> list[str]:
     """
     missing: list[str] = []
     for key in REQUIRED_BLOCKING_KEYS:
+        if key == "frozen_design.design_revision":
+            found, value = _resolve(manifest, key)
+            revision_ok = (
+                found and isinstance(value, str) and value.strip() in _ALLOWED_DESIGN_REVISIONS
+            )
+            if not revision_ok and not legacy_design_revision_ok:
+                if not found or value is None or _is_hollow(value):
+                    missing.append(key)
+                else:
+                    missing.append(
+                        f"{key}: closed vocabulary (must be exactly one of "
+                        f"{sorted(_ALLOWED_DESIGN_REVISIONS)!r}, got {value!r}; legacy v1.0 "
+                        "manifests require validate_c0_manifest(allow_legacy_v1_0=True) "
+                        "opt-in restricted to closed/aborted campaigns, R22-1)"
+                    )
+            continue
         found, value = _resolve(manifest, key)
         if not found or value is None or _is_hollow(value):
             missing.append(key)
@@ -1364,7 +1534,10 @@ def _check_declared_sweep_truth_levels(
     INVALID` を SUPERSEDE）。
     """
     del manifest  # 構造検査: 凍結 matrix 生成器自体から直接導出する
-    rows = build_matrix()
+    # §V2.2 縮退規則: manifest の frozen_design 節と同じ「常に real matrix」
+    # の入口（`_canonical_build_matrix`）を使う——`build_matrix`（差し替え
+    # 可能）ではない。
+    rows = _canonical_build_matrix()
     row_by_id = {mr.row_id: mr.row for mr in rows}
     declared = declared_sweeps_by_family(rows)
     violations: list[SweepManifestViolationDetail] = []
@@ -1458,7 +1631,8 @@ def _check_declared_sweep_declaration_match(
     「宣言が実体と一致しない」という同一の意味論のため `violation` 値は
     区別しない）。
     """
-    rows = build_matrix()
+    # §V2.2 縮退規則: 上と同じ理由で `_canonical_build_matrix` を使う。
+    rows = _canonical_build_matrix()
     derived = declared_sweeps_by_family(rows)
     violations: list[SweepManifestViolationDetail] = []
     for family in fixture_axes.FixtureFamily:
@@ -1515,9 +1689,1100 @@ def _check_declared_sweep_declaration_match(
     return tuple(violations)
 
 
-def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
-    """C0 freeze manifest を dry-run 検証する（書込・secret 生成・freeze event なし）。"""
-    missing_required = _check_required_blocking(manifest)
+# ---------------------------------------------------------------------------
+# v1.1 §V2.2/§V2.3 — holdout sweep pinning validation (D77 同型)
+# ---------------------------------------------------------------------------
+
+
+def _check_claim_relevant_fields_match(
+    manifest: Mapping[str, object],
+) -> tuple[SweepManifestViolationDetail, ...]:
+    """v1.1 §V2.2 5th bullet（Codex レビュー第 5 巡 P1 採用）:
+    `frozen_design.fixture_spec.<FAMILY>.claim_relevant_fields` の宣言値が、
+    凍結 matrix から `fixtures.matrix.claim_relevant_fields_by_family()` で
+    機械導出される値と完全一致することを検査する
+    （`_check_declared_sweep_declaration_match()` と同じ「宣言でなく実体
+    との一致を検査する」規約）。
+
+    `claim_relevant_fields` は v1.1 で新設したキーであり
+    `FIXTURE_SPEC_REQUIRED_KEYS` には加えない——v1.1 以前に構築された
+    manifest fixture（本テストスイートに大量に存在する）へ強制的に追加
+    させる破壊的変更を避けるため。欠落/hollow/非 mapping な
+    `frozen_design.fixture_spec.<FAMILY>` はここでは扱わない（他の checker
+    が別途捕捉する）。宣言されていれば実体と一致しなければならない、という
+    任意フィールドとして扱う。
+    """
+    # §V2.2 縮退規則: 上と同じ理由で `_canonical_build_matrix` を使う。
+    rows = _canonical_build_matrix()
+    derived = claim_relevant_fields_by_family(rows)
+    violations: list[SweepManifestViolationDetail] = []
+    for family in fixture_axes.FixtureFamily:
+        fam = family.value
+        found, entry = _resolve(manifest, f"frozen_design.fixture_spec.{fam}")
+        if not found or not isinstance(entry, Mapping):
+            continue
+        declared_raw = entry.get("claim_relevant_fields")
+        if declared_raw is None:
+            continue
+        expected = tuple(sorted(derived.get(fam, ())))
+        if not isinstance(declared_raw, (list, tuple)) or isinstance(declared_raw, (str, bytes)):
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="claim_relevant_field_mismatch",
+                    family=fam,
+                    sweep_id="",
+                    expected_count=len(expected),
+                    actual_count=0,
+                    detail=(
+                        f"frozen_design.fixture_spec.{fam}.claim_relevant_fields must be a "
+                        "list of field names"
+                    ),
+                )
+            )
+            continue
+        actual = tuple(sorted(str(v) for v in declared_raw))
+        if actual != expected:
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="claim_relevant_field_mismatch",
+                    family=fam,
+                    sweep_id="",
+                    expected_count=len(expected),
+                    actual_count=len(actual),
+                    detail=(
+                        f"frozen_design.fixture_spec.{fam}.claim_relevant_fields declares "
+                        f"{list(actual)!r}, expected {list(expected)!r} (machine-derived "
+                        "from the frozen matrix)"
+                    ),
+                )
+            )
+    return tuple(violations)
+
+
+def _check_invariance_axes_match(
+    manifest: Mapping[str, object],
+) -> tuple[SweepManifestViolationDetail, ...]:
+    """v1.1 §V3.5（Codex レビュー第 12 巡 P1 採用）: `frozen_design.
+    fixture_spec.<FAMILY>.confound_axes`（gate4' invariance 軸宣言）の宣言値
+    が、凍結 matrix から `fixtures.matrix.invariance_axes_by_family()` で
+    機械導出される値と完全一致することを検査する
+    （`_check_declared_sweep_declaration_match()`/`_check_claim_relevant_
+    fields_match()` と同じ「宣言でなく実体との一致を検査する」規約——D77
+    同型）。`confound_axes` 自体の非空 list 形状は `_check_fixture_spec_
+    nested_keys()`/`_shape_violation()`（`_LIST_SHAPE_FIELDS`）が既に検査
+    済みのため、ここでは値そのものが family 固有の正しい導出値と一致するか
+    のみを検査する（欠落/hollow/非 list はここでは扱わない）。
+    """
+    # §V2.2 縮退規則と同じ理由で `_canonical_build_matrix` を使う。
+    rows = _canonical_build_matrix()
+    derived = invariance_axes_by_family(rows)
+    violations: list[SweepManifestViolationDetail] = []
+    for family in fixture_axes.FixtureFamily:
+        fam = family.value
+        found, entry = _resolve(manifest, f"frozen_design.fixture_spec.{fam}")
+        if not found or not isinstance(entry, Mapping):
+            continue
+        declared_raw = entry.get("confound_axes")
+        if declared_raw is None or _is_hollow(declared_raw):
+            continue
+        expected = tuple(sorted(derived.get(fam, ())))
+        if not isinstance(declared_raw, (list, tuple)) or isinstance(declared_raw, (str, bytes)):
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="invariance_axis_declaration_mismatch",
+                    family=fam,
+                    sweep_id="",
+                    expected_count=len(expected),
+                    actual_count=0,
+                    detail=(
+                        f"frozen_design.fixture_spec.{fam}.confound_axes must be a list of "
+                        "axis names"
+                    ),
+                )
+            )
+            continue
+        actual = tuple(sorted(str(v) for v in declared_raw))
+        if actual != expected:
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="invariance_axis_declaration_mismatch",
+                    family=fam,
+                    sweep_id="",
+                    expected_count=len(expected),
+                    actual_count=len(actual),
+                    detail=(
+                        f"frozen_design.fixture_spec.{fam}.confound_axes declares "
+                        f"{list(actual)!r}, expected {list(expected)!r} (machine-derived "
+                        "gate4' invariance axes from the frozen matrix, v1.1 §V3.5)"
+                    ),
+                )
+            )
+    return tuple(violations)
+
+
+#: v1.1 §V3.3 末尾: `u_gt_bound`/`u_num_bound` が `"ABSENT:<reason>"` marker
+#: のみ許容される 2 family（`c0_freeze._U_ABSENT_REASON` と同じ集合——物理
+#: gate 入力を持たない）。
+_U_GT_U_NUM_ABSENT_ONLY_FAMILIES: frozenset[str] = frozenset(
+    {"RESONANCE_GT", "IDENTITY_CAUSAL_SWEEP"}
+)
+
+#: R20-3 対応（Codex 第 20 巡 finding (3)、2026-09-05）: `frozen_design.
+#: design_revision` の値がこれと一致する manifest のみ「v1.1 manifest」
+#: として扱う（`c0_freeze._DESIGN_REVISION` と同期）。キー自体が無い manifest
+#: （既存 closed campaign 3 件を含む legacy v1.0 形式）は判別対象外のまま
+#: 従来の後方互換経路（欠落キーは fail-closed にしない）を維持する。
+_V1_1_DESIGN_REVISION: str = "1.1"
+
+#: R22-1 対応（Codex 第 22 巡 finding (1)、2026-09-05）: `_check_required_
+#: blocking()` が `frozen_design.design_revision` を照合する閉語彙。現状は
+#: `_V1_1_DESIGN_REVISION` のみを含む単一要素集合だが、将来 v1.2 等が追加
+#: された際に両バージョンを同時に許容できるよう set として持つ（`"1.0"` を
+#: 含む他の値・欠落はすべて REQUIRED_BLOCKING violation。legacy v1.0 は
+#: `allow_legacy_v1_0=True` opt-in 経由でのみ通す）。
+_ALLOWED_DESIGN_REVISIONS: frozenset[str] = frozenset({_V1_1_DESIGN_REVISION})
+
+
+def _is_v1_1_manifest(manifest: Mapping[str, object]) -> bool:
+    found, value = _resolve(manifest, "frozen_design.design_revision")
+    return found and isinstance(value, str) and value.strip() == _V1_1_DESIGN_REVISION
+
+
+def _check_u_gt_u_num_bounds(
+    manifest: Mapping[str, object],
+) -> tuple[SweepManifestViolationDetail, ...]:
+    """v1.1 §V3.3 末尾（本 PR で新設。R20-3 で欠落キーの判別を version-aware
+    化）: 非 ABSENT family（F0_CONTROL/FORMANT_GT/TILT_GT/APERIODICITY_GT/
+    TRANSITION_GT）は `frozen_design.fixture_spec.<FAMILY>.u_gt_bound`/
+    `.u_num_bound` が有限非負の number として存在し、対応する
+    `.u_gt_bound_formula`/`.u_num_bound_formula` の導出式文字列も非空で
+    存在することを要求する。RESONANCE_GT/IDENTITY_CAUSAL_SWEEP
+    （`_U_GT_U_NUM_ABSENT_ONLY_FAMILIES`）は `"ABSENT:<reason>"` 文字列
+    （存在する宣言）のみを許可する（`c0_freeze._U_ABSENT_REASON` と同じ
+    2 family——物理 gate 入力を持たない）。
+
+    **version-aware**（R20-3、Codex 第 20 巡 finding (3)）: `u_gt_bound`/
+    `u_num_bound` は `FIXTURE_SPEC_REQUIRED_KEYS` に含まれない任意キーで
+    あり続ける（v1.0 §V3.3 実装以前に構築された legacy manifest fixture・
+    campaign を壊さないため）。判別は `frozen_design.design_revision`
+    （`_is_v1_1_manifest()` — `c0_freeze._DESIGN_REVISION` と同期する
+    machine-readable marker）で行う:
+
+    - marker が `"1.1"` を宣言する manifest（v1.1 完全 manifest）では、
+      `u_gt_bound`/`u_num_bound`/両 `*_formula` の**キー自体の欠落も**
+      fail-closed の violation にする（本 finding: 両フィールドを削っても
+      検証をすり抜け、C4 で全 real gate が NOT_EVALUABLE/INPUT_MISSING に
+      なっていた穴を塞ぐ）。
+    - marker が無い manifest（legacy v1.0 形式。既存 closed campaign 3 件を
+      含む）はキー自体の欠落を引き続き fail-closed にしない——**キーが
+      存在するのに値が欠陥**（型不正・負・非有限・formula 欠落）である
+      場合のみ violation を積む（従来どおり）。
+
+    **R21 追補**（Codex 第 21 巡採用、2026-09-05）: v1.1 manifest では
+    `u_gt_bound_unit`/`u_num_bound_unit`（`campaign/holdout_stage.
+    units_commensurate_for_family()` が §10.4 条件 (c) の可換性判定に
+    直接消費する sibling キー）も検査対象にする——非 ABSENT family は
+    `fixtures.axes.TRUTH_UNIT_BY_FAMILY`（producer 側 `c0_freeze.py` と
+    同一の機械導出源）との厳密一致を、ABSENT-only family は `"n/a"` 固定を
+    要求する。欠落・改変を素通しすると、候補宣言 unit と偶然一致する
+    forged unit が条件 (c) を成立させ偽の `CALIBRATED_DIRECTIONAL` を
+    許してしまう。legacy manifest（marker 無し）はこの検査の対象外。
+    """
+    is_v1_1 = _is_v1_1_manifest(manifest)
+    violations: list[SweepManifestViolationDetail] = []
+    for family in fixture_axes.FixtureFamily:
+        fam = family.value
+        found, entry = _resolve(manifest, f"frozen_design.fixture_spec.{fam}")
+        if not found or not isinstance(entry, Mapping):
+            continue
+        for base_key in ("u_gt_bound", "u_num_bound"):
+            formula_key = f"{base_key}_formula"
+            unit_key = f"{base_key}_unit"
+            if base_key not in entry:
+                if not is_v1_1:
+                    continue  # legacy manifest predating v1.1 §V3.3 -- not blocked here.
+                for missing_key in (base_key, formula_key, unit_key):
+                    violations.append(
+                        SweepManifestViolationDetail(
+                            violation="u_bound_missing_or_invalid",
+                            family=fam,
+                            sweep_id=missing_key,
+                            expected_count=0,
+                            actual_count=0,
+                            detail=(
+                                f"frozen_design.fixture_spec.{fam}.{missing_key} is required "
+                                "for v1.1 manifests (frozen_design.design_revision="
+                                f"{_V1_1_DESIGN_REVISION!r}) but is missing (v1.1 §V3.3; R20-3)"
+                            ),
+                        )
+                    )
+                continue
+            value = entry.get(base_key)
+            formula = entry.get(formula_key)
+            if fam in _U_GT_U_NUM_ABSENT_ONLY_FAMILIES:
+                if not _is_absent_marker(value):
+                    violations.append(
+                        SweepManifestViolationDetail(
+                            violation="u_bound_missing_or_invalid",
+                            family=fam,
+                            sweep_id=base_key,
+                            expected_count=0,
+                            actual_count=0,
+                            detail=(
+                                f"frozen_design.fixture_spec.{fam}.{base_key} must be an "
+                                f"{_ABSENT_PREFIX!r}-prefixed marker for this family "
+                                "(v1.1 §V3.3), got " + repr(value)
+                            ),
+                        )
+                    )
+                    continue
+            else:
+                value_ok = (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(float(value))
+                    and float(value) >= 0.0
+                )
+                if not value_ok:
+                    violations.append(
+                        SweepManifestViolationDetail(
+                            violation="u_bound_missing_or_invalid",
+                            family=fam,
+                            sweep_id=base_key,
+                            expected_count=0,
+                            actual_count=0,
+                            detail=(
+                                f"frozen_design.fixture_spec.{fam}.{base_key} must be a "
+                                f"non-negative finite number, got {value!r} (v1.1 §V3.3)"
+                            ),
+                        )
+                    )
+            if not isinstance(formula, str) or formula.strip() == "":
+                violations.append(
+                    SweepManifestViolationDetail(
+                        violation="u_bound_missing_or_invalid",
+                        family=fam,
+                        sweep_id=formula_key,
+                        expected_count=0,
+                        actual_count=0,
+                        detail=(
+                            f"frozen_design.fixture_spec.{fam}.{formula_key} must be a "
+                            "non-empty derivation-formula string (v1.1 §V3.3)"
+                        ),
+                    )
+                )
+            # R21 対応（Codex 第 21 巡採用、2026-09-05）: `campaign/holdout_stage.
+            # units_commensurate_for_family()` が §10.4 条件 (c) の可換性判定に
+            # 直接消費する `u_gt_bound_unit`/`u_num_bound_unit` を、v1.1 manifest
+            # に限り `fixtures.axes.TRUTH_UNIT_BY_FAMILY`（producer 側と同一の
+            # 機械導出源）に照合する。欠落・改変（例: 別 family/候補の unit へ
+            # すり替え）を検出せずに通すと、正規化後に候補宣言 unit と偶然
+            # 一致する自己整合な forged manifest が条件 (c) を成立させ、偽の
+            # CALIBRATED_DIRECTIONAL を許してしまう（本 finding）。ABSENT-only
+            # family（RESONANCE_GT/IDENTITY_CAUSAL_SWEEP）は `"n/a"` 固定を
+            # 期待する（gate4' 対象外であり、`units_commensurate_for_family()`
+            # 自体もこの sentinel を「非 string 相当」として保守側 False へ
+            # 落とす契約——`campaign/holdout_stage.py` は本 PR の対象外のため
+            # 無改変）。
+            if is_v1_1:
+                expected_unit = (
+                    "n/a"
+                    if fam in _U_GT_U_NUM_ABSENT_ONLY_FAMILIES
+                    else fixture_axes.TRUTH_UNIT_BY_FAMILY.get(fam)
+                )
+                unit_value = entry.get(unit_key)
+                unit_ok = (
+                    unit_key in entry
+                    and isinstance(unit_value, str)
+                    and expected_unit is not None
+                    and unit_value.strip() == expected_unit
+                )
+                if not unit_ok:
+                    violations.append(
+                        SweepManifestViolationDetail(
+                            violation="u_bound_missing_or_invalid",
+                            family=fam,
+                            sweep_id=unit_key,
+                            expected_count=0,
+                            actual_count=0,
+                            detail=(
+                                f"frozen_design.fixture_spec.{fam}.{unit_key} must equal "
+                                f"{expected_unit!r} (v1.1 §V3.3 truth-unit machine "
+                                "derivation, fixtures.axes.TRUTH_UNIT_BY_FAMILY; R21), got "
+                                f"{unit_value!r}"
+                            ),
+                        )
+                    )
+        # R22-2 対応（Codex 第 22 巡 finding (2)、2026-09-05）: 値の形状検査
+        # （有限非負・formula 非空）だけでは、独立生成の v1.1 manifest が
+        # bound を 0 にして formula 文字列だけ残しても通過してしまう（過小
+        # bound を C4 が消費して偽の CALIBRATED_DIRECTIONAL を出す）。非
+        # ABSENT family に限り、producer (`c0_freeze._fixture_specs()`) と
+        # 同一の canonical 関数 (`fixtures.uncertainty.derive_u_gt_bound()`/
+        # `derive_u_num_bound()`) を manifest 自身に記録された入力
+        # (`u_bound_inputs`) から**再実行**し、宣言済みの value/formula と
+        # 一致することを要求する（manifest 自己完結の原則: `fixtures.axes`
+        # の現在値は一切読まない——`fixtures/uncertainty.py` モジュール
+        # docstring 参照）。legacy manifest（marker 無し）はこの検査の対象外。
+        if is_v1_1 and fam not in _U_GT_U_NUM_ABSENT_ONLY_FAMILIES:
+            inputs_key = "u_bound_inputs"
+            if inputs_key not in entry or _is_hollow(entry.get(inputs_key)):
+                violations.append(
+                    SweepManifestViolationDetail(
+                        violation="u_bound_missing_or_invalid",
+                        family=fam,
+                        sweep_id=inputs_key,
+                        expected_count=0,
+                        actual_count=0,
+                        detail=(
+                            f"frozen_design.fixture_spec.{fam}.{inputs_key} is required "
+                            "for v1.1 manifests (frozen_design.design_revision="
+                            f"{_V1_1_DESIGN_REVISION!r}) but is missing (v1.1 §V3.3; R22-2)"
+                        ),
+                    )
+                )
+            else:
+                raw_inputs = entry.get(inputs_key)
+
+                # R24-1 対応（Codex 第 24 巡 P1 採用, 2026-09-05）:
+                # 上のブロックの再導出は manifest 自身が記録した
+                # `raw_inputs` から value/formula を再計算するだけで、
+                # `raw_inputs` そのものが弱められていないかは一切検証して
+                # いなかった——`u_bound_inputs.truth_scale_max`/
+                # `.float64_eps` を 0 にし、対応する `u_gt_bound`/
+                # `u_num_bound`/両 formula もその偽入力から再計算した値に
+                # 揃えた「入力ごと自己整合な」manifest は、この再導出照合
+                # （入力→出力の内部整合性しか見ない）を素通りしてしまう。
+                # `fixtures/uncertainty.py` モジュール docstring は
+                # 「validator は `gather_u_bound_inputs()` を呼び直しては
+                # ならない」という自己完結原則を掲げるが、これは
+                # `candidates.*_paths_sha256`（path inventory の content-
+                # hash 照合、`_check_hash_content_match()`）が REQUIRED_
+                # BLOCKING で通っている前提の下では、検証対象 checkout の
+                # `fixtures/axes.py`/`fixtures/uncertainty.py` の内容が
+                # 凍結時点と一致することは既に別途保証されている——
+                # つまり「将来 axes.py が変わっても過去の manifest は
+                # 揺れ動かない」という自己完結原則が守ろうとした性質は、
+                # そもそも hash 照合が通っている間は不変であり、
+                # `raw_inputs` そのものの真正性を確認しない限り、その
+                # 自己完結性は偽入力による自己整合な改竄を防げない。
+                # よってこの一点に限り、producer と同一の canonical 関数
+                # `fixtures.uncertainty.gather_u_bound_inputs(family)` を
+                # validator 側でも live に再実行し、manifest 宣言済み
+                # `u_bound_inputs` と完全一致することを追加で要求する
+                # （数値は `_numbers_close` で許容誤差付き比較、それ以外は
+                # 厳密一致）。
+                canonical_inputs = fixture_uncertainty.gather_u_bound_inputs(family)
+                inputs_match = (
+                    isinstance(raw_inputs, Mapping)
+                    and set(raw_inputs) == set(canonical_inputs)
+                    and all(
+                        _numbers_close(raw_inputs.get(k), v)
+                        if isinstance(v, (int, float)) and not isinstance(v, bool)
+                        else raw_inputs.get(k) == v
+                        for k, v in canonical_inputs.items()
+                    )
+                )
+                if not inputs_match:
+                    violations.append(
+                        SweepManifestViolationDetail(
+                            violation="u_bound_missing_or_invalid",
+                            family=fam,
+                            sweep_id=inputs_key,
+                            expected_count=0,
+                            actual_count=0,
+                            detail=(
+                                f"frozen_design.fixture_spec.{fam}.{inputs_key} does not "
+                                "match the canonical live re-derivation "
+                                "(fixtures.uncertainty.gather_u_bound_inputs(); v1.1 "
+                                f"§V3.3; R24-1): declared={raw_inputs!r}, "
+                                f"canonical={canonical_inputs!r}"
+                            ),
+                        )
+                    )
+                try:
+                    derived_gt_value, derived_gt_formula = fixture_uncertainty.derive_u_gt_bound(
+                        family, raw_inputs
+                    )
+                    derived_num_value, derived_num_formula = (
+                        fixture_uncertainty.derive_u_num_bound(family, raw_inputs)
+                    )
+                except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
+                    violations.append(
+                        SweepManifestViolationDetail(
+                            violation="u_bound_missing_or_invalid",
+                            family=fam,
+                            sweep_id=inputs_key,
+                            expected_count=0,
+                            actual_count=0,
+                            detail=(
+                                f"frozen_design.fixture_spec.{fam}.{inputs_key} could not be "
+                                "used to canonically recompute u_gt_bound/u_num_bound "
+                                f"(v1.1 §V3.3; R22-2): {exc!r}"
+                            ),
+                        )
+                    )
+                else:
+                    for value_key, formula_key2, derived_value, derived_formula in (
+                        ("u_gt_bound", "u_gt_bound_formula", derived_gt_value, derived_gt_formula),
+                        (
+                            "u_num_bound",
+                            "u_num_bound_formula",
+                            derived_num_value,
+                            derived_num_formula,
+                        ),
+                    ):
+                        declared_value = entry.get(value_key)
+                        if not _numbers_close(declared_value, derived_value):
+                            violations.append(
+                                SweepManifestViolationDetail(
+                                    violation="u_bound_missing_or_invalid",
+                                    family=fam,
+                                    sweep_id=value_key,
+                                    expected_count=0,
+                                    actual_count=0,
+                                    detail=(
+                                        f"frozen_design.fixture_spec.{fam}.{value_key} "
+                                        f"declares {declared_value!r} but the canonical "
+                                        f"re-derivation from {inputs_key} yields "
+                                        f"{derived_value!r} (v1.1 §V3.3; R22-2)"
+                                    ),
+                                )
+                            )
+                        declared_formula = entry.get(formula_key2)
+                        if declared_formula != derived_formula:
+                            violations.append(
+                                SweepManifestViolationDetail(
+                                    violation="u_bound_missing_or_invalid",
+                                    family=fam,
+                                    sweep_id=formula_key2,
+                                    expected_count=0,
+                                    actual_count=0,
+                                    detail=(
+                                        f"frozen_design.fixture_spec.{fam}.{formula_key2} does "
+                                        f"not match the canonical re-derivation from "
+                                        f"{inputs_key} (v1.1 §V3.3; R22-2)"
+                                    ),
+                                )
+                            )
+    return tuple(violations)
+
+
+def _check_holdout_pin_feasibility(
+    manifest: Mapping[str, object],
+) -> tuple[SweepManifestViolationDetail, ...]:
+    """v1.1 §V2.2 の k_hold 被覆要件検査: cap `floor((N_hold-1)/r)` 内で
+    `max_field_cardinality` 個の pin を確保できるか。
+    `_check_declared_sweep_truth_levels()` と同じ「manifest 非依存に凍結
+    matrix 自体の構造を検査する」規約（`manifest` は呼び出し規約を揃える
+    ためだけの未使用引数）。456 セル canonical matrix では発生しない。
+    """
+    del manifest
+    rows = build_matrix()
+    params = holdout_pin_params_by_family(rows)
+    violations: list[SweepManifestViolationDetail] = []
+    for fam in sorted(params):
+        p = params[fam]
+        if p.feasible:
+            continue
+        violations.append(
+            SweepManifestViolationDetail(
+                violation="holdout_pin_infeasible",
+                family=fam,
+                sweep_id="",
+                expected_count=p.max_field_cardinality,
+                actual_count=p.cap,
+                detail=(
+                    f"family {fam!r}: holdout pin coverage requires "
+                    f"max_field_cardinality={p.max_field_cardinality} pinned sweep(s) but "
+                    f"cap floor((N_hold-1)/r)={p.cap} (N_hold={p.n_hold}, "
+                    f"r={p.member_rows_per_sweep})"
+                ),
+            )
+        )
+    return tuple(violations)
+
+
+def _check_holdout_sweeps_declaration_match(
+    manifest: Mapping[str, object], split_secret: bytes | None = None
+) -> tuple[SweepManifestViolationDetail, ...]:
+    """v1.1 §V2.2/§V2.3 holdout sweep pin の宣言一致検査（D77 同型）。
+
+    `holdout_sweeps`（manifest トップレベルの non-core キー、
+    `c0_freeze._attach_freeze_extras()` 参照）は `split_secret` 依存
+    （`fixtures.matrix.pin_holdout_sweeps_by_family()` が
+    HMAC(split_secret, ...) で選抜する）ため、secret 非依存の
+    `declared_sweeps` とは異なり、本関数は `split_secret` が渡された場合に
+    限り完全再導出照合を行う。
+
+    R10 対応（Codex 第 10 巡 P1 採用、2026-09-05）: 修正前は、宣言された
+    pin 数が `degradation_floor <= 宣言数 < k_hold` の範囲に収まってさえ
+    いれば、その**宣言値をそのまま** `k_hold_overrides` として段 1
+    （`pin_holdout_sweeps_by_family()`）だけを再導出照合していた——「公称
+    `k_hold` で段 2 (`realize_split()`) が本当に `CoverageRepairInfeasible`
+    に落ちたか」という縮退の必要性そのものは一切検証しておらず、独立に
+    構築した/改竄した manifest が縮退を自称するだけで宣言 pin 数を水減らし
+    できる穴があった（宣言を信頼する側と実測する側の入力が同じ変数に
+    癒着していたのが根本原因）。
+
+    本対応は、`split_secret` が渡された場合に限り、**宣言値を一切入力に
+    せず**公称 `k_hold` から始まる `splitter.pin_and_realize_holdout()`
+    （段 1 `pin_holdout_sweeps_by_family()` → 段 2 `splitter.
+    realize_split()` の縮退リトライループ本体。`c0_freeze.armed_freeze()`
+    が実際の freeze 時に呼ぶのと**同一の関数**——検証と生成が二重実装に
+    分岐しないよう `splitter.py` へ共有化した。`c0_freeze` は
+    `c0_validate` を import するため逆方向の import ができず、両者が依存
+    できる `splitter` へ実装を寄せた）を検証側で完全に再実行し、その結果
+    (`full_pin`) を「真の」holdout sweep 集合として宣言と突き合わせる。
+    段 2 の修復不能を経て初めて到達する縮退後の k は再実行結果に
+    **そのまま**表れるため、宣言が正当な縮退の帰結であれば厳密一致し、
+    水増し/水減らしされた偽の宣言は（同じ secret・matrix の下で本当に
+    その縮退が起きない限り）per-sweep_id 照合で確実に不一致として検出
+    される（fail-closed）。
+
+    再実行自体が `HoldoutPinInfeasible`/`HoldoutPinDegradationExhausted`
+    を送出した場合（構造的欠陥、または matrix 変更などにより freeze 時と
+    再現できない異常事態）は、再導出結果を一切信頼できないため、宣言の
+    ある家族すべてを無条件で mismatch 扱いにする（fail-closed。「検証
+    不能」を「検証成功」として通さない）。
+
+    `split_secret=None`（`dry_run()` — secret がまだ存在しない、または
+    `holdout_sweeps` を持たない v1.1 以前の manifest を読む場合）では、
+    secret 依存の段 2 再実行は原理的に行えないため、secret 非依存の構造
+    検査のみ行う: 宣言 pin 数が `holdout_pin_params_by_family()` の
+    **nominal** `k_hold` と一致し、各宣言 sweep_id が
+    `declared_sweeps_by_family()` に実在しその member row_id が完全一致する
+    こと。**この経路は宣言された pin 数を override として一切信頼しない**
+    ——nominal `k_hold` との単純一致のみを見るため、縮退を自称する宣言は
+    secret 無しでは「その縮退が正当だったか」を検査できず、単に
+    `len(actual) != k_hold` として構造 mismatch になる（secret 依存の
+    完全再導出照合でのみ縮退の正当性まで確認できる）。
+
+    R11 対応（Codex 第 11 巡採用、2026-09-05）: `found_holdout`（v1.1+
+    manifest の version marker）かつ `split_secret is not None`（secret
+    依存の完全再導出経路）の場合に限り、pin 免除でない
+    （`HoldoutPinParams.pin_exempt=False`、すなわち `k_hold>=1`）全 family
+    について宣言 (`holdout_sweeps.<family>`) の存在と非空を必須にする——
+    欠落/空はここで即 `continue` して以降の照合をすり抜けさせず、
+    fail-closed の mismatch violation にする。pin 免除 family（`cap<1`）は
+    空宣言 `{}` が正しい姿であり、非空の宣言（免除のはずの family が pin
+    を騙る改竄）も同様に検出する。
+
+    R23 対応（Codex 第 23 巡 P2 採用、2026-09-05、PRRT_kwDOSD2OOM6fgdGg）:
+    R11 の必須化は `found_holdout=True` を前提としていたが、top-level
+    `holdout_sweeps` キー自体を manifest から削除すれば `found_holdout=False`
+    になり、R11 の必須化もそれ以降の per-family 照合も丸ごと沈黙していた
+    （`_check_holdout_sweeps_realized_membership()` も同型で沈黙）。本関数は
+    v1.1 manifest（`_is_v1_1_manifest()`）かつ **`realized_split` も存在する
+    full/armed-shape manifest**（`c0_freeze._attach_freeze_extras()` が
+    `realized_split`/`holdout_sweeps` を同一呼び出しで同時に付与するため、
+    両者の有無は常に揃うはずという不変を利用する）に限り、top-level
+    `holdout_sweeps` キー自体の存在を必須化する（欠落は関数冒頭で単独の
+    violation を返して即 return し、以降の per-family 照合は実行しない）。
+    `realized_split` を見ずに `is_v1_1` のみで必須化すると、
+    `c0_freeze.dry_run()`（`build_manifest()` が返す secret 未生成の
+    core-only manifest。`holdout_sweeps` が存在しないのが正当な設計不変
+    ——`_CORE_ONLY_EXCLUDED_KEYS` docstring 参照）まで誤ってブロックして
+    しまう（本 fix 実装時に発見: dry-run manifest は `realized_split` も
+    同時に持たないため、この判別で正しく除外できる）。legacy (marker 無し)
+    manifest は本チェックの対象外のまま従来の nested fallback 経路を維持
+    する（後方互換）。
+    """
+    found_holdout, holdout_section = _resolve(manifest, "holdout_sweeps")
+    is_v1_1 = _is_v1_1_manifest(manifest)
+    found_realized_split, _realized_split_section = _resolve(manifest, "realized_split")
+
+    # R23 対応（Codex 第 23 巡 P2 採用, 2026-09-05, PRRT_kwDOSD2OOM6fgdGg）:
+    # top-level `holdout_sweeps` キー自体を manifest から削除すると
+    # `found_holdout=False` になり、以下の per-family 照合ループは
+    # `declared_raw_by_family` を全て `None`（nested fallback も未収載なら
+    # 空）に落として `hollow` 判定で即 `continue` する——本関数もその下流の
+    # `_check_holdout_sweeps_realized_membership()` も沈黙し、C4 側
+    # (`campaign/cli.py::_run_c4`) の `expected_sweep_ids` フォールバックが
+    # 全宣言 sweep（HOLDOUT 非常駐 sweep を含む）を使って偽の
+    # `DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT` terminal を生み得た。
+    # `frozen_design.design_revision` marker（`_is_v1_1_manifest()`）が
+    # `"1.1"` を宣言し、かつ `realized_split`（`holdout_sweeps` と常に同時に
+    # 付与される sibling 非-core キー）が存在する full/armed-shape manifest
+    # に限り、top-level `holdout_sweeps` キー自体の存在を必須化する——
+    # 欠落は他の宣言内容と無関係に単独の `holdout_pin_declaration_mismatch`
+    # violation として即 fail-closed し、以降の per-family 照合（意味を
+    # 持たないため）は実行しない。`realized_split` も無い manifest（v1.1
+    # `dry_run()` の core-only manifest。secret 未生成で `holdout_sweeps`
+    # 欠落が設計上正当）は本チェックの対象外のまま従来の nested fallback
+    # 経路を維持する（後方互換・偽陽性防止）。
+    if is_v1_1 and found_realized_split and not found_holdout:
+        return (
+            SweepManifestViolationDetail(
+                violation="holdout_pin_declaration_mismatch",
+                family="",
+                sweep_id="",
+                expected_count=0,
+                actual_count=0,
+                detail=(
+                    "top-level holdout_sweeps section is required for v1.1 "
+                    f"manifests (frozen_design.design_revision={_V1_1_DESIGN_REVISION!r}) "
+                    "but is missing — without it, the per-family re-derivation "
+                    "match and realized-split membership checks silently no-op "
+                    "(found_holdout=False), and C4's expected_sweep_ids capacity "
+                    "check falls back to the full declared-sweep set (including "
+                    "sweeps never resident on HOLDOUT), which can manufacture a "
+                    "false DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT terminal "
+                    "(Codex round 23 finding, ADOPT; fail-closed, §V2.2)"
+                ),
+            ),
+        )
+
+    rows = build_matrix()
+    declared = declared_sweeps_by_family(rows)
+    params = holdout_pin_params_by_family(rows)
+
+    declared_raw_by_family: dict[str, object] = {}
+    for family in fixture_axes.FixtureFamily:
+        fam = family.value
+        declared_raw: object = None
+        if found_holdout and isinstance(holdout_section, Mapping):
+            declared_raw = holdout_section.get(fam)
+        else:
+            found, entry = _resolve(manifest, f"frozen_design.fixture_spec.{fam}")
+            if found and isinstance(entry, Mapping):
+                declared_raw = entry.get("holdout_sweeps")
+        declared_raw_by_family[fam] = declared_raw
+
+    # secret 依存経路: 宣言値は一切参照せず、公称 k_hold から始まる正規の
+    # 縮退ループを検証側で完全再実行する（`armed_freeze()` と同一関数）。
+    full_pin: dict[str, dict[str, tuple[str, ...]]] | None = None
+    canonical_rederivation_error: Exception | None = None
+    if split_secret is not None:
+        row_inputs = row_inputs_for_split(rows, STRATUM_FACTOR_NAMES)
+        try:
+            full_pin, _realized = pin_and_realize_holdout(
+                rows, row_inputs, split_secret, STRATUM_FACTOR_NAMES
+            )
+        except (HoldoutPinInfeasible, HoldoutPinDegradationExhausted) as exc:
+            canonical_rederivation_error = exc
+
+    violations: list[SweepManifestViolationDetail] = []
+    for family in fixture_axes.FixtureFamily:
+        fam = family.value
+        declared_raw = declared_raw_by_family[fam]
+        hollow = (
+            declared_raw is None or _is_hollow(declared_raw) or not isinstance(declared_raw, Mapping)
+        )
+
+        # R11 対応（Codex 第 11 巡採用、2026-09-05）: 修正前は
+        # `declared_raw` が欠落/空（`{}`）だとここで即 `continue` し、以降の
+        # 公称 k_hold 再導出比較にすら到達しなかった——非免除
+        # （`pin_exempt=False`、すなわち `k_hold>=1`）family の pin 宣言を
+        # manifest から丸ごと消しても、この検査が沈黙して secret 依存 C0
+        # 検証を通過してしまう穴があった（membership 検査
+        # `_check_holdout_sweeps_realized_membership()` も同じ hollow 判定で
+        # skip するため二重に見逃す）。本対応は、`holdout_sweeps` トップ
+        # レベルキー自体が manifest に存在する（`found_holdout` — v1.1+
+        # 形式である version marker）かつ `split_secret` が渡る secret 依存
+        # 完全再導出経路に限り、pin 免除でない全 family について宣言の
+        # 存在と非空を必須にする：欠落/空は fail-closed。逆に pin 免除
+        # family（`cap<1`）は空宣言 `{}` が正しい姿であり、非空の宣言は
+        # （免除のはずの family が pin を騙る改竄）fail-closed で検出する。
+        # `holdout_sweeps` キー自体が無い v1.0 形式 manifest（`found_holdout`
+        # =False）は、この必須化の対象外のまま従来どおり「宣言があれば照合」
+        # を維持する（後方互換）。
+        #
+        # R23 追補（Codex 第 23 巡 P2 採用、2026-09-05）: `split_secret is
+        # None` の dry-run 経路も、`is_v1_1` の場合はこの必須化の対象に含める
+        # ——「宣言の存在と構造」までは secret 無しでも検証できる（下の
+        # `legitimately_empty` 判定は `full_pin`（secret 依存の再導出）が
+        # 無ければ `rederivation_indicates_empty` が常に False になり、
+        # `p.pin_exempt` のみで legitimacy を判定する——これは意図的な
+        # fail-closed: 「本当に正当な縮退か」を secret 無しで確認できない
+        # 以上、非免除 family の空宣言は疑わしいものとして扱う）。v1.0
+        # legacy manifest（`is_v1_1=False`）は `split_secret is None` の場合
+        # 引き続き対象外（後方互換）。
+        if found_holdout and (split_secret is not None or is_v1_1) and fam in params:
+            p = params[fam]
+            # v1.1 §V3.5 実装時発見（2026-09-05）: `p.pin_exempt` は matrix
+            # 構造のみで決まる静的概念（`cap<1`）であり、段 2 coverage repair
+            # が secret 依存で `degradation_floor`（claim 非被覆 family では
+            # 0）まで完全縮退した「実行時の」ゼロ pin（`p.pin_exempt=False`
+            # のまま起こりうる——nuisance_axis coverage 制約導入後、
+            # `TILT_GT` で実際に観測される）とは別軸である。空宣言の正当性は
+            # 「再導出結果そのものが空か」（`full_pin` — 既に再実行済みの
+            # 正規縮退ループの出力、静的 `pin_exempt` を包含する）で判定
+            # しなければ、正当な完全縮退を fail-closed で誤検出する
+            # （逆に、宣言と再導出のどちらも空でない/どちらも空、の不一致は
+            # 後続の per-sweep_id 完全一致検査が別途捕捉するため、ここでの
+            # 判定を緩めても改竄検出力は落ちない）。
+            rederivation_indicates_empty = (
+                canonical_rederivation_error is None
+                and full_pin is not None
+                and not full_pin.get(fam)
+            )
+            legitimately_empty = p.pin_exempt or rederivation_indicates_empty
+            if not legitimately_empty and hollow:
+                violations.append(
+                    SweepManifestViolationDetail(
+                        violation="holdout_pin_declaration_mismatch",
+                        family=fam,
+                        sweep_id="",
+                        expected_count=p.k_hold,
+                        actual_count=0,
+                        detail=(
+                            f"holdout_sweeps.{fam} declaration is missing or empty, but "
+                            f"family is not pin-exempt (k_hold={p.k_hold} >= 1) and the "
+                            "split_secret re-derivation does not itself produce an empty "
+                            "pin set — a non-exempt family's holdout pin declaration must "
+                            "be present and non-empty unless legitimately degraded to zero "
+                            "(fail-closed, §V2.2)"
+                        ),
+                    )
+                )
+                continue
+            if p.pin_exempt and not hollow:
+                violations.append(
+                    SweepManifestViolationDetail(
+                        violation="holdout_pin_declaration_mismatch",
+                        family=fam,
+                        sweep_id="",
+                        expected_count=0,
+                        actual_count=(
+                            len(declared_raw) if isinstance(declared_raw, Mapping) else 0
+                        ),
+                        detail=(
+                            f"holdout_sweeps.{fam} declares pinned sweep(s) but the family "
+                            "is pin-exempt (cap<1) — an exempt family must declare an empty "
+                            "mapping (fail-closed, §V2.2)"
+                        ),
+                    )
+                )
+                continue
+
+        if hollow:
+            continue
+
+        actual = _normalize_declared_sweeps(declared_raw)
+        if actual is None:
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="holdout_pin_declaration_mismatch",
+                    family=fam,
+                    sweep_id="",
+                    expected_count=0,
+                    actual_count=len(declared_raw),
+                    detail=f"holdout_sweeps.{fam} (inner shape malformed)",
+                )
+            )
+            continue
+
+        if canonical_rederivation_error is not None:
+            # 公称 k_hold からの正規縮退ループそのものが再実行できない
+            # （fail-closed）——宣言のどんな内容とも突き合わせようがない。
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="holdout_pin_declaration_mismatch",
+                    family=fam,
+                    sweep_id="",
+                    expected_count=0,
+                    actual_count=len(actual),
+                    detail=(
+                        f"holdout_sweeps.{fam}: canonical pin-and-realize degradation "
+                        f"retry from nominal k_hold could not be re-executed "
+                        f"({canonical_rederivation_error}) — declaration cannot be "
+                        "trusted, refusing (fail-closed)"
+                    ),
+                )
+            )
+            continue
+
+        expected = full_pin.get(fam, {}) if full_pin is not None else None
+        family_declared = declared.get(fam, {})
+        k_hold = params[fam].k_hold if fam in params else None
+
+        # secret 非依存経路（`expected is None`）: nominal k_hold との単純
+        # 一致のみを見る——宣言された pin 数を override として信頼しない
+        # （縮退の正当性は段 2 の再実行なしには判定できないため、secret が
+        # なければ「縮退している」という宣言そのものを検査対象にしない）。
+        if expected is None and k_hold is not None and len(actual) != k_hold:
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="holdout_pin_declaration_mismatch",
+                    family=fam,
+                    sweep_id="",
+                    expected_count=k_hold,
+                    actual_count=len(actual),
+                    detail=(
+                        f"holdout_sweeps.{fam} declares {len(actual)} pinned sweep(s), "
+                        f"expected k_hold={k_hold}"
+                    ),
+                )
+            )
+
+        candidate_sweep_ids = set(actual) | (set(expected) if expected is not None else set())
+        for sweep_id in sorted(candidate_sweep_ids):
+            actual_members = actual.get(sweep_id)
+            if expected is not None:
+                expected_members = expected.get(sweep_id)
+                mismatch = actual_members != expected_members
+                detail_suffix = "does not match the split_secret re-derivation"
+            else:
+                if actual_members is None:
+                    continue
+                expected_members = family_declared.get(sweep_id)
+                mismatch = expected_members is None or actual_members != expected_members
+                detail_suffix = (
+                    "is not a declared sweep of the frozen matrix (or its member row_id "
+                    "set does not match declared_sweeps)"
+                )
+            if not mismatch:
+                continue
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="holdout_pin_declaration_mismatch",
+                    family=fam,
+                    sweep_id=sweep_id,
+                    expected_count=len(expected_members or ()),
+                    actual_count=len(actual_members or ()),
+                    detail=f"holdout_sweeps.{fam}[{sweep_id!r}] {detail_suffix}",
+                )
+            )
+    return tuple(violations)
+
+
+def _check_holdout_sweeps_realized_membership(
+    manifest: Mapping[str, object],
+) -> tuple[SweepManifestViolationDetail, ...]:
+    """v1.1 §V2.3: 実現済み split (`realized_split.assignment`) 上で
+    `holdout_sweeps` の member 行が 1 行でも HOLDOUT 以外に割当てられて
+    いれば fail-closed する（割当実装の欠陥）。`realized_split`/
+    `holdout_sweeps` が共に存在する full manifest（armed freeze 後）でのみ
+    意味を持つ——いずれかが欠落する manifest（dry-run 等）は対象外。
+    """
+    found_split, split_section = _resolve(manifest, "realized_split.assignment")
+    found_holdout, holdout_section = _resolve(manifest, "holdout_sweeps")
+    if not found_split or not isinstance(split_section, Mapping):
+        return ()
+    if not found_holdout or not isinstance(holdout_section, Mapping):
+        return ()
+    violations: list[SweepManifestViolationDetail] = []
+    for family in fixture_axes.FixtureFamily:
+        fam = family.value
+        declared_raw = holdout_section.get(fam)
+        if declared_raw is None or _is_hollow(declared_raw) or not isinstance(declared_raw, Mapping):
+            continue
+        normalized = _normalize_declared_sweeps(declared_raw)
+        if normalized is None:
+            continue
+        for sweep_id, member_ids in normalized.items():
+            offending = tuple(
+                rid for rid in member_ids if split_section.get(rid) != vocab.Split.HOLDOUT.value
+            )
+            if offending:
+                violations.append(
+                    SweepManifestViolationDetail(
+                        violation="holdout_pin_not_in_holdout_split",
+                        family=fam,
+                        sweep_id=sweep_id,
+                        expected_count=len(member_ids),
+                        actual_count=len(member_ids) - len(offending),
+                        detail=(
+                            f"holdout_sweeps.{fam}[{sweep_id!r}] has member row_id(s) not "
+                            f"assigned to HOLDOUT in realized_split.assignment: "
+                            f"{list(offending)!r}"
+                        ),
+                    )
+                )
+    return tuple(violations)
+
+
+def _legacy_v1_0_opt_in_verified(
+    manifest: Mapping[str, object], manifest_path: Path | str | None
+) -> bool:
+    """R22-1 対応（Codex 第 22 巡 finding (1)）: `allow_legacy_v1_0=True` を
+    「campaign directory 上に既に存在する manifest ファイルであり、かつその
+    campaign の ledger が closed（chain 検証が通り、末尾 event の
+    `payload.kind == "campaign_closed"`）または aborted（`archive_
+    aborted_ledger.ensure_archived()` が公開した `ledger.jsonl.gz` +
+    sidecar のペアが実際に検証を通る）である」場合に限って有効化する。
+
+    `manifest_path=None`（in-memory で組み立てた未書込 manifest——
+    `c0_freeze.dry_run()`/`armed_freeze()` が呼ぶ経路）では常に `False` を
+    返す。これにより、新規 freeze 経路は `allow_legacy_v1_0=True` を渡しても
+    legacy 扱いにならず（そもそも渡していない——両呼び出しとも本引数を渡さない
+    デフォルト False のまま）、opt-in は「既に確定した過去の campaign を
+    後から検証し直す」用途のみに限定される。
+
+    R24-2 対応（Codex 第 24 巡 P2 採用、2026-09-05、PRRT_kwDOSD2OOM6fgdGg）:
+    修正前は (a) `ledger.jsonl.gz` という名前の**通常ファイルが存在するだけ**
+    で aborted 扱いにしており、sidecar sha256 との一致・実伸長・chain 検証の
+    いずれも行っていなかった（空ファイル/fabricated gz でも opt-in が
+    通ってしまう）、(b) closed 判定も生の `ledger.jsonl` を行単位で JSON
+    スキャンするだけで、chain 検証済みの正典であることも「末尾が
+    campaign_closed か」も確認していなかった（改竄・途中の孤立した
+    `campaign_closed` 行でも通ってしまう）。修正は両方とも
+    `tools.archive_aborted_ledger`/`provenance.Ledger` が既に持つ検証実装を
+    共有する: aborted は `archive_aborted_ledger._verify_gz_sidecar_pair()`
+    （sidecar 形式・gz 実伸長・sidecar sha256 一致・伸長結果の chain 検証の
+    4 点、`ensure_archived()` 自身が公開前に使うのと同一関数）、closed は
+    `provenance.Ledger.load_with_verification()` の chain 検証 (`chain.ok`)
+    に加え、entries の**末尾**（`entries[-1]`）が `campaign_closed` である
+    ことを要求する（生スキャンでは「どこかに 1 行あれば真」だったのを、
+    正規の閉鎖手順が必ず末尾に置く event の位置まで絞り込む）。
+
+    R25-1 対応（Codex 第 25 巡 P2 採用、2026-09-05,
+    "Bind legacy opt-in to the manifest being validated"）: R24-2 までの
+    実装は「`manifest_path` の親 campaign directory の ledger が
+    closed/aborted である」ことだけを検証しており、その ledger が
+    **`manifest_path`/`manifest` 自身の freeze 履歴である**ことは一切
+    確認していなかった。他 campaign の正規 closed/aborted archive
+    （`ledger.jsonl` または `ledger.jsonl.gz`+sidecar）を revision marker
+    無しの manifest の隣にコピーするだけで、無関係な ledger の
+    chain-valid 性を借りて legacy 免除が成立してしまう（v1.1 の
+    uncertainty 系検証を丸ごとスキップできる）。加えて in-memory
+    `manifest`（呼び出し元が実際に検証しようとしている値）が
+    `manifest_path` の on-disk 内容と一致することも未確認だった。
+
+    修正は 2 段の束縛を追加する（いずれか一方でも欠けたら `False`）:
+
+    (a) **manifest 自己 hash の一致**: `manifest_path` の生バイト列の
+        sha256 が、in-memory `manifest` から計算した
+        `canonical.manifest_sha()` と一致することを要求する。
+        `c0_freeze.py` は `c0_manifest.json` を常に
+        `canonical_json(full_manifest)` で書き込むため、改変されていない
+        限りこの 2 値は厳密に一致する。不一致は「in-memory manifest が
+        path の内容と異なる」ことを意味し、他 campaign の manifest を
+        誤って渡した・path 側だけ後から書き換えられた、のいずれかで
+        fail-closed する。
+
+    (b) **ledger の freeze identity の一致**: ledger の genesis event
+        （`entries[0]`、`payload.kind == "c0_freeze"`）に記録された
+        `manifest_sha`/`manifest_core_sha` が、(a) で検証した manifest から
+        計算した値（`manifest_sha` は (a) と同じ
+        `canonical.manifest_sha()`、`manifest_core_sha` は
+        `c0_freeze.manifest_core_sha()`）と一致することを要求する。これに
+        より、ledger 自体は chain-valid でも「この manifest を freeze した
+        ものではない」場合（他 campaign の archive の使い回し）を検出する。
+        `c0_freeze.py` は `c0_validate` を import するため
+        `manifest_core_sha()` は遅延 import する（循環 import 回避）。
+    """
+    if manifest_path is None:
+        return False
+    path = Path(manifest_path)
+    if not path.is_file():
+        return False
+
+    # R25-1 (a): path のバイト列と in-memory manifest の正規化 JSON が
+    # 一致することを要求する。
+    try:
+        path_bytes = path.read_bytes()
+    except OSError:
+        return False
+    path_sha = hashlib.sha256(path_bytes).hexdigest()
+    try:
+        in_memory_manifest_sha = _canonical_manifest_sha(manifest)
+    except Exception:  # noqa: BLE001 - 正規化不能な manifest も opt-in 不可扱い
+        return False
+    if path_sha != in_memory_manifest_sha:
+        return False
+
+    # R25-1 (b): `c0_freeze.manifest_core_sha()` は `c0_validate` を
+    # import する `c0_freeze` モジュールの関数のため、ここでのみ遅延
+    # import する（モジュール先頭での import は循環 import を起こす）。
+    from voice_genesis.calibration import c0_freeze as _c0_freeze
+
+    try:
+        expected_core_sha = _c0_freeze.manifest_core_sha(manifest)
+    except Exception:  # noqa: BLE001 - core payload 導出不能も opt-in 不可扱い
+        return False
+
+    def _freeze_identity_matches(entries: Sequence[object]) -> bool:
+        if not entries:
+            return False
+        genesis_payload = entries[0].payload
+        if not isinstance(genesis_payload, Mapping) or genesis_payload.get("kind") != "c0_freeze":
+            return False
+        return (
+            genesis_payload.get("manifest_sha") == in_memory_manifest_sha
+            and genesis_payload.get("manifest_core_sha") == expected_core_sha
+        )
+
+    campaign_dir = path.parent
+    gz_path = campaign_dir / archive_aborted_ledger.GZ_FILENAME
+    sidecar_path = campaign_dir / archive_aborted_ledger.SIDECAR_FILENAME
+    if gz_path.is_file():
+        try:
+            archive_aborted_ledger._verify_gz_sidecar_pair(gz_path, sidecar_path)
+        except archive_aborted_ledger.ArchiveError:
+            return False
+        # sidecar sha256 一致・gz 実伸長・伸長結果の chain 検証まで通った
+        # ——`ensure_archived()` が公開前に要求するのと同じ 4 点がすべて
+        # 揃っている（D100/c0e466c の「公開は検証成功後にのみ」契約と整合）。
+        # R25-1: そのうえで、伸長結果の genesis event の freeze identity を
+        # (a) で検証した manifest と突き合わせる（`_verify_gz_sidecar_pair`
+        # 自体は sha256/chain のみ検証し中身の identity までは見ないため、
+        # ここで改めて伸長・parse する）。
+        try:
+            decompressed = gzip.decompress(gz_path.read_bytes())
+        except OSError:
+            return False
+        tmp_fd, tmp_name = tempfile.mkstemp(
+            dir=str(gz_path.parent), prefix=".legacy-opt-in-verify-", suffix=".jsonl"
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(tmp_fd, "wb") as f:
+                f.write(decompressed)
+            decompressed_ledger, decompressed_chain = Ledger.load_with_verification(tmp_path)
+        except Exception:  # noqa: BLE001 - 検証不能も「legacy opt-in 不可」扱い
+            return False
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        if not decompressed_chain.ok:
+            return False
+        return _freeze_identity_matches(decompressed_ledger.entries)
+
+    ledger_path = campaign_dir / "ledger.jsonl"
+    if not ledger_path.is_file():
+        return False
+    try:
+        ledger, chain = Ledger.load_with_verification(ledger_path)
+    except Exception:  # noqa: BLE001 - 検証不能も「legacy opt-in 不可」扱い
+        return False
+    if not chain.ok:
+        return False
+    entries = ledger.entries
+    if not entries:
+        return False
+    tail_payload = entries[-1].payload
+    if not (isinstance(tail_payload, Mapping) and tail_payload.get("kind") == "campaign_closed"):
+        return False
+    # R25-1 (b): closed campaign についても genesis event の freeze
+    # identity を manifest と突き合わせる。
+    return _freeze_identity_matches(entries)
+
+
+def validate_c0_manifest(
+    manifest: Mapping[str, object],
+    *,
+    split_secret: bytes | None = None,
+    allow_legacy_v1_0: bool = False,
+    manifest_path: Path | str | None = None,
+) -> C0ValidationResult:
+    """C0 freeze manifest を dry-run 検証する（書込・secret 生成・freeze event なし）。
+
+    `allow_legacy_v1_0`（R22-1、既定 False）: `frozen_design.design_revision`
+    marker が無い/一致しない legacy (v1.0) manifest の検証を明示的に許可する
+    opt-in。`_legacy_v1_0_opt_in_verified(manifest, manifest_path)` が「on-disk の
+    closed/aborted campaign manifest である」ことを確認できた場合にのみ実際に
+    有効化される——`manifest_path` を渡さない、または campaign が
+    closed/aborted と確認できない場合は `True` を渡しても legacy 扱いに
+    ならない（fail-closed）。`c0_freeze.dry_run()`/`armed_freeze()` が呼ぶ
+    新規 freeze 経路はこの引数を一切渡さない（常に v1.1 必須のまま）。
+    """
+    legacy_design_revision_ok = allow_legacy_v1_0 and _legacy_v1_0_opt_in_verified(
+        manifest, manifest_path
+    )
+    missing_required = _check_required_blocking(
+        manifest, legacy_design_revision_ok=legacy_design_revision_ok
+    )
     missing_required += _check_claim_critical_set(manifest)
     missing_required += _check_checkout_identity(manifest)
     missing_required += _check_hash_maps(manifest)
@@ -1540,6 +2805,14 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
     unseeded_streams = _check_rng_ledger_unseeded(manifest)
     sweep_violations = _check_declared_sweep_truth_levels(manifest)
     sweep_mismatch_violations = _check_declared_sweep_declaration_match(manifest)
+    claim_relevant_violations = _check_claim_relevant_fields_match(manifest)
+    invariance_axis_violations = _check_invariance_axes_match(manifest)
+    u_gt_u_num_violations = _check_u_gt_u_num_bounds(manifest)
+    holdout_pin_feasibility_violations = _check_holdout_pin_feasibility(manifest)
+    holdout_pin_declaration_violations = _check_holdout_sweeps_declaration_match(
+        manifest, split_secret
+    )
+    holdout_pin_membership_violations = _check_holdout_sweeps_realized_membership(manifest)
 
     # UNDERSPEC-CAL-D78 ruling（#344 round 9 ADOPT, 分類②）: sweep 関連の
     # fail-closed 事由（D76 ruling (2) の truth-level 不足 / D77 ruling (1)
@@ -1547,9 +2820,22 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
     # 既存の `BLOCKED_C0_MANIFEST_INCOMPLETE` で表現する（`all_missing` 経由
     # で既に発行済みなら二重追加しない）。診断詳細は
     # `sweep_declaration_violations`/`sweep_declaration_mismatch_violations`
-    # の `SweepManifestViolationDetail` に残る。
+    # の `SweepManifestViolationDetail` に残る。v1.1 §V2.2/§V2.3 の holdout
+    # sweep pinning 関連 4 検査（claim-relevant field 照合・k_hold 被覆可能性・
+    # holdout_sweeps 宣言一致・realized split 上の member 所属）も同じ規約で
+    # 合流させる（新規 vocab code は発行しない）。
     blocked: list[vocab.BlockedCode] = []
-    if all_missing or sweep_violations or sweep_mismatch_violations:
+    if (
+        all_missing
+        or sweep_violations
+        or sweep_mismatch_violations
+        or claim_relevant_violations
+        or invariance_axis_violations
+        or u_gt_u_num_violations
+        or holdout_pin_feasibility_violations
+        or holdout_pin_declaration_violations
+        or holdout_pin_membership_violations
+    ):
         blocked.append(vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE)
     if unseeded_streams:
         blocked.append(vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG)
@@ -1563,4 +2849,81 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
         unseeded_rng_streams=unseeded_streams,
         sweep_declaration_violations=sweep_violations,
         sweep_declaration_mismatch_violations=sweep_mismatch_violations,
+        claim_relevant_field_violations=claim_relevant_violations,
+        invariance_axis_violations=invariance_axis_violations,
+        u_gt_u_num_bound_violations=u_gt_u_num_violations,
+        holdout_pin_feasibility_violations=holdout_pin_feasibility_violations,
+        holdout_pin_declaration_violations=holdout_pin_declaration_violations,
+        holdout_pin_membership_violations=holdout_pin_membership_violations,
     )
+
+
+# ---------------------------------------------------------------------------
+# CLI（R22-1 対応、Codex 第 22 巡 finding (1)）: 既存 campaign の
+# `c0_manifest.json` を独立に dry-run 検証する薄いエントリポイント。
+# `c0_freeze.py` の `dry_run()`/`armed_freeze()` は常に in-memory で新規
+# manifest を組み立てて検証する（`--allow-legacy-v1-0` を持たない・常に
+# v1.1 必須）ため、on-disk の既存 manifest（典型的には closed/aborted
+# campaign）だけを検証したい場合の別入口として本 CLI を設ける。
+# ---------------------------------------------------------------------------
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m voice_genesis.calibration.c0_validate",
+        description=(
+            "既存の c0_manifest.json を dry-run 検証する（書込・secret 生成なし）。"
+        ),
+    )
+    parser.add_argument("manifest_path", type=Path, help="検証対象の c0_manifest.json への path")
+    parser.add_argument(
+        "--allow-legacy-v1-0",
+        action="store_true",
+        default=False,
+        help=(
+            "frozen_design.design_revision marker が無い/一致しない legacy (v1.0) "
+            "manifest の検証を許可する（R22-1 opt-in）。実際に有効化されるのは "
+            "manifest_path の親 campaign directory の ledger が closed "
+            "(payload.kind=='campaign_closed') または aborted "
+            "(ledger.jsonl.gz が archive 済み) と確認できた場合のみ——それ以外は "
+            "このフラグを渡しても fail-closed のまま。"
+        ),
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _build_arg_parser().parse_args(argv)
+    manifest_path: Path = args.manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    result = validate_c0_manifest(
+        manifest,
+        allow_legacy_v1_0=args.allow_legacy_v1_0,
+        manifest_path=manifest_path,
+    )
+    if result.is_blocked:
+        print(f"BLOCKED: {[code.value for code in result.blocked_codes]}")
+        for key in result.missing_required_keys:
+            print(f"  missing_required_keys: {key}")
+        for violations, label in (
+            (result.u_gt_u_num_bound_violations, "u_gt_u_num_bound_violations"),
+            (result.sweep_declaration_violations, "sweep_declaration_violations"),
+            (result.sweep_declaration_mismatch_violations, "sweep_declaration_mismatch_violations"),
+            (result.claim_relevant_field_violations, "claim_relevant_field_violations"),
+            (result.invariance_axis_violations, "invariance_axis_violations"),
+            (result.holdout_pin_feasibility_violations, "holdout_pin_feasibility_violations"),
+            (result.holdout_pin_declaration_violations, "holdout_pin_declaration_violations"),
+            (result.holdout_pin_membership_violations, "holdout_pin_membership_violations"),
+        ):
+            for v in violations:
+                print(f"  {label}: {v.family}.{v.sweep_id}: {v.detail}")
+        return 1
+    print("OK: no REQUIRED_BLOCKING violations")
+    if result.downgrade_annotations:
+        for annotation in result.downgrade_annotations:
+            print(f"  downgrade_annotation: {annotation}")
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())

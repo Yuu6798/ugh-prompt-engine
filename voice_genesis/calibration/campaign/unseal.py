@@ -34,13 +34,15 @@ Gate 3 承認・5-sha いずれかが欠ければ `UnsealError` を送出し、l
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from voice_genesis.calibration.approvals import Gate, load_approval
+from voice_genesis.calibration.campaign.caps import CostCapExceededError
 from voice_genesis.calibration.campaign.state import FrozenCampaign
+from voice_genesis.calibration.cost_caps import StopDecision
 from voice_genesis.calibration.provenance import LedgerEntry
 
 _PREREQUISITE_KIND_FOR_KEY: Mapping[str, str] = {
@@ -138,6 +140,7 @@ def unseal_campaign(
     *,
     approval_dir: Path,
     invocation_id: str | None = None,
+    pre_transition_checkpoint: Callable[[], StopDecision | None] | None = None,
 ) -> UnsealResult:
     """§7 の 5-sha 相互参照検査 → Gate 3 承認検証 → `GATE3_ACCEPTED` event →
     `holdout_unseal` event の順で実行する。いずれかが失敗すれば `UnsealError`
@@ -195,6 +198,33 @@ def unseal_campaign(
 
     payload = sf_entry.payload
     assert isinstance(payload, Mapping)  # verified by verify_unseal_prerequisites
+
+    # `[UNDERSPEC-CAL-D87]`(ii): `unseal` delegates its entire stage body
+    # (5-sha prerequisite verification + Gate 3 verification + both ledger
+    # appends) to this single function call, exactly like `c1-fixtures`/
+    # `c2-baseline` delegate to `render_stage.run_render_stage()`/
+    # `baseline_stage.run_baseline_stage()` (see those functions' identical
+    # notes) — `cli.py` has no chance to interject its own `_checkpoint_
+    # parent_cpu_before_transition()` call between "prerequisites verified"
+    # and "`holdout_unseal` appended" the way `_run_c3a`/`_run_c3b`/`_run_
+    # c4`/`_run_close` do. `pre_transition_checkpoint`, when given, is
+    # `cli.py`'s `_checkpoint_parent_cpu_before_transition()` wrapped as a
+    # zero-arg callable, called here immediately before the `holdout_
+    # unseal` transition append (the `gate3_accepted` append above it is
+    # not itself a phase-transition event — `campaign/state.py`'s
+    # `LEDGER_KIND_FOR_PHASE` maps only `"holdout_unseal"` to `UNSEALED`)
+    # so a breach blocks that transition from ever being recorded. Raises
+    # `CostCapExceededError` — `unseal_campaign()`'s own return type
+    # (`UnsealResult`) has no room for a COST_CAP_EXCEEDED variant, and
+    # `cli._run_unseal()` already propagates `UnsealError` uncaught-to-
+    # caller-handled only via its own `except`, so a distinct exception
+    # type here keeps the two failure modes (unseal prerequisites unmet vs.
+    # cap breach) from being conflated under the same `except` clause.
+    if pre_transition_checkpoint is not None:
+        breach = pre_transition_checkpoint()
+        if breach is not None:
+            raise CostCapExceededError(breach.detail)
+
     unseal_entry = campaign.ledger.append(
         {
             "kind": "holdout_unseal",
@@ -204,6 +234,17 @@ def unseal_campaign(
             "selection_rule_sha": payload["selection_rule_sha"],
             "selected_candidate_sha": payload["selected_candidate_sha"],
             "gate3_accepted_sha": gate3_entry.entry_sha,
+            # `[UNDERSPEC-CAL-D88]`(a): replay-verifier parity for the D85
+            # freeze-ordering check above — `provenance.
+            # _verified_holdout_unseal_detail()` uses this to re-derive
+            # `freeze_time < gate3_time <= unseal_time` independently from
+            # the ledger alone (the live check above only proves it once,
+            # at unseal time; this field lets a later, independent replay
+            # of the ledger re-verify the same ordering without trusting
+            # this process's live clock). Same `datetime.now(timezone.utc).
+            # isoformat()` convention `c0_freeze.py` uses for its own
+            # `event_time_utc` field.
+            "event_time_utc": datetime.now(timezone.utc).isoformat(),
             "invocation_id": invocation_id,
         }
     )

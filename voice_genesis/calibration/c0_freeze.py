@@ -43,6 +43,7 @@ from typing import Any
 
 from voice_genesis.calibration import c0_validate, e_use_table, streams, vocab
 from voice_genesis.calibration.approvals import (
+    DESIGN_DOC_RELATIVE_PATH,
     GATE_SHORT_NAME,
     ArmingDecision,
     ApprovalLoadResult,
@@ -55,23 +56,30 @@ from voice_genesis.calibration.candidates import registry
 from voice_genesis.calibration.candidates.registry import Candidate
 from voice_genesis.calibration.canonical import canonical_json
 from voice_genesis.calibration.canonical import manifest_sha as _full_manifest_sha
+from voice_genesis.calibration.fixtures import axes
+from voice_genesis.calibration.fixtures import uncertainty as fixture_uncertainty
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
 from voice_genesis.calibration.fixtures.controls import ControlClass
 from voice_genesis.calibration.fixtures.matrix import (
-    MatrixRow,
+    HoldoutPinDegradationExhausted,
+    HoldoutPinInfeasible,
     _negative_applicable,
     build_matrix,
+    claim_relevant_fields_by_family,
     declared_sweeps_by_family,
+    invariance_axes_by_family,
 )
 from voice_genesis.calibration.fixtures.matrix import build_matrix as _canonical_build_matrix
 from voice_genesis.calibration.provenance import Ledger
 from voice_genesis.calibration.splitter import (
+    STRATUM_FACTOR_NAMES,
     RealizedSplitMap,
     RowInput,
     SwapRecord,
-    realize_split,
     verify_split,
 )
+from voice_genesis.calibration.splitter import pin_and_realize_holdout as _pin_and_realize_holdout
+from voice_genesis.calibration.splitter import row_inputs_for_split as _row_inputs_for_split
 from voice_genesis.calibration.vocab import Split
 
 #: `c0_freeze.py` から 2 階層上が repo root（`voice_genesis/calibration/c0_freeze.py`）。
@@ -318,12 +326,34 @@ _GENERATOR_MODULE_RELATIVE_PATH: dict[str, str] = {
 #: UNDERSPEC-CAL-D76（D75 を SUPERSEDE）: `confound_axes` を DIRECTIONAL gate
 #: の sweep_id 宣言として再利用する D18/D75 の写像は誤りだった（nuisance 軸で
 #: 切ると group 内 truth が anchor 固定になり全 pair `delta_truth == 0` —
-#: `sweep_truth_investigation.md`）。`confound_axes` はこの flat 6-tuple の
-#: ままとし、DIRECTIONAL sweep 宣言は下の `declared_sweeps`（def A: truth-core
-#: block の nuisance-constant series、`fixtures.matrix.declared_sweeps_by_
-#: family()`）という別 key へ分離する。
-_CONFOUND_AXES: tuple[str, ...] = ("f0_hz", "sr_hz", "gain_dbfs", "duration_s", "noise_snr_db", "context")
+#: `sweep_truth_investigation.md`）。DIRECTIONAL sweep 宣言は下の
+#: `declared_sweeps`（def A: truth-core block の nuisance-constant series、
+#: `fixtures.matrix.declared_sweeps_by_family()`）という別 key に分離する。
+#:
+#: v1.1 §V3.5（Codex レビュー第 12 巡 P1 採用、2026-09-05）: `confound_axes`
+#: の flat 6-tuple 一律宣言（旧: 全 family に f0_hz/sr_hz を含む同一 6 軸）は
+#: 正典 456 セル行列に f0_hz/sr_hz を名指す単一軸 CONFOUND 行が存在しない
+#: ことと矛盾し、gate4' の invariance pair が当該軸で構造的に 0 件となり
+#: 全 ABSOLUTE 候補が偽失敗していた。`confound_axes` は
+#: `fixtures.matrix.invariance_axes_by_family()`（凍結 matrix の CONFOUND
+#: block から単一軸主効果行が実在する軸のみを機械導出）に置換し、family ごと
+#: に異なる宣言を持つ（`_fixture_specs()` 内で計算）。`c0_validate` が
+#: 再導出との完全一致を検査する（D77 同型）。
 _BOUNDARY_PROBES: tuple[str, ...] = ("f0_hz", "sr_hz", "gain_dbfs", "duration_s", "noise_snr_db")
+
+
+# ---------------------------------------------------------------------------
+# v1.1 §V3.3 追補: U_GT / U_num の C0 凍結（実装時発見、2026-09-05）
+# ---------------------------------------------------------------------------
+#
+# R22-2 対応（Codex 第 22 巡 finding (2)、2026-09-05）: 導出そのもの
+# （`gather_u_bound_inputs()`/`derive_u_gt_bound()`/`derive_u_num_bound()`）は
+# `voice_genesis.calibration.fixtures.uncertainty`（producer/validator 共有の
+# canonical モジュール）へ移設した——`c0_validate._check_u_gt_u_num_bounds()`
+# が同一関数を manifest 記録済みの入力（`u_bound_inputs`）から再実行し、
+# 宣言値と一致するかを検査する（manifest 自己完結の原則。詳細は同モジュールの
+# docstring 参照）。本モジュールは producer 側の呼び出し（`_fixture_specs()`）
+# のみを持つ。
 
 
 def _fixture_specs(root: Path) -> dict[str, object]:
@@ -335,7 +365,19 @@ def _fixture_specs(root: Path) -> dict[str, object]:
     #: （`dry_run()`/E2E テストが `build_matrix` を monkeypatch する経路）から
     #: 意図的に独立させた `_canonical_build_matrix` から導出する。member
     #: row_id も含めて記録する（`manifest_core_sha` に含まれる）。
-    declared_sweeps = declared_sweeps_by_family(_canonical_build_matrix())
+    canonical_rows = _canonical_build_matrix()
+    declared_sweeps = declared_sweeps_by_family(canonical_rows)
+    #: v1.1 §V2.2 5th bullet: claim-relevant field（machine-derived, secret
+    #: 非依存）を declared_sweeps と同じ理由（`build_matrix` の test-only
+    #: 差し替えから独立させる）で `_canonical_build_matrix()` から導出する。
+    #: `holdout_sweeps`（pin 結果）は split_secret 依存のためここには含めない
+    #: ——`armed_freeze()` が secret 生成後に full manifest 側（`realized_
+    #: split` と同じ非-core 節）へ別途添付する（下記 `armed_freeze()` 参照）。
+    claim_relevant = claim_relevant_fields_by_family(canonical_rows)
+    #: v1.1 §V3.5: gate4' invariance 軸を凍結 matrix から family ごとに機械
+    #: 導出する（`declared_sweeps`/`claim_relevant` と同じ「差し替えから
+    #: 独立させた `_canonical_build_matrix()` 入口」を使う）。
+    invariance_axes = invariance_axes_by_family(canonical_rows)
     specs: dict[str, object] = {}
     for family in FixtureFamily:
         rel_path = _GENERATOR_MODULE_RELATIVE_PATH[family.value]
@@ -344,17 +386,48 @@ def _fixture_specs(root: Path) -> dict[str, object]:
             cc.value for cc in ControlClass if _negative_applicable(family, cc.value)
         )
         family_sweeps = declared_sweeps.get(family.value, {})
+        #: R22-2 対応: 導出入力一式を一度だけ収集し、そのまま manifest core
+        #: へ記録する（`u_bound_inputs`）とともに、canonical 関数へ渡して
+        #: value/formula を得る——producer/validator が同一関数・同一入力から
+        #: 同一の結果を再現できることが本 finding の要件（manifest 自己完結）。
+        u_bound_inputs = fixture_uncertainty.gather_u_bound_inputs(family)
+        u_gt_value, u_gt_formula = fixture_uncertainty.derive_u_gt_bound(family, u_bound_inputs)
+        u_num_value, u_num_formula = fixture_uncertainty.derive_u_num_bound(family, u_bound_inputs)
+        u_bound_unit = (
+            "n/a"
+            if family.value in fixture_uncertainty.U_ABSENT_REASON_BY_FAMILY
+            else axes.TRUTH_UNIT_BY_FAMILY[family.value]
+        )
         specs[family.value] = {
             "generator_version": "1",
             "generator_hash": generator_hash,
             "known_truth_field": _KNOWN_TRUTH_FIELD[family.value],
-            "confound_axes": list(_CONFOUND_AXES),
+            "confound_axes": list(invariance_axes.get(family.value, ())),
             "boundary_probes": list(_BOUNDARY_PROBES),
             "negative_controls": negative_controls,
             "declared_sweeps": {
                 sweep_id: list(member_row_ids)
                 for sweep_id, member_row_ids in sorted(family_sweeps.items())
             },
+            "claim_relevant_fields": list(claim_relevant.get(family.value, ())),
+            #: v1.1 §V3.3: `u_gt_bound`/`u_num_bound` は
+            #: `holdout_stage.declared_u_gt_u_num_for_family()` が既に読む
+            #: 後方互換 plain-number キー（型はそのまま非負 finite float か
+            #: `ABSENT:<reason>` 文字列）。値と導出式文字列を併記する v1.0
+            #: §10.2 の要件は、同じ scalar 契約を壊さない sibling キー
+            #: (`*_formula`/`*_unit`) として満たす。
+            "u_gt_bound": u_gt_value,
+            "u_gt_bound_formula": u_gt_formula,
+            "u_gt_bound_unit": u_bound_unit,
+            "u_num_bound": u_num_value,
+            "u_num_bound_formula": u_num_formula,
+            "u_num_bound_unit": u_bound_unit,
+            #: R22-2 対応: `c0_validate._check_u_gt_u_num_bounds()` が
+            #: `fixtures.axes` を再度読まずに canonical 再導出できるよう、
+            #: 上記 2 値の導出に実際に使った入力一式をそのまま記録する
+            #: （core 節。過去に凍結済みの manifest は、後日 axes.py の
+            #: 定数が変わってもこの記録済み入力だけから自己完結で再検証できる）。
+            "u_bound_inputs": u_bound_inputs,
         }
     return specs
 
@@ -382,6 +455,21 @@ _PROVENANCE_SPEC: dict[str, str] = {
         "events/*.json,renders/,measurements/}"
     ),
 }
+
+#: R20-3 対応（Codex 第 20 巡 finding (3)、2026-09-05）: `c0_validate.
+#: _check_u_gt_u_num_bounds()` が legacy（v1.0）manifest と v1.1 manifest を
+#: 判別する machine-readable version marker。`frozen_design.fixture_spec.
+#: <FAMILY>.u_gt_bound`/`.u_num_bound` を v1.1 §V3.3 追補で core へ常時
+#: 書き込むようになって以降、この marker が `frozen_design` に無い manifest
+#: （既存 closed campaign 3 件を含む）は「両フィールドがそもそも存在しない
+#: v1.0 形式」として legacy 扱いする。値は `approvals.DESIGN_DOC_RELATIVE_PATH`
+#: （v1.1 統治文書）が指す文書のバージョン番号と同期させる——文書側の実測
+#: sha256 も並記し、意味論だけでなく内容の pin としても機能させる。
+_DESIGN_REVISION: str = "1.1"
+
+
+def _design_doc_sha256(root: Path) -> str:
+    return hashlib.sha256((root / DESIGN_DOC_RELATIVE_PATH).read_bytes()).hexdigest()
 
 #: gate1 承認時に凍結される固定 stop rule 名（cost_caps 3 次元に 1:1 対応）。
 DEFAULT_STOP_RULES: tuple[str, ...] = (
@@ -463,6 +551,8 @@ def build_manifest(
         "dependencies": _dependencies_section(),
         "sample_format": _SAMPLE_FORMAT_SECTION,
         "frozen_design": {
+            "design_revision": _DESIGN_REVISION,
+            "design_doc_sha256": _design_doc_sha256(root),
             "claim_critical_set": sorted(m.value for m in vocab.CLAIM_CRITICAL_SET),
             "meter_specs": _meter_specs(),
             "fixture_spec": _fixture_specs(root),
@@ -508,12 +598,25 @@ def build_manifest(
 #: core_sha が不一致になり Gate 2 の束縛が無効化される（`campaign_id`/
 #: `authorization_nonce` とは異なり、`frozen_inputs` はこの意味で `cost_caps`/
 #: `max_claim_scope` などの他の frozen-design 入力と同じ扱いになった）。
+#: v1.1 §V2.2: `holdout_sweeps`（段 1 の pin 結果）は `split_secret` 依存
+#: （HMAC(split_secret, ...) で選抜する）ため、`realized_split` と全く同じ
+#: 理由で non-core 節に置く——`build_manifest()`/`dry_run()` は secret を
+#: 一切生成しない設計不変（v1.0 以来）であり、`armed_freeze()` が Gate 2 の
+#: `manifest_core_sha` 束縛検証を終えて secret を生成した**後**にしか計算
+#: できない。設計文書 §V2.2 の文言は `frozen_design.fixture_spec.<FAMILY>.
+#: holdout_sweeps`（= core 節内）を挙げるが、それは secret 生成が dry_run()
+#: より前に必要という前提と両立しない（`build_manifest()` に secret を
+#: 渡す設計変更は v1.0 の dry-run/armed 分離という、より基本的な不変条件を
+#: 破る）。よって本実装は `realized_split` と同じ**トップレベルの非-core
+#: キー**（`holdout_sweeps`）へ意図的に配置を変更する——設計文書の記述との
+#: この乖離とその理由を、実装報告（v1.1 §V2 実装 WP）に明記する。
 _CORE_ONLY_EXCLUDED_KEYS: frozenset[str] = frozenset(
     {
         "approvals",
         "commitments",
         "realized_split",
         "realized_split_sha",
+        "holdout_sweeps",
         "campaign_id",
         "authorization_nonce",
     }
@@ -557,6 +660,7 @@ def _attach_freeze_extras(
     commitments: Mapping[str, str],
     realized_split: Mapping[str, object],
     realized_split_sha: str,
+    holdout_sweeps: Mapping[str, Mapping[str, Sequence[str]]],
 ) -> dict[str, object]:
     """core manifest から frozen/full manifest を組み立てる。設計正本 §7
     「正本は C0 manifest に列挙した実現済み row→split 表」に従い、
@@ -581,6 +685,15 @@ def _attach_freeze_extras(
     full["commitments"] = dict(commitments)
     full["realized_split"] = dict(realized_split)
     full["realized_split_sha"] = realized_split_sha
+    #: v1.1 §V2.2 段 1: pin された holdout sweep（family -> {sweep_id:
+    #: [member row_id, ...]}）。`realized_split` と同じ non-core 節
+    #: （`_CORE_ONLY_EXCLUDED_KEYS` 参照）。
+    full["holdout_sweeps"] = {
+        family: {
+            sweep_id: list(member_row_ids) for sweep_id, member_row_ids in sorted(sweeps.items())
+        }
+        for family, sweeps in holdout_sweeps.items()
+    }
     return full
 
 
@@ -820,46 +933,18 @@ def dry_run(
     )
 
 
-#: `splitter.realize_split` の stratum 化因子。[UNDERSPEC-CAL-D08] 設計正本
-#: §7 は「stratum 因子を C0 で明示列挙」とのみ述べ具体軸は規定しないため、
-#: `splitter._COVERAGE_AXES` のうち row 単位で常に定義される 2 軸
-#: （`truth_level`/`boundary_class`）を採用した（`generator_impl` は
-#: FORMANT_GT 以外では常に `None` — 定数軸を stratum に含めても意味が薄い
-#: ため除外）。
-STRATUM_FACTOR_NAMES: tuple[str, ...] = ("truth_level", "boundary_class")
-
-
-def _row_inputs_for_split(
-    matrix_rows: Sequence[MatrixRow], stratum_factor_names: Sequence[str]
-) -> list[RowInput]:
-    """`provenance.Ledger.check_leakage` の `canonical_split_inputs` 構築と
-    同一の規約（`truth_level`→`row.block`、`boundary_class`/`domain`→
-    `matrix_row.domain.value`）で `RowInput` を組み立てる。D2 の leakage 検査
-    が独立に再構築する canonical row と一致しなければならないため。"""
-    out: list[RowInput] = []
-    for mrow in matrix_rows:
-        fr = mrow.row
-        stratum: dict[str, object] = {}
-        for name in stratum_factor_names:
-            if name == "truth_level":
-                stratum[name] = fr.block
-            elif name in ("boundary_class", "domain"):
-                stratum[name] = mrow.domain.value
-            elif name == "generator_impl":
-                stratum[name] = fr.generator_impl
-            else:
-                stratum[name] = getattr(fr, name, None)
-        out.append(
-            RowInput(
-                row_id=mrow.row_id,
-                family=fr.family,
-                stratum=stratum,
-                truth_level=fr.block,
-                generator_impl=fr.generator_impl,
-                boundary_class=mrow.domain.value,
-            )
-        )
-    return out
+#: R10 対応（2026-09-05）: `STRATUM_FACTOR_NAMES` / `_row_inputs_for_split()`
+#: / `_pin_and_realize_holdout()` は `splitter.py` へ移設・公開化した
+#: （`splitter.STRATUM_FACTOR_NAMES` / `splitter.row_inputs_for_split()` /
+#: `splitter.pin_and_realize_holdout()`。モジュール先頭の import で同一
+#: オブジェクトをこの名前空間へ再輸出しているため、本モジュールおよび
+#: 既存テストからの参照はそのまま動く）。`c0_validate.
+#: _check_holdout_sweeps_declaration_match()` が secret 依存検証で「公称
+#: k_hold から始まる同一の縮退ループ」を検証側で完全再実行するための
+#: 共有入口が必要になったが、`c0_freeze.py` は `c0_validate` を import する
+#: ため逆方向の import ができず、両者が依存できる `splitter.py` へ実装を
+#: 寄せた（生成と検証が二重実装に分岐しない構造）。詳細は `splitter.py`
+#: の該当節 docstring を参照。
 
 
 def _realized_split_to_dict(realized: RealizedSplitMap) -> dict[str, object]:
@@ -877,6 +962,13 @@ def _realized_split_to_dict(realized: RealizedSplitMap) -> dict[str, object]:
             }
             for s in realized.swaps
         ],
+        #: v1.1 §V2.2 段 1 の pin 行集合（`RealizedSplitMap.
+        #: pinned_holdout_row_ids`）。`realized_sha` のハッシュ対象には
+        #: 含まれない（同クラスの docstring 参照）ため、ここでの往復は純粋に
+        #: `verify_split()` が再実行時に正しい pin 集合を読み戻すための
+        #: 補助情報。v1.0 由来の古い `realized_split.json`（このキーを
+        #: 持たない）は `_realized_split_from_dict()` 側で空集合へ既定化する。
+        "pinned_holdout_row_ids": sorted(realized.pinned_holdout_row_ids),
         "realized_sha": realized.realized_sha,
     }
 
@@ -898,6 +990,7 @@ def _realized_split_from_dict(d: Mapping[str, Any]) -> RealizedSplitMap:
         stratum_factor_names=tuple(d["stratum_factor_names"]),
         assignment=assignment,
         swaps=swaps,
+        pinned_holdout_row_ids=frozenset(d.get("pinned_holdout_row_ids", ())),
         realized_sha=d["realized_sha"],
     )
 
@@ -1011,7 +1104,11 @@ def _readback_verify(
         )
     except (OSError, json.JSONDecodeError) as exc:
         return False, f"cannot read back c0_manifest.json: {exc}"
-    validation = c0_validate.validate_c0_manifest(manifest_readback)
+    # v1.1: re-derive `holdout_sweeps` with the actual (just-generated)
+    # split_secret too, not only the secret-independent structural checks.
+    validation = c0_validate.validate_c0_manifest(
+        manifest_readback, split_secret=split_secret_expected
+    )
     if validation.is_blocked:
         return False, f"read-back manifest failed validation: {validation.blocked_codes}"
 
@@ -1370,7 +1467,46 @@ def armed_freeze(
     # review round 4), so `full_manifest` cannot be built until this exists.
     matrix_rows = build_matrix()
     row_inputs = _row_inputs_for_split(matrix_rows, STRATUM_FACTOR_NAMES)
-    realized = realize_split(row_inputs, split_secret, STRATUM_FACTOR_NAMES)
+
+    # v1.1 §V2.2 段 1+段 2: holdout sweep pinning は split_secret 依存
+    # （HMAC(split_secret, ...)）のため、split_secret が確定した直後・
+    # realize_split() の直前でここで初めて計算できる。被覆要件が cap 内で
+    # 充足不能な family 構成（456 セルでは発生しない、防御的経路）は
+    # `HoldoutPinInfeasible` を、段 2 修復不能が縮退下限まで解消しない場合は
+    # `HoldoutPinDegradationExhausted` を、それぞれ fail-closed な
+    # `VALIDATION_BLOCKED` へ変換する（`c0_validate._check_holdout_pin_
+    # feasibility()` が manifest 非依存に同じ構造をあらかじめ検査するため、
+    # 実運用ではこの except 節へ到達する前に上流の `validate_c0_manifest()`/
+    # Gate 2 レビューで発見される想定だが、二重の防御として残す）。縮退
+    # リトライ本体（cap<1 pin 免除 / 段 2 CoverageRepairInfeasible 時の
+    # 決定論的 k 縮退）は `_pin_and_realize_holdout()`（§V2.2 縮退規則、
+    # 2026-09-04 追補）に委譲する。
+    try:
+        holdout_sweeps, realized = _pin_and_realize_holdout(
+            matrix_rows, row_inputs, split_secret, STRATUM_FACTOR_NAMES
+        )
+    except HoldoutPinInfeasible as exc:
+        return ArmedFreezeResult(
+            outcome=FreezeOutcome.VALIDATION_BLOCKED,
+            campaign_id=campaign_id,
+            manifest_core_sha=core_sha,
+            manifest_sha=None,
+            campaign_dir=None,
+            secret_dir=None,
+            detail=f"holdout sweep pin coverage requirement infeasible: {exc}",
+            gate2_arming=gate2_arming,
+        )
+    except HoldoutPinDegradationExhausted as exc:
+        return ArmedFreezeResult(
+            outcome=FreezeOutcome.VALIDATION_BLOCKED,
+            campaign_id=campaign_id,
+            manifest_core_sha=core_sha,
+            manifest_sha=None,
+            campaign_dir=None,
+            secret_dir=None,
+            detail=f"holdout sweep pin degradation exhausted: {exc}",
+            gate2_arming=gate2_arming,
+        )
     realized_split_dict = _realized_split_to_dict(realized)
 
     full_manifest = _attach_freeze_extras(
@@ -1381,10 +1517,15 @@ def armed_freeze(
         commitments=commitments,
         realized_split=realized_split_dict,
         realized_split_sha=realized.realized_sha,
+        holdout_sweeps=holdout_sweeps,
     )
     full_sha = _full_manifest_sha(full_manifest)
 
-    validation = c0_validate.validate_c0_manifest(full_manifest)
+    # v1.1: `split_secret` is passed through so `validate_c0_manifest()` can
+    # fully re-derive and match `holdout_sweeps` against the pin algorithm
+    # (D77-equivalent declaration check) — the only point in the freeze flow
+    # where the plaintext secret is still in scope.
+    validation = c0_validate.validate_c0_manifest(full_manifest, split_secret=split_secret)
     validation = _merge_e_use_table_violations(validation, e_use_violations)
     frozen_design = core_manifest.get("frozen_design")
     max_claim_scope_value = (

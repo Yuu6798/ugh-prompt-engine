@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from functools import lru_cache
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +12,7 @@ from voice_genesis.calibration.provenance import (
     CampaignIdentity,
     CodeIdentity,
     Ledger,
+    LedgerArchivedError,
     LedgerChainInvalidError,
     LedgerEntry,
     LedgerTruncatedTailError,
@@ -379,6 +382,102 @@ def test_ledger_append_refuses_when_middle_entry_tampered(tmp_path) -> None:
     assert path.read_text(encoding="utf-8") == before
 
 
+def test_ledger_append_refuses_to_recreate_ledger_after_archival(tmp_path) -> None:
+    """[Codex レビュー PR #346 round 19 採用, "Refuse to recreate a ledger
+    after archival"] `path`（`ledger.jsonl`）が存在せず、同一ディレクトリに
+    検証済み archive ペア（`<name>.gz` + `<name>.sha256`。
+    `tools/archive_aborted_ledger.py::ensure_archived()` が原本を置換した
+    後の状態）が存在する場合、`append()` は genesis ledger を新規作成せず
+    `LedgerArchivedError`（`LedgerChainInvalidError` のサブクラス）で
+    fail-closed する。ディレクトリには一切ファイルを作らない。"""
+    campaign_dir = tmp_path / "RUN-archived"
+    campaign_dir.mkdir()
+    ledger_path = campaign_dir / "ledger.jsonl"
+    (campaign_dir / "ledger.jsonl.gz").write_bytes(b"fake-gz-payload")
+    (campaign_dir / "ledger.jsonl.sha256").write_text(
+        "0" * 64 + "  ledger.jsonl\n", encoding="utf-8"
+    )
+    gz_bytes_before = (campaign_dir / "ledger.jsonl.gz").read_bytes()
+    sidecar_text_before = (campaign_dir / "ledger.jsonl.sha256").read_text(encoding="utf-8")
+
+    stale_ledger = Ledger(ledger_path)
+    with pytest.raises(LedgerArchivedError) as excinfo:
+        stale_ledger.append({"kind": "meter_call", "row_id": "r0"})
+    assert isinstance(excinfo.value, LedgerChainInvalidError)
+
+    # ledger.jsonl は作られておらず、公開済み gz/sidecar も無傷のまま
+    # （append() が獲得する専用ロックファイル `ledger.jsonl.lock` は append
+    # の成否に関わらず作られる副作用であり、本アサーションの対象外）。
+    assert not ledger_path.exists()
+    assert (campaign_dir / "ledger.jsonl.gz").read_bytes() == gz_bytes_before
+    assert (campaign_dir / "ledger.jsonl.sha256").read_text(encoding="utf-8") == (
+        sidecar_text_before
+    )
+
+
+def test_ledger_append_refuses_to_recreate_ledger_when_only_gz_remains(tmp_path) -> None:
+    """R25-2 fix (Codex PR #346 round 25 finding (2) 採用, "Reject appends
+    when either archive artifact remains"): 完了済み archive が sidecar
+    だけを失った場合（gz のみ残存）でも、`path` 不在のまま `append()` が
+    新しい genesis ledger を作ってはならない——次の `ensure_archived()` が
+    その新規 chain を canonical だと誤認して唯一の gz を破棄しうる
+    （campaign 履歴の永久喪失）。gz/sidecar のどちらか一方でも残っていれば
+    fail-closed する（修正前は両方揃っている場合にしか発火しなかった）。"""
+    campaign_dir = tmp_path / "RUN-archived-gz-only"
+    campaign_dir.mkdir()
+    ledger_path = campaign_dir / "ledger.jsonl"
+    gz_path = campaign_dir / "ledger.jsonl.gz"
+    gz_path.write_bytes(b"fake-gz-payload")
+    gz_bytes_before = gz_path.read_bytes()
+
+    stale_ledger = Ledger(ledger_path)
+    with pytest.raises(LedgerArchivedError) as excinfo:
+        stale_ledger.append({"kind": "meter_call", "row_id": "r0"})
+    assert isinstance(excinfo.value, LedgerChainInvalidError)
+    assert "only ledger.jsonl.gz remains" in excinfo.value.detail
+
+    assert not ledger_path.exists()
+    assert gz_path.read_bytes() == gz_bytes_before
+
+
+def test_ledger_append_refuses_to_recreate_ledger_when_only_sidecar_remains(tmp_path) -> None:
+    """R25-2 fix: 対称ケース——sidecar だけが残存し gz を失った場合も同様に
+    fail-closed する（片方だけの残存は、両方が既に無い「まっさらな新規
+    campaign」とは区別できないため）。"""
+    campaign_dir = tmp_path / "RUN-archived-sidecar-only"
+    campaign_dir.mkdir()
+    ledger_path = campaign_dir / "ledger.jsonl"
+    sidecar_path = campaign_dir / "ledger.jsonl.sha256"
+    sidecar_path.write_text("0" * 64 + "  ledger.jsonl\n", encoding="utf-8")
+    sidecar_text_before = sidecar_path.read_text(encoding="utf-8")
+
+    stale_ledger = Ledger(ledger_path)
+    with pytest.raises(LedgerArchivedError) as excinfo:
+        stale_ledger.append({"kind": "meter_call", "row_id": "r0"})
+    assert isinstance(excinfo.value, LedgerChainInvalidError)
+    assert "only ledger.jsonl.sha256 remains" in excinfo.value.detail
+
+    assert not ledger_path.exists()
+    assert sidecar_path.read_text(encoding="utf-8") == sidecar_text_before
+
+
+def test_ledger_append_creates_genesis_ledger_when_no_archive_pair_present(tmp_path) -> None:
+    """archive ペア（`<name>.gz`/`<name>.sha256`）が存在しない、真に新規の
+    campaign ディレクトリでは `append()` が従来どおり genesis（`seq=0`）
+    ledger を作成できる（`LedgerArchivedError` の対象は archive 済みの場合
+    のみで、C0 freeze の初期化経路を塞いではならない）。"""
+    campaign_dir = tmp_path / "RUN-fresh"
+    campaign_dir.mkdir()
+    ledger_path = campaign_dir / "ledger.jsonl"
+
+    ledger = Ledger(ledger_path)
+    entry = ledger.append({"kind": "meter_call", "row_id": "r0"})
+
+    assert entry.seq == 0
+    assert ledger_path.is_file()
+    assert Ledger(ledger_path).verify_chain().ok is True
+
+
 def test_ledger_verify_chain_ok_with_missing_final_newline_flag(tmp_path) -> None:
     """[Codex レビュー 2026-09-01 P1] 最終行が改行未終端でも JSON としては
     完全にパース可能（＝write 中断ではない）なら、chain は正当として
@@ -452,6 +551,97 @@ def test_ledger_two_instances_interleaved_append_no_sibling_seq(tmp_path) -> Non
     assert result.ok is True
     assert result.entries_verified == 4
     assert result.tamper_at_seq is None
+
+
+# ---------------------------------------------------------------------------
+# R14 fix (Codex PR #346 round 14 採用): "Coordinate appenders before
+# unlinking the locked inode" — `append()` は `self.path` 自身の fd ではなく
+# 同ディレクトリの安定した専用ロックファイル（`<ledger名>.lock`）上で
+# `flock` を取得し、かつ **ledger 本体を open する前に** それを取得する。
+# `tools/archive_aborted_ledger.py::_ledger_write_lock()` も同じ計算式で
+# 同一のロック対象を取り合う（該当テストは
+# `tests/test_archive_aborted_ledger.py` の R14 セクション参照）。
+# ---------------------------------------------------------------------------
+
+
+def test_ledger_append_locks_stable_file_not_ledger_path_itself(tmp_path) -> None:
+    """append() が実際に取り合うロック対象は `ledger.jsonl` 自身ではなく、
+    同ディレクトリの `ledger.jsonl.lock` である。ロック保持中に `ledger.
+    jsonl` 自身を unlink しても、appender はロックファイルの奪い合いだけで
+    直列化される（`self.path` 自身の inode 生死とは独立）。"""
+    import fcntl
+
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+
+    lock_path = path.parent / (path.name + ".lock")
+    assert lock_path.is_file()  # append() 経由で既に作成済み
+
+    with open(lock_path, "a+", encoding="utf-8") as external_lock_holder:
+        fcntl.flock(external_lock_holder.fileno(), fcntl.LOCK_EX)
+        try:
+            appended = threading.Event()
+            error: list[BaseException] = []
+
+            def _do_append() -> None:
+                try:
+                    Ledger(path).append({"kind": "meter_call", "row_id": "r1"})
+                except BaseException as exc:  # noqa: BLE001 - captured for main thread
+                    error.append(exc)
+                finally:
+                    appended.set()
+
+            thread = threading.Thread(target=_do_append)
+            thread.start()
+            blocked_in_time = not appended.wait(timeout=0.3)
+            assert blocked_in_time, "append() was not blocked by the held stable lock file"
+        finally:
+            fcntl.flock(external_lock_holder.fileno(), fcntl.LOCK_UN)
+
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert error == []
+    result = Ledger(path).verify_chain()
+    assert result.ok is True
+    assert result.entries_verified == 2
+
+
+def test_ledger_append_refuses_when_path_vanishes_after_open(tmp_path, monkeypatch) -> None:
+    """R14 fix, defense-in-depth: even under the stable lock (which already
+    prevents any lock-compliant caller from unlinking `self.path` while
+    `append()` holds it), `append()` re-verifies immediately after opening
+    that `self.path` still resolves to the fd it just obtained. A caller
+    that unlinks/replaces `self.path` without going through this lock's
+    convention at all (bypassing the protocol this module can enforce,
+    consistent with the module's declared protection level — see module
+    docstring) must not cause a silent write onto a detached inode; this
+    check fails closed instead."""
+    import voice_genesis.calibration.provenance as provenance_mod
+
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+
+    real_stat = provenance_mod.os.stat
+
+    def _vanished_stat(target, *args, **kwargs):
+        if Path(target) == path:
+            raise FileNotFoundError(target)
+        return real_stat(target, *args, **kwargs)
+
+    monkeypatch.setattr(provenance_mod.os, "stat", _vanished_stat)
+
+    with pytest.raises(LedgerChainInvalidError):
+        ledger.append({"kind": "meter_call", "row_id": "r1"})
+
+    monkeypatch.undo()
+
+    # fail-closed: nothing was written by the refused append.
+    result = Ledger(path).verify_chain()
+    assert result.ok is True
+    assert result.entries_verified == 1
+    assert [e.seq for e in ledger.entries] == [0]
 
 
 def test_ledger_append_cost_independent_of_ledger_size(tmp_path, monkeypatch) -> None:
@@ -625,6 +815,53 @@ def test_ledger_append_succeeds_after_two_trailing_blank_lines(tmp_path) -> None
     assert result.ok is True
     assert result.entries_verified == 3
     assert result.tamper_at_seq is None
+
+
+def test_ledger_append_succeeds_on_blank_only_file(tmp_path) -> None:
+    """`[UNDERSPEC-CAL-D88]`(b): a file holding only blank lines (no JSON
+    entries at all -- distinct from the trailing-blank-line-*after*-valid-
+    entries cases above) is a validated chain of zero entries (`chain.ok`
+    True, `entries == []` -- the "genesis watermark", `_v_seq == -1` /
+    `_v_last_line_sha256 is None` / `_v_last_line_len == 0`). Before this
+    fix, the O(1) last-line fingerprint re-check in `append()`'s `stat_
+    unchanged` branch always compared `hashlib.sha256(b"").hexdigest()`
+    (there is no prior JSON line to re-read -- `last_len == 0`) against
+    `self._v_last_line_sha256 is None`, which can never match, so `append()`
+    raised `LedgerChainInvalidError` -- a false failure -- for the very
+    first append to a blank-only file."""
+    path = tmp_path / "ledger.jsonl"
+    path.write_text("\n\n", encoding="utf-8")
+
+    pre_append_check = Ledger(path).verify_chain()
+    assert pre_append_check.ok is True
+    assert pre_append_check.entries_verified == 0
+
+    ledger = Ledger(path)
+    entry = ledger.append({"kind": "meter_call", "row_id": "r0"})
+    assert entry.seq == 0
+    assert entry.prev_sha == GENESIS_PREV_SHA
+
+    result = Ledger(path).verify_chain()
+    assert result.ok is True
+    assert result.entries_verified == 1
+    assert result.tamper_at_seq is None
+
+
+def test_ledger_append_succeeds_on_completely_empty_file(tmp_path) -> None:
+    """Companion to the blank-only-file test above: a genuinely 0-byte file
+    (`v_bytes == 0`, not the `stat_unchanged` fingerprint path D88(b)
+    touches) was -- and remains -- unaffected by that fix."""
+    path = tmp_path / "ledger.jsonl"
+    path.write_text("", encoding="utf-8")
+
+    ledger = Ledger(path)
+    entry = ledger.append({"kind": "meter_call", "row_id": "r0"})
+    assert entry.seq == 0
+    assert entry.prev_sha == GENESIS_PREV_SHA
+
+    result = Ledger(path).verify_chain()
+    assert result.ok is True
+    assert result.entries_verified == 1
 
 
 def test_ledger_append_g1_detects_early_entry_same_length_tamper(tmp_path) -> None:

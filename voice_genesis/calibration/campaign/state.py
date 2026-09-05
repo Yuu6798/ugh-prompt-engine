@@ -166,7 +166,18 @@ def current_phase(passed: frozenset[CampaignPhase]) -> CampaignPhase | None:
 def _realized_split_from_manifest(d: Mapping[str, Any]) -> RealizedSplitMap:
     """`c0_freeze._realized_split_from_dict` と同一の manifest インライン形状
     (`stratum_factor_names`/`assignment`/`swaps`/`realized_sha`) を読む独立実装
-    （`c0_freeze.py` は他 agent が並行編集中のため import しない）。"""
+    （`c0_freeze.py` は他 agent が並行編集中のため import しない）。
+
+    v1.1 §V2.2: `pinned_holdout_row_ids`（`realized_sha` のハッシュ対象には
+    含まれないが `RealizedSplitMap` 自身が保持するフィールド。`splitter.
+    RealizedSplitMap` docstring 参照）も読み戻す——欠くと、この manifest
+    から再構築した `RealizedSplitMap` を `splitter.verify_split()`（例:
+    `provenance.Ledger.check_leakage` が campaign 実行時に呼ぶ）へ渡した際、
+    段 1 の pin 集合を知らずに再実行することになり、実際に pin を使った
+    v1.1 campaign の realized split を常に「改竄」として誤検出する
+    （`BLOCKED_LEAKAGE` の偽陽性）。欠落キー（v1.0 由来の古い manifest）は
+    `c0_freeze._realized_split_from_dict()` と同じく空集合へ既定化する。
+    """
     try:
         assignment = {str(rid): Split(val) for rid, val in d["assignment"].items()}
         swaps = tuple(
@@ -184,6 +195,7 @@ def _realized_split_from_manifest(d: Mapping[str, Any]) -> RealizedSplitMap:
             stratum_factor_names=tuple(d["stratum_factor_names"]),
             assignment=assignment,
             swaps=swaps,
+            pinned_holdout_row_ids=frozenset(d.get("pinned_holdout_row_ids", ())),
             realized_sha=str(d["realized_sha"]),
         )
     except (KeyError, TypeError, ValueError) as exc:

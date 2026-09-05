@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -137,16 +138,38 @@ def test_dry_run_determinism_same_manifest_core_sha(tmp_path: Path) -> None:
     assert report1.manifest_core_sha == report2.manifest_core_sha
 
 
-def test_fixture_spec_confound_axes_is_the_flat_invariance_axis_tuple() -> None:
-    """UNDERSPEC-CAL-D76 (supersedes D75 ruling (1)): `confound_axes` reverts
-    to the flat, family-uniform 6-tuple (gate4' invariance-axis declaration
-    only) — D75's `declared_sweeps_by_family()`-as-`confound_axes` mapping
-    was a category error (nuisance axis != DIRECTIONAL sweep)."""
+def test_fixture_spec_confound_axes_is_machine_derived_per_family() -> None:
+    """v1.1 §V3.5 (Codex round 12 P1 ADOPT, supersedes the flat 6-tuple this
+    test previously locked in): `confound_axes` is no longer a family-uniform
+    6-tuple. The old flat tuple (f0_hz/sr_hz/gain_dbfs/duration_s/
+    noise_snr_db/context) declared f0_hz/sr_hz as invariance axes even though
+    the canonical 456-cell matrix has no single-axis CONFOUND row naming
+    either field (`axes.CANONICAL_NUISANCE_SEQUENCE` only varies gain_dbfs/
+    duration_s/noise_snr_db/context; f0_hz/sr_hz only move together in
+    `TARGETED_INTERACTIONS`), so gate4' always saw 0 pairs on those two axes
+    and every ABSOLUTE candidate failed structurally. `confound_axes` must
+    now equal `fixtures.matrix.invariance_axes_by_family()` per family."""
+    from voice_genesis.calibration.fixtures.matrix import (
+        build_matrix as _build_matrix_for_expected,
+    )
+    from voice_genesis.calibration.fixtures.matrix import invariance_axes_by_family
+
     manifest = c0_freeze.build_manifest(_REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02")
     fixture_spec = manifest["frozen_design"]["fixture_spec"]
-    expected = ["f0_hz", "sr_hz", "gain_dbfs", "duration_s", "noise_snr_db", "context"]
-    for entry in fixture_spec.values():
-        assert list(entry["confound_axes"]) == expected
+    expected = invariance_axes_by_family(_build_matrix_for_expected())
+    for family, entry in fixture_spec.items():
+        assert list(entry["confound_axes"]) == list(expected[family])
+    # regression lock on the canonical 456-cell derivation (Codex round 12
+    # report table): f0_hz/sr_hz never appear (no single-axis CONFOUND row
+    # names them), and per-family exclusions propagate from
+    # `_build_confound_block(exclude_axis_family=...)`.
+    assert expected["F0_CONTROL"] == ("context", "duration_s", "gain_dbfs", "noise_snr_db")
+    assert expected["FORMANT_GT"] == ("context", "duration_s", "gain_dbfs", "noise_snr_db")
+    assert expected["TILT_GT"] == ("context", "duration_s", "gain_dbfs", "noise_snr_db")
+    assert expected["APERIODICITY_GT"] == ("context", "duration_s", "gain_dbfs")
+    assert expected["RESONANCE_GT"] == ("context", "duration_s", "gain_dbfs", "noise_snr_db")
+    assert expected["TRANSITION_GT"] == ("duration_s", "gain_dbfs", "noise_snr_db")
+    assert expected["IDENTITY_CAUSAL_SWEEP"] == ("context", "duration_s", "gain_dbfs", "noise_snr_db")
 
 
 def test_fixture_spec_declared_sweeps_matches_declared_sweeps_by_family() -> None:
@@ -169,6 +192,96 @@ def test_fixture_spec_declared_sweeps_matches_declared_sweeps_by_family() -> Non
         }
         assert recorded == expected
         assert len(recorded) >= 1, f"{family.value} declares no sweeps"
+
+
+def test_fixture_spec_claim_relevant_fields_matches_machine_derivation() -> None:
+    """v1.1 §V2.2 5th bullet: `frozen_design.fixture_spec.<FAMILY>.
+    claim_relevant_fields` must be exactly `fixtures.matrix.
+    claim_relevant_fields_by_family(build_matrix())[FAMILY]` — same
+    "declared value == machine-derived value" invariant as
+    `declared_sweeps` above.
+    """
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily
+    from voice_genesis.calibration.fixtures.matrix import build_matrix, claim_relevant_fields_by_family
+
+    manifest = c0_freeze.build_manifest(_REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02")
+    derived = claim_relevant_fields_by_family(build_matrix())
+    fixture_spec = manifest["frozen_design"]["fixture_spec"]
+    for family in FixtureFamily:
+        assert fixture_spec[family.value]["claim_relevant_fields"] == list(
+            derived[family.value]
+        )
+
+
+# ---------------------------------------------------------------------------
+# v1.1 §V3.3 (WP2e): U_GT / U_num C0 freeze
+# ---------------------------------------------------------------------------
+
+_U_ABSENT_FAMILIES = {"RESONANCE_GT", "IDENTITY_CAUSAL_SWEEP"}
+_U_NUMERIC_FAMILIES = {
+    "F0_CONTROL",
+    "FORMANT_GT",
+    "TILT_GT",
+    "APERIODICITY_GT",
+    "TRANSITION_GT",
+}
+
+
+def test_fixture_spec_u_gt_u_num_present_with_formula_for_all_families() -> None:
+    """v1.1 §V3.3: 全 7 family が `u_gt_bound`/`u_num_bound` を、値と導出式
+    (`*_formula`) + 単位 (`*_unit`) を併記して凍結する（v1.0 §10.2「値と
+    導出式の両方」要件）。`manifest_core_sha` の対象である `frozen_design.
+    fixture_spec` に載ることも確認する（dry-run/armed 双方が共有する
+    `build_manifest()` の core payload そのもの）。"""
+    manifest = c0_freeze.build_manifest(_REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02")
+    fixture_spec = manifest["frozen_design"]["fixture_spec"]
+    assert set(fixture_spec) == _U_ABSENT_FAMILIES | _U_NUMERIC_FAMILIES
+    for family_name, entry in fixture_spec.items():
+        for key in ("u_gt_bound", "u_num_bound"):
+            assert key in entry, f"{family_name} missing {key}"
+            assert isinstance(entry[f"{key}_formula"], str) and entry[f"{key}_formula"]
+            assert isinstance(entry[f"{key}_unit"], str) and entry[f"{key}_unit"]
+
+
+def test_fixture_spec_u_gt_u_num_values_are_finite_nonneg_or_absent() -> None:
+    """非 ABSENT family は non-negative finite number、ABSENT family は
+    `declared_u_gt_u_num_for_family()` が非 numeric として弾く
+    `"ABSENT:<reason>"` 文字列に限定される（v1.1 §V3.3）。"""
+    manifest = c0_freeze.build_manifest(_REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02")
+    fixture_spec = manifest["frozen_design"]["fixture_spec"]
+    for family_name in _U_NUMERIC_FAMILIES:
+        entry = fixture_spec[family_name]
+        for key in ("u_gt_bound", "u_num_bound"):
+            value = entry[key]
+            assert isinstance(value, (int, float)) and not isinstance(value, bool), (
+                family_name,
+                key,
+                value,
+            )
+            assert math.isfinite(value) and value >= 0.0, (family_name, key, value)
+    for family_name in _U_ABSENT_FAMILIES:
+        entry = fixture_spec[family_name]
+        for key in ("u_gt_bound", "u_num_bound"):
+            assert isinstance(entry[key], str) and entry[key].startswith("ABSENT:")
+
+
+def test_fixture_spec_u_gt_u_num_canonical_values_regression_lock() -> None:
+    """456 セル canonical fixture design での実値表を固定する（回帰ガード）。
+    `c0_freeze.py`/`fixtures/axes.py` の凍結定数を変えたら、この期待値も
+    設計判断として明示的に見直すこと（値の意味は WP2e 報告に記載）。"""
+    manifest = c0_freeze.build_manifest(_REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02")
+    fixture_spec = manifest["frozen_design"]["fixture_spec"]
+    expected = {
+        "F0_CONTROL": (0.0, pytest.approx(0.523251)),
+        "FORMANT_GT": (0.0, pytest.approx(3.0)),
+        "TILT_GT": (0.0, pytest.approx(0.024)),
+        "APERIODICITY_GT": (pytest.approx(0.06363961030678927), pytest.approx(0.0006)),
+        "TRANSITION_GT": (0.0, pytest.approx(0.00065)),
+    }
+    for family_name, (expected_u_gt, expected_u_num) in expected.items():
+        entry = fixture_spec[family_name]
+        assert entry["u_gt_bound"] == expected_u_gt, family_name
+        assert entry["u_num_bound"] == expected_u_num, family_name
 
 
 def test_dry_run_gate1_approved_reduces_blocking(tmp_path: Path) -> None:
@@ -380,6 +493,139 @@ def test_manifest_core_sha_round_trips_from_full_manifest(
     assert c0_freeze.manifest_core_sha(full_manifest) == dry_report.manifest_core_sha
     stripped = c0_freeze.core_payload(full_manifest)
     assert set(stripped) & c0_freeze._CORE_ONLY_EXCLUDED_KEYS == set()
+
+
+def test_armed_freeze_holdout_sweeps_is_non_core_and_matches_k_hold(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """v1.1 §V2.2: `holdout_sweeps` is a split_secret-dependent, non-core
+    top-level key (same placement rationale as `realized_split` — see the
+    `_CORE_ONLY_EXCLUDED_KEYS` docstring) attached only at `armed_freeze()`
+    time. It must (a) be absent from `dry_run()`'s manifest (no secret
+    exists yet there), (b) be stripped by `core_payload()`/excluded from
+    `manifest_core_sha`, (c) declare exactly `k_hold` pinned sweeps per
+    family (§V2.2 frozen table), and (d) have every member row_id assigned
+    to HOLDOUT in the same manifest's `realized_split.assignment` (§V2.3).
+    """
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily
+    from voice_genesis.calibration.fixtures.matrix import build_matrix, holdout_pin_params_by_family
+
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+    dry_report = c0_freeze.dry_run(_REPO_ROOT, approval_dir, env)
+    assert "holdout_sweeps" not in dry_report.manifest
+
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.PUBLISHED
+    full_manifest = json.loads((result.campaign_dir / "c0_manifest.json").read_text(encoding="utf-8"))
+
+    holdout_sweeps = full_manifest["holdout_sweeps"]
+    assert "holdout_sweeps" not in c0_freeze.core_payload(full_manifest)
+
+    params = holdout_pin_params_by_family(build_matrix())
+    assignment = full_manifest["realized_split"]["assignment"]
+    for family in FixtureFamily:
+        family_sweeps = holdout_sweeps[family.value]
+        # v1.1 §V3.5 実装時発見（2026-09-05）: `TILT_GT` の `nuisance_axis`
+        # coverage 制約は nominal k_hold では非 pin HOLDOUT 枠に収まらず、
+        # §V2.2 縮退規則（`splitter.pin_and_realize_holdout()`）が全 secret
+        # で決定論的に k_hold を 1 段階縮退させて解決する（`degradation_floor`
+        # は不変——被覆保証は弱めていない）。よってここは `<=` で検査する
+        # （`test_k_hold_matches_v2_2_frozen_table` が nominal 値自体は
+        # 別途固定済み）。
+        assert len(family_sweeps) <= params[family.value].k_hold, family.value
+        assert len(family_sweeps) >= 1, family.value
+        for member_row_ids in family_sweeps.values():
+            for rid in member_row_ids:
+                assert assignment[rid] == "HOLDOUT", (family.value, rid)
+
+    # end-to-end: the realized-membership check passes against this real,
+    # production-shaped manifest regardless of secret. The secret-dependent
+    # full re-derivation (the check `armed_freeze()` itself performs, per
+    # `c0_freeze.armed_freeze()`'s own `validate_c0_manifest(..., split_
+    # secret=...)` call) also passes. v1.1 §V3.5 実装時発見（2026-09-05）:
+    # the secret-*independent* structural check (`split_secret=None`)
+    # cannot verify a legitimate `nuisance_axis`-coverage-driven degradation
+    # (`TILT_GT` always degrades k_hold 2->1 for the canonical matrix, per
+    # `_check_holdout_sweeps_declaration_match()`'s own docstring on this
+    # known limitation) — so it is expected, not a defect, that only
+    # `TILT_GT` mismatches there.
+    validation_no_secret = c0_validate.validate_c0_manifest(full_manifest)
+    assert {v.family for v in validation_no_secret.holdout_pin_declaration_violations} == {
+        "TILT_GT"
+    }
+    assert validation_no_secret.holdout_pin_membership_violations == ()
+    assert validation_no_secret.holdout_pin_feasibility_violations == ()
+
+    split_secret_bytes = (result.secret_dir / "split_secret.bin").read_bytes()
+    validation_with_secret = c0_validate.validate_c0_manifest(
+        full_manifest, split_secret=split_secret_bytes
+    )
+    assert validation_with_secret.holdout_pin_declaration_violations == ()
+    assert validation_with_secret.holdout_pin_membership_violations == ()
+    assert validation_with_secret.holdout_pin_feasibility_violations == ()
+
+
+def test_armed_freeze_manifest_missing_holdout_sweeps_top_level_key_is_blocked(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """R23 対応（Codex 第 23 巡 P2 採用、2026-09-05, PRRT_kwDOSD2OOM6fgdGg）:
+    against a REAL `armed_freeze()`-produced full manifest (not a synthetic
+    fixture), deleting the top-level `holdout_sweeps` key must fail-closed
+    with a single `holdout_pin_declaration_mismatch` violation, regardless
+    of whether `split_secret` is supplied to `validate_c0_manifest()` — the
+    exact bypass the round-23 review reported (`found_holdout=False`
+    silently skipping the per-family re-derivation match and realized-split
+    membership checks, letting `campaign/cli.py::_run_c4`'s
+    `expected_sweep_ids` fall back to the full declared-sweep set and
+    manufacture a false `DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT`
+    terminal). The untampered manifest (asserted violation-free above in
+    `test_armed_freeze_holdout_sweeps_is_non_core_and_matches_k_hold`)
+    already proves the (c) "no violation when present" side of this
+    contract; this test locks in the (a)/(b) "violation when absent"
+    side for both the secret and no-secret paths.
+    """
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.PUBLISHED
+    full_manifest = json.loads((result.campaign_dir / "c0_manifest.json").read_text(encoding="utf-8"))
+    tampered = dict(full_manifest)
+    del tampered["holdout_sweeps"]
+
+    # (b) secret 無しの構造検査でも fail-closed する。
+    validation_no_secret = c0_validate.validate_c0_manifest(tampered)
+    assert validation_no_secret.is_blocked
+    assert len(validation_no_secret.holdout_pin_declaration_violations) == 1
+    assert (
+        "top-level holdout_sweeps section is required"
+        in validation_no_secret.holdout_pin_declaration_violations[0].detail
+    )
+    assert validation_no_secret.holdout_pin_membership_violations == ()
+
+    # (a) split_secret 付きの完全再導出経路でも同様に fail-closed する。
+    split_secret_bytes = (result.secret_dir / "split_secret.bin").read_bytes()
+    validation_with_secret = c0_validate.validate_c0_manifest(
+        tampered, split_secret=split_secret_bytes
+    )
+    assert validation_with_secret.is_blocked
+    assert len(validation_with_secret.holdout_pin_declaration_violations) == 1
+    assert (
+        "top-level holdout_sweeps section is required"
+        in validation_with_secret.holdout_pin_declaration_violations[0].detail
+    )
 
 
 def test_armed_freeze_manifest_core_sha_mismatch_refused(tmp_path: Path, clean_checkout: None) -> None:
@@ -941,7 +1187,7 @@ def test_readback_verify_detects_corrupted_render_root_secret(
     monkeypatch.setattr(
         c0_freeze.c0_validate,
         "validate_c0_manifest",
-        lambda manifest: c0_validate.C0ValidationResult(),
+        lambda manifest, **kwargs: c0_validate.C0ValidationResult(),
     )
 
     campaign_staging = tmp_path / "campaign"
@@ -1638,7 +1884,7 @@ def test_readback_verify_detects_e_use_table_sha256_mismatch(
     monkeypatch.setattr(
         c0_freeze.c0_validate,
         "validate_c0_manifest",
-        lambda manifest: c0_validate.C0ValidationResult(),
+        lambda manifest, **kwargs: c0_validate.C0ValidationResult(),
     )
 
     campaign_staging = tmp_path / "campaign"
@@ -2099,6 +2345,36 @@ def test_armed_freeze_through_full_campaign_cli_never_hits_blocked_leakage(
     canonical-row-coverage checks (§7) stay internally self-consistent —
     the point under test (split_frozen wiring) is exercised exactly as in
     production, only the row *count* is reduced for tractability.
+
+    Note (§V2.2 縮退規則 fix, `ci_fail_994fb24.md`): `c0_validate.py` now
+    resolves `build_matrix` through two independent bindings, mirroring
+    `c0_freeze.py`'s own `build_matrix`/`_canonical_build_matrix` split:
+    its sweep-declaration/claim-relevant-field checks (which compare
+    against `frozen_design.fixture_spec`, itself always derived from the
+    real matrix by `c0_freeze._fixture_specs()`) read the fixed
+    `_canonical_build_matrix` alias, while only its two holdout-sweep-pin
+    checks (`_check_holdout_pin_feasibility`/`_check_holdout_sweeps_
+    declaration_match` — which compare against `holdout_sweeps`, itself
+    derived from whatever `build_matrix()` `armed_freeze()` actually pinned
+    against) read the swappable `build_matrix` name. So `c0_validate` is
+    added as a 4th monkeypatch site below, safely — it only affects the
+    two holdout-pin checks now, matching what `armed_freeze()` pinned
+    against in this test, without disturbing the other families' (still
+    real-matrix-based) frozen declarations.
+
+    Before that split existed, `armed_freeze()`'s holdout-sweep pin
+    (`fixtures.matrix.pin_holdout_sweeps_by_family()`), applied to this
+    degenerate 4-row F0_CONTROL slice, non-deterministically hit either a
+    stage-2 `CoverageRepairInfeasible` (uncaught) or a spurious
+    `BLOCKED_C0_MANIFEST_INCOMPLETE` (this test's `c0_validate` binding was
+    reading the *real* 456-row matrix while `armed_freeze()` had pinned
+    against the tiny one). §V2.2's `cap < 1` pin-exemption + stage-2 k
+    degradation (`fixtures.matrix.holdout_pin_params_by_family()`/
+    `c0_freeze._pin_and_realize_holdout()`) now makes
+    `holdout_sweeps["F0_CONTROL"]` freeze empty deterministically for this
+    matrix regardless of `split_secret`, and the `c0_validate` binding
+    split above lets its re-derivation agree with that. See
+    `DESIGN_VG_METER_CAL_DEBT_v1.1.md` §V2.2「縮退規則」.
     """
     import voice_genesis.calibration.fixtures.matrix as matrix_mod
     from voice_genesis.calibration.campaign import cli as campaign_cli
@@ -2116,11 +2392,15 @@ def test_armed_freeze_through_full_campaign_cli_never_hits_blocked_leakage(
     def fake_build_matrix() -> list[object]:
         return list(tiny_matrix)
 
-    # All 3 binding sites `build_matrix()` reaches from the freeze/CLI/
-    # leakage-check path (see docstring above).
+    # All 4 binding sites `build_matrix()` reaches from the freeze/CLI/
+    # validate/leakage-check path (see docstring above — `c0_validate`'s
+    # *swappable* `build_matrix` binding only feeds its two holdout-pin
+    # checks; its `_canonical_build_matrix` binding for the other checks
+    # stays real, unaffected by this patch).
     monkeypatch.setattr(matrix_mod, "build_matrix", fake_build_matrix)
     monkeypatch.setattr(c0_freeze, "build_matrix", fake_build_matrix)
     monkeypatch.setattr(campaign_cli, "build_matrix", fake_build_matrix)
+    monkeypatch.setattr(c0_validate, "build_matrix", fake_build_matrix)
 
     approval_dir = tmp_path / "approvals"
     secret_dir = tmp_path / "secrets"

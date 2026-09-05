@@ -332,6 +332,26 @@ FAMILY_ORDER: tuple[FixtureFamily, ...] = (
     FixtureFamily.IDENTITY_CAUSAL_SWEEP,
 )
 
+#: v1.1 §V3.3 の family 別 truth 物理単位（R21 対応、Codex 第 21 巡採用、
+#: 2026-09-05: `c0_freeze.py` に private だった `_TRUTH_UNIT` をここへ
+#: 昇格・公開し、`c0_freeze.py`（producer, `frozen_design.fixture_spec.
+#: <FAMILY>.u_gt_bound_unit`/`.u_num_bound_unit` の populate 元）と
+#: `c0_validate.py`（validator, v1.1 manifest での unit 照合）の両方が
+#: 同一の機械導出源を参照する——`c0_freeze` は `c0_validate` を import する
+#: ため逆方向 import ができず、両者が依存できる `fixtures.axes` へ寄せる
+#: （`invariance_axes_by_family()`/`declared_sweeps_by_family()` と同型の
+#: 「神経系だけを共有モジュールに置く」規約）。RESONANCE_GT/
+#: IDENTITY_CAUSAL_SWEEP（gate4' 対象外、物理 gate 入力を持たない）はここに
+#: 含まない——ABSENT-only family の期待 unit は `"n/a"` 固定であり、
+#: 呼び出し側が family の ABSENT 集合判定と組み合わせて扱う。
+TRUTH_UNIT_BY_FAMILY: dict[str, str] = {
+    FixtureFamily.F0_CONTROL.value: "hz",
+    FixtureFamily.FORMANT_GT.value: "hz",
+    FixtureFamily.TILT_GT.value: "db_per_oct",
+    FixtureFamily.APERIODICITY_GT.value: "dimensionless_fraction",
+    FixtureFamily.TRANSITION_GT.value: "dimensionless_magnitude",
+}
+
 # §5.2 の per-family 内訳 (truth, confound, boundary_negative, total)
 FAMILY_COUNTS: dict[FixtureFamily, tuple[int, int, int, int]] = {
     FixtureFamily.F0_CONTROL: (12, 24, 12, 48),
