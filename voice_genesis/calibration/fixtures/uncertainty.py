@@ -35,6 +35,37 @@ validator が repo の現在値を暗黙に使う設計は不可）。
 依存できる中立モジュールとして `fixtures` サブパッケージへ置く（R21 の
 `fixtures.axes.TRUTH_UNIT_BY_FAMILY` 昇格と同じ「神経系だけを共有モジュールに
 置く」規約）。
+
+## R24-1 追補（Codex 第 24 巡 P1 採用、2026-09-05）: `gather_u_bound_inputs()`
+への validator アクセス許可（自己完結原則の限定的緩和）
+
+上記「manifest 自己完結」原則は `derive_u_gt_bound()`/`derive_u_num_bound()`
+（入力→出力）には引き続き適用されるが、`gather_u_bound_inputs()`
+自体については本 finding を受けて緩和する: `c0_validate._check_u_gt_u_num_
+bounds()` の R22-2 再導出は `frozen_design.fixture_spec.<FAMILY>.
+u_bound_inputs`（manifest 宣言値）を信頼済み入力として扱い、その入力からの
+再計算が宣言済み value/formula と一致するかしか検査していなかった——
+`u_bound_inputs.truth_scale_max`/`.float64_eps` 等を弱い値（例: `0`）に
+差し替え、対応する value/formula もその偽入力からの再計算結果に揃えた
+「入力ごと自己整合な」manifest は、この再導出照合を素通りしてしまう
+（R22-2 は入力の真正性そのものは検証していなかった）。
+
+`candidates.*_paths_sha256`（path inventory の content-hash 照合、
+`c0_validate._check_hash_content_match()`。本モジュール `fixtures/
+uncertainty.py` 自身と `fixtures/axes.py` はいずれも inventory 対象
+——`c0_path_inventory.json` 参照）が REQUIRED_BLOCKING で通っている前提の
+下では、検証対象 checkout の本モジュール/`axes.py` の内容は凍結時点と
+既にバイト一致することが保証されている。したがって「自己完結」原則が
+守ろうとした性質（validator が repo の現在値に依存すると、後日 `axes.py`
+が変わったときに過去の manifest の検証結果が揺れ動く）は、hash 照合が
+通っている間はそもそも成立しない——`gather_u_bound_inputs()` を validator
+がその場で呼び直しても、hash 照合を通過した checkout でしか意味を持たない
+ため、drift の心配はない。
+
+よって `c0_validate._check_u_gt_u_num_bounds()` は本関数を**追加で**
+live に呼び直し、`u_bound_inputs` 宣言値と完全一致することを要求する
+（`derive_u_gt_bound()`/`derive_u_num_bound()` 自体の純関数性・
+manifest 自己完結は無改変のまま——両者は独立した検査軸）。
 """
 
 from __future__ import annotations
@@ -91,11 +122,16 @@ def gather_u_bound_inputs(family: FixtureFamily) -> dict[str, object] | str:
     """freeze 時点の `fixtures.axes` 定数から、`derive_u_gt_bound()`/
     `derive_u_num_bound()` が必要とする導出入力一式を収集する。
 
-    **producer (`c0_freeze._fixture_specs()`) だけが呼ぶ**——本関数の戻り値は
-    manifest の `frozen_design.fixture_spec.<FAMILY>.u_bound_inputs` として
-    記録される。validator (`c0_validate._check_u_gt_u_num_bounds()`) は
-    本関数を呼び直してはならず、manifest に記録済みのこの値を読むだけに
-    留める（自己完結の原則 — モジュール docstring 参照）。
+    producer (`c0_freeze._fixture_specs()`) が呼ぶ——本関数の戻り値は manifest
+    の `frozen_design.fixture_spec.<FAMILY>.u_bound_inputs` として記録される。
+
+    R24-1 追補（Codex 第 24 巡 P1 採用、2026-09-05、モジュール docstring
+    「R24-1 追補」節参照）: validator (`c0_validate._check_u_gt_u_num_
+    bounds()`) も本関数を **追加で** live に呼び直し、manifest 宣言済み
+    `u_bound_inputs` と完全一致することを検査する（path inventory の
+    content-hash 照合が REQUIRED_BLOCKING で通っている前提の下でのみ意味を
+    持つ、限定的な自己完結原則の緩和——`derive_u_gt_bound()`/
+    `derive_u_num_bound()` 自体の「manifest 自己完結」原則は無改変）。
     """
     absent_reason = U_ABSENT_REASON_BY_FAMILY.get(family.value)
     if absent_reason is not None:

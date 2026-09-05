@@ -382,6 +382,14 @@ campaign 成立要件とする:
   derive_floor()` 引数等）から再導出し、宣言値との厳密等値（過大申告も不一致として
   拒否）を要求する（R22-2。manifest 自己完結の原則——validator は `fixtures.axes`
   の現在値を暗黙に読まない）。
+- **R24-1 追補**（Codex 第 24 巡 P1 採用、2026-09-05）: R22-2 の再導出は `u_bound_inputs`
+  そのものの真正性を検証していなかった——`truth_scale_max`/`float64_eps` を弱めつつ
+  bound/formula もその偽入力から正しく再計算した「自己整合な」manifest は R22-2 を
+  素通りする。`candidates.*_paths_sha256`（path inventory の content-hash 照合）が
+  REQUIRED_BLOCKING で通っている前提の下でのみ、`fixtures.uncertainty.
+  gather_u_bound_inputs()`（producer と同一の canonical 入力導出）を validator 側でも
+  live に再実行し `u_bound_inputs` 宣言値と完全一致することを追加で要求する
+  （`derive_u_gt_bound()`/`derive_u_num_bound()` 自体の manifest 自己完結原則は無改変）。
 
 ### V3.4 追補 — M6 の測定経路は v1.2 へ繰延（境界宣言、2026-09-05）
 
@@ -503,6 +511,17 @@ checkout 上の `DESIGN_VG_METER_CAL_DEBT_v1.0.md` の実測 sha256 の一致**�
 検証し、不一致は未承認扱い（fail-closed）とする（信頼の連鎖: 承認 → v1.1 バイト列
 → v1.0 バイト列）。あわせて v1.0 / v1.1 の両ファイルを C0 の path inventory
 （`c0_path_inventory.json`）の検査対象に含める。
+
+**R24-2 追補（Codex 第 24 巡 P2 採用、2026-09-05）**: 「claim された終端状態は、
+その claim の見た目（ファイル名の存在）ではなく実体（実検証）で裏取りする」という
+本節の原則は、R22-1 が新設した `allow_legacy_v1_0` opt-in の terminal-state 判定
+（campaign が closed/aborted である claim）にも同様に適用すべきだった。
+`_legacy_v1_0_opt_in_verified()` は修正前、`ledger.jsonl.gz` という名前の通常
+ファイルが存在するだけで aborted と、生の `ledger.jsonl` に `campaign_closed`
+の 1 行が見つかるだけで closed と認めており、いずれも fabricated/改竄された
+成果物で opt-in を騙り得た。`archive_aborted_ledger._verify_gz_sidecar_pair()`
+（sidecar 一致・実伸長・chain 検証）と `provenance.Ledger.load_with_
+verification()`（chain 検証 + 末尾 `campaign_closed`）による実検証へ置換した。
 
 ## V7. 裁定
 

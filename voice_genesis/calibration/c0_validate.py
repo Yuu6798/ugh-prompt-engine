@@ -157,6 +157,14 @@ from . import approvals, streams, vocab
 from .candidates import registry as candidate_registry
 from .fixtures import axes as fixture_axes
 from .fixtures import uncertainty as fixture_uncertainty
+#: R24-2 対応（Codex 第 24 巡 P2 採用, 2026-09-05）: `_legacy_v1_0_opt_in_
+#: verified()` が aborted/closed 判定の実検証（gz+sidecar pair 検証・
+#: ledger chain 検証）を `tools.archive_aborted_ledger`/`provenance.Ledger`
+#: と共有するための import。`provenance.py`/`tools/archive_aborted_
+#: ledger.py` はいずれも `c0_validate` を import しないため循環 import には
+#: ならない。
+from .provenance import Ledger
+from .tools import archive_aborted_ledger
 from .fixtures.matrix import (
     HoldoutPinDegradationExhausted,
     HoldoutPinInfeasible,
@@ -2025,6 +2033,63 @@ def _check_u_gt_u_num_bounds(
                 )
             else:
                 raw_inputs = entry.get(inputs_key)
+
+                # R24-1 対応（Codex 第 24 巡 P1 採用, 2026-09-05）:
+                # 上のブロックの再導出は manifest 自身が記録した
+                # `raw_inputs` から value/formula を再計算するだけで、
+                # `raw_inputs` そのものが弱められていないかは一切検証して
+                # いなかった——`u_bound_inputs.truth_scale_max`/
+                # `.float64_eps` を 0 にし、対応する `u_gt_bound`/
+                # `u_num_bound`/両 formula もその偽入力から再計算した値に
+                # 揃えた「入力ごと自己整合な」manifest は、この再導出照合
+                # （入力→出力の内部整合性しか見ない）を素通りしてしまう。
+                # `fixtures/uncertainty.py` モジュール docstring は
+                # 「validator は `gather_u_bound_inputs()` を呼び直しては
+                # ならない」という自己完結原則を掲げるが、これは
+                # `candidates.*_paths_sha256`（path inventory の content-
+                # hash 照合、`_check_hash_content_match()`）が REQUIRED_
+                # BLOCKING で通っている前提の下では、検証対象 checkout の
+                # `fixtures/axes.py`/`fixtures/uncertainty.py` の内容が
+                # 凍結時点と一致することは既に別途保証されている——
+                # つまり「将来 axes.py が変わっても過去の manifest は
+                # 揺れ動かない」という自己完結原則が守ろうとした性質は、
+                # そもそも hash 照合が通っている間は不変であり、
+                # `raw_inputs` そのものの真正性を確認しない限り、その
+                # 自己完結性は偽入力による自己整合な改竄を防げない。
+                # よってこの一点に限り、producer と同一の canonical 関数
+                # `fixtures.uncertainty.gather_u_bound_inputs(family)` を
+                # validator 側でも live に再実行し、manifest 宣言済み
+                # `u_bound_inputs` と完全一致することを追加で要求する
+                # （数値は `_numbers_close` で許容誤差付き比較、それ以外は
+                # 厳密一致）。
+                canonical_inputs = fixture_uncertainty.gather_u_bound_inputs(family)
+                inputs_match = (
+                    isinstance(raw_inputs, Mapping)
+                    and set(raw_inputs) == set(canonical_inputs)
+                    and all(
+                        _numbers_close(raw_inputs.get(k), v)
+                        if isinstance(v, (int, float)) and not isinstance(v, bool)
+                        else raw_inputs.get(k) == v
+                        for k, v in canonical_inputs.items()
+                    )
+                )
+                if not inputs_match:
+                    violations.append(
+                        SweepManifestViolationDetail(
+                            violation="u_bound_missing_or_invalid",
+                            family=fam,
+                            sweep_id=inputs_key,
+                            expected_count=0,
+                            actual_count=0,
+                            detail=(
+                                f"frozen_design.fixture_spec.{fam}.{inputs_key} does not "
+                                "match the canonical live re-derivation "
+                                "(fixtures.uncertainty.gather_u_bound_inputs(); v1.1 "
+                                f"§V3.3; R24-1): declared={raw_inputs!r}, "
+                                f"canonical={canonical_inputs!r}"
+                            ),
+                        )
+                    )
                 try:
                     derived_gt_value, derived_gt_formula = fixture_uncertainty.derive_u_gt_bound(
                         family, raw_inputs
@@ -2521,9 +2586,10 @@ def _check_holdout_sweeps_realized_membership(
 def _legacy_v1_0_opt_in_verified(manifest_path: Path | str | None) -> bool:
     """R22-1 対応（Codex 第 22 巡 finding (1)）: `allow_legacy_v1_0=True` を
     「campaign directory 上に既に存在する manifest ファイルであり、かつその
-    campaign の ledger が closed（`payload.kind == "campaign_closed"` の
-    entry を含む）または aborted（`archive_aborted_ledger.py` が
-    `ledger.jsonl.gz` へ archive 済み）である」場合に限って有効化する。
+    campaign の ledger が closed（chain 検証が通り、末尾 event の
+    `payload.kind == "campaign_closed"`）または aborted（`archive_
+    aborted_ledger.ensure_archived()` が公開した `ledger.jsonl.gz` +
+    sidecar のペアが実際に検証を通る）である」場合に限って有効化する。
 
     `manifest_path=None`（in-memory で組み立てた未書込 manifest——
     `c0_freeze.dry_run()`/`armed_freeze()` が呼ぶ経路）では常に `False` を
@@ -2531,6 +2597,23 @@ def _legacy_v1_0_opt_in_verified(manifest_path: Path | str | None) -> bool:
     legacy 扱いにならず（そもそも渡していない——両呼び出しとも本引数を渡さない
     デフォルト False のまま）、opt-in は「既に確定した過去の campaign を
     後から検証し直す」用途のみに限定される。
+
+    R24-2 対応（Codex 第 24 巡 P2 採用、2026-09-05、PRRT_kwDOSD2OOM6fgdGg）:
+    修正前は (a) `ledger.jsonl.gz` という名前の**通常ファイルが存在するだけ**
+    で aborted 扱いにしており、sidecar sha256 との一致・実伸長・chain 検証の
+    いずれも行っていなかった（空ファイル/fabricated gz でも opt-in が
+    通ってしまう）、(b) closed 判定も生の `ledger.jsonl` を行単位で JSON
+    スキャンするだけで、chain 検証済みの正典であることも「末尾が
+    campaign_closed か」も確認していなかった（改竄・途中の孤立した
+    `campaign_closed` 行でも通ってしまう）。修正は両方とも
+    `tools.archive_aborted_ledger`/`provenance.Ledger` が既に持つ検証実装を
+    共有する: aborted は `archive_aborted_ledger._verify_gz_sidecar_pair()`
+    （sidecar 形式・gz 実伸長・sidecar sha256 一致・伸長結果の chain 検証の
+    4 点、`ensure_archived()` 自身が公開前に使うのと同一関数）、closed は
+    `provenance.Ledger.load_with_verification()` の chain 検証 (`chain.ok`)
+    に加え、entries の**末尾**（`entries[-1]`）が `campaign_closed` である
+    ことを要求する（生スキャンでは「どこかに 1 行あれば真」だったのを、
+    正規の閉鎖手順が必ず末尾に置く event の位置まで絞り込む）。
     """
     if manifest_path is None:
         return False
@@ -2538,29 +2621,33 @@ def _legacy_v1_0_opt_in_verified(manifest_path: Path | str | None) -> bool:
     if not path.is_file():
         return False
     campaign_dir = path.parent
-    if (campaign_dir / "ledger.jsonl.gz").is_file():
-        # archive_aborted_ledger.py がチェーン検証成功後にのみ gzip する
-        # （D100/c0e466c）。gz の存在自体が「abort 済み ledger」の記録。
+
+    gz_path = campaign_dir / archive_aborted_ledger.GZ_FILENAME
+    sidecar_path = campaign_dir / archive_aborted_ledger.SIDECAR_FILENAME
+    if gz_path.is_file():
+        try:
+            archive_aborted_ledger._verify_gz_sidecar_pair(gz_path, sidecar_path)
+        except archive_aborted_ledger.ArchiveError:
+            return False
+        # sidecar sha256 一致・gz 実伸長・伸長結果の chain 検証まで通った
+        # ——`ensure_archived()` が公開前に要求するのと同じ 4 点がすべて
+        # 揃っている（D100/c0e466c の「公開は検証成功後にのみ」契約と整合）。
         return True
+
     ledger_path = campaign_dir / "ledger.jsonl"
     if not ledger_path.is_file():
         return False
     try:
-        with ledger_path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                payload = entry.get("payload") if isinstance(entry, Mapping) else None
-                if isinstance(payload, Mapping) and payload.get("kind") == "campaign_closed":
-                    return True
-    except OSError:
+        ledger, chain = Ledger.load_with_verification(ledger_path)
+    except Exception:  # noqa: BLE001 - 検証不能も「legacy opt-in 不可」扱い
         return False
-    return False
+    if not chain.ok:
+        return False
+    entries = ledger.entries
+    if not entries:
+        return False
+    tail_payload = entries[-1].payload
+    return isinstance(tail_payload, Mapping) and tail_payload.get("kind") == "campaign_closed"
 
 
 def validate_c0_manifest(

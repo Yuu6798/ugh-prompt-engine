@@ -28,7 +28,9 @@ from voice_genesis.calibration.fixtures.matrix import (
     invariance_axes_by_family,
     pin_holdout_sweeps_by_family,
 )
+from voice_genesis.calibration.provenance import Ledger
 from voice_genesis.calibration.splitter import pin_and_realize_holdout
+from voice_genesis.calibration.tools import archive_aborted_ledger
 from voice_genesis.calibration.vocab import Split
 
 _ROWS = build_matrix()
@@ -512,20 +514,63 @@ def test_u_gt_u_num_bounds_v1_1_manifest_formula_only_altered_blocks() -> None:
     assert violations[0].sweep_id == "u_num_bound_formula"
 
 
+def test_u_gt_u_num_bounds_v1_1_manifest_self_consistent_forged_inputs_blocks() -> None:
+    """R24-1 対応（Codex 第 24 巡 P1 採用, 2026-09-05, PRRT_kwDOSD2OOM6fgdGg）:
+    `u_bound_inputs.truth_scale_max`/`.float64_eps` を弱い値 (`0.0`) に
+    差し替えた上で、対応する `u_num_bound`/formula もその**偽入力から
+    正しく再計算**した「入力ごと自己整合な」manifest——R22-2 の再導出照合
+    （入力→出力の内部整合性のみ）は素通りしてしまう偽装形——を、live
+    canonical 再導出 (`fixtures.uncertainty.gather_u_bound_inputs()`) との
+    不一致で検出する。R22-2 の value/formula 再導出自体は（偽入力からの
+    計算として）一致するため violation を出さない——本テストは R24-1 の
+    追加チェックだけが単独でこの偽装を捕捉することを確認する。"""
+    fixture_spec = _complete_v1_1_fixture_spec()
+    forged_inputs = dict(fixture_spec["FORMANT_GT"]["u_bound_inputs"])  # type: ignore[index]
+    forged_inputs["truth_scale_max"] = 0.0
+    forged_inputs["float64_eps"] = 0.0
+    forged_gt_value, forged_gt_formula = fixture_uncertainty.derive_u_gt_bound(
+        fixture_axes.FixtureFamily.FORMANT_GT, forged_inputs
+    )
+    forged_num_value, forged_num_formula = fixture_uncertainty.derive_u_num_bound(
+        fixture_axes.FixtureFamily.FORMANT_GT, forged_inputs
+    )
+    fixture_spec["FORMANT_GT"]["u_bound_inputs"] = forged_inputs  # type: ignore[index]
+    fixture_spec["FORMANT_GT"]["u_gt_bound"] = forged_gt_value  # type: ignore[index]
+    fixture_spec["FORMANT_GT"]["u_gt_bound_formula"] = forged_gt_formula  # type: ignore[index]
+    fixture_spec["FORMANT_GT"]["u_num_bound"] = forged_num_value  # type: ignore[index]
+    fixture_spec["FORMANT_GT"]["u_num_bound_formula"] = forged_num_formula  # type: ignore[index]
+    manifest = _v1_1_manifest_with_fixture_spec(fixture_spec)
+
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert len(violations) == 1, violations
+    assert violations[0].family == "FORMANT_GT"
+    assert violations[0].sweep_id == "u_bound_inputs"
+    assert violations[0].violation == "u_bound_missing_or_invalid"
+    assert "does not match the canonical live re-derivation" in violations[0].detail
+
+
 def test_u_gt_u_num_bounds_v1_1_manifest_input_key_deleted_blocks() -> None:
     """finding (2) の再現ケース (c): `u_bound_inputs` から再導出に必要な
     1 キーを消すと、canonical 関数呼び出しが `KeyError` を送出し、それを
     validator が fail-closed の violation に変換することを確認する
     （APERIODICITY_GT は `sr_min_hz`/`duration_min_s`/
-    `aperiodicity_fraction_max` を要求する）。"""
+    `aperiodicity_fraction_max` を要求する）。
+
+    R24-1 追補（Codex 第 24 巡 P1 採用、2026-09-05）: 同じ改竄はキー集合が
+    live canonical (`fixtures.uncertainty.gather_u_bound_inputs()`) とも
+    食い違うため、R24-1 の live 再導出一致検査（キー集合不一致）も独立に
+    fail-closed する——両方の violation が同時に出て良い（片方が拾い漏らす
+    改竄をもう片方が拾う、独立した検査軸であることの確認でもある）。"""
     fixture_spec = _complete_v1_1_fixture_spec()
     del fixture_spec["APERIODICITY_GT"]["u_bound_inputs"]["sr_min_hz"]  # type: ignore[index]
     manifest = _v1_1_manifest_with_fixture_spec(fixture_spec)
     violations = c0_validate._check_u_gt_u_num_bounds(manifest)
-    assert len(violations) == 1
-    assert violations[0].family == "APERIODICITY_GT"
-    assert violations[0].sweep_id == "u_bound_inputs"
-    assert violations[0].violation == "u_bound_missing_or_invalid"
+    assert len(violations) == 2
+    assert all(v.family == "APERIODICITY_GT" for v in violations)
+    assert all(v.violation == "u_bound_missing_or_invalid" for v in violations)
+    assert {v.sweep_id for v in violations} == {"u_bound_inputs"}
+    assert any("does not match the canonical live re-derivation" in v.detail for v in violations)
+    assert any("could not be used to canonically recompute" in v.detail for v in violations)
 
 
 def test_u_gt_u_num_bounds_real_c0_freeze_manifest_still_passes_after_r22_2() -> None:
@@ -598,16 +643,90 @@ def test_legacy_v1_0_opt_in_not_verified_without_manifest_path() -> None:
     assert c0_validate._legacy_v1_0_opt_in_verified(None) is False
 
 
+def _write_chain_valid_ledger(ledger_path: Path, payloads: list[dict[str, object]]) -> None:
+    """`payloads` を順に `provenance.Ledger.append()` で書き込み、
+    seq/prev_sha/entry_sha が正しく連鎖した実物の chain-valid ledger を
+    `ledger_path` に作る（R24-2 のテストが「本物の chain 検証」を要求する
+    ようになったため、手書きの1行 dict では通らない——`Ledger` 自身の
+    生成器を使う）。"""
+    ledger = Ledger(ledger_path)
+    for payload in payloads:
+        ledger.append(payload)
+
+
 def test_legacy_v1_0_opt_in_verified_for_gz_archived_campaign(tmp_path: Path) -> None:
+    """R24-2 対応（Codex 第 24 巡 P2 採用, 2026-09-05）: aborted 判定は
+    `archive_aborted_ledger._verify_gz_sidecar_pair()` を共有するため、
+    fabricated な `ledger.jsonl.gz`（本物の gzip ですらない）ではもう
+    True にならない——本物の `ensure_archived()` 出力（sidecar sha256 一致・
+    実伸長・chain 検証済み）でのみ opt-in できることを確認する。"""
+    campaign_dir = tmp_path / "campaign"
+    campaign_dir.mkdir()
+    manifest_path = campaign_dir / "c0_manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    ledger_path = campaign_dir / "ledger.jsonl"
+    _write_chain_valid_ledger(
+        ledger_path, [{"kind": "c0_freeze"}, {"kind": "holdout_executed_valid"}]
+    )
+    result = archive_aborted_ledger.ensure_archived(campaign_dir)
+    assert result.action == "archived"
+    assert not ledger_path.is_file()  # ensure_archived removes the original
+
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is True
+
+
+def test_legacy_v1_0_opt_in_not_verified_for_fabricated_gz(tmp_path: Path) -> None:
+    """R24-2 (a): 本 fix 前の穴の直接再現——`ledger.jsonl.gz` という名前の
+    ただの通常ファイル（gzip ですらない）が存在するだけでは opt-in できない
+    ことを固定する。"""
     campaign_dir = tmp_path / "campaign"
     campaign_dir.mkdir()
     manifest_path = campaign_dir / "c0_manifest.json"
     manifest_path.write_text("{}", encoding="utf-8")
     (campaign_dir / "ledger.jsonl.gz").write_bytes(b"\x1f\x8b\x00")
-    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is True
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is False
+
+
+def test_legacy_v1_0_opt_in_not_verified_for_gz_sidecar_mismatch(tmp_path: Path) -> None:
+    """R24-2 (b): 本物の archive を作った後、sidecar のみを別 sha256 に
+    差し替える（gz は無傷）——ペア検証が sidecar 不一致で fail するため
+    opt-in できない。"""
+    campaign_dir = tmp_path / "campaign"
+    campaign_dir.mkdir()
+    manifest_path = campaign_dir / "c0_manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    ledger_path = campaign_dir / "ledger.jsonl"
+    _write_chain_valid_ledger(ledger_path, [{"kind": "c0_freeze"}])
+    archive_aborted_ledger.ensure_archived(campaign_dir)
+
+    sidecar_path = campaign_dir / archive_aborted_ledger.SIDECAR_FILENAME
+    sidecar_path.write_text("0" * 64 + "  ledger.jsonl\n", encoding="utf-8")
+
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is False
 
 
 def test_legacy_v1_0_opt_in_verified_for_campaign_closed_ledger(tmp_path: Path) -> None:
+    """R24-2 対応: closed 判定は `provenance.Ledger.load_with_verification()`
+    の chain 検証 (`chain.ok`) を通り、かつ**末尾** entry が
+    `campaign_closed` である本物の chain-valid ledger でのみ True になる。"""
+    campaign_dir = tmp_path / "campaign"
+    campaign_dir.mkdir()
+    manifest_path = campaign_dir / "c0_manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    ledger_path = campaign_dir / "ledger.jsonl"
+    _write_chain_valid_ledger(
+        ledger_path, [{"kind": "c0_freeze"}, {"kind": "campaign_closed"}]
+    )
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is True
+
+
+def test_legacy_v1_0_opt_in_not_verified_for_raw_unchained_campaign_closed_line(
+    tmp_path: Path,
+) -> None:
+    """R24-2 (b): 本 fix 前の穴の直接再現——生の 1 行 JSON
+    (`{"payload": {"kind": "campaign_closed"}}`、`seq`/`prev_sha`/
+    `entry_sha` を欠く chain 未形成の行) は、旧実装（行スキャンのみ）では
+    True になっていたが、chain 検証が必須になった今は False になる。"""
     campaign_dir = tmp_path / "campaign"
     campaign_dir.mkdir()
     manifest_path = campaign_dir / "c0_manifest.json"
@@ -615,7 +734,23 @@ def test_legacy_v1_0_opt_in_verified_for_campaign_closed_ledger(tmp_path: Path) 
     (campaign_dir / "ledger.jsonl").write_text(
         '{"payload": {"kind": "campaign_closed"}}\n', encoding="utf-8"
     )
-    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is True
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is False
+
+
+def test_legacy_v1_0_opt_in_not_verified_for_campaign_closed_not_at_tail(tmp_path: Path) -> None:
+    """R24-2: chain 自体は有効でも、`campaign_closed` が**末尾ではない**
+    （その後に別 event が続く）場合は opt-in できない——正規の閉鎖手順は
+    `campaign_closed` を必ず最後に置く（`campaign/close_stage.py` 参照）。"""
+    campaign_dir = tmp_path / "campaign"
+    campaign_dir.mkdir()
+    manifest_path = campaign_dir / "c0_manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    ledger_path = campaign_dir / "ledger.jsonl"
+    _write_chain_valid_ledger(
+        ledger_path,
+        [{"kind": "c0_freeze"}, {"kind": "campaign_closed"}, {"kind": "meter_call"}],
+    )
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is False
 
 
 def test_legacy_v1_0_opt_in_not_verified_for_open_campaign(tmp_path: Path) -> None:
@@ -638,7 +773,10 @@ def test_validate_c0_manifest_allow_legacy_v1_0_end_to_end(tmp_path: Path) -> No
     manifest = {"frozen_design": {}}
     manifest_path = campaign_dir / "c0_manifest.json"
     manifest_path.write_text("{}", encoding="utf-8")
-    (campaign_dir / "ledger.jsonl.gz").write_bytes(b"\x1f\x8b\x00")
+    ledger_path = campaign_dir / "ledger.jsonl"
+    _write_chain_valid_ledger(
+        ledger_path, [{"kind": "c0_freeze"}, {"kind": "campaign_closed"}]
+    )
 
     without_flag = c0_validate.validate_c0_manifest(manifest)
     assert "frozen_design.design_revision" in without_flag.missing_required_keys
