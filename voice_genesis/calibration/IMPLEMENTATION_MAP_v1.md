@@ -1183,3 +1183,38 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
   期待値どおり 1 回分のみ計上されていることを確認。続けて
   `max(persisted, derived)` reconcile を再度呼び、水増しされないことも
   確認）。
+
+## 7. v1.1 改訂の実装マップ
+
+設計正本 `DESIGN_VG_METER_CAL_DEBT_v1.1.md`（§V1–§V6）の各節を実装した
+モジュール・関数の対応表。関数名で記載する（行番号は変動するため）。
+実装の詳細な逸脱・境界宣言・採否根拠は `README.md` 逸脱台帳
+`UNDERSPEC-CAL-D91`〜`D97` が正（本表は経路の索引のみ）。
+
+| v1.1 節 | 実装モジュール | 関数名 | 対応する台帳 entry |
+|---|---|---|---|
+| §V1（F0_CONTROL C3a fail filter の control class 分割） | `campaign/selection_stage.py` | `candidate_fail_filter_report()`（kwonly `noise_only_control_row_ids`） | D91 |
+| | `campaign/cli.py` | `_run_c3a()`, `_criteria_with_fail_filters()`（kwonly `noise_only_negative_control_ids`） | D91 |
+| §V2（holdout sweep pinning・2段割当） | `fixtures/matrix.py` | `pin_holdout_sweeps_by_family()`, `holdout_pin_params_by_family()`, `claim_relevant_fields_by_family()`（+ `_pin_single_field_stratum`/`_pin_identity_founder_trait`/`_pin_claim_round_robin`/`_pin_plain_topk`） | D92 |
+| | `splitter.py` | `realize_split()`（kwonly `pinned_holdout_row_ids`/`hold_forbidden_row_ids`）, `pin_and_realize_holdout()`, `row_inputs_for_split()`, `STRATUM_FACTOR_NAMES`（`c0_freeze.py` から移設・公開化） | D92 |
+| | `c0_freeze.py` | `_fixture_specs()`, `armed_freeze()`（`holdout_sweeps` を非-core トップレベルキーとして attach） | D92 |
+| | `c0_validate.py` | `_check_holdout_sweeps_declaration_match()`, `_check_holdout_sweeps_realized_membership()` | D92 |
+| | `campaign/state.py` | `_realized_split_from_manifest()`（`pinned_holdout_row_ids` 読み戻し） | D92 |
+| §V2.3（DIRECTIONAL gate の評価対象 sweep） | `campaign/cli.py` | `_run_c4()`（`expected_sweep_ids` を manifest `holdout_sweeps` から sourcing） | D92 |
+| §V2.4（claim 縮小の列挙義務） | `campaign/holdout_stage.py` | `directional_claim_shrinkage_detail()` | D93 |
+| §V3（c4 実 gate 組み立ての配線。D17 閉塞） | `campaign/cli.py` | `_run_c4()`（`effective_ceiling` 分岐、D17 placeholder 撤去） | D93 |
+| | `campaign/holdout_stage.py` | `evaluate_absolute_meter_from_campaign()`, `evaluate_directional_meter_from_campaign()`, `evaluate_m6_identity()`, `build_absolute_gate_inputs()`, `build_directional_gate_inputs()`, `load_e_use_rows()`, `absolute_e_use_value()` | D93 |
+| §V3.3（U_GT/U_num の C0 凍結） | `c0_freeze.py` | `_fixture_specs()`（`u_gt_bound`/`u_num_bound`+導出式文字列） | D93 |
+| | `campaign/holdout_stage.py` | `declared_u_gt_u_num_for_family()`（消費側、既存後方互換 scalar 契約のまま無改変） | D93 |
+| | `c0_validate.py` | `_check_u_gt_u_num_bounds()` | D93 |
+| §V3.5（gate4' invariance 軸の宣言・pair 構成） | `fixtures/matrix.py` | `single_axis_nuisance_tag_axis()`, `invariance_axes_by_family()` | D93 |
+| | `campaign/holdout_stage.py` | `build_invariance_pairs_for_family()`（instance 単位 pair + anchor 共有測定） | D93 |
+| | `splitter.py` | `_COVERAGE_AXES`（`"nuisance_axis"` 追加）, `_GATE4_INAPPLICABLE_FAMILIES` | D93 |
+| | `c0_validate.py` | `_check_invariance_axes_match()` | D93 |
+| §V3.6（control 出力欠落の分子算入） | `campaign/holdout_stage.py` | `control_detection_for_family()`, `_positive_detected()`, `_negative_fired()` | D93 |
+| §V4（破棄 campaign ledger の圧縮保全） | `tools/archive_aborted_ledger.py` | `ensure_archived()`, `_ledger_write_lock()`, `_ledger_lock_path()`, `_reconcile_diverged_original()`, `_ledger_bytes_contain_campaign_closed()` | D94 |
+| | `provenance.py` | `Ledger.append()`（安定ロックファイル + open 直後の inode 再検証） | D94 |
+| §V6（統治文書の切替・基底文書の実行時 pin） | `approvals.py` | `load_approval()`, `_verify_base_document_pin()`, `_read_design_doc()`, `DESIGN_DOC_RELATIVE_PATH`, `BASE_DESIGN_DOC_RELATIVE_PATH` | D95 |
+| | `c0_validate.py` | `scan_calibration_tree_inventory()`（設計文書2件の inventory union） | D95 |
+| （v1.1 の直接改訂ではないが同時期の運用是正: cap 会計 R7/R9/R15-D） | `campaign/cli.py`, `campaign/caps.py` | `_checkpoint_parent_cpu_before_transition()`, `cap_counters_from_ledger()` | D96 |
+| （同上: replay 検証器の legacy 互換） | `provenance.py` | `_c0_freeze_ordering_violation()`, `_verified_holdout_unseal_detail()` | D97 |
