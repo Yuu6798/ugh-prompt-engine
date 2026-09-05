@@ -61,11 +61,12 @@ append()` と排他制御を共有しておらず、この区間の途中で他�
 検出されないまま最後の `unlink()` で恒久喪失し得た（R11 が塞いだ「削除
 直前の中断からの回復」より広い、「読み取り開始 〜 削除」全体の窓）。
 
-本 fix は (a) この区間全体を `_ledger_write_lock()`（`ledger_path` 自身の
-fd 上の `fcntl.flock(LOCK_EX)`——`Ledger.append()` が使うのと同一のロック
-対象・同一の blocking 契約）で保持し、区間中の `Ledger.append()` を
-待たせる（フレッシュ archive はロック外側の他プロセスに対して透過的に
-直列化される）ことで race そのものを閉じ、(b) 原本 `unlink()` の直前に
+本 fix は (a) この区間全体を `_ledger_write_lock()`（当時: `ledger_path`
+自身の fd 上の `fcntl.flock(LOCK_EX)`——`Ledger.append()` が使うのと同一の
+ロック対象・同一の blocking 契約。**R14 でロック対象を変更、下記参照**）で
+保持し、区間中の `Ledger.append()` を待たせる（フレッシュ archive はロック
+外側の他プロセスに対して透過的に直列化される）ことで race そのものを閉じ、
+(b) 原本 `unlink()` の直前に
 もう一段、原本の sha256 を publish 直後の snapshot と再照合する防御的
 二重チェックを加える——ロック契約に従わない直接書き込み（本設計が保護
 対象外と宣言する「台帳の外側で動く敵対的な実行者」を除けば通常発生し
@@ -80,6 +81,32 @@ fd 上の `fcntl.flock(LOCK_EX)`——`Ledger.append()` が使うのと同一の
 で呼ぶ）にそのまま合わせた——archive は破棄裁定済み campaign への短時間の
 一括後処理であり、恣意的なタイムアウト値を新設するより、単に待たせて
 安全側に倒す方が単純かつ一貫している。
+
+R14 fix（PR #346 round 14、Codex 採用, "Coordinate appenders before
+unlinking the locked inode"）: R12 の `_ledger_write_lock()` は
+`ledger_path`（`ledger.jsonl`）自身の fd に `flock` していた。この
+ロック対象は本モジュールが同じ区間の最後で `ledger_path` 自身を
+`unlink()` する運用と衝突する: `provenance.Ledger.append()` は
+`self.path`（`ledger_path` と同一パス）を `open()` してからその fd に
+`flock` を要求していたため、archiver がロック保持中に appender が
+`open()` すると、appender は unlink 前の旧 inode の fd で flock 待ちに
+入り、archiver の `unlink()` でパス名が消えた**後**にこの flock を
+獲得してしまう——その後 appender が書き込む内容は、gz snapshot にも
+ファイルシステム上のどのパスにも存在しない、切り離された inode へ行かれ、
+entry が恒久的に失われる（R12 が閉じた「読み取り開始〜削除」の窓の
+**内側**に潜んでいた、ロック対象そのものの欠陥）。
+
+本 fix は `_ledger_write_lock()` のロック対象を `ledger_path` 自身から
+同ディレクトリの安定した専用ロックファイル（`_ledger_lock_path()`:
+`ledger_path.parent / (ledger_path.name + ".lock")`。`ledger_path` 自身
+とは異なり、本モジュールも `Ledger.append()` も一切 unlink/rename しない）
+へ変更した。`provenance.Ledger.append()` 側も同じ計算式でロック対象を
+決定し、**ledger 本体を open する前に** このロックを取得するよう改めた
+（`provenance.py` の `Ledger.append()` docstring 参照）。両者が同じ安定
+ファイルを、ledger 本体を触る前に先に取り合うことで、「unlink 済みの
+inode で flock を獲得する」という経路自体が構造的に存在しなくなる——
+R12 の (a)(b) の枠組み（区間全体の排他 + 削除直前の sha 再照合）は
+そのまま維持し、ロック対象のみを差し替える。
 """
 
 from __future__ import annotations
@@ -255,19 +282,50 @@ def _discard_if_exists(path: Path) -> None:
         path.unlink()
 
 
+def _ledger_lock_path(ledger_path: Path) -> Path:
+    """`ledger_path` に対応する安定ロックファイルのパス（同一ディレクトリ、
+    固定名 `<ledger名>.lock`）。`provenance.Ledger.append()` が使うのと
+    完全に同じ計算式——`self.path.parent / (self.path.name + ".lock")`
+    （R14 fix）——をここでも独立実装する。ロック対象が一致していることが
+    唯一の正当性根拠であり、`LEDGER_FILENAME` を経由する限り両モジュールは
+    常に同じファイル名（`ledger.jsonl.lock`）を導出する。"""
+    return ledger_path.parent / (ledger_path.name + ".lock")
+
+
 @contextlib.contextmanager
 def _ledger_write_lock(ledger_path: Path) -> Iterator[None]:
-    """R12 fix: `provenance.Ledger.append()` と同一のロック——`ledger_path`
-    自身のファイル記述子上での `fcntl.flock(LOCK_EX)`、`LOCK_NB` 無しの
-    blocking 待ち——を取得し、`with` ブロックを抜けるまで保持する。
+    """R14 fix (Codex PR #346 round 14 採用, "Coordinate appenders before
+    unlinking the locked inode"): `provenance.Ledger.append()` と同一の
+    安定ロックファイル（`_ledger_lock_path(ledger_path)`。`ledger_path`
+    自身ではない）上での `fcntl.flock(LOCK_EX)`、`LOCK_NB` 無しの blocking
+    待ち——を取得し、`with` ブロックを抜けるまで保持する。
+
+    R12 時点の実装は `ledger_path` 自身の fd に `flock` していた。この
+    ロック対象は archiver が本関数の `with` ブロック終端で `ledger_path`
+    自身を `unlink()` する運用と衝突する: `Ledger.append()` 側が
+    `ledger_path` を（unlink 前なので同一 inode で）`open()` した直後に
+    archiver がロックを保持したまま `unlink()` すると、その appender は
+    旧 inode の fd で flock 待ちに入り、unlink でパス名が消えた**後**に
+    flock を獲得してしまう——書き込みは gz snapshot にもファイルシステム上
+    のどのパスにも存在しない、切り離された inode へ行われ、entry が恒久的
+    に失われる（round 14 指摘）。
+
+    本 fix は、ロック対象を `ledger_path` 自身ではなく **同ディレクトリの
+    別ファイル**（archiver も `Ledger.append()` も一切 unlink/rename しない
+    専用ロックファイル）に変更し、かつ両者とも **ledger 本体を open する
+    前に** このロックを取得することで、この区間の競合を構造的に閉じる:
+    archiver がこのロックを保持している間、appender は `ledger_path` を
+    open する前にまず同じロックの獲得を待たされる（`ledger_path` がまだ
+    unlink されていない古い inode を掴んでから待たされることがない）ため、
+    「unlink 済みの inode で flock を獲得する」経路が存在しなくなる。
 
     `ledger_path` は呼び出し時点で存在している前提（呼び出し側は原本の
-    存在を既に確認済みであること）。ロックは open file description に
-    紐づくため、区間内でファイルへの `os.rename`（別パスへの公開）や
-    `unlink`（`ledger_path` 自身の削除）が起きても、このコンテキスト
-    マネージャが保持しているロックそのものは（`ledger_path` を指す fd を
-    閉じるまで）解放されない。"""
-    with ledger_path.open("rb") as lock_file:
+    存在を既に確認済みであること）は変わらない。ロックファイル自体は
+    `ledger_path` の削除や置換に一切連動せず、`ensure_archived()` の
+    実行をまたいで残り続ける（`c0_freeze.py` の `.publish.lock` と同じ
+    「常設の専用ロックファイル」規約）。"""
+    lock_path = _ledger_lock_path(ledger_path)
+    with open(lock_path, "a+", encoding="utf-8") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
             yield

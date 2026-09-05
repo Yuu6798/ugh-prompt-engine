@@ -1288,6 +1288,29 @@ class Ledger:
         検証）、または明示的な `verify_chain()` 呼び出し。モジュール
         docstring が宣言する保護水準（事故的 leakage / 事後改竄の検出、
         台帳の外側で動く敵対的な実行者は対象外）を弱めるものではない。
+
+        **R14 fix（Codex PR #346 round 14 採用, "Coordinate appenders before
+        unlinking the locked inode"）**: ロック対象を `self.path`（ledger
+        自身）の fd から、同ディレクトリの安定した専用ロックファイル
+        （`<ledger名>.lock`）へ変更した。旧実装は `self.path` を先に
+        `open()` してからその fd に `flock` していたため、
+        `archive_aborted_ledger.py` の archiver が同じ `self.path` の fd に
+        `flock` を保持したまま最終的に `unlink()` する運用と衝突していた:
+        archiver がロック保持中に appender が `self.path` を open すると
+        （unlink 前なので同じ inode）appender は旧 inode の fd で flock 待ち
+        に入り、archiver の `unlink()` でパス名が消えた**後**にこの
+        flock を獲得してしまう——その後の書き込みは gz snapshot にも
+        ファイルシステム上のどのパスにも存在しない、切り離された inode へ
+        行われ、entry が恒久的に失われる。本 fix は `Ledger.append()` と
+        archiver の両方に、**ledger 本体を open する前に** この専用ロック
+        ファイルを先に取得させることで、この区間の競合そのものを構造的に
+        閉じる（archiver は本ロックを保持している間 `self.path` を
+        unlink できないため、appender が「unlink 済みの inode で flock を
+        獲得する」経路が存在しなくなる）。加えて、ロック獲得後・書込み前に
+        `os.fstat(fd).st_ino` と `os.stat(self.path).st_ino`（存在しなければ
+        `None`）を照合する defense-in-depth の inode 再検証を行い、万一
+        このロック規約に従わない経路で `self.path` が unlink/置換されていた
+        場合も `LedgerChainInvalidError` で fail-closed する。
         """
         payload_j = _jsonable(payload)
         transition_kind = payload_j.get("kind") if isinstance(payload_j, Mapping) else None
@@ -1295,239 +1318,276 @@ class Ledger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         full_resync = False
         full_entries_for_resync: list[LedgerEntry] = []
-        with self.path.open("a+b") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        # R14 fix (Codex PR #346 round 14, "Coordinate appenders before
+        # unlinking the locked inode"): the lock target is a stable dedicated
+        # lock file next to the ledger, never `self.path` itself. The prior
+        # design locked `self.path`'s own fd, but `archive_aborted_ledger.py`
+        # unlinks `self.path` while holding that same flock; an appender that
+        # opened `self.path` (same inode) just before the unlink would still
+        # win the flock *after* the unlink removed the path, then write onto
+        # the now-detached inode — an entry that is neither in the gz
+        # snapshot nor reachable from any path, permanently lost. Both
+        # `Ledger.append()` and the archiver now acquire this stable file's
+        # lock BEFORE opening the ledger file at all, so the archiver's
+        # unlink can never happen between an appender's open() and its own
+        # flock acquisition.
+        lock_path = self.path.parent / (self.path.name + ".lock")
+        with open(lock_path, "a+", encoding="utf-8") as lock_f:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
             try:
-                f.seek(0, os.SEEK_END)
-                current_size = f.tell()
-                v_bytes = self._v_bytes
-                v_seq = self._v_seq
-                v_sha = self._v_sha
-                v_missing_final_newline = self._v_missing_final_newline
-                if v_bytes > 0:
-                    if current_size < v_bytes:
-                        # watermark より短い＝restore/sync rollback 等の
-                        # 外部要因によるロールバック（VALID だが短い prefix
-                        # を含む）。watermark を再同期して受理してはならない
-                        # （#345 指摘③: 旧実装はここで watermark を 0 に
-                        # 戻してフォールバック検証していたため、on-disk が
-                        # [0,1] へ縮んでも in-memory `self._entries` は
-                        # ロールバック前の内容を保持したまま suffix を
-                        # extend し、`[0,1,2,0,1]` のような重複キャッシュを
-                        # 生んでいた）。in-memory 状態を変更せず、書き込みも
-                        # 一切行わずに fail-closed する。
+                with self.path.open("a+b") as f:
+                    # R14 fix, defense-in-depth: even under the stable lock
+                    # above, re-verify that the path we just opened still
+                    # resolves to the fd we hold (nothing unlinked/replaced
+                    # it out from under us). This does not by itself close
+                    # the race — the stable lock above already does that —
+                    # but fails closed instead of silently writing onto a
+                    # detached inode if some other path ever unlinks
+                    # `self.path` without going through this lock.
+                    fd_ino = os.fstat(f.fileno()).st_ino
+                    try:
+                        path_ino = os.stat(self.path).st_ino
+                    except FileNotFoundError:
+                        path_ino = None
+                    if path_ino != fd_ino:
                         raise LedgerChainInvalidError(
                             self.path,
-                            f"on-disk ledger size ({current_size} bytes) is smaller than "
-                            f"this instance's verified watermark ({v_bytes} bytes, "
-                            f"seq={v_seq}): rollback or truncation detected; refusing to "
-                            "re-sync onto a shortened chain. Reconstruct via Ledger(path) "
-                            "or load_with_verification(path) to re-verify from scratch "
-                            "before appending again.",
-                            v_seq,
+                            "ledger path no longer resolves to the fd this append() "
+                            "just opened (unlinked or replaced while the ledger "
+                            "lock file was held); refusing to append onto a "
+                            "detached inode",
+                            None,
                         )
-                    # `#345` 指摘③ G1: watermark 確立時（構築時 or 直前の
-                    # 自分自身の write 直後）に記録した stat と現在の on-disk
-                    # stat を比較する安価な変更検出器。一致していれば
-                    # （＝このインスタンス自身の直近の write 以外、誰も
-                    # ファイルへ触れていない）既存の O(1) last-line
-                    # fingerprint 再照合だけで十分。`#345` 指摘③ G2: 追記
-                    # しようとしている event 自体がフェーズ遷移/terminal
-                    # summary（`_TRANSITION_EVENT_KINDS`）なら、stat が
-                    # 一致していても無条件にフル再検証へ回す。
-                    current_stat = os.fstat(f.fileno())
-                    stat_unchanged = (
-                        self._v_ino is not None
-                        and current_stat.st_ino == self._v_ino
-                        and current_stat.st_mtime_ns == self._v_mtime_ns
-                        and current_stat.st_size == self._v_stat_size
-                    )
-                    if stat_unchanged and not force_full_chain_verify:
-                        # サイズは watermark 以上でも、watermark 末尾エントリ
-                        # そのものが同じ長さの別内容へ差し替えられていれば
-                        # （truncate を伴わない改竄）、suffix 検証だけでは
-                        # 素通りする（suffix はまさにこの 1 行の直後から読む
-                        # ため）。watermark 末尾 1 行分だけを O(1) で読み直し、
-                        # 記録済み sha256 と一致するか確認する（#345 指摘③）。
-                        # バイト範囲は `_set_watermark()` が構築時に直接記録
-                        # した最終非空行の実オフセット
-                        # （`_v_last_line_start`/`_end`）をそのまま使う —
-                        # `v_bytes`（ファイル全体長）からの逆算ではない。
-                        # 逆算は watermark 末尾に空行が続く有効な chain で
-                        # 実際の終端より後ろを指し、正当な台帳の append を
-                        # 偽の tamper 検出として拒否していた（`#345` 指摘③
-                        # 追補: 末尾空行での偽 append 失敗）。
-                        # `[UNDERSPEC-CAL-D88]`(b): a "genesis watermark" —
-                        # a validated chain of zero JSON entries (the file
-                        # holds only blank lines, so `v_bytes` (total file
-                        # byte length) is nonzero even though there is no
-                        # JSON line to fingerprint). `_v_seq == -1` alone is
-                        # not sufficient to identify this case (a tampered/
-                        # unverified watermark also sentinels `_v_seq = -1`,
-                        # but takes the `v_bytes == 0` branch below instead —
-                        # see `_set_watermark()`'s `else` branch), so require
-                        # the last-line fingerprint fields to be at their
-                        # "no prior line" defaults too. There is nothing to
-                        # re-read/compare against, so the O(1) fingerprint
-                        # check below (which would otherwise always mismatch
-                        # — `hashlib.sha256(b"").hexdigest()` is never equal
-                        # to `None`) is skipped and this append proceeds as a
-                        # normal first-entry append. Any other `None` sha
-                        # (i.e. `_v_seq != -1`, which cannot arise from a
-                        # `chain.ok=True` watermark — see `_set_watermark()`)
-                        # keeps failing closed via the mismatch below.
-                        is_genesis_watermark = (
-                            self._v_seq == -1
-                            and self._v_last_line_sha256 is None
-                            and self._v_last_line_len == 0
-                        )
-                        if not is_genesis_watermark:
-                            last_len = self._v_last_line_len
-                            last_start = self._v_last_line_start
-                            f.seek(last_start)
-                            last_bytes = f.read(last_len)
-                            if (
-                                len(last_bytes) != last_len
-                                or hashlib.sha256(last_bytes).hexdigest()
-                                != self._v_last_line_sha256
-                            ):
-                                raise LedgerChainInvalidError(
-                                    self.path,
-                                    f"on-disk content at this instance's verified watermark "
-                                    f"(seq={v_seq}) no longer matches what was last verified: "
-                                    "content tamper at/behind the watermark; refusing to "
-                                    "append without re-verifying the full chain.",
-                                    v_seq,
-                                )
-                    else:
-                        # G1（stat が想定外に変化）または G2（遷移 event）:
-                        # watermark より前の in-place 同一長改ざんは stat の
-                        # みでは疑わしいと分かっても位置を特定できないため、
-                        # on-disk ledger 全体を seq 0 からフル再検証する。
-                        f.seek(0)
-                        full_raw = f.read()
-                        try:
-                            full_content = full_raw.decode("utf-8")
-                        except UnicodeDecodeError as exc:
-                            raise LedgerTruncatedTailError(
-                                self.path,
-                                "existing ledger content is not valid utf-8; refusing "
-                                "to append",
-                            ) from exc
-                        full_lines, full_truncated_tail, full_missing_final_newline = (
-                            _split_complete_lines(full_content)
-                        )
-                        if full_truncated_tail:
-                            raise LedgerTruncatedTailError(
-                                self.path,
-                                "existing ledger tail is truncated (incomplete final "
-                                "line); refusing to append onto partial bytes",
-                            )
-                        full_check = _verify_chain_prefix(
-                            full_lines,
-                            truncated_tail=False,
-                            missing_final_newline=full_missing_final_newline,
-                        )
-                        if not full_check.ok:
+                    f.seek(0, os.SEEK_END)
+                    current_size = f.tell()
+                    v_bytes = self._v_bytes
+                    v_seq = self._v_seq
+                    v_sha = self._v_sha
+                    v_missing_final_newline = self._v_missing_final_newline
+                    if v_bytes > 0:
+                        if current_size < v_bytes:
+                            # watermark より短い＝restore/sync rollback 等の
+                            # 外部要因によるロールバック（VALID だが短い prefix
+                            # を含む）。watermark を再同期して受理してはならない
+                            # （#345 指摘③: 旧実装はここで watermark を 0 に
+                            # 戻してフォールバック検証していたため、on-disk が
+                            # [0,1] へ縮んでも in-memory `self._entries` は
+                            # ロールバック前の内容を保持したまま suffix を
+                            # extend し、`[0,1,2,0,1]` のような重複キャッシュを
+                            # 生んでいた）。in-memory 状態を変更せず、書き込みも
+                            # 一切行わずに fail-closed する。
                             raise LedgerChainInvalidError(
-                                self.path, full_check.detail, full_check.tamper_at_seq
+                                self.path,
+                                f"on-disk ledger size ({current_size} bytes) is smaller than "
+                                f"this instance's verified watermark ({v_bytes} bytes, "
+                                f"seq={v_seq}): rollback or truncation detected; refusing to "
+                                "re-sync onto a shortened chain. Reconstruct via Ledger(path) "
+                                "or load_with_verification(path) to re-verify from scratch "
+                                "before appending again.",
+                                v_seq,
                             )
-                        # フル検証済み: watermark とこのインスタンスの
-                        # `self._entries` キャッシュを、このフル読取の内容へ
-                        # 再同期する（旧キャッシュへの単純 extend は行わない
-                        # — `#345` 指摘③ ロールバック fix と同じ理由で、
-                        # 一部だけを継ぎ足すと disk と乖離した重複キャッシュ
-                        # を生みうる）。
-                        full_entries_for_resync, _full_malformed = _parse_ledger_lines(
-                            full_lines
+                        # `#345` 指摘③ G1: watermark 確立時（構築時 or 直前の
+                        # 自分自身の write 直後）に記録した stat と現在の on-disk
+                        # stat を比較する安価な変更検出器。一致していれば
+                        # （＝このインスタンス自身の直近の write 以外、誰も
+                        # ファイルへ触れていない）既存の O(1) last-line
+                        # fingerprint 再照合だけで十分。`#345` 指摘③ G2: 追記
+                        # しようとしている event 自体がフェーズ遷移/terminal
+                        # summary（`_TRANSITION_EVENT_KINDS`）なら、stat が
+                        # 一致していても無条件にフル再検証へ回す。
+                        current_stat = os.fstat(f.fileno())
+                        stat_unchanged = (
+                            self._v_ino is not None
+                            and current_stat.st_ino == self._v_ino
+                            and current_stat.st_mtime_ns == self._v_mtime_ns
+                            and current_stat.st_size == self._v_stat_size
                         )
-                        full_resync = True
-                        v_bytes = len(full_raw)
-                        v_missing_final_newline = full_missing_final_newline
-                        if full_lines:
-                            tail_raw_full = json.loads(full_lines[-1])
-                            v_seq = int(tail_raw_full["seq"])
-                            v_sha = str(tail_raw_full["entry_sha"])
+                        if stat_unchanged and not force_full_chain_verify:
+                            # サイズは watermark 以上でも、watermark 末尾エントリ
+                            # そのものが同じ長さの別内容へ差し替えられていれば
+                            # （truncate を伴わない改竄）、suffix 検証だけでは
+                            # 素通りする（suffix はまさにこの 1 行の直後から読む
+                            # ため）。watermark 末尾 1 行分だけを O(1) で読み直し、
+                            # 記録済み sha256 と一致するか確認する（#345 指摘③）。
+                            # バイト範囲は `_set_watermark()` が構築時に直接記録
+                            # した最終非空行の実オフセット
+                            # （`_v_last_line_start`/`_end`）をそのまま使う —
+                            # `v_bytes`（ファイル全体長）からの逆算ではない。
+                            # 逆算は watermark 末尾に空行が続く有効な chain で
+                            # 実際の終端より後ろを指し、正当な台帳の append を
+                            # 偽の tamper 検出として拒否していた（`#345` 指摘③
+                            # 追補: 末尾空行での偽 append 失敗）。
+                            # `[UNDERSPEC-CAL-D88]`(b): a "genesis watermark" —
+                            # a validated chain of zero JSON entries (the file
+                            # holds only blank lines, so `v_bytes` (total file
+                            # byte length) is nonzero even though there is no
+                            # JSON line to fingerprint). `_v_seq == -1` alone is
+                            # not sufficient to identify this case (a tampered/
+                            # unverified watermark also sentinels `_v_seq = -1`,
+                            # but takes the `v_bytes == 0` branch below instead —
+                            # see `_set_watermark()`'s `else` branch), so require
+                            # the last-line fingerprint fields to be at their
+                            # "no prior line" defaults too. There is nothing to
+                            # re-read/compare against, so the O(1) fingerprint
+                            # check below (which would otherwise always mismatch
+                            # — `hashlib.sha256(b"").hexdigest()` is never equal
+                            # to `None`) is skipped and this append proceeds as a
+                            # normal first-entry append. Any other `None` sha
+                            # (i.e. `_v_seq != -1`, which cannot arise from a
+                            # `chain.ok=True` watermark — see `_set_watermark()`)
+                            # keeps failing closed via the mismatch below.
+                            is_genesis_watermark = (
+                                self._v_seq == -1
+                                and self._v_last_line_sha256 is None
+                                and self._v_last_line_len == 0
+                            )
+                            if not is_genesis_watermark:
+                                last_len = self._v_last_line_len
+                                last_start = self._v_last_line_start
+                                f.seek(last_start)
+                                last_bytes = f.read(last_len)
+                                if (
+                                    len(last_bytes) != last_len
+                                    or hashlib.sha256(last_bytes).hexdigest()
+                                    != self._v_last_line_sha256
+                                ):
+                                    raise LedgerChainInvalidError(
+                                        self.path,
+                                        f"on-disk content at this instance's verified watermark "
+                                        f"(seq={v_seq}) no longer matches what was last verified: "
+                                        "content tamper at/behind the watermark; refusing to "
+                                        "append without re-verifying the full chain.",
+                                        v_seq,
+                                    )
                         else:
-                            v_seq = -1
-                            v_sha = GENESIS_PREV_SHA
+                            # G1（stat が想定外に変化）または G2（遷移 event）:
+                            # watermark より前の in-place 同一長改ざんは stat の
+                            # みでは疑わしいと分かっても位置を特定できないため、
+                            # on-disk ledger 全体を seq 0 からフル再検証する。
+                            f.seek(0)
+                            full_raw = f.read()
+                            try:
+                                full_content = full_raw.decode("utf-8")
+                            except UnicodeDecodeError as exc:
+                                raise LedgerTruncatedTailError(
+                                    self.path,
+                                    "existing ledger content is not valid utf-8; refusing "
+                                    "to append",
+                                ) from exc
+                            full_lines, full_truncated_tail, full_missing_final_newline = (
+                                _split_complete_lines(full_content)
+                            )
+                            if full_truncated_tail:
+                                raise LedgerTruncatedTailError(
+                                    self.path,
+                                    "existing ledger tail is truncated (incomplete final "
+                                    "line); refusing to append onto partial bytes",
+                                )
+                            full_check = _verify_chain_prefix(
+                                full_lines,
+                                truncated_tail=False,
+                                missing_final_newline=full_missing_final_newline,
+                            )
+                            if not full_check.ok:
+                                raise LedgerChainInvalidError(
+                                    self.path, full_check.detail, full_check.tamper_at_seq
+                                )
+                            # フル検証済み: watermark とこのインスタンスの
+                            # `self._entries` キャッシュを、このフル読取の内容へ
+                            # 再同期する（旧キャッシュへの単純 extend は行わない
+                            # — `#345` 指摘③ ロールバック fix と同じ理由で、
+                            # 一部だけを継ぎ足すと disk と乖離した重複キャッシュ
+                            # を生みうる）。
+                            full_entries_for_resync, _full_malformed = _parse_ledger_lines(
+                                full_lines
+                            )
+                            full_resync = True
+                            v_bytes = len(full_raw)
+                            v_missing_final_newline = full_missing_final_newline
+                            if full_lines:
+                                tail_raw_full = json.loads(full_lines[-1])
+                                v_seq = int(tail_raw_full["seq"])
+                                v_sha = str(tail_raw_full["entry_sha"])
+                            else:
+                                v_seq = -1
+                                v_sha = GENESIS_PREV_SHA
 
-                f.seek(v_bytes)
-                suffix_raw = f.read()
-                try:
-                    suffix_content = suffix_raw.decode("utf-8")
-                except UnicodeDecodeError as exc:
-                    raise LedgerTruncatedTailError(
-                        self.path,
-                        "existing ledger suffix is not valid utf-8; refusing to append",
-                    ) from exc
+                    f.seek(v_bytes)
+                    suffix_raw = f.read()
+                    try:
+                        suffix_content = suffix_raw.decode("utf-8")
+                    except UnicodeDecodeError as exc:
+                        raise LedgerTruncatedTailError(
+                            self.path,
+                            "existing ledger suffix is not valid utf-8; refusing to append",
+                        ) from exc
 
-                raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(
-                    suffix_content
-                )
-                if truncated_tail:
-                    raise LedgerTruncatedTailError(
-                        self.path,
-                        "existing ledger tail is truncated (incomplete final line); "
-                        "refusing to append onto partial bytes",
+                    raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(
+                        suffix_content
                     )
-                chain_check = _verify_chain_prefix(
-                    raw_lines,
-                    truncated_tail=False,
-                    missing_final_newline=missing_final_newline,
-                    start_seq=v_seq + 1,
-                    start_prev_sha=v_sha,
-                )
-                if not chain_check.ok:
-                    raise LedgerChainInvalidError(
-                        self.path, chain_check.detail, chain_check.tamper_at_seq
+                    if truncated_tail:
+                        raise LedgerTruncatedTailError(
+                            self.path,
+                            "existing ledger tail is truncated (incomplete final line); "
+                            "refusing to append onto partial bytes",
+                        )
+                    chain_check = _verify_chain_prefix(
+                        raw_lines,
+                        truncated_tail=False,
+                        missing_final_newline=missing_final_newline,
+                        start_seq=v_seq + 1,
+                        start_prev_sha=v_sha,
                     )
+                    if not chain_check.ok:
+                        raise LedgerChainInvalidError(
+                            self.path, chain_check.detail, chain_check.tamper_at_seq
+                        )
 
-                if raw_lines:
-                    tail_raw = json.loads(raw_lines[-1])
-                    seq = int(tail_raw["seq"]) + 1
-                    prev_sha = str(tail_raw["entry_sha"])
-                elif v_seq >= 0:
-                    seq = v_seq + 1
-                    prev_sha = v_sha
-                else:
-                    seq = 0
-                    prev_sha = GENESIS_PREV_SHA
+                    if raw_lines:
+                        tail_raw = json.loads(raw_lines[-1])
+                        seq = int(tail_raw["seq"]) + 1
+                        prev_sha = str(tail_raw["entry_sha"])
+                    elif v_seq >= 0:
+                        seq = v_seq + 1
+                        prev_sha = v_sha
+                    else:
+                        seq = 0
+                        prev_sha = GENESIS_PREV_SHA
 
-                entry_sha = _entry_sha(seq, prev_sha, payload_j)
-                entry = LedgerEntry(
-                    seq=seq, prev_sha=prev_sha, entry_sha=entry_sha, payload=payload_j
-                )
-                line = canonical_json(
-                    {
-                        "seq": entry.seq,
-                        "prev_sha": entry.prev_sha,
-                        "entry_sha": entry.entry_sha,
-                        "payload": entry.payload,
-                    }
-                )
-                # `suffix_content` が空、かつ watermark 自身が末尾改行未終端
-                # だった場合のみ、欠けた "\n" をまず自己修復として書く
-                # （suffix が非空なら、それを書いた側の append() が既に
-                # 同じ自己修復を行っているため不要）。
-                heal_missing_newline = v_missing_final_newline and not suffix_content
-                heal_prefix = b"\n" if heal_missing_newline else b""
-                new_line_bytes = line.encode("utf-8")
-                new_bytes = heal_prefix + new_line_bytes + b"\n"
-                f.seek(0, os.SEEK_END)
-                write_pos = f.tell()
-                f.write(new_bytes)
-                f.flush()
-                os.fsync(f.fileno())
-                # `#345` 指摘③ G1: 次回 append() の安価な変更検出器が使う
-                # baseline を、この write を fsync した直後の実 stat から
-                # 取り直す（f.tell() からの逆算ではなく、on-disk の実値）。
-                new_stat = os.fstat(f.fileno())
-                new_v_bytes = f.tell()
-                new_line_start = write_pos + len(heal_prefix)
-                new_line_end = new_line_start + len(new_line_bytes)
+                    entry_sha = _entry_sha(seq, prev_sha, payload_j)
+                    entry = LedgerEntry(
+                        seq=seq, prev_sha=prev_sha, entry_sha=entry_sha, payload=payload_j
+                    )
+                    line = canonical_json(
+                        {
+                            "seq": entry.seq,
+                            "prev_sha": entry.prev_sha,
+                            "entry_sha": entry.entry_sha,
+                            "payload": entry.payload,
+                        }
+                    )
+                    # `suffix_content` が空、かつ watermark 自身が末尾改行未終端
+                    # だった場合のみ、欠けた "\n" をまず自己修復として書く
+                    # （suffix が非空なら、それを書いた側の append() が既に
+                    # 同じ自己修復を行っているため不要）。
+                    heal_missing_newline = v_missing_final_newline and not suffix_content
+                    heal_prefix = b"\n" if heal_missing_newline else b""
+                    new_line_bytes = line.encode("utf-8")
+                    new_bytes = heal_prefix + new_line_bytes + b"\n"
+                    f.seek(0, os.SEEK_END)
+                    write_pos = f.tell()
+                    f.write(new_bytes)
+                    f.flush()
+                    os.fsync(f.fileno())
+                    # `#345` 指摘③ G1: 次回 append() の安価な変更検出器が使う
+                    # baseline を、この write を fsync した直後の実 stat から
+                    # 取り直す（f.tell() からの逆算ではなく、on-disk の実値）。
+                    new_stat = os.fstat(f.fileno())
+                    new_v_bytes = f.tell()
+                    new_line_start = write_pos + len(heal_prefix)
+                    new_line_end = new_line_start + len(new_line_bytes)
             finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
 
         if full_resync:
             # G1/G2 でフル再検証した回: 旧キャッシュへの部分 extend ではなく

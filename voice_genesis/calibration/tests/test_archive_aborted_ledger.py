@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from voice_genesis.calibration.provenance import Ledger
+from voice_genesis.calibration.provenance import Ledger, LedgerChainInvalidError
 from voice_genesis.calibration.tools import archive_aborted_ledger as archive
 
 
@@ -570,7 +570,9 @@ def _compute_extended_bytes(original_bytes: bytes, tmp_path: Path, i: int = 999)
 
 def test_ledger_write_lock_blocks_concurrent_append(tmp_path: Path) -> None:
     """`_ledger_write_lock()` が保持するロックは `provenance.Ledger.append()`
-    と同一（同じ `ledger.jsonl` の fd 上の `fcntl.flock(LOCK_EX)`）である
+    と同一（R14 fix: `ledger.jsonl` 自身の fd ではなく、`_ledger_lock_path()`
+    が指す同ディレクトリの安定ロックファイル上の `fcntl.flock(LOCK_EX)`）で
+    ある——`Ledger.append()` も同じ計算式でこのロックファイルを先に取得する
     ため、archive 側がロックを保持している間、別スレッドの `append()` は
     ロック解放まで待たされる（blocking、タイムアウトなし——
     `Ledger.append()` 自身の流儀に合わせた設計判断）。"""
@@ -597,6 +599,117 @@ def test_ledger_write_lock_blocks_concurrent_append(tmp_path: Path) -> None:
     # ロック解放後は正常に追記され、chain は依然として有効。
     _, chain = Ledger.load_with_verification(ledger_path)
     assert chain.ok
+
+
+# ---------------------------------------------------------------------------
+# R14 fix (PR #346 round 14 採用): "Coordinate appenders before unlinking
+# the locked inode" — ロック対象を `ledger.jsonl` 自身の fd から同ディレクト
+# リの安定した専用ロックファイルへ変更し、appender/archiver 双方が **ledger
+# 本体を open する前に** このロックを取得する。旧実装は appender が
+# `ledger.jsonl` を（unlink 前なので同一 inode で）先に open してから flock
+# を要求していたため、archiver がロック保持中に割り込むと、appender は
+# 旧 inode の fd で flock 待ちに入り、archiver の unlink でパス名が消えた
+# **後** にこの flock を獲得し、切り離された inode へ書き込んで entry が
+# 恒久喪失し得た。
+# ---------------------------------------------------------------------------
+
+
+def test_lock_path_is_stable_dedicated_file_not_ledger_itself(tmp_path: Path) -> None:
+    """R14 fix: `_ledger_write_lock()`/`Ledger.append()` が実際に取り合う
+    ロック対象は `ledger.jsonl` 自身ではなく、同ディレクトリの専用ロック
+    ファイル（`ledger.jsonl.lock`）である——このファイルは archiver の
+    `unlink()` 対象に一切含まれない。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-abort"
+    _build_tiny_ledger(campaign_dir, n=1)
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+
+    lock_path = archive._ledger_lock_path(ledger_path)
+    assert lock_path == campaign_dir / "ledger.jsonl.lock"
+    assert lock_path != ledger_path
+
+    with archive._ledger_write_lock(ledger_path):
+        assert lock_path.is_file()
+        # ロック保持中に原本を unlink しても、ロックファイル自体は無関係
+        # （archiver の実運用どおり: unlink は `ledger_path` のみに作用する）。
+        ledger_path.unlink()
+        assert lock_path.is_file()
+    assert lock_path.is_file()  # ロック解放後も常設ファイルとして残る
+
+
+def test_appender_refused_not_lost_after_archiver_unlinks_under_stable_lock(
+    tmp_path: Path,
+) -> None:
+    """R14 の核心回帰: archiver がロック保持中に、既存の（構築済み・古い
+    watermark を持つ）`Ledger` インスタンスで `append()` を試みるスレッドを
+    起こすと、そのスレッドはロック解放までブロックされ（stable lock file
+    経由）、archiver が実際の archive 手順（`_write_and_publish_archive` →
+    `unlink`）を完了させてロックを解放した**後**にようやく進行する。この
+    時点で `ledger_path` は既に unlink 済みのため、appender が新たに
+    `open("a+b")` するのは「まっさらな新しい inode」であり、`current_size
+    (0) < 保持していた watermark (>0)` の既存 rollback 検知
+    (`LedgerChainInvalidError`) が働いて **fail-closed で拒否される**。
+
+    修正前の実装（`ledger_path` 自身の fd に flock）では、appender が
+    archiver のロック取得前に `ledger_path` を open 済みだった場合、その
+    fd は unlink 後も同じ（切り離された）inode を指し続け、この fd への
+    書き込みは gz snapshot にもどのファイルパスにも存在しない場所へ消えて
+    いた——本テストは「書き込みが起きない・拒否される」ことを固定する。
+    """
+    campaign_dir = tmp_path / "RUN10-CAL-fake-abort"
+    original_bytes = _build_tiny_ledger(campaign_dir, n=3)
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    sidecar_path = campaign_dir / archive.SIDECAR_FILENAME
+    staging_gz_path = campaign_dir / archive._STAGING_GZ_FILENAME
+    staging_sidecar_path = campaign_dir / archive._STAGING_SIDECAR_FILENAME
+
+    # 「archive 実行前から生きていた appender」を模す: この Ledger インスタン
+    # スの watermark は archiving 前の 3 エントリを指したまま。
+    stale_ledger = Ledger(ledger_path)
+    assert stale_ledger.entries[-1].seq == 2
+
+    append_errors: list[BaseException] = []
+    started = threading.Event()
+
+    def _do_append() -> None:
+        started.set()
+        try:
+            stale_ledger.append({"kind": "test_event", "i": 99})
+        except BaseException as exc:  # noqa: BLE001 - captured for the main thread
+            append_errors.append(exc)
+
+    with archive._ledger_write_lock(ledger_path):
+        thread = threading.Thread(target=_do_append)
+        thread.start()
+        assert started.wait(timeout=5), "append() thread never started"
+        thread.join(timeout=0.3)
+        assert thread.is_alive(), "append() was not blocked by the held archiver lock"
+
+        # 実運用の ensure_archived() が unlink 直前に行う手順そのもの
+        # （公開 → 検証済み gz/sidecar → 原本 unlink）を、同じロックの下で
+        # 実行する。
+        archive._write_and_publish_archive(
+            original_bytes,
+            campaign_dir,
+            gz_path,
+            sidecar_path,
+            staging_gz_path,
+            staging_sidecar_path,
+        )
+        ledger_path.unlink()
+
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert len(append_errors) == 1, f"expected exactly one refusal, got {append_errors}"
+    assert isinstance(append_errors[0], LedgerChainInvalidError)
+
+    # アーカイブは無傷: 失われた追記はどこにも存在しない（gz にも、恒久化
+    # した on-disk 状態にも）。
+    assert gzip.decompress(gz_path.read_bytes()) == original_bytes
+    if ledger_path.exists():
+        # "a+b" は open 時に新しい（空の）inode を作り得るが、append() は
+        # 書き込みに至る前に fail-closed するため中身は空のままである。
+        assert ledger_path.read_bytes() == b""
 
 
 def test_ensure_archived_rearchives_when_original_extended_during_archival(
