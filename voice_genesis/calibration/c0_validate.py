@@ -1756,25 +1756,50 @@ _U_GT_U_NUM_ABSENT_ONLY_FAMILIES: frozenset[str] = frozenset(
     {"RESONANCE_GT", "IDENTITY_CAUSAL_SWEEP"}
 )
 
+#: R20-3 対応（Codex 第 20 巡 finding (3)、2026-09-05）: `frozen_design.
+#: design_revision` の値がこれと一致する manifest のみ「v1.1 manifest」
+#: として扱う（`c0_freeze._DESIGN_REVISION` と同期）。キー自体が無い manifest
+#: （既存 closed campaign 3 件を含む legacy v1.0 形式）は判別対象外のまま
+#: 従来の後方互換経路（欠落キーは fail-closed にしない）を維持する。
+_V1_1_DESIGN_REVISION: str = "1.1"
+
+
+def _is_v1_1_manifest(manifest: Mapping[str, object]) -> bool:
+    found, value = _resolve(manifest, "frozen_design.design_revision")
+    return found and isinstance(value, str) and value.strip() == _V1_1_DESIGN_REVISION
+
 
 def _check_u_gt_u_num_bounds(
     manifest: Mapping[str, object],
 ) -> tuple[SweepManifestViolationDetail, ...]:
-    """v1.1 §V3.3 末尾（本 PR で新設）: 非 ABSENT family
-    （F0_CONTROL/FORMANT_GT/TILT_GT/APERIODICITY_GT/TRANSITION_GT）は
-    `frozen_design.fixture_spec.<FAMILY>.u_gt_bound`/`.u_num_bound` が
-    有限非負の number として存在し、対応する `.u_gt_bound_formula`/
-    `.u_num_bound_formula` の導出式文字列も非空で存在することを要求する。
-    RESONANCE_GT/IDENTITY_CAUSAL_SWEEP（`_U_GT_U_NUM_ABSENT_ONLY_FAMILIES`）
-    は `"ABSENT:<reason>"` 文字列のみを許可する（`c0_freeze._U_ABSENT_
-    REASON` と同じ 2 family——物理 gate 入力を持たない）。
+    """v1.1 §V3.3 末尾（本 PR で新設。R20-3 で欠落キーの判別を version-aware
+    化）: 非 ABSENT family（F0_CONTROL/FORMANT_GT/TILT_GT/APERIODICITY_GT/
+    TRANSITION_GT）は `frozen_design.fixture_spec.<FAMILY>.u_gt_bound`/
+    `.u_num_bound` が有限非負の number として存在し、対応する
+    `.u_gt_bound_formula`/`.u_num_bound_formula` の導出式文字列も非空で
+    存在することを要求する。RESONANCE_GT/IDENTITY_CAUSAL_SWEEP
+    （`_U_GT_U_NUM_ABSENT_ONLY_FAMILIES`）は `"ABSENT:<reason>"` 文字列
+    （存在する宣言）のみを許可する（`c0_freeze._U_ABSENT_REASON` と同じ
+    2 family——物理 gate 入力を持たない）。
 
-    **version-aware**: `u_gt_bound`/`u_num_bound` は `FIXTURE_SPEC_REQUIRED_
-    KEYS` に含まれない任意キーである（v1.0 §V3.3 実装以前に構築された
-    manifest fixture・legacy campaign を壊さないため）。キー自体が
-    manifest に存在しない場合はここでは fail-closed にしない——**キーが
-    存在するのに値が欠陥（型不正・負・非有限・formula 欠落）である場合の
-    み** violation を積む。"""
+    **version-aware**（R20-3、Codex 第 20 巡 finding (3)）: `u_gt_bound`/
+    `u_num_bound` は `FIXTURE_SPEC_REQUIRED_KEYS` に含まれない任意キーで
+    あり続ける（v1.0 §V3.3 実装以前に構築された legacy manifest fixture・
+    campaign を壊さないため）。判別は `frozen_design.design_revision`
+    （`_is_v1_1_manifest()` — `c0_freeze._DESIGN_REVISION` と同期する
+    machine-readable marker）で行う:
+
+    - marker が `"1.1"` を宣言する manifest（v1.1 完全 manifest）では、
+      `u_gt_bound`/`u_num_bound`/両 `*_formula` の**キー自体の欠落も**
+      fail-closed の violation にする（本 finding: 両フィールドを削っても
+      検証をすり抜け、C4 で全 real gate が NOT_EVALUABLE/INPUT_MISSING に
+      なっていた穴を塞ぐ）。
+    - marker が無い manifest（legacy v1.0 形式。既存 closed campaign 3 件を
+      含む）はキー自体の欠落を引き続き fail-closed にしない——**キーが
+      存在するのに値が欠陥**（型不正・負・非有限・formula 欠落）である
+      場合のみ violation を積む（従来どおり）。
+    """
+    is_v1_1 = _is_v1_1_manifest(manifest)
     violations: list[SweepManifestViolationDetail] = []
     for family in fixture_axes.FixtureFamily:
         fam = family.value
@@ -1782,10 +1807,27 @@ def _check_u_gt_u_num_bounds(
         if not found or not isinstance(entry, Mapping):
             continue
         for base_key in ("u_gt_bound", "u_num_bound"):
-            if base_key not in entry:
-                continue  # legacy manifest predating v1.1 §V3.3 -- not blocked here.
-            value = entry.get(base_key)
             formula_key = f"{base_key}_formula"
+            if base_key not in entry:
+                if not is_v1_1:
+                    continue  # legacy manifest predating v1.1 §V3.3 -- not blocked here.
+                for missing_key in (base_key, formula_key):
+                    violations.append(
+                        SweepManifestViolationDetail(
+                            violation="u_bound_missing_or_invalid",
+                            family=fam,
+                            sweep_id=missing_key,
+                            expected_count=0,
+                            actual_count=0,
+                            detail=(
+                                f"frozen_design.fixture_spec.{fam}.{missing_key} is required "
+                                "for v1.1 manifests (frozen_design.design_revision="
+                                f"{_V1_1_DESIGN_REVISION!r}) but is missing (v1.1 §V3.3; R20-3)"
+                            ),
+                        )
+                    )
+                continue
+            value = entry.get(base_key)
             formula = entry.get(formula_key)
             if fam in _U_GT_U_NUM_ABSENT_ONLY_FAMILIES:
                 if not _is_absent_marker(value):

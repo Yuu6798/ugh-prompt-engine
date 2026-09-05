@@ -345,6 +345,15 @@ campaign 成立要件とする:
     `ABSENT:no_physical_ground_truth`。
 - c0_validate は非 ABSENT family について両キーの存在・有限非負・導出式文字列の存在を
   検査し、欠落は `BLOCKED_C0_MANIFEST_INCOMPLETE` 経由で fail-closed（閉語彙は不変）。
+- **R20-3 追補**（Codex 第 20 巡 finding (3)、2026-09-05）: 上記の「欠落 fail-closed」は
+  当初 `u_gt_bound`/`u_num_bound` **キー自体が manifest に存在するが値が欠陥**の場合
+  にのみ働いており、v1.1 の完全 manifest からキーごと両フィールドを削っても
+  legacy（v1.0、キー自体が無い形式）と区別できず沈黙して通過する穴があった。
+  `c0_freeze.build_manifest()` が `frozen_design.design_revision="1.1"`
+  （`design_doc_sha256` 併記）を machine-readable version marker として core へ常時
+  書き込み、`c0_validate._check_u_gt_u_num_bounds()` はこの marker を持つ manifest
+  でのみキー自体の欠落も fail-closed 対象にする。marker が無い manifest（既存 closed
+  campaign 3 件を含む v1.0 形式）は従来どおりキー欠落を許容する。
 
 ### V3.4 追補 — M6 の測定経路は v1.2 へ繰延（境界宣言、2026-09-05）
 

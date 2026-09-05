@@ -1189,7 +1189,7 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
 設計正本 `DESIGN_VG_METER_CAL_DEBT_v1.1.md`（§V1–§V6）の各節を実装した
 モジュール・関数の対応表。関数名で記載する（行番号は変動するため）。
 実装の詳細な逸脱・境界宣言・採否根拠は `README.md` 逸脱台帳
-`UNDERSPEC-CAL-D91`〜`D97` が正（本表は経路の索引のみ）。
+`UNDERSPEC-CAL-D91`〜`D98` が正（本表は経路の索引のみ）。
 
 | v1.1 節 | 実装モジュール | 関数名 | 対応する台帳 entry |
 |---|---|---|---|
@@ -1206,7 +1206,8 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
 | | `campaign/holdout_stage.py` | `evaluate_absolute_meter_from_campaign()`, `evaluate_directional_meter_from_campaign()`, `evaluate_m6_identity()`, `build_absolute_gate_inputs()`, `build_directional_gate_inputs()`, `load_e_use_rows()`, `absolute_e_use_value()` | D93 |
 | §V3.3（U_GT/U_num の C0 凍結） | `c0_freeze.py` | `_fixture_specs()`（`u_gt_bound`/`u_num_bound`+導出式文字列） | D93 |
 | | `campaign/holdout_stage.py` | `declared_u_gt_u_num_for_family()`（消費側、既存後方互換 scalar 契約のまま無改変） | D93 |
-| | `c0_validate.py` | `_check_u_gt_u_num_bounds()` | D93 |
+| | `c0_validate.py` | `_check_u_gt_u_num_bounds()`（R20-3: `_is_v1_1_manifest()` による version-aware 必須化） | D93/D98 |
+| §V3.3 追補（R20-3: v1.1 manifest 判別 marker） | `c0_freeze.py` | `build_manifest()`（`frozen_design.design_revision`/`design_doc_sha256`）, `_design_doc_sha256()` | D98 |
 | §V3.5（gate4' invariance 軸の宣言・pair 構成） | `fixtures/matrix.py` | `single_axis_nuisance_tag_axis()`, `invariance_axes_by_family()` | D93 |
 | | `campaign/holdout_stage.py` | `build_invariance_pairs_for_family()`（instance 単位 pair + anchor 共有測定） | D93 |
 | | `splitter.py` | `_COVERAGE_AXES`（`"nuisance_axis"` 追加）, `_GATE4_INAPPLICABLE_FAMILIES` | D93 |
