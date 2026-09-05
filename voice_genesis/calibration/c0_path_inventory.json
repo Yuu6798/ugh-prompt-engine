@@ -51,6 +51,7 @@
   "voice_genesis/calibration/fixtures/generators/tilt.py",
   "voice_genesis/calibration/fixtures/generators/transition.py",
   "voice_genesis/calibration/fixtures/matrix.py",
+  "voice_genesis/calibration/fixtures/uncertainty.py",
   "voice_genesis/calibration/gates.py",
   "voice_genesis/calibration/m6_identity.py",
   "voice_genesis/calibration/observables.py",
