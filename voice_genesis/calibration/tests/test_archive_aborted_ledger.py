@@ -437,6 +437,116 @@ def test_ensure_archived_replaces_truncated_restore_residue_original(
     assert not (campaign_dir / archive._STAGING_LEDGER_FILENAME).exists()
 
 
+# ---------------------------------------------------------------------------
+# R11 fix (PR #346 round 11 採用, 2026-09-05): 公開済み gz+sidecar が揃った
+# 後・原本削除前 (4) に中断し、その後残存 `ledger.jsonl` へ追記があった場合、
+# 旧実装は次回 `ensure_archived()` が公開物のみ検証して新しい原本を無条件
+# `unlink()` していたため、追記分が恒久喪失していた。
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_archived_rearchives_leftover_original_with_genuine_append(
+    tmp_path: Path,
+) -> None:
+    """(a) 公開済み gz+sidecar が揃った後・原本削除前に中断し、その後残存
+    `ledger.jsonl` へ正当な（chain 継続する）追記があった場合、旧実装は
+    無条件 `unlink()` で追記分を失っていた。新実装は残存原本が公開済み
+    archive の chain-検証済み byte-prefix 拡張だと判定し、原本を正として
+    archive を作り直し、新しい sha256 が sidecar に反映される。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-abort"
+    original_bytes = _build_tiny_ledger(campaign_dir, n=5)
+    published_sha = hashlib.sha256(original_bytes).hexdigest()
+
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    sidecar_path = campaign_dir / archive.SIDECAR_FILENAME
+    gz_path.write_bytes(archive._write_gzip_bytes(original_bytes))
+    sidecar_path.write_text(archive._sidecar_text(published_sha), encoding="utf-8")
+
+    # 原本削除前に、さらなる append があった状態を模す。
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    assert ledger_path.is_file()
+    Ledger(ledger_path).append({"kind": "test_event", "i": 100})
+    extended_bytes = ledger_path.read_bytes()
+    extended_sha = hashlib.sha256(extended_bytes).hexdigest()
+    assert extended_bytes.startswith(original_bytes)
+    assert extended_sha != published_sha
+
+    result = archive.ensure_archived(campaign_dir)
+
+    assert result.action == "archived"
+    assert result.sha256 == extended_sha
+    assert not ledger_path.exists()
+    assert gzip.decompress(gz_path.read_bytes()) == extended_bytes
+    sidecar_sha, sidecar_name = sidecar_path.read_text(encoding="utf-8").split(None, 1)
+    assert sidecar_sha == extended_sha
+    assert sidecar_name.strip() == archive.LEDGER_FILENAME
+    assert not (campaign_dir / archive._STAGING_GZ_FILENAME).exists()
+    assert not (campaign_dir / archive._STAGING_SIDECAR_FILENAME).exists()
+    assert _has_authoritative_copy(campaign_dir)
+
+
+def test_ensure_archived_refuses_inconsistent_leftover_original_and_keeps_both(
+    tmp_path: Path,
+) -> None:
+    """(b) 残存原本が公開済み archive の byte-prefix 拡張ではない（無関係な
+    ledger と取り違えた/改竄された）場合は、原本にも公開物にも一切手を
+    付けず `ArchiveError` で停止し、両方を保全する。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-abort"
+    original_bytes = _build_tiny_ledger(campaign_dir, n=5)
+    published_sha = hashlib.sha256(original_bytes).hexdigest()
+
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    sidecar_path = campaign_dir / archive.SIDECAR_FILENAME
+    gz_bytes_before = archive._write_gzip_bytes(original_bytes)
+    sidecar_text_before = archive._sidecar_text(published_sha)
+    gz_path.write_bytes(gz_bytes_before)
+    sidecar_path.write_text(sidecar_text_before, encoding="utf-8")
+
+    # 残存原本を、公開済み archive とは無関係な chain へ丸ごと置き換える
+    # （byte-prefix にならない不整合）。
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    ledger_path.unlink()
+    Ledger(ledger_path).append({"kind": "unrelated_event", "i": 999})
+    mismatched_bytes = ledger_path.read_bytes()
+    assert mismatched_bytes != original_bytes
+    assert not mismatched_bytes.startswith(original_bytes)
+
+    with pytest.raises(archive.ArchiveError):
+        archive.ensure_archived(campaign_dir)
+
+    # 両方とも一切変更されていない（fail-closed）。
+    assert ledger_path.read_bytes() == mismatched_bytes
+    assert gz_path.read_bytes() == gz_bytes_before
+    assert sidecar_path.read_text(encoding="utf-8") == sidecar_text_before
+
+
+def test_ensure_archived_matching_leftover_original_is_discarded_as_before(
+    tmp_path: Path,
+) -> None:
+    """(c) 残存原本の sha256 が公開済み sidecar と一致する場合は、従来どおり
+    原本を除去するだけで完了する（回帰確認 —
+    `test_recovers_from_interruption_after_publish_before_original_delete`
+    と同型だが、R11 の新規分岐が「一致」経路に副作用を持ち込んでいないこと
+    を明示的に固定する）。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-abort"
+    original_bytes = _build_tiny_ledger(campaign_dir, n=5)
+    published_sha = hashlib.sha256(original_bytes).hexdigest()
+
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    sidecar_path = campaign_dir / archive.SIDECAR_FILENAME
+    gz_path.write_bytes(archive._write_gzip_bytes(original_bytes))
+    sidecar_path.write_text(archive._sidecar_text(published_sha), encoding="utf-8")
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    assert ledger_path.read_bytes() == original_bytes  # sha256 一致
+
+    result = archive.ensure_archived(campaign_dir)
+
+    assert result.action == "already_archived"
+    assert result.sha256 == published_sha
+    assert not ledger_path.exists()
+    assert _has_authoritative_copy(campaign_dir)
+
+
 def test_cli_main_reports_failure_for_campaign_closed_ledger(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

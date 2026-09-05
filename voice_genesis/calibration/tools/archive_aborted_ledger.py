@@ -222,6 +222,63 @@ def _discard_if_exists(path: Path) -> None:
         path.unlink()
 
 
+def _is_strict_prefix_extension(candidate: bytes, published: bytes) -> bool:
+    """`candidate` が `published` の byte-exact prefix を持ち、かつ真に長いか
+    （R11 fix 用 — `ensure_archived()` 参照）。
+
+    JSONL は行区切りのため、`published` 自体が publish 時点で既に
+    chain-検証済み（well-formed）であれば、その先頭バイト列と byte-exact に
+    一致する `candidate` の対応区間の行境界も同一になる。よって、この
+    prefix 判定に加えて `candidate` 全体の chain 検証（呼び出し側で行う）が
+    通れば、`candidate` は `published` の全 entry をそのまま含んだ上で
+    entry を追加した厳密な拡張だと判断してよい（追加のエントリ数比較は
+    不要）。"""
+    return len(candidate) > len(published) and candidate[: len(published)] == published
+
+
+def _write_and_publish_archive(
+    data: bytes,
+    campaign_dir: Path,
+    gz_path: Path,
+    sidecar_path: Path,
+    staging_gz_path: Path,
+    staging_sidecar_path: Path,
+) -> str:
+    """`data`（非圧縮 ledger バイト列）を §V4 の 3 段階（staging へ書く →
+    実伸長して検証 → fsync 済み staging を rename で公開）で gz+sidecar と
+    して原子的に公開する。`gz_path`/`sidecar_path` に既存の公開物があれば
+    `os.rename` がそのまま置換する（R11 fix の re-archive 経路が既存の
+    stale な公開物を置き換えるのに使う）。公開直後にもう一度検証してから
+    非圧縮バイト列の sha256 を返す。呼び出し側は、この関数が正常終了した
+    後にのみ `data` の出所（原本ファイル等）を削除してよい。"""
+    sha256_hex = _sha256_bytes(data)
+
+    staging_gz_path.write_bytes(_write_gzip_bytes(data))
+    _fsync_file(staging_gz_path)
+    staging_sidecar_path.write_text(_sidecar_text(sha256_hex), encoding="utf-8")
+    _fsync_file(staging_sidecar_path)
+    _fsync_dir(campaign_dir)
+
+    verified_sha = _verify_gz_sidecar_pair(staging_gz_path, staging_sidecar_path)
+    if verified_sha != sha256_hex:  # pragma: no cover - defensive only
+        raise ArchiveError(
+            "staging verification sha256 does not match source bytes "
+            f"(verified={verified_sha!r}, source={sha256_hex!r})"
+        )
+
+    os.rename(staging_gz_path, gz_path)
+    os.rename(staging_sidecar_path, sidecar_path)
+    _fsync_dir(campaign_dir)
+
+    republished_sha = _verify_gz_sidecar_pair(gz_path, sidecar_path)
+    if republished_sha != sha256_hex:  # pragma: no cover - defensive only
+        raise ArchiveError(
+            "published artifact failed post-publish verification — refusing to "
+            "delete the original ledger"
+        )
+    return sha256_hex
+
+
 def _ledger_bytes_contain_campaign_closed(data: bytes) -> bool:
     """R9 fix (PR #346 round 9): does decompressed/raw `ledger.jsonl`
     content `data` contain a `kind == "campaign_closed"` event anywhere?
@@ -392,6 +449,63 @@ def ensure_archived(campaign_dir: Path) -> ArchiveResult:
                     "canonical records and must never be archived; refusing "
                     "to remove anything further" + restore_note
                 )
+            # R11 fix (PR #346 round 11 採用, 2026-09-05): 公開済み gz+sidecar
+            # が揃った後・原本削除前 (4) に中断し、その後残存 `ledger.jsonl`
+            # へ追記があった場合、修正前はここで無条件 `unlink` していたため
+            # 追記分が恒久喪失した。原本を消す前に、残存原本の sha256 を
+            # 公開済み sidecar の sha256 と突き合わせる。
+            if ledger_path.is_file():
+                leftover_bytes = ledger_path.read_bytes()
+                leftover_sha = _sha256_bytes(leftover_bytes)
+            else:
+                leftover_bytes = None
+                leftover_sha = None
+
+            if leftover_sha is not None and leftover_sha != published_sha:
+                # 一致しない — 残存原本が公開済み archive から乖離している。
+                # (i) 残存原本の chain 検証を行い、(ii) 公開済み ledger の
+                # 厳密な byte-prefix 拡張（先頭部分が byte 一致・真に長い）
+                # であることの両方を満たす場合に限り、追記が正当な続きだと
+                # みなして原本を正とし archive を作り直す（staging → 検証 →
+                # rename で既存の gz/sidecar を置換）。それ以外（不整合 —
+                # 改竄・無関係な ledger との取り違え等）は何も削除せず
+                # `ArchiveError` で停止し、両方を保全する。
+                is_extension = _is_strict_prefix_extension(leftover_bytes, decompressed_gz)
+                chain_ok = False
+                if is_extension:
+                    try:
+                        _, leftover_chain = Ledger.load_with_verification(ledger_path)
+                    except Exception:  # noqa: BLE001 - 検証不能は re-archive しない
+                        chain_ok = False
+                    else:
+                        chain_ok = leftover_chain.ok
+                if is_extension and chain_ok:
+                    _discard_if_exists(staging_gz_path)
+                    _discard_if_exists(staging_sidecar_path)
+                    new_sha = _write_and_publish_archive(
+                        leftover_bytes,
+                        campaign_dir,
+                        gz_path,
+                        sidecar_path,
+                        staging_gz_path,
+                        staging_sidecar_path,
+                    )
+                    ledger_path.unlink()
+                    return ArchiveResult(
+                        campaign_dir=campaign_dir,
+                        gz_path=gz_path,
+                        sidecar_path=sidecar_path,
+                        sha256=new_sha,
+                        action="archived",
+                    )
+                raise ArchiveError(
+                    f"{campaign_dir}: leftover ledger.jsonl (sha256={leftover_sha!r}) "
+                    f"does not match the verified published archive "
+                    f"(sha256={published_sha!r}) and is not a valid, chain-verified, "
+                    "strict byte-prefix extension of it — refusing to delete or "
+                    "overwrite either side (fail-closed, §V4 R11)"
+                )
+
             # 公開物は検証済み。staging の残骸と、残存していれば原本を除去
             # して完了とする（原本を消す前に必ずここで検証を通している）。
             _discard_if_exists(staging_gz_path)

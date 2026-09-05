@@ -295,6 +295,110 @@ def test_holdout_sweeps_declaration_fails_closed_when_canonical_rederivation_rai
     assert {v.family for v in violations} == declared_families
 
 
+# ---------------------------------------------------------------------------
+# R11 対応（PR #346 第 11 巡採用, 2026-09-05）: `holdout_sweeps.<family>` が
+# `{}`/欠落だと、修正前は段 1+段 2 の完全再導出比較に到達する前に
+# `continue` して黙って skip していたため、非免除（`pin_exempt=False`、
+# `k_hold>=1`）family の pin 宣言を manifest から丸ごと消す/空にするだけで
+# secret 依存 C0 検証を通過できてしまう穴があった。修正後は
+# `found_holdout`（v1.1+ manifest である version marker）かつ
+# `split_secret is not None`（secret 依存の完全再導出経路）の場合に限り、
+# 非免除 family の宣言欠落/空を fail-closed で検出し、逆に pin 免除
+# family（`cap<1`）の非空宣言（免除を騙る改竄）も検出する。
+# ---------------------------------------------------------------------------
+
+
+def test_holdout_sweeps_missing_declaration_for_non_exempt_family_fails_closed() -> None:
+    """(a) 非免除 family（FORMANT_GT, k_hold>=1）の宣言を manifest から
+    丸ごと落とすと、完全再導出比較に到達する前に skip されず fail-closed
+    で検出される。"""
+    tampered = {fam: dict(sweeps) for fam, sweeps in _PINNED.items()}
+    del tampered["FORMANT_GT"]
+    manifest = _holdout_sweeps_manifest(tampered)
+
+    violations = c0_validate._check_holdout_sweeps_declaration_match(manifest, _SECRET)
+    assert violations
+    assert any(
+        v.family == "FORMANT_GT" and v.violation == "holdout_pin_declaration_mismatch"
+        for v in violations
+    )
+
+
+def test_holdout_sweeps_empty_declaration_for_non_exempt_family_fails_closed() -> None:
+    """(b) 非免除 family の宣言を `{}`（空 mapping）に置き換えても、missing
+    と同様に fail-closed で検出される。"""
+    tampered = {fam: dict(sweeps) for fam, sweeps in _PINNED.items()}
+    tampered["FORMANT_GT"] = {}
+    manifest = _holdout_sweeps_manifest(tampered)
+
+    violations = c0_validate._check_holdout_sweeps_declaration_match(manifest, _SECRET)
+    assert violations
+    assert any(
+        v.family == "FORMANT_GT" and v.violation == "holdout_pin_declaration_mismatch"
+        for v in violations
+    )
+
+
+def _with_family_forced_exempt(monkeypatch, exempt_family: str) -> None:
+    """`holdout_pin_params_by_family()` の戻り値のうち `exempt_family` だけ
+    `pin_exempt=True`/`k_hold=0` に差し替えたものを `c0_validate` の名前空間
+    に monkeypatch する（`full_pin` の実再計算 — `pin_and_realize_holdout()`
+    — は独立に `fixtures.matrix` 側の実装を直接呼ぶため影響を受けない。
+    テスト対象の新規チェックは exempt 分岐でいずれも実 pin 比較に進む前に
+    `continue` するため、この不一致は問題にならない）。"""
+    import dataclasses
+
+    from voice_genesis.calibration.fixtures.matrix import (
+        holdout_pin_params_by_family as real_holdout_pin_params_by_family,
+    )
+
+    def _fake(rows: object) -> dict[str, object]:
+        result = dict(real_holdout_pin_params_by_family(rows))
+        p = result[exempt_family]
+        result[exempt_family] = dataclasses.replace(p, pin_exempt=True, k_hold=0)
+        return result
+
+    monkeypatch.setattr(c0_validate, "holdout_pin_params_by_family", _fake)
+
+
+def test_holdout_sweeps_empty_declaration_for_exempt_family_passes(monkeypatch) -> None:
+    """(c) pin 免除 family（`cap<1`）の空宣言 `{}` は正しい姿であり
+    violation にならない。"""
+    _with_family_forced_exempt(monkeypatch, "TILT_GT")
+    tampered = {fam: dict(sweeps) for fam, sweeps in _PINNED.items()}
+    tampered["TILT_GT"] = {}
+    manifest = _holdout_sweeps_manifest(tampered)
+
+    violations = c0_validate._check_holdout_sweeps_declaration_match(manifest, _SECRET)
+    assert not any(v.family == "TILT_GT" for v in violations)
+
+
+def test_holdout_sweeps_non_empty_declaration_for_exempt_family_fails_closed(monkeypatch) -> None:
+    """(d) pin 免除 family が非空の pin を宣言している（免除を騙る改竄）
+    場合は fail-closed で検出される。"""
+    _with_family_forced_exempt(monkeypatch, "TILT_GT")
+    manifest = _holdout_sweeps_manifest(_PINNED)  # TILT_GT は実際には非空宣言のまま
+
+    violations = c0_validate._check_holdout_sweeps_declaration_match(manifest, _SECRET)
+    assert any(
+        v.family == "TILT_GT" and v.violation == "holdout_pin_declaration_mismatch"
+        for v in violations
+    )
+
+
+def test_holdout_sweeps_missing_declaration_dry_run_backward_compatible() -> None:
+    """(e) secret 非依存（dry-run）経路は後方互換を維持する: 非免除 family
+    の宣言が欠落していても、`split_secret=None` では新規の必須化チェックは
+    発動せず、従来どおり「宣言があれば照合」——欠落は無条件 skip
+    （fail-closed 化は full manifest の secret 依存経路にのみ適用される）。"""
+    tampered = {fam: dict(sweeps) for fam, sweeps in _PINNED.items()}
+    del tampered["FORMANT_GT"]
+    manifest = _holdout_sweeps_manifest(tampered)
+
+    violations = c0_validate._check_holdout_sweeps_declaration_match(manifest, None)
+    assert not any(v.family == "FORMANT_GT" for v in violations)
+
+
 def test_holdout_membership_detects_pinned_row_not_in_holdout() -> None:
     """§V2.3 fail-closed: `holdout_sweeps` の member 行が 1 行でも realized
     split 上で HOLDOUT でなければ検出する。"""

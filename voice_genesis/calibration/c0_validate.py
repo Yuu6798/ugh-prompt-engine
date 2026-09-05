@@ -1759,6 +1759,16 @@ def _check_holdout_sweeps_declaration_match(
     secret 無しでは「その縮退が正当だったか」を検査できず、単に
     `len(actual) != k_hold` として構造 mismatch になる（secret 依存の
     完全再導出照合でのみ縮退の正当性まで確認できる）。
+
+    R11 対応（Codex 第 11 巡採用、2026-09-05）: `found_holdout`（v1.1+
+    manifest の version marker）かつ `split_secret is not None`（secret
+    依存の完全再導出経路）の場合に限り、pin 免除でない
+    （`HoldoutPinParams.pin_exempt=False`、すなわち `k_hold>=1`）全 family
+    について宣言 (`holdout_sweeps.<family>`) の存在と非空を必須にする——
+    欠落/空はここで即 `continue` して以降の照合をすり抜けさせず、
+    fail-closed の mismatch violation にする。pin 免除 family（`cap<1`）は
+    空宣言 `{}` が正しい姿であり、非空の宣言（免除のはずの family が pin
+    を騙る改竄）も同様に検出する。
     """
     found_holdout, holdout_section = _resolve(manifest, "holdout_sweeps")
     rows = build_matrix()
@@ -1794,7 +1804,67 @@ def _check_holdout_sweeps_declaration_match(
     for family in fixture_axes.FixtureFamily:
         fam = family.value
         declared_raw = declared_raw_by_family[fam]
-        if declared_raw is None or _is_hollow(declared_raw) or not isinstance(declared_raw, Mapping):
+        hollow = (
+            declared_raw is None or _is_hollow(declared_raw) or not isinstance(declared_raw, Mapping)
+        )
+
+        # R11 対応（Codex 第 11 巡採用、2026-09-05）: 修正前は
+        # `declared_raw` が欠落/空（`{}`）だとここで即 `continue` し、以降の
+        # 公称 k_hold 再導出比較にすら到達しなかった——非免除
+        # （`pin_exempt=False`、すなわち `k_hold>=1`）family の pin 宣言を
+        # manifest から丸ごと消しても、この検査が沈黙して secret 依存 C0
+        # 検証を通過してしまう穴があった（membership 検査
+        # `_check_holdout_sweeps_realized_membership()` も同じ hollow 判定で
+        # skip するため二重に見逃す）。本対応は、`holdout_sweeps` トップ
+        # レベルキー自体が manifest に存在する（`found_holdout` — v1.1+
+        # 形式である version marker）かつ `split_secret` が渡る secret 依存
+        # 完全再導出経路に限り、pin 免除でない全 family について宣言の
+        # 存在と非空を必須にする：欠落/空は fail-closed。逆に pin 免除
+        # family（`cap<1`）は空宣言 `{}` が正しい姿であり、非空の宣言は
+        # （免除のはずの family が pin を騙る改竄）fail-closed で検出する。
+        # `holdout_sweeps` キー自体が無い v1.0 形式 manifest（`found_holdout`
+        # =False）と secret 非依存の dry-run 経路（`split_secret is None`）
+        # は、この必須化の対象外のまま従来どおり「宣言があれば照合」を
+        # 維持する（後方互換）。
+        if found_holdout and split_secret is not None and fam in params:
+            p = params[fam]
+            if not p.pin_exempt and hollow:
+                violations.append(
+                    SweepManifestViolationDetail(
+                        violation="holdout_pin_declaration_mismatch",
+                        family=fam,
+                        sweep_id="",
+                        expected_count=p.k_hold,
+                        actual_count=0,
+                        detail=(
+                            f"holdout_sweeps.{fam} declaration is missing or empty, but "
+                            f"family is not pin-exempt (k_hold={p.k_hold} >= 1) — a "
+                            "non-exempt family's holdout pin declaration must be present "
+                            "and non-empty (fail-closed, §V2.2)"
+                        ),
+                    )
+                )
+                continue
+            if p.pin_exempt and not hollow:
+                violations.append(
+                    SweepManifestViolationDetail(
+                        violation="holdout_pin_declaration_mismatch",
+                        family=fam,
+                        sweep_id="",
+                        expected_count=0,
+                        actual_count=(
+                            len(declared_raw) if isinstance(declared_raw, Mapping) else 0
+                        ),
+                        detail=(
+                            f"holdout_sweeps.{fam} declares pinned sweep(s) but the family "
+                            "is pin-exempt (cap<1) — an exempt family must declare an empty "
+                            "mapping (fail-closed, §V2.2)"
+                        ),
+                    )
+                )
+                continue
+
+        if hollow:
             continue
 
         actual = _normalize_declared_sweeps(declared_raw)
