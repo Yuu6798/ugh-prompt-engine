@@ -4450,8 +4450,18 @@ def test_c1_fixtures_partial_slice_counters_reconstructable_from_ledger_after_co
     a `PARTIAL_SLICE` dispatch's parent CPU must be recoverable purely from
     the ledger, not only from `counters.json` — via the new `slice_summary`
     ledger event. Delete `counters.json` after a `PARTIAL_SLICE` dispatch and
-    confirm `reconcile_cap_counters()` reconstructs the exact same
-    `compute_used` from the ledger alone."""
+    confirm `reconcile_cap_counters()` reconstructs (at least) the same
+    `compute_used` from the ledger alone.
+
+    R18 対応（Codex PR #346 第 18 巡 P1 採用、2026-09-05）で「purely from the
+    ledger」は「厳密一致」ではなくなった: `slice_summary` append 自身が消費
+    する O(n) 全 chain 再検証 CPU（`_summary_append_cpu_delta()`）は
+    `counters.json` にのみ追加で計上され、ledger の `parent_cpu_seconds`
+    フィールドには乗らない（summary の意味論を保つため、append 後に別 event
+    を足さない設計）——これはこの関数自身の docstring が明記する境界宣言
+    そのもの（cache 消失時のみ露出する過小計上）。よってここでは `<=` を
+    固定する（ledger のみからの再構成は persisted 値を超えないが、下回り
+    得る）。"""
     subset = small_matrix_subset(2, family="F0_CONTROL")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     approval_dir = tmp_path / "approvals"
@@ -4494,7 +4504,9 @@ def test_c1_fixtures_partial_slice_counters_reconstructable_from_ledger_after_co
 
     derived, reconstructed = reconcile_cap_counters(campaign_dir, campaign.ledger.entries, None)
     # `counters.json` is gone, so this can only reconstruct from the ledger.
-    assert derived.compute_used == pytest.approx(counters_before_deletion.compute_used)
+    # R18: the ledger alone may under-count by the `slice_summary` append's
+    # own verification CPU (never written to the ledger) -- see docstring.
+    assert derived.compute_used <= counters_before_deletion.compute_used + 1e-6
     assert derived.storage_used == counters_before_deletion.storage_used
     if counters_before_deletion.compute_used > 0.0 or counters_before_deletion.storage_used > 0:
         assert reconstructed is True
@@ -4784,7 +4796,17 @@ def test_parent_cpu_charged_and_persisted_on_normal_dispatch_exit(
 ) -> None:
     """round 15 finding #5: on a normal (non-breach) stage dispatch, the CLI
     process's own parent-side CPU is charged to compute_used, persisted to
-    counters.json, and recorded on a `stage_summary` ledger event."""
+    counters.json, and recorded on a `stage_summary` ledger event.
+
+    R18 対応（Codex 第 18 巡 P1 採用、2026-09-05）で `persisted["compute_
+    used"]` は `stage_summaries[0]["parent_cpu_seconds"]` と厳密一致では
+    なくなった: `stage_summary` append 自身が消費する O(n) 全 chain 再検証
+    CPU（`_summary_append_cpu_delta()`）が `counters.json` にのみ追加で
+    計上される（ledger の `parent_cpu_seconds` フィールドは append 前の
+    値のまま——summary の意味論を壊さないため）。厳密な等価固定は
+    `test_stage_summary_append_verification_cpu_is_charged_to_counters_
+    only` が fake clock で行う。ここでは real CPU clock を使うため
+    `>=` のみを固定する。"""
     campaign_dir, secret_root = build_tiny_campaign(tmp_path)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
     campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
@@ -4815,7 +4837,7 @@ def test_parent_cpu_charged_and_persisted_on_normal_dispatch_exit(
     assert len(stage_summaries) == 1
     assert stage_summaries[0]["stage"] == "c2-baseline"
     assert stage_summaries[0]["parent_cpu_seconds"] > 0.0
-    assert stage_summaries[0]["parent_cpu_seconds"] == pytest.approx(persisted["compute_used"])
+    assert persisted["compute_used"] >= stage_summaries[0]["parent_cpu_seconds"]
 
 
 def test_parent_cpu_charged_and_persisted_on_breach_exception_exit(
@@ -5332,6 +5354,68 @@ def test_close_stage_summary_records_full_dispatch_cpu_across_checkpoint(
     cost_caps_obj = cost_caps_from_manifest(reloaded.manifest)
     derived = cap_counters_from_ledger(reloaded.ledger.entries, cost_caps_obj)
     assert derived.compute_used == pytest.approx(persisted["compute_used"])
+
+
+def test_stage_summary_append_verification_cpu_is_charged_to_counters_only(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R18 対応（Codex PR #346 第 18 巡 P1 採用、2026-09-05）: `stage_summary`
+    は `provenance._TRANSITION_EVENT_KINDS` に含まれるため、`Ledger.append()`
+    はこの 1 回で ledger 全 chain の O(n) 再検証を行う——`_checkpoint_before_
+    summary()` の CPU snapshot は append **前**に取られるため、この検証 CPU
+    は旧実装では `cap_counters`/`counters.json` のどちらにも計上されて
+    いなかった。`cli._process_cpu_seconds` を fake clock で固定し、append
+    前後の 2 回の追加スナップショット（`pre_append_cpu_seconds` と
+    `_summary_append_cpu_delta()` 内部の事後スナップショット）を明示的に
+    分離して検証する:
+
+    call 1: 起動時 `parent_cpu_t0` = 0.0。call 2: `close` の
+    pre-transition checkpoint = 3.0（checkpoint delta = 3.0）。call 3:
+    `_checkpoint_before_summary()` の snapshot = 5.0（residual = 2.0、
+    full dispatch = 5.0 -- ここまでは round 17 のテストと同じ）。call 4:
+    append 直前の `pre_append_cpu_seconds` = 5.0（append 前は追加の CPU
+    消費なし）。call 5: append 完了後の snapshot = 6.5（append 自身の
+    検証 CPU = 1.5）。
+
+    期待される帰結: ledger の `stage_summary.parent_cpu_seconds` は
+    append 前の値 5.0 のまま変わらない（summary の意味論を保つ——ledger
+    には追記しない）が、`counters.json` の `compute_used` は
+    5.0 + 1.5 = 6.5 になる（append 自身の検証 CPU が計上される）。ledger
+    の末尾 entry も `stage_summary` のままであること（本 fix が summary の
+    **後**に別 event を足していないこと）を確認する。"""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    _seed_closable_holdout(campaign)
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    monkeypatch.setattr(cli, "_process_cpu_seconds", _fake_clock([0.0, 3.0, 5.0, 5.0, 6.5]))
+
+    exit_code = cli.main(_armed_close_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+
+    persisted = json.loads(counters_path(campaign_dir).read_text(encoding="utf-8"))
+    assert persisted["compute_used"] == pytest.approx(6.5)
+
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    stage_summaries = [
+        e.payload
+        for e in reloaded.ledger.entries
+        if isinstance(e.payload, dict) and e.payload.get("kind") == "stage_summary"
+    ]
+    assert len(stage_summaries) == 1
+    # unchanged: the ledger event still records only the pre-append full
+    # dispatch delta, not the append's own verification CPU.
+    assert stage_summaries[0]["parent_cpu_seconds"] == pytest.approx(5.0)
+    # the append-verification CPU is charged to counters.json only.
+    assert persisted["compute_used"] > stage_summaries[0]["parent_cpu_seconds"]
+
+    # the ledger's tail entry is still the stage_summary itself -- no event
+    # was appended after it (the delta is charged to counters.json only).
+    assert reloaded.ledger.entries[-1].payload.get("kind") == "stage_summary"
 
 
 # ---------------------------------------------------------------------------

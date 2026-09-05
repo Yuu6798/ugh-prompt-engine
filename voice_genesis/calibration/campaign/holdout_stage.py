@@ -171,6 +171,61 @@ def declared_u_gt_u_num_for_family(
     return u_gt_value, u_num_value
 
 
+#: v1.1 R18（Codex レビュー第 18 巡 P1 採用、2026-09-05）: `units_commensurate_
+#: for_family()` が使う、候補宣言 unit（`candidates.registry.Candidate.unit`）
+#: と C0 凍結 fixture truth unit（`frozen_design.fixture_spec.<FAMILY>.
+#: u_gt_bound_unit`）を突き合わせるための表記ゆれ正規化。両者は独立に書かれた
+#: 自由記述文字列であり、同じ物理量でも綴りが異なる組がある（例:
+#: `M2A-HARMONIC-RESIDUAL-*`/`M2A-D4C-*` 候補の `"fraction"` と
+#: `TRUTH_UNIT[APERIODICITY_GT] == "dimensionless_fraction"`）。閉じた
+#: 対応表のみを機械的に吸収し、表に無い綴りは正規化しない（結果的に
+#: unknown 同士の不一致 = 保守側 False に落ちる）。
+_UNIT_SYNONYMS: dict[str, str] = {
+    "fraction": "dimensionless_fraction",
+}
+
+
+def _normalize_unit_token(raw: str) -> str:
+    """大小文字・前後空白・`/`（`dB/oct` 形式）・`-` の表記ゆれのみを
+    正規化した上で `_UNIT_SYNONYMS` の既知同義語表を引く。"""
+    token = raw.strip().lower().replace("/", "_per_").replace("-", "_")
+    return _UNIT_SYNONYMS.get(token, token)
+
+
+def units_commensurate_for_family(
+    manifest: Mapping[str, object], family: str, candidate_unit: str
+) -> bool:
+    """v1.1 §V3.2/§10.4 条件 (c) の単位可換性フラグを、凍結 candidate 定義の
+    `unit`（`candidates.registry.Candidate.unit`）と C0 凍結 fixture truth
+    unit（`frozen_design.fixture_spec.<FAMILY>.u_gt_bound_unit` —
+    `c0_freeze._u_gt_bound_for_family()` が truth の物理単位として populate
+    する sibling キー。`declared_u_gt_u_num_for_family()` は数値契約のみを
+    読み、この unit キーには触れない設計のため、本関数を独立に持つ）から
+    機械導出する（R18 対応、Codex レビュー第 18 巡 P1 採用、2026-09-05——
+    旧実装は `evaluate_directional_meter_from_campaign()` の
+    `units_commensurate` を `_run_c4` が一度も明示的に上書きせず、本番では
+    §10.4 条件 (c) が常に無効化されていた）。
+
+    双方の unit 文字列を `_normalize_unit_token()` で正規化した上で厳密一致
+    するときのみ `True`。`u_gt_bound_unit` が欠落/空/非 string（ABSENT
+    family の `"n/a"` を含む）な場合や、正規化しても一致しない未知の組は
+    保守側で `False`（§10.4 条件 (c) を課さない——(a)/(b) の二連言のみで
+    resolvability を判定する、既定の安全側）。"""
+    frozen_design = manifest.get("frozen_design")
+    if not isinstance(frozen_design, Mapping):
+        return False
+    fixture_spec = frozen_design.get("fixture_spec")
+    if not isinstance(fixture_spec, Mapping):
+        return False
+    family_spec = fixture_spec.get(family)
+    if not isinstance(family_spec, Mapping):
+        return False
+    truth_unit = family_spec.get("u_gt_bound_unit")
+    if not isinstance(truth_unit, str) or not truth_unit:
+        return False
+    return _normalize_unit_token(truth_unit) == _normalize_unit_token(candidate_unit)
+
+
 def instance_id_str(row_id: str, probe_index: int) -> str:
     """`(row_id, probe_index)` の canonical 文字列 instance id
     （`InstanceMargin.instance_id`/`evaluate_absolute_meter`
@@ -715,12 +770,31 @@ def build_directional_gate_inputs(
     ——呼び出し側 `cli._run_c4` が manifest `holdout_sweeps[family]`
     （優先）または `declared_sweeps_by_family()` から渡す、既存の
     `expected_sweep_ids` と同じ入口）。sweep 内の distinct truth level
-    （`selection_stage.truth_value_for_row`）ごとに集約した
-    two-stage-median 出力から、truth 昇順で全 pair を構成する（隣接 pair =
-    ソート順で連続する 2 level。gates.directional_gates() 自身が resolvable
-    性・符号・sweep 最小数を判定する——本関数は候補ペアの機械的組み立てのみ
-    を担う）。`U_GT`/`U_num` は ABSOLUTE と同じ family 単位の frozen bound
-    （`declared_u_gt_u_num_for_family()`）を再利用する。"""
+    （`selection_stage.truth_value_for_row`）ごとに集約した出力から、truth
+    昇順で全 pair を構成する（隣接 pair = ソート順で連続する 2 level。
+    gates.directional_gates() 自身が resolvable 性・符号・sweep 最小数を
+    判定する——本関数は候補ペアの機械的組み立てのみを担う）。`U_GT`/`U_num`
+    は ABSOLUTE と同じ family 単位の frozen bound
+    （`declared_u_gt_u_num_for_family()`）を再利用する。
+
+    **instance 単位の two-stage median（R18 対応、Codex レビュー第 18 巡
+    P1 採用、2026-09-05）**: `MeasurementRecord.process_id` は
+    `within-process`/`fresh-process-N` として全 probe instance で同名を共有
+    するため、旧実装は `two_stage_median()` へ渡す `per_process` バケットを
+    `row_id` 単位（`f"{row_id}:{process_id}"`）でしか分けておらず、同じ
+    row の 5 probe instance（`fixture_controls.PROBE_REPEATS`）の repeat が
+    同一 process バケットへ黙って併合されていた——`observables.
+    two_stage_median` が要求する `m[i] = median_p(median_r(x))`（§10.1）の
+    `i` は 1 probe instance（`(row_id, probe_index)`）を指すが、この併合は
+    5 instance ぶんの生値を「1 instance の複数 repeat」として二段 median に
+    通す非結合的な操作であり、instance ごとに正しく二段 median を取った後で
+    集約するのとは異なる符号・値になり得る（合成ケースで実証: `tests/
+    test_holdout_stage.py::test_build_directional_gate_inputs_...`）。
+    本関数は ABSOLUTE 側 `build_absolute_gate_inputs()` と同じ粒度——
+    `(row_id, probe_index)` の 1 instance ごとに `two_stage_median()` で
+    `m[i]` を算出してから、truth level の代表値は複数 instance の `m[i]`
+    の `statistics.median()`（`gate3`/`gate2'` 等、設計正本全体で instance
+    集約に一貫して使われている中央値ベースの代表値と同じ選択）で結合する。"""
     u_gt_u_num = declared_u_gt_u_num_for_family(manifest, family)
     if u_gt_u_num is None:
         raise GateInputError(f"no frozen U_GT/U_num bound for family {family!r}")
@@ -748,7 +822,7 @@ def build_directional_gate_inputs(
 
         level_outputs: dict[float, float] = {}
         for truth, row_ids in by_truth.items():
-            per_process: dict[str, list[float]] = {}
+            instance_m_values: list[float] = []
             for row_id in row_ids:
                 for probe_index in range(fixture_controls.PROBE_REPEATS):
                     if (row_id, probe_index) not in usable_set:
@@ -758,13 +832,16 @@ def build_directional_gate_inputs(
                         continue
                     instance_id = instance_id_str(row_id, probe_index)
                     for process_id, values in repeats.items():
-                        per_process.setdefault(f"{row_id}:{process_id}", []).extend(values)
                         per_process_ranges.setdefault((instance_id, process_id), []).extend(values)
                     per_instance_process_medians[instance_id] = [
                         statistics.median(values) for values in repeats.values()
                     ]
-            if per_process:
-                level_outputs[truth] = two_stage_median(per_process)
+                    # R18: two_stage_median は必ず 1 instance 自身の
+                    # per_process repeats にのみ適用する（他 instance と
+                    # 併合しない）——m[i] の定義そのもの。
+                    instance_m_values.append(two_stage_median(repeats))
+            if instance_m_values:
+                level_outputs[truth] = statistics.median(instance_m_values)
 
         expected_adjacent_pair_ids.setdefault(sweep_id, ())
         levels = sorted(level_outputs)
@@ -838,7 +915,7 @@ def evaluate_directional_meter_from_campaign(
     records: Sequence[measure_stage.MeasurementRecord],
     usable_primary_instances: Collection[tuple[str, int]],
     expected_sweep_member_row_ids: Mapping[str, Sequence[str]],
-    units_commensurate: bool = False,
+    units_commensurate: bool | None = None,
 ) -> MeterHoldoutResult:
     """v1.1 §V3.2 (D17 close): `evaluate_directional_meter()` の入力を
     campaign 実測から組み立て、実 gate を評価する。終端 status がいずれで
@@ -847,7 +924,19 @@ def evaluate_directional_meter_from_campaign(
     `gate_detail["prohibited_interpretations"]` として必ず添付する（何も
     評価できなかった場合に claim を主張しないよう、`NOT_EVALUABLE` のときは
     列挙を空のまま——ただし INPUT_MISSING 以外は常に添付する。INPUT_MISSING
-    は gate 自体に到達していないため対象外）。"""
+    は gate 自体に到達していないため対象外）。
+
+    **`units_commensurate`（R18 対応、Codex レビュー第 18 巡 P1 採用、
+    2026-09-05）**: 省略（`None`）時は `units_commensurate_for_family()`
+    で `candidate.unit` と凍結 fixture truth unit から機械導出する——旧実装は
+    既定値 `False` を `_run_c4` が一度も上書きせず、本番で §10.4 条件 (c)
+    が常に無効だった。明示的に `True`/`False` を渡した呼び出し側（テスト等）
+    はその値をそのまま使う（後方互換）。"""
+    resolved_units_commensurate = (
+        units_commensurate
+        if units_commensurate is not None
+        else units_commensurate_for_family(manifest, family, candidate.unit)
+    )
     try:
         bundle = build_directional_gate_inputs(
             family=family,
@@ -882,7 +971,7 @@ def evaluate_directional_meter_from_campaign(
         expected_adjacent_pair_ids=bundle.expected_adjacent_pair_ids,
         negative_control_failures=bundle.negative_control_failures,
         positive_control_failures=bundle.positive_control_failures,
-        units_commensurate=units_commensurate,
+        units_commensurate=resolved_units_commensurate,
     )
     claim_detail = directional_claim_shrinkage_detail(
         expected_sweep_member_row_ids=expected_sweep_member_row_ids,
@@ -1746,6 +1835,7 @@ def run_holdout_stage(
 __all__ = [
     "declared_axes_for_family",
     "declared_u_gt_u_num_for_family",
+    "units_commensurate_for_family",
     "instance_id_str",
     "absolute_e_use_value",
     "GateInputError",

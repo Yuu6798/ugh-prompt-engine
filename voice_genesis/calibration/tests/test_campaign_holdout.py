@@ -6,6 +6,7 @@ meters are too slow"）。高速。
 from __future__ import annotations
 
 import hashlib
+import statistics
 from dataclasses import replace
 from pathlib import Path
 
@@ -642,6 +643,218 @@ def test_declared_u_gt_u_num_for_family_reads_real_c0_freeze_manifest() -> None:
         assert holdout_stage.declared_u_gt_u_num_for_family(manifest, family_name) is None
 
 
+# ---------------------------------------------------------------------------
+# R18 対応（Codex PR #346 第 18 巡 P1 採用、2026-09-05）:
+# `units_commensurate_for_family()` の単位可換性の機械導出、および
+# `evaluate_directional_meter_from_campaign()` がそれを既定で消費すること
+# （旧実装は `units_commensurate: bool = False` を `cli._run_c4` が一度も
+# 上書きせず、本番で §10.4 条件 (c) が常に無効だった）。
+# ---------------------------------------------------------------------------
+
+
+def test_units_commensurate_for_family_missing_manifest_keys_returns_false() -> None:
+    assert holdout_stage.units_commensurate_for_family({}, "TILT_GT", "db_per_oct") is False
+    manifest_no_family = {"frozen_design": {"fixture_spec": {}}}
+    assert (
+        holdout_stage.units_commensurate_for_family(manifest_no_family, "TILT_GT", "db_per_oct")
+        is False
+    )
+    manifest_no_unit = {"frozen_design": {"fixture_spec": {"TILT_GT": {"u_gt_bound": 0.0}}}}
+    assert (
+        holdout_stage.units_commensurate_for_family(manifest_no_unit, "TILT_GT", "db_per_oct")
+        is False
+    )
+    # ABSENT family: unit key is the literal "n/a" sentinel, never numeric.
+    manifest_absent = {
+        "frozen_design": {"fixture_spec": {"RESONANCE_GT": {"u_gt_bound_unit": "n/a"}}}
+    }
+    assert (
+        holdout_stage.units_commensurate_for_family(manifest_absent, "RESONANCE_GT", "hz") is False
+    )
+
+
+def test_units_commensurate_for_family_matches_same_unit() -> None:
+    manifest = {
+        "frozen_design": {"fixture_spec": {"TILT_GT": {"u_gt_bound_unit": "db_per_oct"}}}
+    }
+    assert holdout_stage.units_commensurate_for_family(manifest, "TILT_GT", "db_per_oct") is True
+
+
+def test_units_commensurate_for_family_normalizes_known_synonym_and_notation() -> None:
+    """`fraction`（candidate 側）と `dimensionless_fraction`（C0 凍結 truth
+    unit）は同義語表で吸収する。大小文字・`/`（`dB/oct` 形式）・`-` の表記
+    ゆれも正規化する。"""
+    manifest = {
+        "frozen_design": {
+            "fixture_spec": {"APERIODICITY_GT": {"u_gt_bound_unit": "dimensionless_fraction"}}
+        }
+    }
+    assert (
+        holdout_stage.units_commensurate_for_family(manifest, "APERIODICITY_GT", "fraction")
+        is True
+    )
+    manifest_notation = {
+        "frozen_design": {"fixture_spec": {"TILT_GT": {"u_gt_bound_unit": "dB/Oct"}}}
+    }
+    assert (
+        holdout_stage.units_commensurate_for_family(manifest_notation, "TILT_GT", "db_per_oct")
+        is True
+    )
+
+
+def test_units_commensurate_for_family_rejects_unknown_mismatch() -> None:
+    """未知の組（同義語表に無い）は保守側で `False`——例: APERIODICITY_GT の
+    DIRECTIONAL-ceiling 候補 (HNR, unit `db`) は truth 側 `dimensionless_
+    fraction` と単位が異なる（dB は対数スケール、fraction は線形）。"""
+    manifest = {
+        "frozen_design": {
+            "fixture_spec": {"APERIODICITY_GT": {"u_gt_bound_unit": "dimensionless_fraction"}}
+        }
+    }
+    assert holdout_stage.units_commensurate_for_family(manifest, "APERIODICITY_GT", "db") is False
+
+
+def test_units_commensurate_for_family_reads_real_c0_freeze_manifest() -> None:
+    """実際の `c0_freeze.build_manifest()` が populate する `u_gt_bound_unit`
+    を読む——TILT_GT の凍結 truth unit (`db_per_oct`) は候補宣言 unit と
+    一致するが、無関係な unit を渡せば False のまま。"""
+    from voice_genesis.calibration import c0_freeze
+
+    real_manifest = c0_freeze.build_manifest(
+        c0_freeze._REPO_ROOT, approvals={}, campaign_date_utc="2026-09-02"
+    )
+    real_tilt_unit = real_manifest["frozen_design"]["fixture_spec"]["TILT_GT"]["u_gt_bound_unit"]
+    assert real_tilt_unit == "db_per_oct"
+    assert (
+        holdout_stage.units_commensurate_for_family(real_manifest, "TILT_GT", "db_per_oct")
+        is True
+    )
+    assert holdout_stage.units_commensurate_for_family(real_manifest, "TILT_GT", "hz") is False
+
+
+def test_evaluate_directional_meter_from_campaign_derives_units_commensurate_by_default() -> None:
+    """R18 対応: `units_commensurate` を明示せずに呼んだとき、`evaluate_
+    directional_meter_from_campaign()` は `units_commensurate_for_family()`
+    経由で凍結 fixture truth unit と `candidate.unit` から機械導出した値を
+    §10.4 条件 (c) へ実際に適用する——同一の (a)/(b) 通過・(c) のみ不通過な
+    合成 pair 集合を使い、manifest の `u_gt_bound_unit` を候補 unit と
+    一致させる/させないだけで終端 status が変わることを実測する（単位表記の
+    差だけが gate 判定を左右する、というのが本 fix の主張そのもの）。"""
+    candidate = _tilt_candidate()
+    assert candidate.unit == "db_per_oct"
+
+    # 3 truth levels 0.0/0.12/0.24 db_per_oct (adjacent delta=0.12, endpoint
+    # delta=0.24). u_gt_bound=0.05/u_num_bound=0.0 -> r_truth=0.1 per pair
+    # (both sides share the same family-level bound). Repeat spread is
+    # engineered so U_rep=U_proc=0.01 (2*(u_rep+u_proc)=0.04): (a) truth-side
+    # resolvability (delta_truth > 0.1) passes for all 3 pairs; (b) output
+    # significance (|delta_output| > 0.04) passes for all 3 (deltas are
+    # 10.0/20.0/10.0); only the combined v1.0 formula (c)
+    # (delta_truth > 0.1 + 0.04 = 0.14) discriminates: the two adjacent
+    # 0.12-apart pairs fail it, leaving only 1 resolvable pair (< the
+    # sweep's required minimum of 3).
+    rows = {"t0": (0.0, 99.98), "t1": (0.12, 109.98), "t2": (0.24, 119.98)}
+    matrix_rows = [
+        _matrix_row(rid, family="TILT_GT", block="TRUTH_CORE", slope_db_per_oct=truth)
+        for rid, (truth, _x) in rows.items()
+    ]
+    row_by_id = {mr.row_id: mr.row for mr in matrix_rows}
+    assignment = {rid: Split.HOLDOUT for rid in rows}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for row_id, (_truth, x) in rows.items():
+        for probe_index in range(5):
+            records += _wf_record(
+                candidate.candidate_id, row_id, probe_index, field="tilt_db_per_oct",
+                within_1=x, within_2=x + 0.02, fresh=x + 0.03,
+            )
+    usable_primary_instances = {(row_id, p) for row_id in rows for p in range(5)}
+    expected_sweep_member_row_ids = {"sweep-a": list(rows)}
+
+    def _run(u_gt_bound_unit: str) -> holdout_stage.MeterHoldoutResult:
+        manifest = {
+            "frozen_design": {
+                "fixture_spec": {
+                    "TILT_GT": {
+                        "u_gt_bound": 0.05,
+                        "u_num_bound": 0.0,
+                        "u_gt_bound_unit": u_gt_bound_unit,
+                    }
+                }
+            }
+        }
+        return holdout_stage.evaluate_directional_meter_from_campaign(
+            meter_id=MeterId.M2_SPECTRAL_TILT.value,
+            family="TILT_GT",
+            candidate=candidate,
+            manifest=manifest,
+            row_by_id=row_by_id,
+            matrix_rows=matrix_rows,
+            assignment=assignment,
+            records=records,
+            usable_primary_instances=usable_primary_instances,
+            expected_sweep_member_row_ids=expected_sweep_member_row_ids,
+            # units_commensurate intentionally omitted -> must be derived.
+        )
+
+    commensurate = _run("db_per_oct")  # matches candidate.unit -> True
+    assert commensurate.terminal_status == TerminalStatus.DIAGNOSTIC_ONLY.value, commensurate.gate_detail
+    assert commensurate.gate_detail["passed"] is False
+    assert any(
+        "resolvable pair count" in reason for reason in commensurate.gate_detail["failure_reasons"]
+    )
+
+    mismatched = _run("hz")  # does not match candidate.unit -> False
+    assert mismatched.terminal_status == TerminalStatus.CALIBRATED_DIRECTIONAL.value, mismatched.gate_detail
+    assert mismatched.gate_detail["passed"] is True
+
+
+def test_evaluate_directional_meter_from_campaign_explicit_override_wins_over_derivation() -> None:
+    """明示的な `units_commensurate=True/False` は既存呼び出し側（テスト等）
+    との後方互換のため、機械導出より優先される。"""
+    candidate = _tilt_candidate()
+    rows = {"t0": (0.0, 99.98), "t1": (0.12, 109.98), "t2": (0.24, 119.98)}
+    matrix_rows = [
+        _matrix_row(rid, family="TILT_GT", block="TRUTH_CORE", slope_db_per_oct=truth)
+        for rid, (truth, _x) in rows.items()
+    ]
+    row_by_id = {mr.row_id: mr.row for mr in matrix_rows}
+    assignment = {rid: Split.HOLDOUT for rid in rows}
+    records: list[measure_stage.MeasurementRecord] = []
+    for row_id, (_truth, x) in rows.items():
+        for probe_index in range(5):
+            records += _wf_record(
+                candidate.candidate_id, row_id, probe_index, field="tilt_db_per_oct",
+                within_1=x, within_2=x + 0.02, fresh=x + 0.03,
+            )
+    usable_primary_instances = {(row_id, p) for row_id in rows for p in range(5)}
+    expected_sweep_member_row_ids = {"sweep-a": list(rows)}
+    # manifest declares a MATCHING unit (would derive True), but the
+    # explicit override below forces False -> reaches CALIBRATED_DIRECTIONAL
+    # anyway (condition (c) not applied), proving the override wins.
+    manifest = {
+        "frozen_design": {
+            "fixture_spec": {
+                "TILT_GT": {"u_gt_bound": 0.05, "u_num_bound": 0.0, "u_gt_bound_unit": "db_per_oct"}
+            }
+        }
+    }
+    result = holdout_stage.evaluate_directional_meter_from_campaign(
+        meter_id=MeterId.M2_SPECTRAL_TILT.value,
+        family="TILT_GT",
+        candidate=candidate,
+        manifest=manifest,
+        row_by_id=row_by_id,
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        records=records,
+        usable_primary_instances=usable_primary_instances,
+        expected_sweep_member_row_ids=expected_sweep_member_row_ids,
+        units_commensurate=False,
+    )
+    assert result.terminal_status == TerminalStatus.CALIBRATED_DIRECTIONAL.value, result.gate_detail
+
+
 def test_evaluate_absolute_meter_reaches_calibrated_absolute_with_c0_frozen_tilt_bounds() -> None:
     """E2E-lite (WP2e AC-d): reproduces
     `test_evaluate_absolute_meter_passes_with_clean_synthetic_data` but with
@@ -1216,6 +1429,146 @@ def test_evaluate_absolute_meter_from_campaign_wires_real_inputs_and_gate5_fails
     assert result.terminal_status == TerminalStatus.DIAGNOSTIC_ONLY.value, result.gate_detail
     assert result.gate_detail["passed"] is False
     assert any("gate5" in reason for reason in result.gate_detail["failure_reasons"])
+
+
+def _wf_record(
+    candidate_id: str,
+    row_id: str,
+    probe_index: int,
+    *,
+    field: str,
+    within_1: float,
+    within_2: float,
+    fresh: float,
+) -> list[measure_stage.MeasurementRecord]:
+    """`_within_fresh_record()` と異なり、within-process の 2 repeat と
+    fresh-process-0 の 1 repeat に別々の値を与える（R18 regression test 専用
+    — instance ごとに process 間で非対称な値を作れないと、pooled
+    two_stage_median との差異を作れない）。"""
+    return [
+        measure_stage.MeasurementRecord(
+            row_id=row_id, probe_index=probe_index, candidate_id=candidate_id,
+            repeat_kind="within", repeat_index=0, process_id="within-process",
+            output=MeterOutput(values={field: within_1}),
+        ),
+        measure_stage.MeasurementRecord(
+            row_id=row_id, probe_index=probe_index, candidate_id=candidate_id,
+            repeat_kind="within", repeat_index=1, process_id="within-process",
+            output=MeterOutput(values={field: within_2}),
+        ),
+        measure_stage.MeasurementRecord(
+            row_id=row_id, probe_index=probe_index, candidate_id=candidate_id,
+            repeat_kind="fresh", repeat_index=0, process_id="fresh-process-0",
+            output=MeterOutput(values={field: fresh}),
+        ),
+    ]
+
+
+def test_build_directional_gate_inputs_uses_per_instance_two_stage_median_not_pooled() -> None:
+    """R18 対応（Codex PR #346 第 18 巡 P1 採用、2026-09-05）: 旧実装は
+    `two_stage_median()` へ渡す `per_process` バケットを row 単位でしか
+    分けておらず、同じ truth level の 5 probe instance
+    (`fixture_controls.PROBE_REPEATS`) の repeat が同一 process バケットへ
+    黙って併合されていた（`m[i] = median_p(median_r(x))` の `i` は 1 probe
+    instance を指すはずが、5 instance ぶんの生値が「1 instance の複数
+    repeat」であるかのように pool されていた）。
+
+    truth=1.0 の sweep member（5 probe instance）を、instance ごとの
+    within/fresh の値を意図的に非対称にして構成する: 個別に two_stage_median
+    を取ると全 instance が m[i]=[10.5相当の分布]（探索で見つけた具体値）に
+    なるが、pooled（旧実装のバグ）で計算すると別の値になる——truth=2.0 の
+    もう 1 sweep member（全 instance が within=fresh=15.0 の一様値、pooled/
+    per-instance いずれの集計でも 15.0 で一致する対照）と組み合わせると、
+    delta_output の符号が新旧で反転する:
+
+    - 新実装（per-instance m[i] の median、本 fix）: level(truth=1.0) =
+      median([m_0..m_4]) = 10.5、delta_output = 15.0 - 10.5 = +4.5
+      （delta_truth も + なので `correct_sign=True`）。
+    - 旧実装（pooled、bug）: level(truth=1.0) = 20.0
+      （`observables.two_stage_median()` を pooled dict へ直接適用すると
+      再現できる——下記アサーションで明示的に検算する）、delta_output =
+      15.0 - 20.0 = -5.0（`correct_sign=False` になり、偽の
+      DIAGNOSTIC_ONLY/逆符号を生む）。
+    """
+    candidate = next(
+        c
+        for c in candidates_for_meter(MeterId.M5_TRANSITION)
+        if c.algorithm_family == "WAVE_DISCONTINUITY"
+    )
+    row_low = _matrix_row("t-low", family="TRANSITION_GT", block="TRUTH_CORE", discontinuity_magnitude=1.0)
+    row_high = _matrix_row(
+        "t-high", family="TRANSITION_GT", block="TRUTH_CORE", discontinuity_magnitude=2.0
+    )
+    matrix_rows = [row_low, row_high]
+    row_by_id = {mr.row_id: mr.row for mr in matrix_rows}
+    assignment = {"t-low": Split.HOLDOUT, "t-high": Split.HOLDOUT}
+    manifest = {
+        "frozen_design": {"fixture_spec": {"TRANSITION_GT": {"u_gt_bound": 0.001, "u_num_bound": 0.001}}}
+    }
+
+    # per-instance (within_1, within_2, fresh) values for truth=1.0's 5
+    # probes, found by search to maximize |per-instance-median vs pooled|.
+    low_instance_values = [
+        (3.0, 20.0, 20.0),
+        (20.0, 2.0, 20.0),
+        (20.0, 20.0, 0.0),
+        (20.0, 20.0, 0.0),
+        (1.0, 1.0, 20.0),
+    ]
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index, (w1, w2, f) in enumerate(low_instance_values):
+        records += _wf_record(
+            candidate.candidate_id, "t-low", probe_index, field="magnitude",
+            within_1=w1, within_2=w2, fresh=f,
+        )
+    for probe_index in range(5):
+        records += _wf_record(
+            candidate.candidate_id, "t-high", probe_index, field="magnitude",
+            within_1=15.0, within_2=15.0, fresh=15.0,
+        )
+
+    usable_primary_instances = {("t-low", p) for p in range(5)} | {("t-high", p) for p in range(5)}
+    expected_sweep_member_row_ids = {"sweep-a": ["t-low", "t-high"]}
+
+    bundle = holdout_stage.build_directional_gate_inputs(
+        family="TRANSITION_GT",
+        candidate=candidate,
+        row_by_id=row_by_id,
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        records=records,
+        usable_primary_instances=usable_primary_instances,
+        expected_sweep_member_row_ids=expected_sweep_member_row_ids,
+        manifest=manifest,
+    )
+    assert len(bundle.pairs) == 1
+    pair = bundle.pairs[0]
+    assert pair.delta_truth == pytest.approx(1.0)
+    # new (fixed) per-instance aggregation: level(truth=1.0) = median of the
+    # 5 per-instance two_stage_median values, not a pooled two_stage_median
+    # over all 5 instances' raw repeats combined.
+    per_instance_m = [
+        holdout_stage.two_stage_median({"within-process": [w1, w2], "fresh-process-0": [f]})
+        for (w1, w2, f) in low_instance_values
+    ]
+    expected_new_level_low = statistics.median(per_instance_m)
+    assert expected_new_level_low == pytest.approx(10.5)
+    assert pair.delta_output == pytest.approx(15.0 - expected_new_level_low)
+    assert pair.correct_sign is True
+
+    # explicit regression check against the OLD (buggy) pooled computation:
+    # merging all 5 probe instances' repeats into shared per-process buckets
+    # (ignoring the (row_id, probe_index) instance boundary) produces a
+    # DIFFERENT level value with the OPPOSITE delta_output sign.
+    pooled_within = [v for (w1, w2, _f) in low_instance_values for v in (w1, w2)]
+    pooled_fresh = [f for (_w1, _w2, f) in low_instance_values]
+    old_pooled_level_low = holdout_stage.two_stage_median(
+        {"within-process": pooled_within, "fresh-process-0": pooled_fresh}
+    )
+    assert old_pooled_level_low == pytest.approx(20.0)
+    old_delta_output = 15.0 - old_pooled_level_low
+    assert old_delta_output == pytest.approx(-5.0)
+    assert (pair.delta_output > 0) != (old_delta_output > 0)  # sign flip, as documented above
 
 
 def test_directional_claim_shrinkage_detail_enumerates_and_prohibits_extrapolation() -> None:

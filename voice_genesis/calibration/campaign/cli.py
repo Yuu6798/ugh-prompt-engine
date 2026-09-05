@@ -2848,6 +2848,40 @@ def _charge_pre_dispatch_cpu(
         save_cap_counters(campaign.campaign_dir, cap_counters)
 
 
+def _summary_append_cpu_delta(pre_append_cpu_seconds: float) -> float:
+    """R18 対応（Codex PR #346 第 18 巡 P1 採用、R15-D
+    (`_charge_pre_dispatch_cpu`) と同型、2026-09-05）: `stage_summary`/
+    `slice_summary` は `provenance._TRANSITION_EVENT_KINDS` に含まれるため
+    `Ledger.append()` はこの 1 回で ledger 全 chain の O(n) 再検証を行うが、
+    `_checkpoint_before_summary()` の CPU snapshot は append **前**に取られ、
+    append 自体が消費するその検証 CPU は `cap_counters`/`counters.json` の
+    どちらにも一切計上されていなかった（`main()` の `finally` 節はこの
+    delta を append 完了直後に計上するため、`_process_cpu_seconds()` を
+    append 直前に取った `pre_append_cpu_seconds` との差分をここで返す）。
+    呼び出し側は返り値を `cap_counters.add(compute=...)` へそのまま渡す——
+    `_charge_pre_dispatch_cpu()` の `record_ledger_event=False` 経路と同型に
+    **ledger には一切書かない**（summary event の**後**に別 event を足すと
+    「この dispatch の最後の ledger entry は自身の summary である」という
+    summary の意味論を壊すため）。呼び出し側の既存 `save_cap_counters()`
+    （summary append の直後、両分岐共通）が `counters.json` への永続化を
+    引き受ける——本関数自身は永続化しない。
+
+    **境界宣言（残余の露出）**: `counters.json` が消失・破損した場合、次回
+    armed 起動の `reconcile_cap_counters()` は ledger 由来の再構成に頼る
+    しかなく、この delta（summary event 自体の`parent_cpu_seconds`フィール
+    ドは ledger 上に残るため計上されるが、その append を実行するために
+    要した検証コストぶんだけ）は再構成結果に含まれない（過小計上）。cache
+    が健全な限り（通常運用経路）は `reconcile_cap_counters()` の
+    per-dimension max がこの加算値を拾うため実害はなく、露出は「cache
+    消失」という異常系のみに限定される（`_charge_pre_dispatch_cpu()` の
+    同種の境界宣言と同じ形）。"""
+    now = _process_cpu_seconds()
+    delta = now - pre_append_cpu_seconds
+    if delta < 0.0:  # pragma: no cover - defensive only
+        delta = 0.0
+    return delta
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
     secret_dir = args.secret_dir or default_secret_dir()
@@ -3346,6 +3380,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             slice_report = out.get("slice") if isinstance(out, dict) else None
             slice_fields = dict(slice_report) if isinstance(slice_report, Mapping) else {}
             full_dispatch_parent_cpu_seconds = _checkpoint_before_summary()
+            pre_append_cpu_seconds = _process_cpu_seconds()
             campaign.ledger.append(
                 {
                     "kind": "slice_summary",
@@ -3355,8 +3390,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     **slice_fields,
                 }
             )
+            # R18: charge this append's own O(n) full-chain verification CPU
+            # (`slice_summary` is in `provenance._TRANSITION_EVENT_KINDS`) —
+            # see `_summary_append_cpu_delta()`. `save_cap_counters()` below
+            # (shared by both branches) persists it; no ledger event is added.
+            cap_counters.add(compute=_summary_append_cpu_delta(pre_append_cpu_seconds))
         else:
             full_dispatch_parent_cpu_seconds = _checkpoint_before_summary()
+            pre_append_cpu_seconds = _process_cpu_seconds()
             campaign.ledger.append(
                 {
                     "kind": "stage_summary",
@@ -3365,6 +3406,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "invocation_id": invocation_id,
                 }
             )
+            # R18: see the `slice_summary` branch's comment above.
+            cap_counters.add(compute=_summary_append_cpu_delta(pre_append_cpu_seconds))
         # Codex PR #345 finding ③ (adopted): persist the derived `counters.
         # json` cache AFTER the authoritative `slice_summary`/`stage_summary`
         # ledger append above, not before. `cap_counters` (in-memory) already
