@@ -15,8 +15,12 @@ feasibility()` / `_check_holdout_sweeps_declaration_match()` /
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from voice_genesis.calibration import c0_validate, vocab
 from voice_genesis.calibration.c0_freeze import STRATUM_FACTOR_NAMES, _row_inputs_for_split
+from voice_genesis.calibration.fixtures import axes as fixture_axes
+from voice_genesis.calibration.fixtures import uncertainty as fixture_uncertainty
 from voice_genesis.calibration.fixtures.matrix import (
     build_matrix,
     claim_relevant_fields_by_family,
@@ -301,7 +305,9 @@ def test_u_gt_u_num_bounds_v1_1_manifest_missing_both_bounds_blocks() -> None:
     """finding の再現ケース: v1.1 の完全 manifest から `u_gt_bound`/
     `u_num_bound`（と両 formula・両 unit）を丸ごと消すと、v1.0 legacy 経路
     のように黙って `continue` せず、6 件 (bound x2 + formula x2 + unit x2)
-    の violation が出て fail-closed になる。"""
+    の violation が出て fail-closed になる。加えて R22-2（Codex 第 22 巡
+    finding (2)）: `u_bound_inputs` も同じ manifest には無いため、canonical
+    再導出チェック側の欠落 violation も 1 件追加される。"""
     manifest = _v1_1_manifest_with_fixture_spec({"TILT_GT": {}})
     violations = c0_validate._check_u_gt_u_num_bounds(manifest)
     sweep_ids = {v.sweep_id for v in violations}
@@ -312,6 +318,7 @@ def test_u_gt_u_num_bounds_v1_1_manifest_missing_both_bounds_blocks() -> None:
         "u_num_bound",
         "u_num_bound_formula",
         "u_num_bound_unit",
+        "u_bound_inputs",
     }
     assert all(v.family == "TILT_GT" for v in violations)
     assert all(v.violation == "u_bound_missing_or_invalid" for v in violations)
@@ -323,7 +330,9 @@ def test_u_gt_u_num_bounds_v1_1_manifest_missing_both_bounds_blocks() -> None:
 
 def test_u_gt_u_num_bounds_v1_1_manifest_missing_one_bound_blocks() -> None:
     """v1.1 manifest から `u_num_bound`（+ その formula・unit）だけを消しても
-    検出される（`u_gt_bound` 側は完備のため無傷）。"""
+    検出される（`u_gt_bound` 側は完備のため無傷）。この manifest には
+    `u_bound_inputs` も無いため、R22-2 の canonical 再導出チェック側の欠落
+    violation も 1 件追加される。"""
     manifest = _v1_1_manifest_with_fixture_spec(
         {
             "TILT_GT": {
@@ -335,7 +344,12 @@ def test_u_gt_u_num_bounds_v1_1_manifest_missing_one_bound_blocks() -> None:
     )
     violations = c0_validate._check_u_gt_u_num_bounds(manifest)
     sweep_ids = {v.sweep_id for v in violations}
-    assert sweep_ids == {"u_num_bound", "u_num_bound_formula", "u_num_bound_unit"}
+    assert sweep_ids == {
+        "u_num_bound",
+        "u_num_bound_formula",
+        "u_num_bound_unit",
+        "u_bound_inputs",
+    }
     assert all(v.family == "TILT_GT" for v in violations)
 
 
@@ -349,31 +363,36 @@ def test_u_gt_u_num_bounds_legacy_manifest_missing_bounds_still_not_blocked() ->
 
 
 def _complete_v1_1_fixture_spec() -> dict[str, object]:
+    """v1.1 の全 7 family に対して `u_gt_bound`/`u_num_bound` (+formula/unit/
+    `u_bound_inputs`) を完備するエントリを生成する。
+
+    R22-2 対応（Codex 第 22 巡 finding (2)、2026-09-05）: 旧実装は family
+    間で使い回した固定 placeholder（`u_gt_bound=0.0`/`u_num_bound=0.024`/
+    `"U_GT = 0 (analytic)"` 等）を返していたが、`_check_u_gt_u_num_bounds()`
+    に canonical 再導出一致検査（`u_bound_inputs` からの再導出 == 宣言値）が
+    追加されたことで、real family ごとの canonical 値でなければ通らなくなった
+    （producer `c0_freeze._fixture_specs()` と同一の
+    `fixtures.uncertainty.gather_u_bound_inputs()`/`derive_u_gt_bound()`/
+    `derive_u_num_bound()` から実導出する）。
+    """
     fixture_spec: dict[str, object] = {}
-    unit_by_family = {
-        "F0_CONTROL": "hz",
-        "FORMANT_GT": "hz",
-        "TILT_GT": "db_per_oct",
-        "APERIODICITY_GT": "dimensionless_fraction",
-        "TRANSITION_GT": "dimensionless_magnitude",
-    }
-    for family_id, unit in unit_by_family.items():
-        fixture_spec[family_id] = {
-            "u_gt_bound": 0.0,
-            "u_gt_bound_formula": "U_GT = 0 (analytic)",
+    for family in fixture_axes.FixtureFamily:
+        inputs = fixture_uncertainty.gather_u_bound_inputs(family)
+        gt_value, gt_formula = fixture_uncertainty.derive_u_gt_bound(family, inputs)
+        num_value, num_formula = fixture_uncertainty.derive_u_num_bound(family, inputs)
+        unit = (
+            "n/a"
+            if family.value in fixture_uncertainty.U_ABSENT_REASON_BY_FAMILY
+            else fixture_axes.TRUTH_UNIT_BY_FAMILY[family.value]
+        )
+        fixture_spec[family.value] = {
+            "u_gt_bound": gt_value,
+            "u_gt_bound_formula": gt_formula,
             "u_gt_bound_unit": unit,
-            "u_num_bound": 0.024,
-            "u_num_bound_formula": "U_num = derive_floor(...)",
+            "u_num_bound": num_value,
+            "u_num_bound_formula": num_formula,
             "u_num_bound_unit": unit,
-        }
-    for family_id in ("RESONANCE_GT", "IDENTITY_CAUSAL_SWEEP"):
-        fixture_spec[family_id] = {
-            "u_gt_bound": "ABSENT:diagnostic_only",
-            "u_gt_bound_formula": "no gate input",
-            "u_gt_bound_unit": "n/a",
-            "u_num_bound": "ABSENT:diagnostic_only",
-            "u_num_bound_formula": "no gate input",
-            "u_num_bound_unit": "n/a",
+            "u_bound_inputs": inputs,
         }
     return fixture_spec
 
@@ -454,6 +473,185 @@ def test_u_gt_u_num_bounds_legacy_manifest_missing_unit_not_blocked() -> None:
     assert not c0_validate._is_v1_1_manifest(manifest)
     violations = c0_validate._check_u_gt_u_num_bounds(manifest)
     assert violations == ()
+
+
+# ---------------------------------------------------------------------------
+# _check_u_gt_u_num_bounds -- R22-2 (Codex 第 22 巡 finding (2)): v1.1 manifest
+# では u_gt_bound/u_num_bound を producer と同一の canonical 関数
+# (`fixtures.uncertainty`) で `u_bound_inputs` から再導出し、宣言値と厳密
+# 一致することを要求する。
+# ---------------------------------------------------------------------------
+
+
+def test_u_gt_u_num_bounds_v1_1_manifest_zeroed_bound_with_fake_formula_blocks() -> None:
+    """finding (2) の再現ケース (a): 完全な v1.1 manifest の `u_num_bound` を
+    0.0 に、formula を無関係な文字列に差し替えても、`u_bound_inputs` からの
+    canonical 再導出と一致しないため検出される（旧実装は形状検査のみで通して
+    いた）。"""
+    fixture_spec = _complete_v1_1_fixture_spec()
+    fixture_spec["FORMANT_GT"]["u_num_bound"] = 0.0  # type: ignore[index]
+    fixture_spec["FORMANT_GT"]["u_num_bound_formula"] = "forged: no real derivation"  # type: ignore[index]
+    manifest = _v1_1_manifest_with_fixture_spec(fixture_spec)
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    sweep_ids = {v.sweep_id for v in violations}
+    assert sweep_ids == {"u_num_bound", "u_num_bound_formula"}
+    assert all(v.family == "FORMANT_GT" for v in violations)
+    assert all(v.violation == "u_bound_missing_or_invalid" for v in violations)
+
+
+def test_u_gt_u_num_bounds_v1_1_manifest_formula_only_altered_blocks() -> None:
+    """finding (2) の再現ケース (b): 宣言値は canonical と一致するが formula
+    文字列だけ改竄されたケースも独立に検出される（value/formula は別々に
+    照合する）。"""
+    fixture_spec = _complete_v1_1_fixture_spec()
+    fixture_spec["TILT_GT"]["u_num_bound_formula"] = "not the real derivation"  # type: ignore[index]
+    manifest = _v1_1_manifest_with_fixture_spec(fixture_spec)
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert len(violations) == 1
+    assert violations[0].family == "TILT_GT"
+    assert violations[0].sweep_id == "u_num_bound_formula"
+
+
+def test_u_gt_u_num_bounds_v1_1_manifest_input_key_deleted_blocks() -> None:
+    """finding (2) の再現ケース (c): `u_bound_inputs` から再導出に必要な
+    1 キーを消すと、canonical 関数呼び出しが `KeyError` を送出し、それを
+    validator が fail-closed の violation に変換することを確認する
+    （APERIODICITY_GT は `sr_min_hz`/`duration_min_s`/
+    `aperiodicity_fraction_max` を要求する）。"""
+    fixture_spec = _complete_v1_1_fixture_spec()
+    del fixture_spec["APERIODICITY_GT"]["u_bound_inputs"]["sr_min_hz"]  # type: ignore[index]
+    manifest = _v1_1_manifest_with_fixture_spec(fixture_spec)
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert len(violations) == 1
+    assert violations[0].family == "APERIODICITY_GT"
+    assert violations[0].sweep_id == "u_bound_inputs"
+    assert violations[0].violation == "u_bound_missing_or_invalid"
+
+
+def test_u_gt_u_num_bounds_real_c0_freeze_manifest_still_passes_after_r22_2() -> None:
+    """finding (2) の再現ケース (d): `c0_freeze.build_manifest()` の実出力は
+    R22-2 の canonical 再導出一致検査を通過する（producer/validator が
+    同一関数・同一入力から同一結果を再現できることの回帰ガード。
+    `test_u_gt_u_num_bounds_real_c0_freeze_manifest_passes` と同趣旨だが、
+    R22-2 追加後であることを明示するため独立して固定する）。"""
+    from voice_genesis.calibration import c0_freeze
+
+    manifest = c0_freeze.build_manifest(
+        c0_freeze._REPO_ROOT, approvals={}, campaign_date_utc="2026-09-05"
+    )
+    for family in fixture_axes.FixtureFamily:
+        entry = manifest["frozen_design"]["fixture_spec"][family.value]
+        if family.value not in fixture_uncertainty.U_ABSENT_REASON_BY_FAMILY:
+            assert isinstance(entry["u_bound_inputs"], dict)
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert violations == ()
+
+
+def test_u_gt_u_num_bounds_v1_1_manifest_missing_u_bound_inputs_blocks() -> None:
+    """v1.1 manifest で `u_bound_inputs` キー自体が丸ごと無い場合も個別の
+    violation として検出される（bound/formula/unit 自体は完備でも、R22-2 の
+    canonical 再導出照合が成立しないため）。"""
+    fixture_spec = _complete_v1_1_fixture_spec()
+    del fixture_spec["F0_CONTROL"]["u_bound_inputs"]  # type: ignore[index]
+    manifest = _v1_1_manifest_with_fixture_spec(fixture_spec)
+    violations = c0_validate._check_u_gt_u_num_bounds(manifest)
+    assert len(violations) == 1
+    assert violations[0].family == "F0_CONTROL"
+    assert violations[0].sweep_id == "u_bound_inputs"
+
+
+# ---------------------------------------------------------------------------
+# _check_required_blocking / validate_c0_manifest -- R22-1 (Codex 第 22 巡
+# finding (1)): frozen_design.design_revision の必須化・legacy opt-in ゲート。
+# ---------------------------------------------------------------------------
+
+
+def test_design_revision_missing_is_required_blocking() -> None:
+    manifest = _v1_1_manifest_with_fixture_spec({})
+    del manifest["frozen_design"]["design_revision"]  # type: ignore[union-attr]
+    missing = c0_validate._check_required_blocking(manifest)
+    assert "frozen_design.design_revision" in missing
+
+
+def test_design_revision_v1_0_value_is_closed_vocabulary_violation() -> None:
+    manifest = {"frozen_design": {"design_revision": "1.0"}}
+    missing = c0_validate._check_required_blocking(manifest)
+    assert any(
+        k.startswith("frozen_design.design_revision: closed vocabulary") for k in missing
+    )
+
+
+def test_design_revision_legacy_opt_in_suppresses_violation() -> None:
+    manifest = {"frozen_design": {}}
+    missing_default = c0_validate._check_required_blocking(manifest)
+    assert "frozen_design.design_revision" in missing_default
+    missing_opt_in = c0_validate._check_required_blocking(
+        manifest, legacy_design_revision_ok=True
+    )
+    assert "frozen_design.design_revision" not in missing_opt_in
+
+
+def test_legacy_v1_0_opt_in_not_verified_without_manifest_path() -> None:
+    """`manifest_path=None`（in-memory manifest、`c0_freeze.dry_run()`/
+    `armed_freeze()` の呼び出し方）では `allow_legacy_v1_0=True` を渡しても
+    opt-in が有効化されない（fail-closed）。"""
+    assert c0_validate._legacy_v1_0_opt_in_verified(None) is False
+
+
+def test_legacy_v1_0_opt_in_verified_for_gz_archived_campaign(tmp_path: Path) -> None:
+    campaign_dir = tmp_path / "campaign"
+    campaign_dir.mkdir()
+    manifest_path = campaign_dir / "c0_manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    (campaign_dir / "ledger.jsonl.gz").write_bytes(b"\x1f\x8b\x00")
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is True
+
+
+def test_legacy_v1_0_opt_in_verified_for_campaign_closed_ledger(tmp_path: Path) -> None:
+    campaign_dir = tmp_path / "campaign"
+    campaign_dir.mkdir()
+    manifest_path = campaign_dir / "c0_manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    (campaign_dir / "ledger.jsonl").write_text(
+        '{"payload": {"kind": "campaign_closed"}}\n', encoding="utf-8"
+    )
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is True
+
+
+def test_legacy_v1_0_opt_in_not_verified_for_open_campaign(tmp_path: Path) -> None:
+    campaign_dir = tmp_path / "campaign"
+    campaign_dir.mkdir()
+    manifest_path = campaign_dir / "c0_manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    (campaign_dir / "ledger.jsonl").write_text(
+        '{"payload": {"kind": "meter_call"}}\n', encoding="utf-8"
+    )
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest_path) is False
+
+
+def test_validate_c0_manifest_allow_legacy_v1_0_end_to_end(tmp_path: Path) -> None:
+    """`validate_c0_manifest(allow_legacy_v1_0=True, manifest_path=...)` が
+    closed campaign の on-disk manifest に限って design_revision 欠落を
+    suppress することを end-to-end で確認する。"""
+    campaign_dir = tmp_path / "campaign"
+    campaign_dir.mkdir()
+    manifest = {"frozen_design": {}}
+    manifest_path = campaign_dir / "c0_manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    (campaign_dir / "ledger.jsonl.gz").write_bytes(b"\x1f\x8b\x00")
+
+    without_flag = c0_validate.validate_c0_manifest(manifest)
+    assert "frozen_design.design_revision" in without_flag.missing_required_keys
+
+    with_flag = c0_validate.validate_c0_manifest(
+        manifest, allow_legacy_v1_0=True, manifest_path=manifest_path
+    )
+    assert "frozen_design.design_revision" not in with_flag.missing_required_keys
+
+    # manifest_path を渡さない（in-memory 新規 freeze 経路を模す）と opt-in
+    # フラグを立てても効かない（fail-closed）。
+    without_path = c0_validate.validate_c0_manifest(manifest, allow_legacy_v1_0=True)
+    assert "frozen_design.design_revision" in without_path.missing_required_keys
 
 
 # ---------------------------------------------------------------------------

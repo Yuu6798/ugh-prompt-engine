@@ -141,12 +141,14 @@ ineligible とする（`d4c_ineligible=True` で表現。BLOCKED code は発行�
 
 from __future__ import annotations
 
+import argparse
 import ast
 import hashlib
 import json
 import math
 import re
 import subprocess
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -154,6 +156,7 @@ from pathlib import Path
 from . import approvals, streams, vocab
 from .candidates import registry as candidate_registry
 from .fixtures import axes as fixture_axes
+from .fixtures import uncertainty as fixture_uncertainty
 from .fixtures.matrix import (
     HoldoutPinDegradationExhausted,
     HoldoutPinInfeasible,
@@ -217,6 +220,16 @@ REQUIRED_BLOCKING_KEYS: tuple[str, ...] = (
     "sample_format.channel_policy",
     "sample_format.resampling_impl",
     "sample_format.resampling_parameters",
+    #: R22-1 対応（Codex 第 22 巡 finding (1)、2026-09-05）: marker 自体を
+    #: REQUIRED_BLOCKING 化する（旧: 欠落は legacy v1.0 として黙って許容して
+    #: いたため、marker を削除/改変するだけで `_is_v1_1_manifest()` が False
+    #: になり、bound/formula/unit 必須化 (R20-3/R21/R22-2) がまるごと無効化
+    #: できてしまっていた）。値の閉語彙判定は `_check_required_blocking()`
+    #: 内の専用分岐（`_ALLOWED_DESIGN_REVISIONS`）で行う——legacy v1.0
+    #: manifest の検証は `validate_c0_manifest(..., allow_legacy_v1_0=True)`
+    #: による明示 opt-in（かつ closed/aborted campaign の on-disk manifest に
+    #: 限定）でのみ許容する。
+    "frozen_design.design_revision",
     "frozen_design.claim_critical_set",
     "frozen_design.meter_specs",
     "frozen_design.fixture_spec",
@@ -703,6 +716,19 @@ def _is_absent_marker(value: object) -> bool:
     return isinstance(value, str) and value.startswith(_ABSENT_PREFIX)
 
 
+def _numbers_close(declared: object, derived: object) -> bool:
+    """R22-2 対応: `declared`（manifest 宣言値）と `derived`（canonical
+    再導出値）が両方とも non-bool numeric で、かつ数値的に一致するかを判定する
+    （`math.isclose(rel_tol=1e-9, abs_tol=1e-12)`。過大申告も不一致として
+    拒否する——freeze は決定論的なので厳密等値が正しい）。片方でも非 numeric
+    （例: 型不正な宣言値）なら無条件で False（fail-closed）。"""
+    if isinstance(declared, bool) or isinstance(derived, bool):
+        return False
+    if not isinstance(declared, (int, float)) or not isinstance(derived, (int, float)):
+        return False
+    return math.isclose(float(declared), float(derived), rel_tol=1e-9, abs_tol=1e-12)
+
+
 def _is_hollow(value: object) -> bool:
     """`None` 以外で「実質未記録」とみなす値（空文字列・空 mapping・空 list 等）。
 
@@ -838,8 +864,19 @@ class C0ValidationResult:
         return len(self.blocked_codes) > 0
 
 
-def _check_required_blocking(manifest: Mapping[str, object]) -> list[str]:
+def _check_required_blocking(
+    manifest: Mapping[str, object], *, legacy_design_revision_ok: bool = False
+) -> list[str]:
     """REQUIRED_BLOCKING キーのうち欠落・hollow なものを返す。
+
+    `frozen_design.design_revision` は他の REQUIRED_BLOCKING キーと異なり、
+    「非 hollow なら OK」ではなく閉語彙 `_ALLOWED_DESIGN_REVISIONS`（現状
+    `{"1.1"}`）との厳密一致を要求する（R22-1、Codex 第 22 巡 finding (1)）。
+    `legacy_design_revision_ok=True`（`validate_c0_manifest(...,
+    allow_legacy_v1_0=True)` が on-disk の closed/aborted campaign manifest に
+    対してのみ立てる）の場合に限り、marker の欠落・不一致を violation にしない
+    ——それ以外は常に fail-closed（新規 freeze 経路が呼ぶ
+    `validate_c0_manifest()` はこの引数を渡さないため、常に必須のまま）。
 
     `repo.dirty_tree` は「値が False であること」自体が要求（§3.1:
     「dirty-tree=false」）のため、存在していても `True` なら欠落と同様に
@@ -870,6 +907,22 @@ def _check_required_blocking(manifest: Mapping[str, object]) -> list[str]:
     """
     missing: list[str] = []
     for key in REQUIRED_BLOCKING_KEYS:
+        if key == "frozen_design.design_revision":
+            found, value = _resolve(manifest, key)
+            revision_ok = (
+                found and isinstance(value, str) and value.strip() in _ALLOWED_DESIGN_REVISIONS
+            )
+            if not revision_ok and not legacy_design_revision_ok:
+                if not found or value is None or _is_hollow(value):
+                    missing.append(key)
+                else:
+                    missing.append(
+                        f"{key}: closed vocabulary (must be exactly one of "
+                        f"{sorted(_ALLOWED_DESIGN_REVISIONS)!r}, got {value!r}; legacy v1.0 "
+                        "manifests require validate_c0_manifest(allow_legacy_v1_0=True) "
+                        "opt-in restricted to closed/aborted campaigns, R22-1)"
+                    )
+            continue
         found, value = _resolve(manifest, key)
         if not found or value is None or _is_hollow(value):
             missing.append(key)
@@ -1763,6 +1816,14 @@ _U_GT_U_NUM_ABSENT_ONLY_FAMILIES: frozenset[str] = frozenset(
 #: 従来の後方互換経路（欠落キーは fail-closed にしない）を維持する。
 _V1_1_DESIGN_REVISION: str = "1.1"
 
+#: R22-1 対応（Codex 第 22 巡 finding (1)、2026-09-05）: `_check_required_
+#: blocking()` が `frozen_design.design_revision` を照合する閉語彙。現状は
+#: `_V1_1_DESIGN_REVISION` のみを含む単一要素集合だが、将来 v1.2 等が追加
+#: された際に両バージョンを同時に許容できるよう set として持つ（`"1.0"` を
+#: 含む他の値・欠落はすべて REQUIRED_BLOCKING violation。legacy v1.0 は
+#: `allow_legacy_v1_0=True` opt-in 経由でのみ通す）。
+_ALLOWED_DESIGN_REVISIONS: frozenset[str] = frozenset({_V1_1_DESIGN_REVISION})
+
 
 def _is_v1_1_manifest(manifest: Mapping[str, object]) -> bool:
     found, value = _resolve(manifest, "frozen_design.design_revision")
@@ -1934,6 +1995,101 @@ def _check_u_gt_u_num_bounds(
                             ),
                         )
                     )
+        # R22-2 対応（Codex 第 22 巡 finding (2)、2026-09-05）: 値の形状検査
+        # （有限非負・formula 非空）だけでは、独立生成の v1.1 manifest が
+        # bound を 0 にして formula 文字列だけ残しても通過してしまう（過小
+        # bound を C4 が消費して偽の CALIBRATED_DIRECTIONAL を出す）。非
+        # ABSENT family に限り、producer (`c0_freeze._fixture_specs()`) と
+        # 同一の canonical 関数 (`fixtures.uncertainty.derive_u_gt_bound()`/
+        # `derive_u_num_bound()`) を manifest 自身に記録された入力
+        # (`u_bound_inputs`) から**再実行**し、宣言済みの value/formula と
+        # 一致することを要求する（manifest 自己完結の原則: `fixtures.axes`
+        # の現在値は一切読まない——`fixtures/uncertainty.py` モジュール
+        # docstring 参照）。legacy manifest（marker 無し）はこの検査の対象外。
+        if is_v1_1 and fam not in _U_GT_U_NUM_ABSENT_ONLY_FAMILIES:
+            inputs_key = "u_bound_inputs"
+            if inputs_key not in entry or _is_hollow(entry.get(inputs_key)):
+                violations.append(
+                    SweepManifestViolationDetail(
+                        violation="u_bound_missing_or_invalid",
+                        family=fam,
+                        sweep_id=inputs_key,
+                        expected_count=0,
+                        actual_count=0,
+                        detail=(
+                            f"frozen_design.fixture_spec.{fam}.{inputs_key} is required "
+                            "for v1.1 manifests (frozen_design.design_revision="
+                            f"{_V1_1_DESIGN_REVISION!r}) but is missing (v1.1 §V3.3; R22-2)"
+                        ),
+                    )
+                )
+            else:
+                raw_inputs = entry.get(inputs_key)
+                try:
+                    derived_gt_value, derived_gt_formula = fixture_uncertainty.derive_u_gt_bound(
+                        family, raw_inputs
+                    )
+                    derived_num_value, derived_num_formula = (
+                        fixture_uncertainty.derive_u_num_bound(family, raw_inputs)
+                    )
+                except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
+                    violations.append(
+                        SweepManifestViolationDetail(
+                            violation="u_bound_missing_or_invalid",
+                            family=fam,
+                            sweep_id=inputs_key,
+                            expected_count=0,
+                            actual_count=0,
+                            detail=(
+                                f"frozen_design.fixture_spec.{fam}.{inputs_key} could not be "
+                                "used to canonically recompute u_gt_bound/u_num_bound "
+                                f"(v1.1 §V3.3; R22-2): {exc!r}"
+                            ),
+                        )
+                    )
+                else:
+                    for value_key, formula_key2, derived_value, derived_formula in (
+                        ("u_gt_bound", "u_gt_bound_formula", derived_gt_value, derived_gt_formula),
+                        (
+                            "u_num_bound",
+                            "u_num_bound_formula",
+                            derived_num_value,
+                            derived_num_formula,
+                        ),
+                    ):
+                        declared_value = entry.get(value_key)
+                        if not _numbers_close(declared_value, derived_value):
+                            violations.append(
+                                SweepManifestViolationDetail(
+                                    violation="u_bound_missing_or_invalid",
+                                    family=fam,
+                                    sweep_id=value_key,
+                                    expected_count=0,
+                                    actual_count=0,
+                                    detail=(
+                                        f"frozen_design.fixture_spec.{fam}.{value_key} "
+                                        f"declares {declared_value!r} but the canonical "
+                                        f"re-derivation from {inputs_key} yields "
+                                        f"{derived_value!r} (v1.1 §V3.3; R22-2)"
+                                    ),
+                                )
+                            )
+                        declared_formula = entry.get(formula_key2)
+                        if declared_formula != derived_formula:
+                            violations.append(
+                                SweepManifestViolationDetail(
+                                    violation="u_bound_missing_or_invalid",
+                                    family=fam,
+                                    sweep_id=formula_key2,
+                                    expected_count=0,
+                                    actual_count=0,
+                                    detail=(
+                                        f"frozen_design.fixture_spec.{fam}.{formula_key2} does "
+                                        f"not match the canonical re-derivation from "
+                                        f"{inputs_key} (v1.1 §V3.3; R22-2)"
+                                    ),
+                                )
+                            )
     return tuple(violations)
 
 
@@ -2288,11 +2444,73 @@ def _check_holdout_sweeps_realized_membership(
     return tuple(violations)
 
 
+def _legacy_v1_0_opt_in_verified(manifest_path: Path | str | None) -> bool:
+    """R22-1 対応（Codex 第 22 巡 finding (1)）: `allow_legacy_v1_0=True` を
+    「campaign directory 上に既に存在する manifest ファイルであり、かつその
+    campaign の ledger が closed（`payload.kind == "campaign_closed"` の
+    entry を含む）または aborted（`archive_aborted_ledger.py` が
+    `ledger.jsonl.gz` へ archive 済み）である」場合に限って有効化する。
+
+    `manifest_path=None`（in-memory で組み立てた未書込 manifest——
+    `c0_freeze.dry_run()`/`armed_freeze()` が呼ぶ経路）では常に `False` を
+    返す。これにより、新規 freeze 経路は `allow_legacy_v1_0=True` を渡しても
+    legacy 扱いにならず（そもそも渡していない——両呼び出しとも本引数を渡さない
+    デフォルト False のまま）、opt-in は「既に確定した過去の campaign を
+    後から検証し直す」用途のみに限定される。
+    """
+    if manifest_path is None:
+        return False
+    path = Path(manifest_path)
+    if not path.is_file():
+        return False
+    campaign_dir = path.parent
+    if (campaign_dir / "ledger.jsonl.gz").is_file():
+        # archive_aborted_ledger.py がチェーン検証成功後にのみ gzip する
+        # （D100/c0e466c）。gz の存在自体が「abort 済み ledger」の記録。
+        return True
+    ledger_path = campaign_dir / "ledger.jsonl"
+    if not ledger_path.is_file():
+        return False
+    try:
+        with ledger_path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = entry.get("payload") if isinstance(entry, Mapping) else None
+                if isinstance(payload, Mapping) and payload.get("kind") == "campaign_closed":
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def validate_c0_manifest(
-    manifest: Mapping[str, object], *, split_secret: bytes | None = None
+    manifest: Mapping[str, object],
+    *,
+    split_secret: bytes | None = None,
+    allow_legacy_v1_0: bool = False,
+    manifest_path: Path | str | None = None,
 ) -> C0ValidationResult:
-    """C0 freeze manifest を dry-run 検証する（書込・secret 生成・freeze event なし）。"""
-    missing_required = _check_required_blocking(manifest)
+    """C0 freeze manifest を dry-run 検証する（書込・secret 生成・freeze event なし）。
+
+    `allow_legacy_v1_0`（R22-1、既定 False）: `frozen_design.design_revision`
+    marker が無い/一致しない legacy (v1.0) manifest の検証を明示的に許可する
+    opt-in。`_legacy_v1_0_opt_in_verified(manifest_path)` が「on-disk の
+    closed/aborted campaign manifest である」ことを確認できた場合にのみ実際に
+    有効化される——`manifest_path` を渡さない、または campaign が
+    closed/aborted と確認できない場合は `True` を渡しても legacy 扱いに
+    ならない（fail-closed）。`c0_freeze.dry_run()`/`armed_freeze()` が呼ぶ
+    新規 freeze 経路はこの引数を一切渡さない（常に v1.1 必須のまま）。
+    """
+    legacy_design_revision_ok = allow_legacy_v1_0 and _legacy_v1_0_opt_in_verified(manifest_path)
+    missing_required = _check_required_blocking(
+        manifest, legacy_design_revision_ok=legacy_design_revision_ok
+    )
     missing_required += _check_claim_critical_set(manifest)
     missing_required += _check_checkout_identity(manifest)
     missing_required += _check_hash_maps(manifest)
@@ -2366,3 +2584,74 @@ def validate_c0_manifest(
         holdout_pin_declaration_violations=holdout_pin_declaration_violations,
         holdout_pin_membership_violations=holdout_pin_membership_violations,
     )
+
+
+# ---------------------------------------------------------------------------
+# CLI（R22-1 対応、Codex 第 22 巡 finding (1)）: 既存 campaign の
+# `c0_manifest.json` を独立に dry-run 検証する薄いエントリポイント。
+# `c0_freeze.py` の `dry_run()`/`armed_freeze()` は常に in-memory で新規
+# manifest を組み立てて検証する（`--allow-legacy-v1-0` を持たない・常に
+# v1.1 必須）ため、on-disk の既存 manifest（典型的には closed/aborted
+# campaign）だけを検証したい場合の別入口として本 CLI を設ける。
+# ---------------------------------------------------------------------------
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m voice_genesis.calibration.c0_validate",
+        description=(
+            "既存の c0_manifest.json を dry-run 検証する（書込・secret 生成なし）。"
+        ),
+    )
+    parser.add_argument("manifest_path", type=Path, help="検証対象の c0_manifest.json への path")
+    parser.add_argument(
+        "--allow-legacy-v1-0",
+        action="store_true",
+        default=False,
+        help=(
+            "frozen_design.design_revision marker が無い/一致しない legacy (v1.0) "
+            "manifest の検証を許可する（R22-1 opt-in）。実際に有効化されるのは "
+            "manifest_path の親 campaign directory の ledger が closed "
+            "(payload.kind=='campaign_closed') または aborted "
+            "(ledger.jsonl.gz が archive 済み) と確認できた場合のみ——それ以外は "
+            "このフラグを渡しても fail-closed のまま。"
+        ),
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _build_arg_parser().parse_args(argv)
+    manifest_path: Path = args.manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    result = validate_c0_manifest(
+        manifest,
+        allow_legacy_v1_0=args.allow_legacy_v1_0,
+        manifest_path=manifest_path,
+    )
+    if result.is_blocked:
+        print(f"BLOCKED: {[code.value for code in result.blocked_codes]}")
+        for key in result.missing_required_keys:
+            print(f"  missing_required_keys: {key}")
+        for violations, label in (
+            (result.u_gt_u_num_bound_violations, "u_gt_u_num_bound_violations"),
+            (result.sweep_declaration_violations, "sweep_declaration_violations"),
+            (result.sweep_declaration_mismatch_violations, "sweep_declaration_mismatch_violations"),
+            (result.claim_relevant_field_violations, "claim_relevant_field_violations"),
+            (result.invariance_axis_violations, "invariance_axis_violations"),
+            (result.holdout_pin_feasibility_violations, "holdout_pin_feasibility_violations"),
+            (result.holdout_pin_declaration_violations, "holdout_pin_declaration_violations"),
+            (result.holdout_pin_membership_violations, "holdout_pin_membership_violations"),
+        ):
+            for v in violations:
+                print(f"  {label}: {v.family}.{v.sweep_id}: {v.detail}")
+        return 1
+    print("OK: no REQUIRED_BLOCKING violations")
+    if result.downgrade_annotations:
+        for annotation in result.downgrade_annotations:
+            print(f"  downgrade_annotation: {annotation}")
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())

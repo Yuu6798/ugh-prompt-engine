@@ -13,6 +13,7 @@ import pytest
 from voice_genesis.calibration import c0_validate, streams, vocab
 from voice_genesis.calibration.candidates import registry as candidate_registry
 from voice_genesis.calibration.fixtures import axes as fixture_axes
+from voice_genesis.calibration.fixtures import uncertainty as fixture_uncertainty
 from voice_genesis.calibration.fixtures.matrix import (
     build_matrix,
     declared_sweeps_by_family,
@@ -160,14 +161,44 @@ def _full_fixture_spec() -> dict[str, dict[str, object]]:
     （`[UNDERSPEC-CAL-C17]`）。値は `_shape_valid_nested_value` で BOUNDED
     shape validation（`[UNDERSPEC-CAL-C18]`）を満たすよう生成する
     （`generator_hash` は 64 桁 hex、`confound_axes`/`boundary_probes`/
-    `negative_controls` は非空 list）。"""
-    return {
+    `negative_controls` は非空 list）。
+
+    R22-2 対応（Codex 第 22 巡 finding (2)、2026-09-05）: `_complete_manifest()`
+    は `design_revision="1.1"` を付ける v1.1 manifest になったため、
+    `u_gt_bound`/`u_num_bound`（+ 両 formula・両 unit・`u_bound_inputs`）も
+    producer (`c0_freeze._fixture_specs()`) と同一の canonical 関数
+    (`fixtures.uncertainty`) から実導出する——`declared_sweeps`/
+    `confound_axes` と同じ理由（`_check_u_gt_u_num_bounds()` の canonical
+    再導出一致検査を満たす必要があり、汎用 placeholder では通らない）。
+    """
+    spec: dict[str, dict[str, object]] = {
         family.value: {
             key: _shape_valid_nested_value(key, family.value.lower())
             for key in c0_validate.FIXTURE_SPEC_REQUIRED_KEYS
         }
         for family in fixture_axes.FixtureFamily
     }
+    for family in fixture_axes.FixtureFamily:
+        inputs = fixture_uncertainty.gather_u_bound_inputs(family)
+        gt_value, gt_formula = fixture_uncertainty.derive_u_gt_bound(family, inputs)
+        num_value, num_formula = fixture_uncertainty.derive_u_num_bound(family, inputs)
+        unit = (
+            "n/a"
+            if family.value in fixture_uncertainty.U_ABSENT_REASON_BY_FAMILY
+            else fixture_axes.TRUTH_UNIT_BY_FAMILY[family.value]
+        )
+        spec[family.value].update(
+            {
+                "u_gt_bound": gt_value,
+                "u_gt_bound_formula": gt_formula,
+                "u_gt_bound_unit": unit,
+                "u_num_bound": num_value,
+                "u_num_bound_formula": num_formula,
+                "u_num_bound_unit": unit,
+                "u_bound_inputs": inputs,
+            }
+        )
+    return spec
 
 
 def _full_rng_ledger() -> list[dict[str, object]]:
@@ -207,6 +238,10 @@ def _complete_manifest() -> dict[str, object]:
             "resampling_parameters": {"window": ["kaiser", 5.0], "padtype": "constant"},
         },
         "frozen_design": {
+            # R22-1 対応（Codex 第 22 巡 finding (1)）: v1.1 の必須 marker。
+            # 欠落/不一致は REQUIRED_BLOCKING violation になる
+            # （`c0_validate._ALLOWED_DESIGN_REVISIONS`）。
+            "design_revision": "1.1",
             "claim_critical_set": ["M3_FORMANTS", "M2_SPECTRAL_TILT", "M2_APERIODICITY"],
             "meter_specs": _full_meter_specs(),
             "fixture_spec": _full_fixture_spec(),

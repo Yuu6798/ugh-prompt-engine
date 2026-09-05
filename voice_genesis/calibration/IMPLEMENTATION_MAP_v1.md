@@ -1189,7 +1189,7 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
 設計正本 `DESIGN_VG_METER_CAL_DEBT_v1.1.md`（§V1–§V6）の各節を実装した
 モジュール・関数の対応表。関数名で記載する（行番号は変動するため）。
 実装の詳細な逸脱・境界宣言・採否根拠は `README.md` 逸脱台帳
-`UNDERSPEC-CAL-D91`〜`D98` が正（本表は経路の索引のみ）。
+`UNDERSPEC-CAL-D91`〜`D100` が正（本表は経路の索引のみ）。
 
 | v1.1 節 | 実装モジュール | 関数名 | 対応する台帳 entry |
 |---|---|---|---|
@@ -1209,6 +1209,8 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
 | | `c0_validate.py` | `_check_u_gt_u_num_bounds()`（R20-3: `_is_v1_1_manifest()` による version-aware 必須化） | D93/D98 |
 | §V3.3 追補（R20-3: v1.1 manifest 判別 marker） | `c0_freeze.py` | `build_manifest()`（`frozen_design.design_revision`/`design_doc_sha256`）, `_design_doc_sha256()` | D98 |
 | §V3.3 追補（R21: unit 照合の共有機械導出源） | `fixtures/axes.py` | `TRUTH_UNIT_BY_FAMILY`（`c0_freeze.py` の旧 private `_TRUTH_UNIT` を昇格・公開） | D98 |
+| §V3.3 追補（R22-2: bound/formula の canonical 再導出照合） | `fixtures/uncertainty.py`（新設） | `gather_u_bound_inputs()`, `derive_u_gt_bound()`, `derive_u_num_bound()`（producer/validator 共有） | D99 |
+| §V3.3 追補（R22-1: design_revision の必須化・legacy opt-in） | `c0_validate.py` | `_check_required_blocking()`（`_ALLOWED_DESIGN_REVISIONS`）, `_legacy_v1_0_opt_in_verified()`, `validate_c0_manifest(allow_legacy_v1_0=...)`, CLI `main()` | D99 |
 | §V3.5（gate4' invariance 軸の宣言・pair 構成） | `fixtures/matrix.py` | `single_axis_nuisance_tag_axis()`, `invariance_axes_by_family()` | D93 |
 | | `campaign/holdout_stage.py` | `build_invariance_pairs_for_family()`（instance 単位 pair + anchor 共有測定） | D93 |
 | | `splitter.py` | `_COVERAGE_AXES`（`"nuisance_axis"` 追加）, `_GATE4_INAPPLICABLE_FAMILIES` | D93 |

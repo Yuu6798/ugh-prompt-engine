@@ -360,6 +360,18 @@ campaign 成立要件とする:
   TRUTH_UNIT_BY_FAMILY`（producer/validator 共有の機械導出源）との一致を要求する
   （ABSENT-only family は `"n/a"` 固定）——欠落・改竄を素通しすると forged unit が
   候補宣言 unit と偶然一致し偽の `CALIBRATED_DIRECTIONAL` を許すため。
+- **R22 追補**（Codex 第 22 巡 finding (1)(2) 採用、2026-09-05）: `frozen_design.
+  design_revision` marker 自体を REQUIRED_BLOCKING 化し、値は閉語彙 `{"1.1"}` の
+  みを合格とする（欠落・未知値・`"1.0"` は fail-closed）——legacy v1.0 manifest の
+  検証は `validate_c0_manifest(allow_legacy_v1_0=True)` の明示 opt-in、かつ
+  on-disk の closed/aborted campaign manifest に限定して許容する（R22-1）。加えて
+  validator は `u_gt_bound`/`u_num_bound`（+両 formula）を producer
+  (`c0_freeze._fixture_specs()`) と同一の canonical 関数
+  (`fixtures.uncertainty.derive_u_gt_bound()`/`derive_u_num_bound()`) で manifest
+  自身に記録された入力（`u_bound_inputs`。sr/duration/PCM 項/`tolerance.
+  derive_floor()` 引数等）から再導出し、宣言値との厳密等値（過大申告も不一致として
+  拒否）を要求する（R22-2。manifest 自己完結の原則——validator は `fixtures.axes`
+  の現在値を暗黙に読まない）。
 
 ### V3.4 追補 — M6 の測定経路は v1.2 へ繰延（境界宣言、2026-09-05）
 
