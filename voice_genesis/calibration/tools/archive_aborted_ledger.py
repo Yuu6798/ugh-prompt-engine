@@ -50,11 +50,43 @@ truncated な `ledger.jsonl` が残り得た——次回起動時は「原本が
 または他要因での破損）ケースも「復元すべき原本欠落」と同一に扱い、
 staging 経由で再復元する（従来は「原本が存在する」の一点のみで復元をスキップ
 しており、この壊れた原本ケースを回復できなかった）。
+
+R12 fix（PR #346 round 12、Codex 採用）: R11 は「公開済み gz+sidecar が
+揃った後・原本削除前 (4) に中断」した状態からの**回復**（次回起動時の再
+判定）は塞いだが、フレッシュな archive 1 回の実行そのもの——原本 bytes
+読み取り (`original_bytes = ledger_path.read_bytes()`) から staging 書込・
+検証・公開・原本 `unlink()` に至る一続きの区間——は `provenance.Ledger.
+append()` と排他制御を共有しておらず、この区間の途中で他プロセス/他
+`Ledger` インスタンスが append すると、その追記分は本モジュールの誰にも
+検出されないまま最後の `unlink()` で恒久喪失し得た（R11 が塞いだ「削除
+直前の中断からの回復」より広い、「読み取り開始 〜 削除」全体の窓）。
+
+本 fix は (a) この区間全体を `_ledger_write_lock()`（`ledger_path` 自身の
+fd 上の `fcntl.flock(LOCK_EX)`——`Ledger.append()` が使うのと同一のロック
+対象・同一の blocking 契約）で保持し、区間中の `Ledger.append()` を
+待たせる（フレッシュ archive はロック外側の他プロセスに対して透過的に
+直列化される）ことで race そのものを閉じ、(b) 原本 `unlink()` の直前に
+もう一段、原本の sha256 を publish 直後の snapshot と再照合する防御的
+二重チェックを加える——ロック契約に従わない直接書き込み（本設計が保護
+対象外と宣言する「台帳の外側で動く敵対的な実行者」を除けば通常発生し
+得ないが、bug/運用ミスに対する belt-and-suspenders）を検出するため。
+再照合が食い違った場合は R11 が既に定義した唯一の判定規則
+（`_reconcile_diverged_original()`——byte-prefix 拡張 + chain 検証なら
+その内容で archive を作り直す、そうでなければ `ArchiveError` で両方を
+保全する）へ合流させる（二重規則を作らない）。
+
+ロック取得の待ち方針（blocking、タイムアウトなし）は `Ledger.append()`
+自身の流儀（`provenance.py` 参照: `fcntl.flock(LOCK_EX)` を `LOCK_NB` 無し
+で呼ぶ）にそのまま合わせた——archive は破棄裁定済み campaign への短時間の
+一括後処理であり、恣意的なタイムアウト値を新設するより、単に待たせて
+安全側に倒す方が単純かつ一貫している。
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import gzip
 import hashlib
 import json
@@ -63,6 +95,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 
 from voice_genesis.calibration.provenance import Ledger
 
@@ -220,6 +253,82 @@ def _verify_gz_sidecar_pair(gz_path: Path, sidecar_path: Path) -> str:
 def _discard_if_exists(path: Path) -> None:
     if path.exists():
         path.unlink()
+
+
+@contextlib.contextmanager
+def _ledger_write_lock(ledger_path: Path) -> Iterator[None]:
+    """R12 fix: `provenance.Ledger.append()` と同一のロック——`ledger_path`
+    自身のファイル記述子上での `fcntl.flock(LOCK_EX)`、`LOCK_NB` 無しの
+    blocking 待ち——を取得し、`with` ブロックを抜けるまで保持する。
+
+    `ledger_path` は呼び出し時点で存在している前提（呼び出し側は原本の
+    存在を既に確認済みであること）。ロックは open file description に
+    紐づくため、区間内でファイルへの `os.rename`（別パスへの公開）や
+    `unlink`（`ledger_path` 自身の削除）が起きても、このコンテキスト
+    マネージャが保持しているロックそのものは（`ledger_path` を指す fd を
+    閉じるまで）解放されない。"""
+    with ledger_path.open("rb") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _reconcile_diverged_original(
+    *,
+    campaign_dir: Path,
+    ledger_path: Path,
+    gz_path: Path,
+    sidecar_path: Path,
+    staging_gz_path: Path,
+    staging_sidecar_path: Path,
+    leftover_bytes: bytes,
+    leftover_sha: str,
+    published_bytes: bytes,
+    published_sha: str,
+) -> str:
+    """R11 が定義した唯一の判定規則（PR #346 round 11 採用）: 現在 on-disk の
+    原本 (`leftover_bytes`) が、既に検証済み/直前に公開した archive の中身
+    (`published_bytes`) と食い違う場合にどう扱うか。
+
+    R12（round 12）はこの規則を、フレッシュ archive 実行中の削除直前
+    再照合（`ensure_archived()` 本体）とも共有する——同じ状況に 2 つの
+    規則を作らない。
+
+    `leftover_bytes` が `published_bytes` の chain-検証済み・厳密な
+    byte-prefix 拡張であれば、それを正として archive を作り直し（gz+sidecar
+    を新しい内容で置換）、新しい sha256 を返す。それ以外（改竄・無関係な
+    ledger との取り違え）は `ArchiveError` を送出する——呼び出し側は原本・
+    公開物のどちらも削除・上書きしてはならない（fail-closed、§V4 R11）。
+    """
+    is_extension = _is_strict_prefix_extension(leftover_bytes, published_bytes)
+    chain_ok = False
+    if is_extension:
+        try:
+            _, leftover_chain = Ledger.load_with_verification(ledger_path)
+        except Exception:  # noqa: BLE001 - 検証不能は re-archive しない
+            chain_ok = False
+        else:
+            chain_ok = leftover_chain.ok
+    if is_extension and chain_ok:
+        _discard_if_exists(staging_gz_path)
+        _discard_if_exists(staging_sidecar_path)
+        return _write_and_publish_archive(
+            leftover_bytes,
+            campaign_dir,
+            gz_path,
+            sidecar_path,
+            staging_gz_path,
+            staging_sidecar_path,
+        )
+    raise ArchiveError(
+        f"{campaign_dir}: leftover ledger.jsonl (sha256={leftover_sha!r}) "
+        f"does not match the verified published archive "
+        f"(sha256={published_sha!r}) and is not a valid, chain-verified, "
+        "strict byte-prefix extension of it — refusing to delete or "
+        "overwrite either side (fail-closed, §V4 R11)"
+    )
 
 
 def _is_strict_prefix_extension(candidate: bytes, published: bytes) -> bool:
@@ -470,40 +579,25 @@ def ensure_archived(campaign_dir: Path) -> ArchiveResult:
                 # rename で既存の gz/sidecar を置換）。それ以外（不整合 —
                 # 改竄・無関係な ledger との取り違え等）は何も削除せず
                 # `ArchiveError` で停止し、両方を保全する。
-                is_extension = _is_strict_prefix_extension(leftover_bytes, decompressed_gz)
-                chain_ok = False
-                if is_extension:
-                    try:
-                        _, leftover_chain = Ledger.load_with_verification(ledger_path)
-                    except Exception:  # noqa: BLE001 - 検証不能は re-archive しない
-                        chain_ok = False
-                    else:
-                        chain_ok = leftover_chain.ok
-                if is_extension and chain_ok:
-                    _discard_if_exists(staging_gz_path)
-                    _discard_if_exists(staging_sidecar_path)
-                    new_sha = _write_and_publish_archive(
-                        leftover_bytes,
-                        campaign_dir,
-                        gz_path,
-                        sidecar_path,
-                        staging_gz_path,
-                        staging_sidecar_path,
-                    )
-                    ledger_path.unlink()
-                    return ArchiveResult(
-                        campaign_dir=campaign_dir,
-                        gz_path=gz_path,
-                        sidecar_path=sidecar_path,
-                        sha256=new_sha,
-                        action="archived",
-                    )
-                raise ArchiveError(
-                    f"{campaign_dir}: leftover ledger.jsonl (sha256={leftover_sha!r}) "
-                    f"does not match the verified published archive "
-                    f"(sha256={published_sha!r}) and is not a valid, chain-verified, "
-                    "strict byte-prefix extension of it — refusing to delete or "
-                    "overwrite either side (fail-closed, §V4 R11)"
+                new_sha = _reconcile_diverged_original(
+                    campaign_dir=campaign_dir,
+                    ledger_path=ledger_path,
+                    gz_path=gz_path,
+                    sidecar_path=sidecar_path,
+                    staging_gz_path=staging_gz_path,
+                    staging_sidecar_path=staging_sidecar_path,
+                    leftover_bytes=leftover_bytes,
+                    leftover_sha=leftover_sha,
+                    published_bytes=decompressed_gz,
+                    published_sha=published_sha,
+                )
+                ledger_path.unlink()
+                return ArchiveResult(
+                    campaign_dir=campaign_dir,
+                    gz_path=gz_path,
+                    sidecar_path=sidecar_path,
+                    sha256=new_sha,
+                    action="archived",
                 )
 
             # 公開物は検証済み。staging の残骸と、残存していれば原本を除去
@@ -537,49 +631,79 @@ def ensure_archived(campaign_dir: Path) -> ArchiveResult:
         )
 
     # --- ここから (1)-(4)。原本が正であることが確定している。 ---
-    _discard_if_exists(staging_gz_path)
-    _discard_if_exists(staging_sidecar_path)
+    # R12 fix: 原本 bytes 読み取り → staging → 検証 → 公開 → 原本 unlink の
+    # 一連を、`Ledger.append()` と同一の排他ロック下で実行する（この区間の
+    # 途中で他の `Ledger.append()` が割り込んで書いた内容を、検出しないまま
+    # 最後の `unlink()` で恒久喪失することを防ぐ。モジュール docstring の
+    # R12 fix 節参照）。
+    with _ledger_write_lock(ledger_path):
+        _discard_if_exists(staging_gz_path)
+        _discard_if_exists(staging_sidecar_path)
 
-    original_bytes = ledger_path.read_bytes()
-    original_sha256 = _sha256_bytes(original_bytes)
+        original_bytes = ledger_path.read_bytes()
+        original_sha256 = _sha256_bytes(original_bytes)
 
-    # (1) staging へ gz + sidecar を書く。
-    staging_gz_path.write_bytes(_write_gzip_bytes(original_bytes))
-    _fsync_file(staging_gz_path)
-    staging_sidecar_path.write_text(_sidecar_text(original_sha256), encoding="utf-8")
-    _fsync_file(staging_sidecar_path)
-    _fsync_dir(campaign_dir)
+        # (1) staging へ gz + sidecar を書く。
+        staging_gz_path.write_bytes(_write_gzip_bytes(original_bytes))
+        _fsync_file(staging_gz_path)
+        staging_sidecar_path.write_text(_sidecar_text(original_sha256), encoding="utf-8")
+        _fsync_file(staging_sidecar_path)
+        _fsync_dir(campaign_dir)
 
-    # (2) staging を実伸長して sidecar sha・原本バイト列・chain を検証する。
-    verified_sha = _verify_gz_sidecar_pair(staging_gz_path, staging_sidecar_path)
-    if verified_sha != original_sha256:  # pragma: no cover - defensive only
-        raise ArchiveError(
-            "staging verification sha256 does not match original ledger bytes "
-            f"(verified={verified_sha!r}, original={original_sha256!r})"
-        )
+        # (2) staging を実伸長して sidecar sha・原本バイト列・chain を検証する。
+        verified_sha = _verify_gz_sidecar_pair(staging_gz_path, staging_sidecar_path)
+        if verified_sha != original_sha256:  # pragma: no cover - defensive only
+            raise ArchiveError(
+                "staging verification sha256 does not match original ledger bytes "
+                f"(verified={verified_sha!r}, original={original_sha256!r})"
+            )
 
-    # (3) fsync 済みの staging を rename で公開する。
-    os.rename(staging_gz_path, gz_path)
-    os.rename(staging_sidecar_path, sidecar_path)
-    _fsync_dir(campaign_dir)
+        # (3) fsync 済みの staging を rename で公開する。
+        os.rename(staging_gz_path, gz_path)
+        os.rename(staging_sidecar_path, sidecar_path)
+        _fsync_dir(campaign_dir)
 
-    # 公開直後にもう一度検証する（defense-in-depth: rename 自体が壊れる
-    # ことは通常想定しないが、原本削除の前提を軽く二重化しておく）。
-    republished_sha = _verify_gz_sidecar_pair(gz_path, sidecar_path)
-    if republished_sha != original_sha256:  # pragma: no cover - defensive only
-        raise ArchiveError(
-            "published artifact failed post-publish verification — refusing to "
-            "delete the original ledger"
-        )
+        # 公開直後にもう一度検証する（defense-in-depth: rename 自体が壊れる
+        # ことは通常想定しないが、原本削除の前提を軽く二重化しておく）。
+        republished_sha = _verify_gz_sidecar_pair(gz_path, sidecar_path)
+        if republished_sha != original_sha256:  # pragma: no cover - defensive only
+            raise ArchiveError(
+                "published artifact failed post-publish verification — refusing to "
+                "delete the original ledger"
+            )
 
-    # (4) 検証済み公開物が揃った後にのみ原本を削除する。
-    ledger_path.unlink()
+        # R12 fix: 原本削除の直前に、保持中のロックの下でもう一度原本の
+        # sha256 を再照合する（防御的二重チェック。上記ロックにより
+        # `Ledger.append()` 経由の書き込みはこの区間で発生し得ないはずだが、
+        # ロック契約に従わない直接書き込みがあっても、削除だけは常にこの
+        # 再照合を通してから行う）。食い違えば R11 が定義した唯一の判定規則
+        # (`_reconcile_diverged_original`) に合流させる——二重規則を作らない。
+        current_bytes = ledger_path.read_bytes()
+        current_sha256 = _sha256_bytes(current_bytes)
+        if current_sha256 != original_sha256:
+            final_sha256 = _reconcile_diverged_original(
+                campaign_dir=campaign_dir,
+                ledger_path=ledger_path,
+                gz_path=gz_path,
+                sidecar_path=sidecar_path,
+                staging_gz_path=staging_gz_path,
+                staging_sidecar_path=staging_sidecar_path,
+                leftover_bytes=current_bytes,
+                leftover_sha=current_sha256,
+                published_bytes=original_bytes,
+                published_sha=original_sha256,
+            )
+        else:
+            final_sha256 = original_sha256
+
+        # (4) 検証済み公開物が揃った後にのみ原本を削除する。
+        ledger_path.unlink()
 
     return ArchiveResult(
         campaign_dir=campaign_dir,
         gz_path=gz_path,
         sidecar_path=sidecar_path,
-        sha256=original_sha256,
+        sha256=final_sha256,
         action="archived",
     )
 

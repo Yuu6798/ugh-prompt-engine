@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import threading
 from pathlib import Path
 
 import pytest
@@ -545,6 +546,127 @@ def test_ensure_archived_matching_leftover_original_is_discarded_as_before(
     assert result.sha256 == published_sha
     assert not ledger_path.exists()
     assert _has_authoritative_copy(campaign_dir)
+
+
+# ---------------------------------------------------------------------------
+# R12 fix (PR #346 round 12 採用): 原本 bytes 読み取り → staging → 検証 →
+# 公開 → 原本 unlink の区間を `provenance.Ledger.append()` と同一の排他
+# ロックの下で実行し、かつ unlink 直前に原本の sha256 を再照合する
+# （食い違えば R11 の判定規則 `_reconcile_diverged_original()` へ合流させる）。
+# ---------------------------------------------------------------------------
+
+
+def _compute_extended_bytes(original_bytes: bytes, tmp_path: Path, i: int = 999) -> bytes:
+    """`original_bytes` に 1 エントリ追記した chain-valid な拡張バイト列を、
+    実際の campaign_dir には一切触れずに（スクラッチ用の別ディレクトリで）
+    計算する。"""
+    scratch_dir = tmp_path / f"scratch-extend-{i}"
+    scratch_dir.mkdir()
+    scratch_ledger = scratch_dir / archive.LEDGER_FILENAME
+    scratch_ledger.write_bytes(original_bytes)
+    Ledger(scratch_ledger).append({"kind": "test_event", "i": i})
+    return scratch_ledger.read_bytes()
+
+
+def test_ledger_write_lock_blocks_concurrent_append(tmp_path: Path) -> None:
+    """`_ledger_write_lock()` が保持するロックは `provenance.Ledger.append()`
+    と同一（同じ `ledger.jsonl` の fd 上の `fcntl.flock(LOCK_EX)`）である
+    ため、archive 側がロックを保持している間、別スレッドの `append()` は
+    ロック解放まで待たされる（blocking、タイムアウトなし——
+    `Ledger.append()` 自身の流儀に合わせた設計判断）。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-abort"
+    _build_tiny_ledger(campaign_dir, n=1)
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+
+    appended = threading.Event()
+
+    def _do_append() -> None:
+        Ledger(ledger_path).append({"kind": "test_event", "i": 1})
+        appended.set()
+
+    with archive._ledger_write_lock(ledger_path):
+        thread = threading.Thread(target=_do_append)
+        thread.start()
+        # ロックが効いていなければこの間に append は完了してしまう。
+        blocked_in_time = not appended.wait(timeout=0.3)
+        assert blocked_in_time, "append() was not blocked by the held archive lock"
+
+    thread.join(timeout=5)
+    assert appended.is_set()
+    assert not thread.is_alive()
+    # ロック解放後は正常に追記され、chain は依然として有効。
+    _, chain = Ledger.load_with_verification(ledger_path)
+    assert chain.ok
+
+
+def test_ensure_archived_rearchives_when_original_extended_during_archival(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """フレッシュ archive の実行中（公開直後・原本削除の前）に、ロック契約に
+    従わない直接書き込みで原本が chain-valid に拡張された場合でも、削除
+    直前の再照合がそれを検出し、拡張分を失わずに archive を作り直す
+    （R11 の判定規則との合流）。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-abort"
+    original_bytes = _build_tiny_ledger(campaign_dir, n=5)
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    extended_bytes = _compute_extended_bytes(original_bytes, tmp_path)
+    extended_sha = hashlib.sha256(extended_bytes).hexdigest()
+
+    real_rename = archive.os.rename
+    sidecar_path = campaign_dir / archive.SIDECAR_FILENAME
+
+    def _sneaky_rename(src: object, dst: object) -> None:
+        real_rename(src, dst)
+        if Path(dst) == sidecar_path:
+            # publish (3) 完了直後・(4) 原本削除前に割り込む「ロックを
+            # 経由しない書き込み」を模す。
+            ledger_path.write_bytes(extended_bytes)
+
+    monkeypatch.setattr(archive.os, "rename", _sneaky_rename)
+
+    result = archive.ensure_archived(campaign_dir)
+
+    assert result.action == "archived"
+    assert result.sha256 == extended_sha
+    assert not ledger_path.exists()
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    assert gzip.decompress(gz_path.read_bytes()) == extended_bytes
+    sidecar_sha, _ = sidecar_path.read_text(encoding="utf-8").split(None, 1)
+    assert sidecar_sha == extended_sha
+    assert not (campaign_dir / archive._STAGING_GZ_FILENAME).exists()
+    assert not (campaign_dir / archive._STAGING_SIDECAR_FILENAME).exists()
+    assert _has_authoritative_copy(campaign_dir)
+
+
+def test_ensure_archived_refuses_when_original_diverges_unrelatedly_during_archival(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(反対ケース) 割り込んだ内容が公開直後の snapshot の byte-prefix
+    拡張ではない（改竄/無関係な取り違え相当）場合は、削除を拒否し
+    `ArchiveError` を送出して原本・公開物のどちらも変更しない。"""
+    campaign_dir = tmp_path / "RUN10-CAL-fake-abort"
+    original_bytes = _build_tiny_ledger(campaign_dir, n=5)
+    ledger_path = campaign_dir / archive.LEDGER_FILENAME
+    unrelated_bytes = b'{"unrelated": true}\n'
+
+    real_rename = archive.os.rename
+    sidecar_path = campaign_dir / archive.SIDECAR_FILENAME
+
+    def _sneaky_rename(src: object, dst: object) -> None:
+        real_rename(src, dst)
+        if Path(dst) == sidecar_path:
+            ledger_path.write_bytes(unrelated_bytes)
+
+    monkeypatch.setattr(archive.os, "rename", _sneaky_rename)
+
+    with pytest.raises(archive.ArchiveError):
+        archive.ensure_archived(campaign_dir)
+
+    # どちらも保全される: 公開物は publish 時点の原本のまま、原本は割り込み
+    # 内容のまま — どちらも削除・上書きされていない。
+    gz_path = campaign_dir / archive.GZ_FILENAME
+    assert gzip.decompress(gz_path.read_bytes()) == original_bytes
+    assert ledger_path.read_bytes() == unrelated_bytes
 
 
 def test_cli_main_reports_failure_for_campaign_closed_ledger(
