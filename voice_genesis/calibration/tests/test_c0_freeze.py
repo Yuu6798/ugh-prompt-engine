@@ -572,6 +572,62 @@ def test_armed_freeze_holdout_sweeps_is_non_core_and_matches_k_hold(
     assert validation_with_secret.holdout_pin_feasibility_violations == ()
 
 
+def test_armed_freeze_manifest_missing_holdout_sweeps_top_level_key_is_blocked(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """R23 対応（Codex 第 23 巡 P2 採用、2026-09-05, PRRT_kwDOSD2OOM6fgdGg）:
+    against a REAL `armed_freeze()`-produced full manifest (not a synthetic
+    fixture), deleting the top-level `holdout_sweeps` key must fail-closed
+    with a single `holdout_pin_declaration_mismatch` violation, regardless
+    of whether `split_secret` is supplied to `validate_c0_manifest()` — the
+    exact bypass the round-23 review reported (`found_holdout=False`
+    silently skipping the per-family re-derivation match and realized-split
+    membership checks, letting `campaign/cli.py::_run_c4`'s
+    `expected_sweep_ids` fall back to the full declared-sweep set and
+    manufacture a false `DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT`
+    terminal). The untampered manifest (asserted violation-free above in
+    `test_armed_freeze_holdout_sweeps_is_non_core_and_matches_k_hold`)
+    already proves the (c) "no violation when present" side of this
+    contract; this test locks in the (a)/(b) "violation when absent"
+    side for both the secret and no-secret paths.
+    """
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.PUBLISHED
+    full_manifest = json.loads((result.campaign_dir / "c0_manifest.json").read_text(encoding="utf-8"))
+    tampered = dict(full_manifest)
+    del tampered["holdout_sweeps"]
+
+    # (b) secret 無しの構造検査でも fail-closed する。
+    validation_no_secret = c0_validate.validate_c0_manifest(tampered)
+    assert validation_no_secret.is_blocked
+    assert len(validation_no_secret.holdout_pin_declaration_violations) == 1
+    assert (
+        "top-level holdout_sweeps section is required"
+        in validation_no_secret.holdout_pin_declaration_violations[0].detail
+    )
+    assert validation_no_secret.holdout_pin_membership_violations == ()
+
+    # (a) split_secret 付きの完全再導出経路でも同様に fail-closed する。
+    split_secret_bytes = (result.secret_dir / "split_secret.bin").read_bytes()
+    validation_with_secret = c0_validate.validate_c0_manifest(
+        tampered, split_secret=split_secret_bytes
+    )
+    assert validation_with_secret.is_blocked
+    assert len(validation_with_secret.holdout_pin_declaration_violations) == 1
+    assert (
+        "top-level holdout_sweeps section is required"
+        in validation_with_secret.holdout_pin_declaration_violations[0].detail
+    )
+
+
 def test_armed_freeze_manifest_core_sha_mismatch_refused(tmp_path: Path, clean_checkout: None) -> None:
     approval_dir = tmp_path / "approvals"
     secret_dir = tmp_path / "secrets"

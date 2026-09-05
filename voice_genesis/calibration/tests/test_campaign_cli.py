@@ -2667,6 +2667,104 @@ def test_c4_directional_holdout_sweeps_manifest_narrows_expected_sweep_ids(
     assert "no frozen U_GT/U_num bound" in gate_detail["reason"]
 
 
+def test_c4_directional_v1_1_manifest_missing_holdout_sweeps_fails_closed_as_input_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex round 23 P2 ADOPT: for a v1.1 manifest
+    (`frozen_design.design_revision == "1.1"`) that is missing the top-level
+    `holdout_sweeps` key entirely, the DIRECTIONAL capacity check must NOT
+    silently fall back to the full declared-sweep set — it must fail closed
+    as `NOT_EVALUABLE`/`INPUT_MISSING` instead.
+
+    Reuses the exact same under-minimum-coverage fixture as
+    `test_c4_directional_partial_coverage_below_minimum_count_closes_not_
+    evaluable` above (2 usable rows of one declared sweep out of the
+    family's 10 -- the shape that, under the pre-v1.1 "all declared sweeps
+    are expected" fallback, manufactures a false
+    `DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT` terminal for the other 9
+    starved sweeps). The only difference here is the manifest's
+    `frozen_design.design_revision` is forced to `"1.1"` post-hoc (`build_
+    tiny_campaign()` does not itself stamp this marker) and `holdout_sweeps`
+    is left unset (default `None`) -- proving the v1.1 guard fires instead
+    of reproducing that false terminal.
+    """
+    import dataclasses
+
+    campaign, subset, independent_candidate, _stale_expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(
+            tmp_path,
+            monkeypatch,
+            select_directional=True,
+            subset_override=_aperiodicity_family_subset(),
+        )
+    )
+    assert "holdout_sweeps" not in campaign.manifest
+    v1_1_manifest = {
+        **campaign.manifest,
+        "frozen_design": {**campaign.manifest["frozen_design"], "design_revision": "1.1"},
+    }
+    campaign = dataclasses.replace(campaign, manifest=v1_1_manifest)
+
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.fixtures.controls import non_boundary_selection_instances
+    from voice_genesis.calibration.vocab import Split as _Split
+
+    _sweep_id, member_row_ids = sorted(
+        declared_sweeps_by_family(subset)["APERIODICITY_GT"].items()
+    )[0]
+    usable_row_ids = list(member_row_ids[:2])  # 2 distinct rows -> below minimum
+    campaign = _force_rows_into_holdout(campaign, usable_row_ids)
+    expected_instances = frozenset(
+        workunits.c4_holdout_instances(
+            subset, campaign.realized_split.assignment, family="APERIODICITY_GT"
+        )
+    )
+    expected_primary_instances = non_boundary_selection_instances(
+        subset, campaign.realized_split.assignment, _Split.HOLDOUT, family="APERIODICITY_GT"
+    )
+    assert expected_primary_instances  # sanity: setup mirrors the sibling test above
+    usable_instances = [(row_id, 0) for row_id in usable_row_ids]
+    ordered_instances = sorted(expected_instances)
+
+    records = [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in ordered_instances
+    ] + [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in usable_instances
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "INPUT_MISSING"
+    assert m2a_result["selected_candidate_id"] == independent_candidate.candidate_id
+    gate_detail = m2a_result["gate_detail"]
+    # not the false DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT terminal the
+    # pre-fix "all declared sweeps" fallback would have forced here for a
+    # v1.1 manifest (the sibling non-v1.1 test above locks in that this
+    # fallback still applies for legacy manifests).
+    assert gate_detail["gate_detail_reason_code"] == "HOLDOUT_SWEEPS_DECLARATION_MISSING"
+
+
 def test_c4_directional_partial_coverage_at_minimum_count_closes_diagnostic_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

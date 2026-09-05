@@ -2192,8 +2192,72 @@ def _check_holdout_sweeps_declaration_match(
     fail-closed の mismatch violation にする。pin 免除 family（`cap<1`）は
     空宣言 `{}` が正しい姿であり、非空の宣言（免除のはずの family が pin
     を騙る改竄）も同様に検出する。
+
+    R23 対応（Codex 第 23 巡 P2 採用、2026-09-05、PRRT_kwDOSD2OOM6fgdGg）:
+    R11 の必須化は `found_holdout=True` を前提としていたが、top-level
+    `holdout_sweeps` キー自体を manifest から削除すれば `found_holdout=False`
+    になり、R11 の必須化もそれ以降の per-family 照合も丸ごと沈黙していた
+    （`_check_holdout_sweeps_realized_membership()` も同型で沈黙）。本関数は
+    v1.1 manifest（`_is_v1_1_manifest()`）かつ **`realized_split` も存在する
+    full/armed-shape manifest**（`c0_freeze._attach_freeze_extras()` が
+    `realized_split`/`holdout_sweeps` を同一呼び出しで同時に付与するため、
+    両者の有無は常に揃うはずという不変を利用する）に限り、top-level
+    `holdout_sweeps` キー自体の存在を必須化する（欠落は関数冒頭で単独の
+    violation を返して即 return し、以降の per-family 照合は実行しない）。
+    `realized_split` を見ずに `is_v1_1` のみで必須化すると、
+    `c0_freeze.dry_run()`（`build_manifest()` が返す secret 未生成の
+    core-only manifest。`holdout_sweeps` が存在しないのが正当な設計不変
+    ——`_CORE_ONLY_EXCLUDED_KEYS` docstring 参照）まで誤ってブロックして
+    しまう（本 fix 実装時に発見: dry-run manifest は `realized_split` も
+    同時に持たないため、この判別で正しく除外できる）。legacy (marker 無し)
+    manifest は本チェックの対象外のまま従来の nested fallback 経路を維持
+    する（後方互換）。
     """
     found_holdout, holdout_section = _resolve(manifest, "holdout_sweeps")
+    is_v1_1 = _is_v1_1_manifest(manifest)
+    found_realized_split, _realized_split_section = _resolve(manifest, "realized_split")
+
+    # R23 対応（Codex 第 23 巡 P2 採用, 2026-09-05, PRRT_kwDOSD2OOM6fgdGg）:
+    # top-level `holdout_sweeps` キー自体を manifest から削除すると
+    # `found_holdout=False` になり、以下の per-family 照合ループは
+    # `declared_raw_by_family` を全て `None`（nested fallback も未収載なら
+    # 空）に落として `hollow` 判定で即 `continue` する——本関数もその下流の
+    # `_check_holdout_sweeps_realized_membership()` も沈黙し、C4 側
+    # (`campaign/cli.py::_run_c4`) の `expected_sweep_ids` フォールバックが
+    # 全宣言 sweep（HOLDOUT 非常駐 sweep を含む）を使って偽の
+    # `DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT` terminal を生み得た。
+    # `frozen_design.design_revision` marker（`_is_v1_1_manifest()`）が
+    # `"1.1"` を宣言し、かつ `realized_split`（`holdout_sweeps` と常に同時に
+    # 付与される sibling 非-core キー）が存在する full/armed-shape manifest
+    # に限り、top-level `holdout_sweeps` キー自体の存在を必須化する——
+    # 欠落は他の宣言内容と無関係に単独の `holdout_pin_declaration_mismatch`
+    # violation として即 fail-closed し、以降の per-family 照合（意味を
+    # 持たないため）は実行しない。`realized_split` も無い manifest（v1.1
+    # `dry_run()` の core-only manifest。secret 未生成で `holdout_sweeps`
+    # 欠落が設計上正当）は本チェックの対象外のまま従来の nested fallback
+    # 経路を維持する（後方互換・偽陽性防止）。
+    if is_v1_1 and found_realized_split and not found_holdout:
+        return (
+            SweepManifestViolationDetail(
+                violation="holdout_pin_declaration_mismatch",
+                family="",
+                sweep_id="",
+                expected_count=0,
+                actual_count=0,
+                detail=(
+                    "top-level holdout_sweeps section is required for v1.1 "
+                    f"manifests (frozen_design.design_revision={_V1_1_DESIGN_REVISION!r}) "
+                    "but is missing — without it, the per-family re-derivation "
+                    "match and realized-split membership checks silently no-op "
+                    "(found_holdout=False), and C4's expected_sweep_ids capacity "
+                    "check falls back to the full declared-sweep set (including "
+                    "sweeps never resident on HOLDOUT), which can manufacture a "
+                    "false DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT terminal "
+                    "(Codex round 23 finding, ADOPT; fail-closed, §V2.2)"
+                ),
+            ),
+        )
+
     rows = build_matrix()
     declared = declared_sweeps_by_family(rows)
     params = holdout_pin_params_by_family(rows)
@@ -2246,10 +2310,20 @@ def _check_holdout_sweeps_declaration_match(
         # family（`cap<1`）は空宣言 `{}` が正しい姿であり、非空の宣言は
         # （免除のはずの family が pin を騙る改竄）fail-closed で検出する。
         # `holdout_sweeps` キー自体が無い v1.0 形式 manifest（`found_holdout`
-        # =False）と secret 非依存の dry-run 経路（`split_secret is None`）
-        # は、この必須化の対象外のまま従来どおり「宣言があれば照合」を
-        # 維持する（後方互換）。
-        if found_holdout and split_secret is not None and fam in params:
+        # =False）は、この必須化の対象外のまま従来どおり「宣言があれば照合」
+        # を維持する（後方互換）。
+        #
+        # R23 追補（Codex 第 23 巡 P2 採用、2026-09-05）: `split_secret is
+        # None` の dry-run 経路も、`is_v1_1` の場合はこの必須化の対象に含める
+        # ——「宣言の存在と構造」までは secret 無しでも検証できる（下の
+        # `legitimately_empty` 判定は `full_pin`（secret 依存の再導出）が
+        # 無ければ `rederivation_indicates_empty` が常に False になり、
+        # `p.pin_exempt` のみで legitimacy を判定する——これは意図的な
+        # fail-closed: 「本当に正当な縮退か」を secret 無しで確認できない
+        # 以上、非免除 family の空宣言は疑わしいものとして扱う）。v1.0
+        # legacy manifest（`is_v1_1=False`）は `split_secret is None` の場合
+        # 引き続き対象外（後方互換）。
+        if found_holdout and (split_secret is not None or is_v1_1) and fam in params:
             p = params[fam]
             # v1.1 §V3.5 実装時発見（2026-09-05）: `p.pin_exempt` は matrix
             # 構造のみで決まる静的概念（`cap<1`）であり、段 2 coverage repair

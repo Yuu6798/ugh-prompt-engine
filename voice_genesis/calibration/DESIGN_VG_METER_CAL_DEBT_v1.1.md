@@ -248,6 +248,16 @@ fail-closed する。
 selection 側（C3b）の行構成と selection rule（v1.0 §9）の式・順序は不変（前 campaign
 で selection は sweep 薄化の下でも成立しており、欠陥は holdout 側にのみ実測された）。
 
+**R23 追補（Codex 第 23 巡 P2 採用、2026-09-05）**: top-level `holdout_sweeps`
+キー自体を manifest から削除すると、上記の secret 依存/非依存照合と realized
+membership 検査が丸ごと沈黙し、C4 の expected sweep 集合が「全 declared sweep」
+（本節が禁じた pre-v1.1 挙動）へ黙って退行しうる穴があった。v1.1 manifest
+（かつ `realized_split` を伴う full/armed-shape manifest）では top-level
+`holdout_sweeps` キー自体の存在を必須化し、欠落を fail-closed の
+violation にする（`c0_validate._check_holdout_sweeps_declaration_match()`）。
+C4 側も同じ欠落を `NOT_EVALUABLE`/`INPUT_MISSING` に倒し、全 sweep への
+フォールバックを行わない（`campaign/cli.py::_run_c4`）。
+
 ### V2.4 帰結の宣言
 
 - 456 セル・2,280 instance・render/meter call 会計・family 合計 50/25/25 は不変

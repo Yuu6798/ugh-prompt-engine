@@ -1201,6 +1201,8 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
 | | `c0_validate.py` | `_check_holdout_sweeps_declaration_match()`, `_check_holdout_sweeps_realized_membership()` | D92 |
 | | `campaign/state.py` | `_realized_split_from_manifest()`（`pinned_holdout_row_ids` 読み戻し） | D92 |
 | §V2.3（DIRECTIONAL gate の評価対象 sweep） | `campaign/cli.py` | `_run_c4()`（`expected_sweep_ids` を manifest `holdout_sweeps` から sourcing） | D92 |
+| §V2.3 追補（R23: top-level `holdout_sweeps` キーの必須化） | `c0_validate.py` | `_check_holdout_sweeps_declaration_match()`（v1.1 full/armed-shape manifest での必須化） | D101 |
+| | `campaign/cli.py` | `_run_c4()`（v1.1 manifest では `holdout_sweeps` 欠落を `NOT_EVALUABLE/INPUT_MISSING` に倒し全宣言 sweep へフォールバックしない） | D101 |
 | §V2.4（claim 縮小の列挙義務） | `campaign/holdout_stage.py` | `directional_claim_shrinkage_detail()` | D93 |
 | §V3（c4 実 gate 組み立ての配線。D17 閉塞） | `campaign/cli.py` | `_run_c4()`（`effective_ceiling` 分岐、D17 placeholder 撤去） | D93 |
 | | `campaign/holdout_stage.py` | `evaluate_absolute_meter_from_campaign()`, `evaluate_directional_meter_from_campaign()`, `evaluate_m6_identity()`, `build_absolute_gate_inputs()`, `build_directional_gate_inputs()`, `load_e_use_rows()`, `absolute_e_use_value()` | D93 |

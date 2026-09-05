@@ -1009,3 +1009,103 @@ def test_holdout_membership_detects_pinned_row_not_in_holdout() -> None:
 
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+
+
+# ---------------------------------------------------------------------------
+# R23 対応（Codex 第 23 巡 P2 採用、2026-09-05, PRRT_kwDOSD2OOM6fgdGg）:
+# top-level `holdout_sweeps` キー自体の削除は、修正前は `found_holdout=False`
+# へ落ちて上記 R10/R11 の全チェックを丸ごと skip させ、
+# `_check_holdout_sweeps_realized_membership()` も同型に沈黙し、C4 側
+# (`campaign/cli.py::_run_c4`, 別テストで検証) の `expected_sweep_ids`
+# フォールバックが全宣言 sweep（HOLDOUT 非常駐 sweep を含む）を使って偽の
+# `DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT` terminal を生み得た。
+# 修正: `frozen_design.design_revision == "1.1"` かつ `realized_split` も
+# 存在する full/armed-shape manifest（`realized_split`/`holdout_sweeps` は
+# `c0_freeze._attach_freeze_extras()` が常に同時に付与する sibling 非-core
+# キー）に限り、top-level `holdout_sweeps` キー自体の存在を必須化する。
+# `realized_split` を伴わない v1.1 manifest（`c0_freeze.dry_run()` の
+# core-only 形状。secret 未生成で `holdout_sweeps` 欠落が設計上正当）は
+# 対象外のまま——これを見誤ると `dry_run()` 自体を壊す（本 fix 実装時に
+# `_complete_manifest()`/`c0_freeze.dry_run()` 双方で確認済み）。
+# ---------------------------------------------------------------------------
+
+
+def _full_manifest_with_holdout_sweeps(
+    pinned: dict[str, dict[str, tuple[str, ...]]], *, include_realized_split: bool = True
+) -> dict[str, object]:
+    manifest: dict[str, object] = {
+        "frozen_design": {"design_revision": "1.1"},
+        "holdout_sweeps": {
+            family: {sid: list(rids) for sid, rids in sweeps.items()}
+            for family, sweeps in pinned.items()
+        },
+    }
+    if include_realized_split:
+        manifest["realized_split"] = {"assignment": {}}
+    return manifest
+
+
+def test_holdout_sweeps_top_level_key_required_for_v1_1_full_manifest_with_secret() -> None:
+    """(a) `realized_split` を伴う v1.1 full-shape manifest から top-level
+    `holdout_sweeps` キー自体を削除すると、split_secret 付きでも単独の
+    violation で fail-closed する（以降の per-family 照合には到達しない）。"""
+    manifest = _full_manifest_with_holdout_sweeps(_PINNED)
+    del manifest["holdout_sweeps"]
+
+    violations = c0_validate._check_holdout_sweeps_declaration_match(manifest, _SECRET)
+    assert len(violations) == 1
+    assert violations[0].violation == "holdout_pin_declaration_mismatch"
+    assert "top-level holdout_sweeps section is required" in violations[0].detail
+
+    result = c0_validate.validate_c0_manifest(manifest, split_secret=_SECRET)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+
+
+def test_holdout_sweeps_top_level_key_required_for_v1_1_full_manifest_without_secret() -> None:
+    """(b) 同じ削除は secret 無しの構造検査でも同様に検出される——本必須化は
+    `split_secret` に依存しない（削除の有無だけを見る）。"""
+    manifest = _full_manifest_with_holdout_sweeps(_PINNED)
+    del manifest["holdout_sweeps"]
+
+    violations = c0_validate._check_holdout_sweeps_declaration_match(manifest, None)
+    assert len(violations) == 1
+    assert violations[0].violation == "holdout_pin_declaration_mismatch"
+    assert "top-level holdout_sweeps section is required" in violations[0].detail
+
+
+def test_holdout_sweeps_top_level_key_present_for_v1_1_full_manifest_passes() -> None:
+    """(c) top-level `holdout_sweeps` キーが正しく存在する v1.1 full-shape
+    manifest では、本必須化チェックはノーオペのまま既存の per-family
+    再導出照合のみが働く（`_PINNED` は secret 依存の完全再導出と一致する
+    正当な pin なので違反なし）。"""
+    manifest = _full_manifest_with_holdout_sweeps(_PINNED)
+    assert c0_validate._check_holdout_sweeps_declaration_match(manifest, _SECRET) == ()
+
+
+def test_holdout_sweeps_top_level_key_not_required_without_realized_split() -> None:
+    """`realized_split` を伴わない v1.1 manifest（`c0_freeze.dry_run()` の
+    core-only 形状——secret 未生成で `holdout_sweeps` 欠落が正当）は本
+    必須化の対象外のまま——`is_v1_1` だけで判定すると `dry_run()` 自体を
+    誤ってブロックしてしまう（本 fix 実装時に発見した回帰）。"""
+    manifest = _full_manifest_with_holdout_sweeps(_PINNED, include_realized_split=False)
+    del manifest["holdout_sweeps"]
+
+    violations = c0_validate._check_holdout_sweeps_declaration_match(manifest, _SECRET)
+    assert violations == ()
+
+
+def test_holdout_sweeps_missing_declaration_for_non_exempt_family_fails_closed_dry_run_v1_1() -> None:
+    """R23 追補: `is_v1_1` の manifest なら `split_secret=None` の dry-run
+    経路でも R11 の非空必須化が働く（found_holdout による skip を無効化）。
+    v1.0 legacy manifest（design_revision マーカー無し、上の
+    `test_holdout_sweeps_missing_declaration_dry_run_backward_compatible`）
+    は引き続き対象外のまま。"""
+    tampered = {fam: dict(sweeps) for fam, sweeps in _PINNED.items()}
+    del tampered["FORMANT_GT"]
+    manifest = _full_manifest_with_holdout_sweeps(tampered)
+
+    violations = c0_validate._check_holdout_sweeps_declaration_match(manifest, None)
+    assert any(
+        v.family == "FORMANT_GT" and v.violation == "holdout_pin_declaration_mismatch"
+        for v in violations
+    )

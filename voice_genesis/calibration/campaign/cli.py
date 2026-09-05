@@ -160,6 +160,23 @@ DEFAULT_SECRET_DIR = Path.home() / ".vg_cal" / "secrets"
 
 CAMPAIGN_ARMED_ENV_VAR = "VG_CAL_CAMPAIGN_AUTHORIZED"
 
+#: `c0_validate._V1_1_DESIGN_REVISION`/`_is_v1_1_manifest()` と同一の判定を、
+#: `c0_validate` に依存せず独立に再定義する（モジュール docstring の既存方針、
+#: `_REPO_ROOT`/`SECRET_DIR_ENV_VAR` と同じパターン）。Codex round 23 対応
+#: （P2「Require the top-level holdout sweep section」, ADOPT）: v1.1 manifest
+#: では top-level `holdout_sweeps` を必須化するので、C4 側の
+#: `expected_sweep_ids` フォールバック（下記 `_run_c4`）も v1.1 かどうかで
+#: 分岐する必要がある。
+_DESIGN_REVISION_V1_1 = "1.1"
+
+
+def _manifest_is_v1_1(manifest: Mapping[str, object]) -> bool:
+    frozen_design = manifest.get("frozen_design")
+    if not isinstance(frozen_design, Mapping):
+        return False
+    value = frozen_design.get("design_revision")
+    return isinstance(value, str) and value.strip() == _DESIGN_REVISION_V1_1
+
 
 def _process_cpu_seconds() -> float:
     """round 15 finding #5 (`[UNDERSPEC-CAL-D31]`): this process's own
@@ -1838,6 +1855,18 @@ def _run_c4(
     # frozen before v1.1 (or a test fixture that never populates it) falls
     # back to the pre-v1.1 "all declared sweeps" behavior unchanged.
     holdout_sweeps_section = campaign.manifest.get("holdout_sweeps")
+    # Codex round 23 P2 ADOPT (`_manifest_is_v1_1` above): for a v1.1
+    # manifest, `holdout_sweeps` is always populated by `c0_freeze.
+    # _attach_freeze_extras()` with an entry (possibly `{}`) for *every*
+    # family (`fixtures.matrix.pin_holdout_sweeps_by_family()` iterates
+    # `axes.FAMILY_ORDER` unconditionally) — a v1.1 manifest missing the
+    # top-level section entirely, or missing a per-family entry, is
+    # therefore never a legitimate state, only a tampered/incomplete one
+    # (`c0_validate._check_holdout_sweeps_declaration_match()` requires the
+    # top-level key for v1.1 manifests and blocks freeze/arming on its
+    # absence). Below, the DIRECTIONAL-ceiling capacity check must refuse to
+    # silently fall back to the full declared-sweep set in that case.
+    manifest_is_v1_1 = _manifest_is_v1_1(campaign.manifest)
     row_id_to_sweep_id: dict[str, dict[str, str]] = {}
     for family_value, family_sweeps in declared_sweeps_by_family_map.items():
         for sweep_id, member_row_ids in family_sweeps.items():
@@ -2236,11 +2265,46 @@ def _run_c4(
                 if isinstance(holdout_sweeps_section, Mapping)
                 else None
             )
-            expected_sweep_ids = (
-                set(family_holdout_sweeps)
-                if isinstance(family_holdout_sweeps, Mapping)
-                else set(declared_sweeps_by_family_map.get(family.value, {}))
-            )
+            if not isinstance(family_holdout_sweeps, Mapping):
+                if manifest_is_v1_1:
+                    # Codex round 23 P2 ADOPT: a v1.1 manifest always
+                    # populates `holdout_sweeps.<family>` (possibly `{}`) —
+                    # reaching here means the top-level section or this
+                    # family's entry is missing/malformed. Refusing to fall
+                    # back to the full declared-sweep set (which includes
+                    # sweeps never resident on HOLDOUT) prevents a false
+                    # `DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT` terminal
+                    # manufactured by deleting the declaration.
+                    results.append(
+                        holdout_stage.MeterHoldoutResult(
+                            meter_id=meter.value,
+                            terminal_status=TerminalStatus.NOT_EVALUABLE.value,
+                            reason_code=MissingReason.INPUT_MISSING.value,
+                            ceiling=ClaimCeiling.NONE.value,
+                            selected_candidate_id=selected_id,
+                            gate_detail={
+                                "reason": (
+                                    "[Codex round 23] v1.1 manifest is missing a "
+                                    f"usable holdout_sweeps.{family.value} "
+                                    "declaration (top-level holdout_sweeps section "
+                                    "absent or malformed for this family); refusing "
+                                    "to fall back to the full declared-sweep set "
+                                    "for the DIRECTIONAL capacity check "
+                                    "(c0_validate.validate_c0_manifest() requires "
+                                    "this section for v1.1 manifests and should "
+                                    "have blocked freeze/arming before C4 ever ran)"
+                                ),
+                                "gate_detail_reason_code": (
+                                    "HOLDOUT_SWEEPS_DECLARATION_MISSING"
+                                ),
+                                "claim_scope": claim_scope_detail,
+                            },
+                        )
+                    )
+                    continue
+                expected_sweep_ids = set(declared_sweeps_by_family_map.get(family.value, {}))
+            else:
+                expected_sweep_ids = set(family_holdout_sweeps)
             directional_minimum_not_met = not resolvable_pairs_possible(
                 usable_truth_level_counts_by_sweep, expected_sweep_ids
             )
@@ -2398,6 +2462,36 @@ def _run_c4(
                 if isinstance(holdout_sweeps_section, Mapping)
                 else None
             )
+            if not isinstance(family_holdout_sweeps, Mapping) and manifest_is_v1_1:
+                # Codex round 23 P2 ADOPT (same rationale as the capacity
+                # check above): this branch is reachable even when
+                # `expected_holdout_instances` is empty (the capacity check
+                # above is gated on it being non-empty), so the same
+                # fail-closed guard is required here too.
+                results.append(
+                    holdout_stage.MeterHoldoutResult(
+                        meter_id=meter.value,
+                        terminal_status=TerminalStatus.NOT_EVALUABLE.value,
+                        reason_code=MissingReason.INPUT_MISSING.value,
+                        ceiling=ClaimCeiling.NONE.value,
+                        selected_candidate_id=selected_id,
+                        gate_detail={
+                            "reason": (
+                                "[Codex round 23] v1.1 manifest is missing a "
+                                f"usable holdout_sweeps.{family.value} declaration "
+                                "(top-level holdout_sweeps section absent or "
+                                "malformed for this family); refusing to fall "
+                                "back to the full declared-sweep set for the "
+                                "DIRECTIONAL gate's expected sweep-member row ids"
+                            ),
+                            "gate_detail_reason_code": (
+                                "HOLDOUT_SWEEPS_DECLARATION_MISSING"
+                            ),
+                            "claim_scope": claim_scope_detail,
+                        },
+                    )
+                )
+                continue
             expected_sweep_member_row_ids = (
                 {sid: list(rids) for sid, rids in family_holdout_sweeps.items()}
                 if isinstance(family_holdout_sweeps, Mapping)
