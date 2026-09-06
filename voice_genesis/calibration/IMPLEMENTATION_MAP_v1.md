@@ -1250,7 +1250,7 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
 | | `campaign/cli.py` | `--rehearsal`, `_rehearsal_path_violations()`, `_manifest_declares_rehearsal()` | canonical `campaigns/`/`~/.vg_cal/` 配下を path ガードで拒否 |
 | | `campaign/close.py` | `derived.debt_discharged` を rehearsal では常に `false` 固定, `RehearsalRevealRefusedError` | |
 | | `approvals.py` | `REHEARSAL_CLAIM_SCOPE_SENTINEL = "REHEARSAL"`（`load_approval(rehearsal=...)`/`check_armed(rehearsal=...)` でのみ受理） | |
-| §W2(d)（freeze 前提 = 実経路で動いたコードのみ） | （運用規約。実装は rehearsal E2E 経由） | `tests/test_rehearsal_e2e.py`（`VG_CAL_REHEARSAL_E2E=1` 明示 opt-in。既定 skip） | 実測: <WP2b 実測>（プレースホルダ、実測後に転記） |
+| §W2(d)（freeze 前提 = 実経路で動いたコードのみ） | （運用規約。実装は rehearsal E2E 経由） | `tests/test_rehearsal_e2e.py`（`VG_CAL_REHEARSAL_E2E=1` 明示 opt-in。既定 skip） | 実測（WP2b）: 40.0 分（2400.6 秒）で `campaign_closed` 到達、`BLOCKED_*` 0 件。目標 30 分は未達（律速 = c1 render 290 と c2/c4 instance 数） |
 | §W2(e)（Gate 1/2 承認時刻の順序 fail-closed 検査、D108 是正） | `c0_freeze.py` | `_check_gate_approval_ordering()`, `_GATE_APPROVAL_CLOCK_SKEW_TOLERANCE_SECONDS = 60`（`unseal.py` Gate 3 検査と同値） | 理由語彙: `gate<N>_approval_not_before_freeze`/`_future_dated`/`_unparsable_timestamp` |
 | | `c0_validate.py` | `_check_gate_approval_ordering()`（`C0ValidationResult.gate_approval_ordering_notes`、非ブロッキング） | 承認記録が `approvals/records/` に無い場合はスキップ |
 | §W3（統治文書切替・2 段連鎖 pin） | `approvals.py` | `DESIGN_DOC_RELATIVE_PATH`(→v1.2), `BASE_DESIGN_DOC_RELATIVE_PATH`(→v1.1), `BASE_BASE_DESIGN_DOC_RELATIVE_PATH`(新設、→v1.0), `_verify_single_base_pin()`, `_verify_base_document_pin()`（2 段連鎖） | `c0_validate.scan_calibration_tree_inventory()` の union は本 revision では v1.2/v1.1 の 2 文書のみ据え置き（v1.0 の path inventory 再収載は次 revision の課題として境界宣言） |

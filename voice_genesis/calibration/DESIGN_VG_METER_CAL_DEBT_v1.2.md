@@ -160,8 +160,14 @@ family/anchor を被覆する部分集合）、`frozen_design.rehearsal` を常�
 疎通試験である**ことを構造的に強制する。`rehearsal` フラグは manifest の core
 payload に入るため、rehearsal 承認を本番 freeze に流用することはできない。
 
-rehearsal E2E（C0 freeze → c1 → c2 → c3a → c3b → c4 → close の全経路疎通）の実測は
-`<WP2b 実測>`（本節はプレースホルダ——WP2b の実装完了後、実測値をここへ転記する）。
+rehearsal E2E（C0 freeze → c1 → c2 → c3a → c3b → c4 → close の全経路疎通）の実測
+（WP2b、`scratchpad/v12/wp2b_report.md` §4）: **合計 2400.6 秒 = 40.0 分**（候補プール
+99→12・`meter_call` 6540・`campaign_closed` 到達・`BLOCKED_*` reason 0 件。
+`holdout_executed_valid.per_meter` は F0_CONTROL/M4_RESONANCE が `DIAGNOSTIC_ONLY`、
+他 5 meter が `NOT_EVALUABLE`）。目標 30 分は未達で残る。残る律速は候補プールではなく
+**c1 の render 290 と c2/c4 の instance 数**（`build_rehearsal_matrix()` の行数や
+instance 反復数の削減が対象）——次 revision の縮小候補として記録し、本 revision では
+許容する。
 
 ### (d) freeze 前提 = 実経路で動いたコードのみ
 
