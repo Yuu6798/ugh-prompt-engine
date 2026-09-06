@@ -40,6 +40,7 @@ from typing import Any
 
 from voice_genesis.calibration.canonical import manifest_sha
 from voice_genesis.calibration.fixtures.matrix import (
+    FixtureRow,
     HoldoutPinDegradationExhausted,
     MatrixRow,
     holdout_pin_params_by_family,
@@ -738,14 +739,35 @@ def verify_split(
 STRATUM_FACTOR_NAMES: tuple[str, ...] = ("truth_level", "boundary_class")
 
 
+def nuisance_axis_for_row(row: FixtureRow) -> str | None:
+    """`row` の `RowInput.nuisance_axis` 値（v1.1 §V3.5）。CONFOUND block の
+    単一軸主効果行（`fixtures.matrix.single_axis_nuisance_tag_axis()`）が
+    名指す軸名を返し、`_GATE4_INAPPLICABLE_FAMILIES`（gate4' に到達しない
+    RESONANCE_GT/IDENTITY_CAUSAL_SWEEP）は常に `None` に強制する。
+    `row_inputs_for_split()` と `provenance.Ledger.check_leakage()` の
+    canonical 再構築が共有する唯一の導出入口 — 二重実装で片方だけが
+    `nuisance_axis` を計算し忘れると、その入力差が `realize_split()` の
+    coverage 修復結果を変え `verify_split()` を無言で不一致にさせる
+    （campaign RUN10-CAL-20260905-410b25f2 の C4 `BLOCKED_LEAKAGE` 実障害の
+    根本原因。`README.md` 逸脱台帳 `UNDERSPEC-CAL-D105`）。"""
+    return (
+        single_axis_nuisance_tag_axis(row)
+        if row.family not in _GATE4_INAPPLICABLE_FAMILIES
+        else None
+    )
+
+
 def row_inputs_for_split(
     matrix_rows: Sequence[MatrixRow],
     stratum_factor_names: Sequence[str] = STRATUM_FACTOR_NAMES,
 ) -> list[RowInput]:
     """`provenance.Ledger.check_leakage` の `canonical_split_inputs` 構築と
     同一の規約（`truth_level`→`row.block`、`boundary_class`/`domain`→
-    `matrix_row.domain.value`）で `RowInput` を組み立てる。D2 の leakage 検査
-    が独立に再構築する canonical row と一致しなければならないため。"""
+    `matrix_row.domain.value`、`nuisance_axis`→`nuisance_axis_for_row()`）で
+    `RowInput` を組み立てる。D2 の leakage 検査が独立に再構築する canonical
+    row と一致しなければならないため。**この関数が RowInput 構築の唯一の
+    正本**（D105: `campaign/render_stage.py` に存在したローカル複製は削除
+    済み — leakage ゲート・C0 freeze とも本関数を直接呼ぶ）。"""
     out: list[RowInput] = []
     for mrow in matrix_rows:
         fr = mrow.row
@@ -759,11 +781,6 @@ def row_inputs_for_split(
                 stratum[name] = fr.generator_impl
             else:
                 stratum[name] = getattr(fr, name, None)
-        nuisance_axis = (
-            single_axis_nuisance_tag_axis(fr)
-            if fr.family not in _GATE4_INAPPLICABLE_FAMILIES
-            else None
-        )
         out.append(
             RowInput(
                 row_id=mrow.row_id,
@@ -772,7 +789,7 @@ def row_inputs_for_split(
                 truth_level=fr.block,
                 generator_impl=fr.generator_impl,
                 boundary_class=mrow.domain.value,
-                nuisance_axis=nuisance_axis,
+                nuisance_axis=nuisance_axis_for_row(fr),
             )
         )
     return out

@@ -445,6 +445,11 @@ duration / noise / context）を invariance 軸として一律宣言する一方
 - **§10.1 の意味論は不変**: 未達軸が 1 つでもあれば ABSOLUTE 不可（実測で pair が
   欠落した場合は従来どおり正直に fail）。本追補は「宣言と行列の不整合による構造的
   偽失敗」だけを除去する。
+- **D105 追補（2026-09-06）**: `RowInput` 構築（`nuisance_axis` を含む）は
+  `splitter.row_inputs_for_split()` が唯一の正本であり、他モジュールでの
+  ローカル複製を禁止する。leakage ゲート（`provenance.Ledger.check_leakage()`）
+  の canonical 突合は `nuisance_axis` を含む（`README.md` 逸脱台帳
+  `UNDERSPEC-CAL-D105`）。
 
 ### V3.6 追補 — control 出力欠落の分子算入（同 P1 採用、2026-09-05）
 

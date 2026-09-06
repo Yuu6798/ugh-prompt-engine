@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import threading
@@ -23,7 +24,12 @@ from voice_genesis.calibration.provenance import (
 )
 from voice_genesis.calibration.fixtures.controls import negative_control_row_ids
 from voice_genesis.calibration.fixtures.matrix import build_matrix
-from voice_genesis.calibration.splitter import RealizedSplitMap, RowInput, realize_split
+from voice_genesis.calibration.splitter import (
+    RealizedSplitMap,
+    RowInput,
+    nuisance_axis_for_row,
+    realize_split,
+)
 from voice_genesis.calibration.vocab import BlockedCode
 
 
@@ -32,6 +38,14 @@ def _canonical_split_material():
     from voice_genesis.calibration.vocab import Split
 
     matrix = build_matrix()
+    # D105: `nuisance_axis` must be populated the same way production's
+    # `splitter.row_inputs_for_split()` does (`nuisance_axis_for_row()`),
+    # even though this helper otherwise uses a simplified `stratum={}` /
+    # `stratum_factor_names=()` construction — `check_leakage()`'s
+    # canonical-row comparison now includes `nuisance_axis` regardless of
+    # `stratum_factor_names`, so leaving it at the dataclass default `None`
+    # here would make every one of this helper's downstream tests trip the
+    # new `SPLIT_VERIFICATION_ROW_MISMATCH` check on real CONFOUND rows.
     rows = tuple(
         RowInput(
             row_id=matrix_row.row_id,
@@ -40,6 +54,7 @@ def _canonical_split_material():
             truth_level=matrix_row.row.block,
             generator_impl=matrix_row.row.generator_impl,
             boundary_class=matrix_row.domain.value,
+            nuisance_axis=nuisance_axis_for_row(matrix_row.row),
         )
         for matrix_row in matrix
     )
@@ -1474,6 +1489,9 @@ def test_check_leakage_authenticates_nonempty_frozen_stratification() -> None:
     from voice_genesis.calibration.vocab import Split
 
     matrix = build_matrix()
+    # D105: see `_canonical_split_material()` — `nuisance_axis` must match
+    # `check_leakage()`'s canonical reconstruction (`nuisance_axis_for_row()`)
+    # or real CONFOUND rows trip `SPLIT_VERIFICATION_ROW_MISMATCH` below.
     rows = tuple(
         RowInput(
             row_id=matrix_row.row_id,
@@ -1482,6 +1500,7 @@ def test_check_leakage_authenticates_nonempty_frozen_stratification() -> None:
             truth_level=matrix_row.row.block,
             generator_impl=matrix_row.row.generator_impl,
             boundary_class=matrix_row.domain.value,
+            nuisance_axis=nuisance_axis_for_row(matrix_row.row),
         )
         for matrix_row in matrix
     )
@@ -1569,3 +1588,120 @@ def test_check_leakage_rejects_forged_value_for_frozen_stratum_factor() -> None:
     )
 
     assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
+
+
+# ---------------------------------------------------------------------------
+# D105 regression (`README.md` 逸脱台帳 `UNDERSPEC-CAL-D105`): campaign
+# `RUN10-CAL-20260905-410b25f2`'s C4 stage hit `BLOCKED_LEAKAGE
+# (control_excluded_count=0)` on its very first call, before any holdout
+# render had happened. Root cause: `campaign/render_stage.py` had its own
+# local `_row_inputs_for_split()` duplicate of `splitter.row_inputs_for_
+# split()` that never set `RowInput.nuisance_axis` (v1.1 §V3.5), while C0
+# freeze always built its `RealizedSplitMap` from the real
+# `splitter.row_inputs_for_split()` (nuisance-axis aware). `realize_split()`'s
+# coverage repair consults `nuisance_axis`, so the two row sets re-derive
+# different swaps — `verify_split()` silently returns `False` and
+# `check_leakage()` returns the generic `BLOCKED_LEAKAGE` with no indication
+# that a `RowInput`-construction mismatch, rather than actual leakage, was
+# the cause.
+#
+# `test_armed_freeze_through_full_campaign_cli_never_hits_blocked_leakage`
+# (`test_c0_freeze.py`) exercises this exact call path end to end yet never
+# caught the bug: its synthetic `tiny_matrix` is `F0_CONTROL`/`TRUTH_CORE`
+# rows only (`row.block == "TRUTH_CORE"`), and `single_axis_nuisance_tag_
+# axis()` returns `None` unconditionally for any row whose `block !=
+# "CONFOUND"` — so both the buggy and the correct `RowInput` construction
+# produced identical (`nuisance_axis=None`) rows for that fixture, and the
+# re-derivation matched either way. The regression needs a matrix slice that
+# actually contains CONFOUND rows with a single-axis `nuisance_tag` (e.g.
+# `F0_CONTROL`/`FORMANT_GT`, per `EXPECTED_NUISANCE_AXIS_COVERAGE_REQUIRED`
+# in `test_holdout_sweep_pinning.py`) for `nuisance_axis` to actually change
+# the realized split.
+# ---------------------------------------------------------------------------
+
+
+@lru_cache(maxsize=1)
+def _nuisance_axis_split_material():
+    """Full canonical-matrix `RowInput`s built via the single production
+    entrypoint (`splitter.row_inputs_for_split()`, nuisance-axis aware),
+    frozen with a fixed secret. Unlike `_canonical_split_material()` above
+    (which hand-builds `RowInput`s with `stratum={}` and leaves
+    `nuisance_axis` at its dataclass default of `None` for every row — fine
+    for the control/holdout-set semantics those tests check, but useless for
+    a `nuisance_axis` regression), this uses the real production row
+    construction so at least one row has a non-`None` `nuisance_axis`."""
+    from voice_genesis.calibration.splitter import STRATUM_FACTOR_NAMES, row_inputs_for_split
+
+    matrix = build_matrix()
+    rows = row_inputs_for_split(matrix, STRATUM_FACTOR_NAMES)
+    assert any(r.nuisance_axis is not None for r in rows), (
+        "canonical matrix must contain at least one nuisance-axis row for "
+        "this regression to be meaningful"
+    )
+    secret = hashlib.sha256(b"d105-nuisance-axis-regression").digest()
+    realized = realize_split(rows, secret, STRATUM_FACTOR_NAMES)
+    return rows, secret, realized
+
+
+def test_check_leakage_accepts_full_canonical_split_with_nuisance_axis_aware_rows(
+    tmp_path,
+) -> None:
+    """D105 regression (must pass post-fix): freezing via `splitter.
+    row_inputs_for_split()` — the single production entrypoint C0 freeze and
+    the C4 leakage gate (`render_stage._refuse_if_pre_unseal_holdout()`) both
+    use after the fix — and then calling `check_leakage()` with that same
+    nuisance-axis-aware row set for a matrix that genuinely has CONFOUND rows
+    must pass cleanly (`blocked is None`) before any holdout render has
+    happened, exactly like production's pre-unseal C4 gate call."""
+    from voice_genesis.calibration.vocab import Split
+
+    rows, secret, realized = _nuisance_axis_split_material()
+    holdout = [rid for rid, split in realized.assignment.items() if split == Split.HOLDOUT]
+    assert holdout
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    _append_split_frozen(ledger, realized, secret)
+
+    result = Ledger.check_leakage(
+        ledger.entries,
+        holdout_row_ids=holdout,
+        unseal_seq=None,
+        realized_split_map=realized,
+        split_verification_rows=rows,
+        split_secret=secret,
+    )
+    assert result.blocked is None, (result.blocked, result.reason)
+
+
+def test_check_leakage_rejects_nuisance_axis_blind_rows_with_distinct_reason(
+    tmp_path,
+) -> None:
+    """D105 regression (FAILS before the fix, per the commit's pre-fix run):
+    directly reproduces the `render_stage._row_inputs_for_split()` duplicate
+    bug. The frozen `realized_split_map` was produced from nuisance-axis-
+    aware rows (as C0 freeze always does), but the caller supplies rows with
+    `nuisance_axis` forced to `None` on every row — exactly what the deleted
+    `render_stage` duplicate always did. This must fail closed with a
+    `reason` that distinguishes a `RowInput`-construction mismatch from a
+    generic `BLOCKED_LEAKAGE` (`LeakageCheckResult.reason ==
+    "SPLIT_VERIFICATION_ROW_MISMATCH"`), not silently pass and not collapse
+    into the undifferentiated pre-D105 `BLOCKED_LEAKAGE`."""
+    from voice_genesis.calibration.vocab import Split
+
+    rows, secret, realized = _nuisance_axis_split_material()
+    holdout = [rid for rid, split in realized.assignment.items() if split == Split.HOLDOUT]
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    _append_split_frozen(ledger, realized, secret)
+
+    nuisance_blind_rows = [dataclasses.replace(r, nuisance_axis=None) for r in rows]
+    assert any(r.nuisance_axis is not None for r in rows)  # sanity: blinding is real
+
+    result = Ledger.check_leakage(
+        ledger.entries,
+        holdout_row_ids=holdout,
+        unseal_seq=None,
+        realized_split_map=realized,
+        split_verification_rows=nuisance_blind_rows,
+        split_secret=secret,
+    )
+    assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
+    assert result.reason == "SPLIT_VERIFICATION_ROW_MISMATCH", result.reason
