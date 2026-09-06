@@ -2348,18 +2348,28 @@ def test_armed_freeze_through_full_campaign_cli_never_hits_blocked_leakage(
 
     Rendering the full 456-row canonical matrix here would take well over
     an hour, so the frozen matrix is reduced to a tiny *real* 4-row
-    F0_CONTROL TRUTH_CORE slice. v1.2 WP2: this now needs exactly **one**
-    monkeypatch — every production call site (`c0_freeze.py`,
-    `c0_validate.py`'s two entries, `campaign/cli.py`, and
+    F0_CONTROL TRUTH_CORE slice. v1.2 WP2: every production call site
+    (`c0_freeze.py`, `c0_validate.py`'s two entries, `campaign/cli.py`, and
     `provenance.check_leakage`'s own local re-import) resolves the frozen
-    matrix through `fixtures.matrix.active_matrix()` at call time, so
-    patching that single module attribute reaches all of them. (Before WP2
-    the same effect needed 4 separate `build_matrix` bindings to be patched
-    in lockstep — the drift hazard that motivated the `active_matrix()`
-    single switch point.) Because every call site sees the same tiny
-    matrix, `check_leakage`'s canonical-row-coverage checks (§7) stay
-    internally self-consistent — the point under test (split_frozen wiring)
-    is exercised exactly as in production, only the row *count* is reduced.
+    matrix through `fixtures.matrix.active_matrix()` at call time, so a
+    **single** patch of that module attribute now reaches all of them
+    (before WP2 this needed 4 separate `build_matrix` bindings patched in
+    lockstep — the drift hazard the single switch point removes). Because
+    every call site sees the same tiny matrix, `check_leakage`'s
+    canonical-row-coverage checks (§7) stay internally self-consistent —
+    the point under test (split_frozen wiring) is exercised exactly as in
+    production, only the row *count* is reduced.
+
+    Note (§V2.2 縮退規則 fix, `ci_fail_994fb24.md`): the two *canonical
+    declaration* entries (`c0_freeze._canonical_build_matrix` — the source of
+    `frozen_design.fixture_spec` — and `c0_validate._canonical_build_matrix`
+    — the re-derivation it is compared against) must keep reading the real
+    456-row matrix here: a 4-row single-family slice would declare empty
+    `declared_sweeps`/`confound_axes` for the other 6 families and block on
+    `BLOCKED_C0_MANIFEST_INCOMPLETE` before the point under test is ever
+    reached. They are restored below, so only the row-level split/pin/
+    leakage path sees the tiny matrix — exactly the binding split those two
+    names exist for.
 
     Before that split existed, `armed_freeze()`'s holdout-sweep pin
     (`fixtures.matrix.pin_holdout_sweeps_by_family()`), applied to this
@@ -2396,6 +2406,10 @@ def test_armed_freeze_through_full_campaign_cli_never_hits_blocked_leakage(
     # `fixture_matrix.active_matrix()` through the module object, and
     # `provenance.check_leakage` re-imports the name locally at call time.
     monkeypatch.setattr(matrix_mod, "active_matrix", fake_active_matrix)
+    # ...except the two canonical *declaration* entries, which stay on the
+    # real 456-row matrix (docstring's `ci_fail_994fb24.md` note).
+    monkeypatch.setattr(c0_freeze, "_canonical_build_matrix", real_build_matrix)
+    monkeypatch.setattr(c0_validate, "_canonical_build_matrix", real_build_matrix)
 
     approval_dir = tmp_path / "approvals"
     secret_dir = tmp_path / "secrets"

@@ -11,6 +11,23 @@ campaigns/secrets/approvals に限る。リポジトリの
 ——`--rehearsal` 自身がそれらの配下を指す path を `BLOCKED_REHEARSAL_PATH`
 で拒否する（`c0_freeze.rehearsal_path_violations()`）。
 
+**既定で skip する理由（実測、2026-09-06）**: 設計時の目標は「十数分」だったが、
+縮小行列（58 行 / 実現 split は c1=250・c2=150・c3a=20・c3b=120・c4=40 instance）
+でも到達しない。実測（他エージェントの test 実行と同居した負荷下）:
+
+- C0 freeze -> c1 -> c2 -> c3a: **約 26 分**（render 245 + meter_call 約 5.4k）
+- c3b: 実測 **46 meter_call/min**、必要量は 20 instance x family 候補数
+  (M3_FORMANTS 43 / M2_APERIODICITY 24 / M2_SPECTRAL_TILT 13 / M5_TRANSITION 7 /
+  M4_RESONANCE 5 / M6_IDENTITY 2) x 約 3.3 call ≈ **6.2k** -> 約 2.2 時間
+- 合計 **約 3 時間**（c4/close 込みの概算）
+
+矛盾ではなく前提の更新であり、**行の削減だけでは「候補数 x instance」の積が
+律速のまま**という観測そのもの（fresh-process の subprocess 起動が支配的で、
+`--workers 2` でも桁は変わらない）。既定の `pytest` / CI（`slow` 込み）を
+数時間拘束しないよう、環境変数 `VG_CAL_REHEARSAL_E2E=1` を明示したときだけ
+実行する。所要時間そのものの設計判断（rehearsal に候補プールの縮小まで
+許すのか、CI からは外したまま手動 gate として使うのか）は Fable に委ねる。
+
 **subprocess で回す理由**: 本 WP が配線したのは CLI の引数解析から
 `set_rehearsal_mode()`・manifest への `rehearsal` 記録・path ガード・
 stage dispatch までの一続きであり、in-process 呼び出しではその入口
@@ -47,6 +64,9 @@ _NONCE = "rehearsal-e2e-nonce-000000"
 #: rehearsal の 1 stage あたりの上限（秒）。無限待ちを避けるためだけの安全弁で、
 #: 性能主張ではない（所要時間そのものは報告文に実測値として残す）。
 _STAGE_TIMEOUT_SECONDS = 3600
+
+#: 明示 opt-in の環境変数（モジュール docstring「既定で skip する理由」参照）。
+REHEARSAL_E2E_ENV_VAR = "VG_CAL_REHEARSAL_E2E"
 
 
 def _utc(dt: datetime) -> str:
@@ -132,6 +152,11 @@ def _ledger_payloads(campaign_dir: Path) -> list[dict[str, object]]:
 
 @pytest.mark.slow
 def test_rehearsal_campaign_runs_c0_through_close(tmp_path: Path) -> None:
+    if os.environ.get(REHEARSAL_E2E_ENV_VAR) != "1":
+        pytest.skip(
+            f"set {REHEARSAL_E2E_ENV_VAR}=1 to run the rehearsal E2E "
+            "(measured multi-hour runtime; see this module's docstring)"
+        )
     head_sha, dirty, error = c0_validate._inspect_checkout_identity()
     if error is not None or dirty is None:
         pytest.skip(f"cannot inspect checkout identity: {error}")
