@@ -287,14 +287,14 @@ def test_c3a_f0_selection_passes_with_candidate_that_correctly_non_detects_on_si
     from voice_genesis.calibration.candidates.registry import candidate_by_id
 
     only_b0 = (candidate_by_id("F0-B0-CURRENT"),)
-    orig_candidates_for_meter = cli.candidates_for_meter
+    orig_candidates_for_meter = cli.active_candidates_for_meter
 
     def _trimmed_candidates_for_meter(meter):
         if meter is MeterId.F0_CONTROL:
             return only_b0
         return orig_candidates_for_meter(meter)
 
-    monkeypatch.setattr(cli, "candidates_for_meter", _trimmed_candidates_for_meter)
+    monkeypatch.setattr(cli, "active_candidates_for_meter", _trimmed_candidates_for_meter)
 
     result = cli._run_c3a(campaign, subset, 1)
     assert result["result"] == "OK", result
@@ -406,8 +406,8 @@ def test_v11_c3a_noise_only_false_fire_stays_eligible_and_rate_is_recorded(
     only_b0 = (candidate_by_id("F0-B0-CURRENT"),)
     monkeypatch.setattr(
         cli,
-        "candidates_for_meter",
-        lambda meter, _orig=cli.candidates_for_meter: (
+        "active_candidates_for_meter",
+        lambda meter, _orig=cli.active_candidates_for_meter: (
             only_b0 if meter is MeterId.F0_CONTROL else _orig(meter)
         ),
     )
@@ -455,8 +455,8 @@ def test_v11_c3a_silence_false_fire_still_rejects(
     only_b0 = (candidate_by_id("F0-B0-CURRENT"),)
     monkeypatch.setattr(
         cli,
-        "candidates_for_meter",
-        lambda meter, _orig=cli.candidates_for_meter: (
+        "active_candidates_for_meter",
+        lambda meter, _orig=cli.active_candidates_for_meter: (
             only_b0 if meter is MeterId.F0_CONTROL else _orig(meter)
         ),
     )
@@ -3989,14 +3989,14 @@ def test_c4_holdout_render_precedes_f0_prepass_end_to_end(
     campaign = load_frozen_campaign(campaign_dir, secret_root)
 
     f0_only_b0 = (candidate_by_id("F0-B0-CURRENT"),)
-    orig_candidates_for_meter = cli.candidates_for_meter
+    orig_candidates_for_meter = cli.active_candidates_for_meter
 
     def _trimmed_candidates_for_meter(meter):
         if meter is MeterId.F0_CONTROL:
             return f0_only_b0
         return orig_candidates_for_meter(meter)
 
-    monkeypatch.setattr(cli, "candidates_for_meter", _trimmed_candidates_for_meter)
+    monkeypatch.setattr(cli, "active_candidates_for_meter", _trimmed_candidates_for_meter)
 
     independent_candidate = next(
         c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
@@ -6136,3 +6136,140 @@ def test_phase_order_violation_still_charges_counters_json_not_ledger(
     reloaded = load_frozen_campaign(campaign_dir, secret_root)
     new_entries = list(reloaded.ledger.entries)[entries_before:]
     assert new_entries == []
+
+
+# ---------------------------------------------------------------------------
+# v1.2 WP1 配線（WP2 で実施）: sanctioned abstention (SILENCE, F0_UNUSABLE)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_c3b_silence_row_missing_with_f0_unusable_is_sanctioned_abstention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.2 WP1 §1.4 の CLI 側配線テスト: SILENCE negative control 行が
+    `F0_UNUSABLE` で欠測した F0 依存候補は、C3b の
+    `negative_controls_incomplete` を **発火させない**（sanctioned
+    abstention）。配線が抜けていると（`control_class_by_negative_row_id` /
+    `missing_reason_by_negative_row_id` を渡さないと）同じ状況で `True` に
+    なる——その往復も同じ fixture 上で確認する。"""
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+    from voice_genesis.calibration.fixtures.controls import negative_control_row_ids
+    from voice_genesis.calibration.fixtures.matrix import build_matrix as _real_build_matrix
+
+    family_rows = [mr for mr in _real_build_matrix() if mr.row.family == "APERIODICITY_GT"]
+    silence_rows = [mr for mr in family_rows if mr.row.control_class == "SILENCE"]
+    assert silence_rows
+    truth_rows = [mr for mr in family_rows if mr.row.block == "TRUTH_CORE"][:2]
+    subset = truth_rows + silence_rows[:1]
+    silence_row_id = silence_rows[0].row_id
+
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    assert campaign.realized_split.assignment[silence_row_id].value == "SELECTION"
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    baseline_entry = campaign.ledger.append(
+        {"kind": "baseline_audit", "artifact_sha": "7" * 64, "payload": {}}
+    )
+    campaign.ledger.append(
+        {"kind": "baseline_audited", "baseline_audit_sha": baseline_entry.entry_sha}
+    )
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": "F0-B0-CURRENT",
+            "outcome": "SELECTED",
+        }
+    )
+
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.APERIODICITY_GT:
+            return (harmonic_residual,)
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+
+    result = cli._run_c3b(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    missing_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "measurement_missing"
+    ]
+    assert any(
+        m["reason"] == "F0_UNUSABLE"
+        and any(cell[0] == silence_row_id for cell in m["cells"])
+        for m in missing_events
+    ), missing_events
+
+    sf_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "selection_frozen"
+    ]
+    assert sf_events
+    fail_filters = sf_events[-1]["fail_filters_by_family"]["APERIODICITY_GT"]
+    assert fail_filters[harmonic_residual.candidate_id]["negative_controls_incomplete"] is False
+
+    # 往復: 配線を外す（判定材料を渡さない）と同じ状況で fail-closed に戻る。
+    neg_ids = negative_control_row_ids(subset)
+    assert silence_row_id in neg_ids
+    _criteria, unwired_report, _scope = cli._criteria_with_fail_filters(
+        harmonic_residual,
+        [],
+        {},
+        negative_control_ids=neg_ids,
+        positive_control_ids=frozenset(),
+        max_claim_scope=frozenset({harmonic_residual.construct}),
+    )
+    assert unwired_report["negative_controls_incomplete"] is True
+
+
+# ---------------------------------------------------------------------------
+# v1.2 WP2b — rehearsal 候補プールが c3a/c3b/c4 の候補列挙まで届く
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_enumeration_follows_rehearsal_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--rehearsal`（= `fixtures.matrix._REHEARSAL_MODE`）の下では、c3a の
+    F0 候補列挙も c3b/c4 の family 候補列挙も縮小プールになる。
+
+    実測 3 時間の律速は「候補数 x instance x fresh-process」の積であり、
+    行列だけ縮小しても候補が 99 のままでは疎通試験として成立しない
+    （WP2 報告 §6）。ここで両ステージの入口が同じフラグで切り替わることを
+    固定する。プロセス大域状態なので `monkeypatch.setattr` で必ず戻す。"""
+    from voice_genesis.calibration.candidates import registry as candidate_registry
+    from voice_genesis.calibration.fixtures import matrix as fixture_matrix
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily
+
+    pool_ids = {c.candidate_id for c in candidate_registry.rehearsal_candidate_pool()}
+
+    # 本番（既定）: registry 全件。
+    production_f0 = cli.active_candidates_for_meter(MeterId.F0_CONTROL)
+    production_formants = cli._candidates_for_family(FixtureFamily.FORMANT_GT)
+    assert production_f0 == candidates_for_meter(MeterId.F0_CONTROL)
+    assert len(production_formants) == len(candidates_for_meter(MeterId.M3_FORMANTS))
+    assert len(production_formants) > 2
+
+    monkeypatch.setattr(fixture_matrix, "_REHEARSAL_MODE", True)
+
+    rehearsal_f0 = cli.active_candidates_for_meter(MeterId.F0_CONTROL)
+    assert {c.candidate_id for c in rehearsal_f0} <= pool_ids
+    assert len(rehearsal_f0) < len(production_f0)
+    assert any("-B0-" in c.candidate_id for c in rehearsal_f0)
+
+    for family in FixtureFamily:
+        if family is FixtureFamily.F0_CONTROL:
+            continue
+        rehearsal_family = cli._candidates_for_family(family)
+        assert {c.candidate_id for c in rehearsal_family} <= pool_ids, family
+        assert len(rehearsal_family) <= 2, family

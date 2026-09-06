@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -19,6 +20,7 @@ import pytest
 
 from voice_genesis.calibration import approvals, c0_freeze, c0_validate
 from voice_genesis.calibration.candidates import registry as candidate_registry
+from voice_genesis.calibration.fixtures import matrix as fixture_matrix
 from voice_genesis.calibration.splitter import realize_split, verify_split
 
 _REPO_ROOT = c0_freeze._REPO_ROOT
@@ -49,6 +51,17 @@ def clean_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
         return "a" * 40, False, None
 
     monkeypatch.setattr(c0_validate, "_inspect_checkout_identity", fake_identity)
+
+
+@pytest.fixture()
+def rehearsal_mode() -> Iterator[None]:
+    """v1.2 WP2b: プロセス大域の rehearsal フラグを立てて必ず戻す
+    （`fixtures.matrix._REHEARSAL_MODE` は行列と候補プールの共有スイッチ）。"""
+    fixture_matrix.set_rehearsal_mode(True)
+    try:
+        yield None
+    finally:
+        fixture_matrix.set_rehearsal_mode(False)
 
 
 #: PR レビュー第 5 巡: gate1/gate2 は同一 authorization_nonce を要求する。
@@ -1098,9 +1111,20 @@ def test_armed_freeze_loads_approvals_exactly_once(tmp_path: Path, clean_checkou
     calls: list[approvals_mod.Gate] = []
     real_load_approval = approvals_mod.load_approval
 
-    def counting_load_approval(gate: approvals_mod.Gate, approval_dir_: Path, *, repo_root: Path | None = None):
+    def counting_load_approval(
+        gate: approvals_mod.Gate,
+        approval_dir_: Path,
+        *,
+        repo_root: Path | None = None,
+        # v1.2 WP2: `load_approval()` は rehearsal 文脈も受け取るようになった
+        # （Gate 1 の `max_claim_scope` sentinel 受理可否）。本 shim は
+        # 「何回読んだか」だけを数えるので、追加引数はそのまま素通しする。
+        rehearsal: bool = False,
+    ):
         calls.append(gate)
-        return real_load_approval(gate, approval_dir_, repo_root=repo_root)
+        return real_load_approval(
+            gate, approval_dir_, repo_root=repo_root, rehearsal=rehearsal
+        )
 
     import voice_genesis.calibration.approvals as approvals_module
 
@@ -2336,31 +2360,29 @@ def test_armed_freeze_through_full_campaign_cli_never_hits_blocked_leakage(
     blocks on leakage.
 
     Rendering the full 456-row canonical matrix here would take well over
-    an hour, so `build_matrix()` is monkeypatched at every call site that
-    the freeze/CLI/leakage-check path actually uses (`c0_freeze.py`,
-    `campaign/cli.py`, and `fixtures.matrix.build_matrix` itself — the
-    latter covers `provenance.check_leakage`'s own local re-import) to a
-    tiny *real* 4-row F0_CONTROL TRUTH_CORE slice. Because every one of
-    those call sites is patched to the same tiny matrix, `check_leakage`'s
+    an hour, so the frozen matrix is reduced to a tiny *real* 4-row
+    F0_CONTROL TRUTH_CORE slice. v1.2 WP2: every production call site
+    (`c0_freeze.py`, `c0_validate.py`'s two entries, `campaign/cli.py`, and
+    `provenance.check_leakage`'s own local re-import) resolves the frozen
+    matrix through `fixtures.matrix.active_matrix()` at call time, so a
+    **single** patch of that module attribute now reaches all of them
+    (before WP2 this needed 4 separate `build_matrix` bindings patched in
+    lockstep — the drift hazard the single switch point removes). Because
+    every call site sees the same tiny matrix, `check_leakage`'s
     canonical-row-coverage checks (§7) stay internally self-consistent —
     the point under test (split_frozen wiring) is exercised exactly as in
-    production, only the row *count* is reduced for tractability.
+    production, only the row *count* is reduced.
 
-    Note (§V2.2 縮退規則 fix, `ci_fail_994fb24.md`): `c0_validate.py` now
-    resolves `build_matrix` through two independent bindings, mirroring
-    `c0_freeze.py`'s own `build_matrix`/`_canonical_build_matrix` split:
-    its sweep-declaration/claim-relevant-field checks (which compare
-    against `frozen_design.fixture_spec`, itself always derived from the
-    real matrix by `c0_freeze._fixture_specs()`) read the fixed
-    `_canonical_build_matrix` alias, while only its two holdout-sweep-pin
-    checks (`_check_holdout_pin_feasibility`/`_check_holdout_sweeps_
-    declaration_match` — which compare against `holdout_sweeps`, itself
-    derived from whatever `build_matrix()` `armed_freeze()` actually pinned
-    against) read the swappable `build_matrix` name. So `c0_validate` is
-    added as a 4th monkeypatch site below, safely — it only affects the
-    two holdout-pin checks now, matching what `armed_freeze()` pinned
-    against in this test, without disturbing the other families' (still
-    real-matrix-based) frozen declarations.
+    Note (§V2.2 縮退規則 fix, `ci_fail_994fb24.md`): the two *canonical
+    declaration* entries (`c0_freeze._canonical_build_matrix` — the source of
+    `frozen_design.fixture_spec` — and `c0_validate._canonical_build_matrix`
+    — the re-derivation it is compared against) must keep reading the real
+    456-row matrix here: a 4-row single-family slice would declare empty
+    `declared_sweeps`/`confound_axes` for the other 6 families and block on
+    `BLOCKED_C0_MANIFEST_INCOMPLETE` before the point under test is ever
+    reached. They are restored below, so only the row-level split/pin/
+    leakage path sees the tiny matrix — exactly the binding split those two
+    names exist for.
 
     Before that split existed, `armed_freeze()`'s holdout-sweep pin
     (`fixtures.matrix.pin_holdout_sweeps_by_family()`), applied to this
@@ -2389,18 +2411,18 @@ def test_armed_freeze_through_full_campaign_cli_never_hits_blocked_leakage(
     )[:4]
     assert len(tiny_matrix) == 4
 
-    def fake_build_matrix() -> list[object]:
+    def fake_active_matrix() -> list[object]:
         return list(tiny_matrix)
 
-    # All 4 binding sites `build_matrix()` reaches from the freeze/CLI/
-    # validate/leakage-check path (see docstring above — `c0_validate`'s
-    # *swappable* `build_matrix` binding only feeds its two holdout-pin
-    # checks; its `_canonical_build_matrix` binding for the other checks
-    # stays real, unaffected by this patch).
-    monkeypatch.setattr(matrix_mod, "build_matrix", fake_build_matrix)
-    monkeypatch.setattr(c0_freeze, "build_matrix", fake_build_matrix)
-    monkeypatch.setattr(campaign_cli, "build_matrix", fake_build_matrix)
-    monkeypatch.setattr(c0_validate, "build_matrix", fake_build_matrix)
+    # v1.2 WP2: one switch point for every production call site (docstring
+    # above). `campaign_cli`/`c0_freeze`/`c0_validate` all call
+    # `fixture_matrix.active_matrix()` through the module object, and
+    # `provenance.check_leakage` re-imports the name locally at call time.
+    monkeypatch.setattr(matrix_mod, "active_matrix", fake_active_matrix)
+    # ...except the two canonical *declaration* entries, which stay on the
+    # real 456-row matrix (docstring's `ci_fail_994fb24.md` note).
+    monkeypatch.setattr(c0_freeze, "_canonical_build_matrix", real_build_matrix)
+    monkeypatch.setattr(c0_validate, "_canonical_build_matrix", real_build_matrix)
 
     approval_dir = tmp_path / "approvals"
     secret_dir = tmp_path / "secrets"
@@ -2542,3 +2564,308 @@ def test_armed_freeze_through_full_campaign_cli_never_hits_blocked_leakage(
     )
     assert result.blocked is None, result.blocked
     assert result.blocked != BlockedCode.BLOCKED_LEAKAGE
+
+
+# ---------------------------------------------------------------------------
+# v1.2 WP2 addendum（D108）— Gate 1/2 承認時刻の順序検査（往復テスト）
+# ---------------------------------------------------------------------------
+
+
+def test_armed_freeze_publishes_when_gate_approvals_precede_freeze(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """往復の「通る」側: `_write_gate1`/`_write_gate2` の既定
+    `approved_at_utc`（過去日時）は freeze event より前なので publish される。"""
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.PUBLISHED, result.detail
+
+
+def _rewrite_approval_timestamp(path: Path, approved_at_utc: str) -> None:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["approved_at_utc"] = approved_at_utc
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_armed_freeze_blocks_when_gate2_approval_postdates_freeze(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """AGENTS.md §3-5 の往復テストの「落ちる」側 = D108 の実欠陥。Gate 2 の
+    `approved_at_utc` が freeze event より後（事後追認）なら publish しない。
+
+    `approved_at_utc` は `manifest_core_sha` の束縛対象ではない（承認ファイル
+    自身の内容 hash は `approvals.gate2_sha256` にしか現れず core payload には
+    入らない）ので、Gate 2 を書いた後にタイムスタンプだけ差し替えても
+    `MANIFEST_CORE_SHA_MISMATCH` にはならない——まさにこの経路が D108 で
+    publish を通してしまった穴そのもの。
+    """
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+    future = datetime.now(timezone.utc) + timedelta(days=1)
+    _rewrite_approval_timestamp(
+        approval_dir / approvals.APPROVAL_FILENAMES[approvals.Gate.GATE2_C0_FREEZE],
+        future.isoformat().replace("+00:00", "Z"),
+    )
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.VALIDATION_BLOCKED, result.detail
+    assert "gate2_approval_future_dated" in (result.detail or "")
+    # 副作用ゼロ: campaign も secret も公開されていない。
+    assert result.campaign_dir is None and result.secret_dir is None
+    assert not campaigns_dir.exists() or not any(campaigns_dir.iterdir())
+
+
+def test_armed_freeze_blocks_when_gate1_approval_is_not_before_freeze(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """Gate 1 側も同じ検査に服する（「freeze より前」を厳密に要求する）。"""
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+    future = datetime.now(timezone.utc) + timedelta(days=1)
+    _rewrite_approval_timestamp(
+        approval_dir / approvals.APPROVAL_FILENAMES[approvals.Gate.GATE1_CAMPAIGN_EXECUTION],
+        future.isoformat().replace("+00:00", "Z"),
+    )
+    result = c0_freeze.armed_freeze(
+        _REPO_ROOT,
+        cli_armed=True,
+        env=env,
+        approval_dir=approval_dir,
+        secret_dir=secret_dir,
+        campaigns_dir=campaigns_dir,
+    )
+    assert result.outcome == c0_freeze.FreezeOutcome.VALIDATION_BLOCKED, result.detail
+    assert "gate1_approval_future_dated" in (result.detail or "")
+
+
+def test_gate_approval_ordering_helper_accepts_past_approvals() -> None:
+    """`_check_gate_approval_ordering()` 単体: freeze より前の承認は無違反。"""
+    freeze_time = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
+    record = approvals.ApprovalRecord(
+        gate=approvals.Gate.GATE2_C0_FREEZE,
+        approver="tester",
+        approved_at_utc="2026-09-06T11:59:59Z",
+        design_doc_sha256="a" * 64,
+        memo_sha256="b" * 64,
+    )
+    loaded = approvals.ApprovalLoadResult(
+        gate=approvals.Gate.GATE2_C0_FREEZE,
+        approved=True,
+        record=record,
+        content_sha256="c" * 64,
+        reasons=(),
+    )
+    assert c0_freeze._check_gate_approval_ordering(
+        {approvals.Gate.GATE2_C0_FREEZE: loaded}, freeze_time
+    ) == []
+
+
+# ---------------------------------------------------------------------------
+# v1.2 WP2 §B — --rehearsal（manifest key / campaign_id / path ガード）
+# ---------------------------------------------------------------------------
+
+
+def _declared_candidate_ids(manifest: dict) -> set[str]:
+    """manifest が凍結した候補空間の candidate_id 全集合
+    （`c0_validate._declared_candidate_ids()` と同じ導出をテスト側で独立に行う）。"""
+    ids: set[str] = set()
+    for entry in manifest["frozen_design"]["meter_specs"].values():
+        ids.update(entry["parameter_grid"].keys())
+    return ids
+
+
+def test_production_manifest_records_rehearsal_false(tmp_path: Path) -> None:
+    report = c0_freeze.dry_run(_REPO_ROOT, tmp_path, os.environ)
+    assert report.manifest["frozen_design"]["rehearsal"] is False
+    assert report.campaign_id.startswith("RUN10-CAL-")
+    # v1.2 WP2b: 本番の候補空間は registry 全件（縮小プールでは freeze できない）。
+    assert _declared_candidate_ids(report.manifest) == {
+        c.candidate_id for c in candidate_registry.ALL_CANDIDATES
+    }
+
+
+def test_rehearsal_manifest_records_rehearsal_true_and_prefixed_campaign_id(
+    tmp_path: Path, rehearsal_mode: None
+) -> None:
+    report = c0_freeze.dry_run(_REPO_ROOT, tmp_path, os.environ, rehearsal=True)
+    assert report.manifest["frozen_design"]["rehearsal"] is True
+    assert report.campaign_id.startswith(c0_freeze.REHEARSAL_CAMPAIGN_ID_PREFIX + "RUN10-CAL-")
+    # v1.2 WP2b: rehearsal の候補空間は縮小プールそのもの（family あたり最大 2 件）。
+    assert _declared_candidate_ids(report.manifest) == {
+        c.candidate_id for c in candidate_registry.rehearsal_candidate_pool()
+    }
+    # rehearsal フラグは core payload の一部なので manifest_core_sha が変わる
+    # （rehearsal 承認を本番 freeze へ流用できない）。
+    fixture_matrix.set_rehearsal_mode(False)
+    production = c0_freeze.dry_run(_REPO_ROOT, tmp_path, os.environ)
+    assert report.manifest_core_sha != production.manifest_core_sha
+
+
+def test_build_manifest_refuses_rehearsal_flag_without_process_mode(tmp_path: Path) -> None:
+    """v1.2 WP2b: `rehearsal=` 引数とプロセス大域フラグの不一致は fail-fast
+    （片方だけ立つと「rehearsal を名乗る本番行列/本番候補空間」という内部
+    矛盾した manifest が黙って作られる）。"""
+    with pytest.raises(ValueError, match="contradicts the process-wide rehearsal mode"):
+        c0_freeze.build_manifest(
+            _REPO_ROOT, approvals={}, campaign_date_utc="2026-09-06", rehearsal=True
+        )
+
+
+def test_rehearsal_manifest_candidate_space_passes_validation_production_pool_does_not(
+    tmp_path: Path, rehearsal_mode: None
+) -> None:
+    """v1.2 WP2b: `frozen_design.rehearsal` と候補空間の組は両方向に固定される
+    ——rehearsal manifest に registry 全件を差し戻すと violation になり
+    （= 「rehearsal を名乗る本番候補空間」を通さない）、本番 manifest に縮小
+    プールを差し込んでも violation になる（= 縮小プールで測った証拠を claim
+    経路へ持ち込ませない）。"""
+    report = c0_freeze.dry_run(_REPO_ROOT, tmp_path, os.environ, rehearsal=True)
+    rehearsal_manifest = report.manifest
+    assert c0_validate._check_candidate_space_pool(rehearsal_manifest) == []
+
+    fixture_matrix.set_rehearsal_mode(False)
+    production_manifest = c0_freeze.dry_run(_REPO_ROOT, tmp_path, os.environ).manifest
+    assert c0_validate._check_candidate_space_pool(production_manifest) == []
+
+    # 交叉させる: 本番の meter_specs を rehearsal manifest に移植 -> violation。
+    swapped_rehearsal = json.loads(json.dumps(rehearsal_manifest))
+    swapped_rehearsal["frozen_design"]["meter_specs"] = production_manifest["frozen_design"][
+        "meter_specs"
+    ]
+    violations = c0_validate._check_candidate_space_pool(swapped_rehearsal)
+    assert violations and all("outside" in v for v in violations)
+
+    # rehearsal の meter_specs を本番 manifest に移植 -> violation（欠落側）。
+    swapped_production = json.loads(json.dumps(production_manifest))
+    swapped_production["frozen_design"]["meter_specs"] = rehearsal_manifest["frozen_design"][
+        "meter_specs"
+    ]
+    violations = c0_validate._check_candidate_space_pool(swapped_production)
+    assert violations and all("missing candidate_id" in v for v in violations)
+    assert any("registry.ALL_CANDIDATES" in v for v in violations)
+
+
+# ---------------------------------------------------------------------------
+# #349 第 3 巡 ② P2 (c0_validate.py:223): standalone `python -m
+# voice_genesis.calibration.c0_validate` が rehearsal manifest を検証すると
+# 偽 BLOCKED_C0_MANIFEST_INCOMPLETE になっていた経路の回帰テスト。
+# ---------------------------------------------------------------------------
+
+
+def test_standalone_validate_of_rehearsal_manifest_does_not_false_block(
+    tmp_path: Path, rehearsal_mode: None
+) -> None:
+    """standalone CLI（`c0_validate.main()`）は `--rehearsal` の配線
+    （`set_rehearsal_mode()`）を一切経由しないため、大域フラグは常に `False`
+    のまま。修正前は `_check_declared_sweep_declaration_match()`/
+    `_check_claim_relevant_fields_match()`/`_check_invariance_axes_match()`/
+    holdout pin 系検査が縮小行列/縮小候補プールに対する manifest の宣言を
+    本番 456 セル/99 候補と比較してしまい、偽の `BLOCKED_C0_MANIFEST_
+    INCOMPLETE` を発行していた。`validate_c0_manifest()` が manifest 自身の
+    `frozen_design.rehearsal` から検証中だけモードを導出するようになった今、
+    on-disk canonical dir の外に置かれた rehearsal manifest は Gate 1 未承認
+    由来の欠落以外の violation を一切出さないことを固定する。"""
+    report = c0_freeze.dry_run(_REPO_ROOT, tmp_path, os.environ, rehearsal=True)
+    manifest = report.manifest
+
+    # standalone CLI と同じ状態を再現する: manifest 生成後、検証呼び出し前に
+    # 大域フラグを production (False) へ落とす（`c0_validate.main()` は
+    # `set_rehearsal_mode()` を一切呼ばないため、これが実際の初期状態）。
+    fixture_matrix.set_rehearsal_mode(False)
+
+    manifest_path = tmp_path / "elsewhere" / "c0_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = c0_validate.validate_c0_manifest(manifest, manifest_path=manifest_path)
+
+    def _is_allowed(reason: str) -> bool:
+        # Gate 1 未承認由来（cost_caps/stop_rules/e_use_table）と、開発中の
+        # 実 checkout が dirty であること由来の理由だけは許容する
+        # （`test_dry_run_blocking_reasons_are_only_gate1_dependent_or_dirty_tree`
+        # と同じロバスト化——本 fix の対象である行列/候補プールの
+        # ミスマッチ由来の violation とは無関係）。
+        if reason.startswith(_GATE1_DEPENDENT_REASON_PREFIXES):
+            return True
+        if "dirty_tree" in reason or "dirty-tree" in reason or "checkout_identity" in reason:
+            return True
+        return False
+
+    disallowed = [r for r in result.missing_required_keys if not _is_allowed(r)]
+    assert disallowed == [], disallowed
+    assert result.sweep_declaration_violations == ()
+    assert result.sweep_declaration_mismatch_violations == ()
+    assert result.claim_relevant_field_violations == ()
+    assert result.invariance_axis_violations == ()
+    assert result.holdout_pin_feasibility_violations == ()
+    assert result.holdout_pin_declaration_violations == ()
+    assert result.holdout_pin_membership_violations == ()
+    # 検証後、大域フラグは呼び出し直前の値（`False`、standalone の実態）へ
+    # 戻る——次のテストで「常に False へ倒すだけの実装ではない」ことを確認する。
+    assert fixture_matrix.rehearsal_mode() is False
+
+
+def test_validate_c0_manifest_restores_previous_ambient_rehearsal_mode(
+    tmp_path: Path,
+) -> None:
+    """検証後に大域フラグが「常に production (False) へ戻す」のではなく
+    「呼び出し直前の値」へ復帰することを確認する（try/finally の save-restore
+    実装であって、決め打ちの後始末ではないことの回帰防止）。"""
+    production_manifest = c0_freeze.dry_run(_REPO_ROOT, tmp_path, os.environ).manifest
+    assert fixture_matrix.rehearsal_mode() is False
+    fixture_matrix.set_rehearsal_mode(True)
+    try:
+        c0_validate.validate_c0_manifest(production_manifest)
+        assert fixture_matrix.rehearsal_mode() is True
+    finally:
+        fixture_matrix.set_rehearsal_mode(False)
+
+
+def test_rehearsal_path_violations_require_explicit_dirs_outside_canonical(
+    tmp_path: Path,
+) -> None:
+    assert c0_freeze.rehearsal_path_violations(
+        {"--campaigns-dir": None}, repo_root=_REPO_ROOT
+    ) == [
+        "--campaigns-dir must be given explicitly when --rehearsal is used"
+    ]
+    inside = c0_freeze.default_campaigns_dir(_REPO_ROOT) / "REHEARSAL-X"
+    violations = c0_freeze.rehearsal_path_violations(
+        {"--campaigns-dir": inside}, repo_root=_REPO_ROOT
+    )
+    assert violations and "canonical campaign registry" in violations[0]
+    assert (
+        c0_freeze.rehearsal_path_violations(
+            {"--campaigns-dir": tmp_path / "campaigns"}, repo_root=_REPO_ROOT
+        )
+        == []
+    )
+
+
+def test_rehearsal_cli_refuses_canonical_paths(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    exit_code = c0_freeze.main(
+        [
+            "--rehearsal",
+            "--campaigns-dir",
+            str(c0_freeze.default_campaigns_dir(_REPO_ROOT)),
+            "--secret-dir",
+            str(tmp_path / "secrets"),
+            "--approval-dir",
+            str(tmp_path / "approvals"),
+        ]
+    )
+    assert exit_code == 1
+    assert c0_freeze.BLOCKED_REHEARSAL_PATH in capsys.readouterr().out

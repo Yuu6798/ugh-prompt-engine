@@ -146,6 +146,21 @@ dry-run（`plan`、または `--armed` を渡さない全サブコマンド）�
 
 ## 運用
 
+### C-1 診断（探索ステージ、v1.2 §W2(a)）
+
+armed campaign 投入前に freeze/封印/ledger なしで正例発火・負例不発火を安く
+確認する（claim 不可）:
+
+    python -m voice_genesis.calibration.campaign.diagnose --family <FAMILY> [--f0-candidate <id>]
+
+### rehearsal 経路（縮小行列での疎通試験、v1.2 §W2(c)）
+
+`--rehearsal` を `c0_freeze`/`campaign` の両 CLI に付けると 456→58 行の縮小
+行列へ切替わり claim を生まない疎通試験になる（`debt_discharged` は常に
+`false`、canonical `campaigns/`/`~/.vg_cal/` 配下への書込みは拒否される）:
+
+    python -m voice_genesis.calibration.c0_freeze --rehearsal --armed ...
+
 ### 破棄 campaign ledger の圧縮保全（v1.1 §V4）
 
 破棄（abort）裁定済み campaign の `ledger.jsonl` は
@@ -312,6 +327,7 @@ gzip 保全する:
 | `UNDERSPEC-CAL-D104` | `c0_validate.py`, `tools/archive_aborted_ledger.py`, 対応テスト群 | R26 採用（2026-09-05、PR #346 follow-up 69e5ab7）: `--allow-legacy-v1-0` の legacy opt-in 判定で gz/sidecar/chain 検証と freeze identity 照合を単一読取の同一バイト列から導出（R16 と同じ単一読取原則）。読取回数 1 回を固定するテストを追加 |
 | `UNDERSPEC-CAL-D105` | `campaign/render_stage.py`, `splitter.py`, `provenance.py`, 対応テスト群 | 2026-09-06 C4 入場不能欠陥（render_stage の RowInput 複製が §V3.5 の nuisance_axis に未追随 → verify_split 不一致 → BLOCKED_LEAKAGE）。campaign RUN10-CAL-20260905-410b25f2 は UNSEALED で abort（render_stage.py は schema_paths に pin されているため修正後の継続は BLOCKED_CANONICAL_MUTATION_REQUIRED）。修正 = 複製排除 + check_leakage の nuisance_axis 突合 + 回帰テスト。 |
 | `UNDERSPEC-CAL-D106` | (docs only — campaign 410b25f2 観測記録。関連コード = D105) | 2026-09-06 campaign RUN10-CAL-20260905-410b25f2（設計 v1.1、114+24+26+12 slice）の c3b 観測: F0 選定成功（`F0-PYIN-FRAME2048-HOP512`、§V1 分割どおり NOISE_ONLY は rate、B0 は negative 発火で不適格）、選定成立は APERIODICITY_GT のみ（`M2A-B0-AUTOCORR-PERIODICITY`、DIRECTIONAL）、FORMANT 43/43 negative false-fire・RESONANCE 5/5 positive non-fire・TILT clean 候補 ceiling NONE・TRANSITION 7/7 は前回 862dec28 と同一で対照設計/候補由来（v1.1 退行なし）。`negative_controls_incomplete` は SILENCE 対照が F0_UNUSABLE で F0 依存候補の record が 0 になり無条件発火する一方 `coverage_incomplete` は同行を設計上の除外とする非整合 = 実装バグ疑い（selection_stage.py:510-514、v1.2 設計判断）。C4 は BLOCKED_LEAKAGE（D105）で abort、ledger は gz archive。 |
+| `UNDERSPEC-CAL-D107` | `fixtures/controls.py`, `candidates/registry.py`, `campaign/selection_stage.py`, `campaign/holdout_stage.py`, `campaign/diagnose.py`（新設）, `approvals.py`, `DESIGN_VG_METER_CAL_DEBT_v1.2.md`, 対応テスト群 | v1.2 判定（D106 の対照意味論疑義を裁定）: fire 判定を `fixtures.controls.detected()` へ一本化し `SANCTIONED_ABSTENTIONS={(SILENCE, F0_UNUSABLE)}` を閉語彙で採用（`negative_controls_incomplete`/`coverage_incomplete` の非整合を解消）。C-1 診断（`campaign.diagnose`）で FORMANT_GT/TILT_GT の fail-closed は対照設計/候補由来と確認（帰属確認のみ・未修正）、統治文書 pin を v1.2→v1.1→v1.0 の 2 段連鎖へ拡張。debt_discharged は本 revision でも false のまま。ルール 7（順序固定・生成測定分離）追加。 |
 | `UNDERSPEC-CAL-D108` | (docs only — campaign a4ed65c1 観測記録) | 2026-09-06 campaign RUN10-CAL-20260906-a4ed65c1 を c1 部分実行（8 slice）で abort・gz archive。理由 (a) Gate 2 承認時刻 06:28:30Z が freeze event 06:28:16Z より後 = 承認が保護対象の後に記録（Codex #348 第 2 巡 P1 採用、承認 JSON の時刻を実測せず記入した運用ミス）。`c0_freeze` に「Gate 2 `approved_at_utc` < freeze 時刻」の fail-closed 検査が無いことも欠陥として v1.2 WP に登録。(b) v1.2 設計先行で pin 済みコードが変わるため継続不可。運用規則: 承認 JSON の `approved_at_utc` は書き込み直前に `date -u` で実測した値のみ。 |
 
 **holdout coverage-classification family（`[UNDERSPEC-CAL-D66]`/`[UNDERSPEC-CAL-D69]`/`[UNDERSPEC-CAL-D72]`/`[UNDERSPEC-CAL-D73]`/`[UNDERSPEC-CAL-D74]`/`[UNDERSPEC-CAL-D76]`/`[UNDERSPEC-CAL-D77]`）終端宣言**（2026-09-02、D77 追記で再終端。**D75 は本 family の一部として数えない**——D75 は matrix/sweep 定義そのものの誤りで、D76 (1)/(2)/(3) により撤回・訂正済み。D76 (4) の instance-usability は本 family と同じ「C4 coverage-completeness」領域の是正だが、collapse していた対象は record 集計であり分岐ロジックではないため、本家系の是正段数には含めず別枠の Codex round 7 #1 指摘として扱う）:

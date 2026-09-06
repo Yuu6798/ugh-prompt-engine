@@ -21,7 +21,7 @@ harness/ 自体は `voice_genesis/calibration/` の外にあるため (1) には
 
 from __future__ import annotations
 
-from voice_genesis.calibration import c0_validate
+from voice_genesis.calibration import approvals, c0_validate
 
 
 def test_committed_inventory_matches_live_tree_scan() -> None:
@@ -46,6 +46,21 @@ def test_committed_inventory_matches_live_tree_scan() -> None:
         f"{missing_from_committed}, stale entries no longer on disk: "
         f"{extra_in_committed})"
     )
+
+
+def test_governance_documents_are_inventoried() -> None:
+    """v1.2 の pin は 2 段連鎖（v1.2 統治正本 -> 基底 v1.1 -> 基底の基底 v1.0）
+    であり、`.md` は `rglob("*.py")` に載らないため union の取りこぼしが起きる
+    ——3 本すべてが scan 結果とコミット済み inventory の双方に含まれること。"""
+    scanned = c0_validate.scan_calibration_tree_inventory()
+    committed = c0_validate.calibration_path_inventory()
+    for doc in (
+        approvals.DESIGN_DOC_RELATIVE_PATH,
+        approvals.BASE_DESIGN_DOC_RELATIVE_PATH,
+        approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH,
+    ):
+        assert doc in scanned, doc
+        assert doc in committed, doc
 
 
 def test_b0_wrapper_harness_imports_are_inventoried() -> None:

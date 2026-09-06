@@ -36,7 +36,7 @@ import shutil
 import subprocess
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -45,6 +45,7 @@ from voice_genesis.calibration import c0_validate, e_use_table, streams, vocab
 from voice_genesis.calibration.approvals import (
     DESIGN_DOC_RELATIVE_PATH,
     GATE_SHORT_NAME,
+    REHEARSAL_CLAIM_SCOPE_SENTINEL,
     ArmingDecision,
     ApprovalLoadResult,
     Gate,
@@ -57,6 +58,7 @@ from voice_genesis.calibration.candidates.registry import Candidate
 from voice_genesis.calibration.canonical import canonical_json
 from voice_genesis.calibration.canonical import manifest_sha as _full_manifest_sha
 from voice_genesis.calibration.fixtures import axes
+from voice_genesis.calibration.fixtures import matrix as fixture_matrix
 from voice_genesis.calibration.fixtures import uncertainty as fixture_uncertainty
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
 from voice_genesis.calibration.fixtures.controls import ControlClass
@@ -64,12 +66,10 @@ from voice_genesis.calibration.fixtures.matrix import (
     HoldoutPinDegradationExhausted,
     HoldoutPinInfeasible,
     _negative_applicable,
-    build_matrix,
     claim_relevant_fields_by_family,
     declared_sweeps_by_family,
     invariance_axes_by_family,
 )
-from voice_genesis.calibration.fixtures.matrix import build_matrix as _canonical_build_matrix
 from voice_genesis.calibration.provenance import Ledger
 from voice_genesis.calibration.splitter import (
     STRATUM_FACTOR_NAMES,
@@ -84,6 +84,16 @@ from voice_genesis.calibration.vocab import Split
 
 #: `c0_freeze.py` から 2 階層上が repo root（`voice_genesis/calibration/c0_freeze.py`）。
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _canonical_build_matrix() -> list[fixture_matrix.MatrixRow]:
+    """inventory pin/宣言導出用の「行レベル差し替えから独立させた」入口
+    （`_fixture_specs()` の docstring 参照）。v1.2 WP2 以降は実体としては
+    `fixtures.matrix.active_matrix()` そのもの——rehearsal 時は宣言側も
+    縮小行列から導出しないと `c0_validate` の再導出照合が構造的に不一致に
+    なるため、両入口とも同じ `active_matrix()` を通す（名前の分離は「テストが
+    片方だけを monkeypatch できる」既存の自由度のためだけに残す）。"""
+    return fixture_matrix.active_matrix()
 
 #: `VG_CAL_SECRET_DIR` の既定値（checkout 外。IMPLEMENTATION_MAP §6.2）。
 DEFAULT_SECRET_DIR = Path.home() / ".vg_cal" / "secrets"
@@ -284,10 +294,20 @@ def _meter_spec_for(candidates: Sequence[Candidate]) -> dict[str, object]:
 
 
 def _meter_specs() -> dict[str, object]:
+    """凍結される候補空間（`frozen_design.meter_specs`）。
+
+    v1.2 WP2b: 候補列挙は `registry.active_candidates_for_meter()` 経由
+    ——`--rehearsal` の下では縮小プール（family あたり最大 2 件）が凍結され、
+    本番では常に registry 全件。両方向の一致は
+    `c0_validate._check_candidate_space_pool()` が固定する
+    （本番 manifest が縮小プールで凍結されていれば violation）。
+    `independence_ledger` は候補空間ではなく registry 全体の tier 宣言なので
+    rehearsal でも全件のまま（`_check_independence_ledger()` が全件一致を要求）。
+    """
     return {
-        meter.value: _meter_spec_for(registry.candidates_for_meter(meter))
+        meter.value: _meter_spec_for(registry.active_candidates_for_meter(meter))
         for meter in vocab.MeterId
-        if registry.candidates_for_meter(meter)
+        if registry.active_candidates_for_meter(meter)
     }
 
 
@@ -506,6 +526,7 @@ def build_manifest(
     *,
     approvals: Mapping[Gate, ApprovalLoadResult],
     campaign_date_utc: str,
+    rehearsal: bool = False,
 ) -> dict[str, object]:
     """C0 manifest（"core" — `approvals`/`commitments` 節を含まない）を
     コードから生成する。secret は一切受け取らない・生成しない。
@@ -522,7 +543,23 @@ def build_manifest(
     （`_check_max_claim_scope()`、`dry_run()`/`armed_freeze()` が呼ぶ）が
     別途行う — `build_manifest()` 自体は Gate 1 record の値をそのまま転記
     するのみで検証しない（`cost_caps`/`e_use_table` と同じ責務分離）。
+
+    v1.2 WP2b: `rehearsal` 引数はプロセス大域の rehearsal フラグ
+    （`fixtures.matrix.rehearsal_mode()`）と **一致していなければならない**。
+    manifest に記録する `frozen_design.rehearsal` と、実際に凍結される
+    fixture matrix（`active_matrix()`）・候補空間（`active_candidates()`）は
+    同じフラグから導かれるため、片方だけ立っていると「rehearsal を名乗る
+    本番行列」のような内部矛盾した artifact が黙って作られてしまう。
+    ここで `ValueError` として fail-fast させる。
     """
+    if bool(rehearsal) is not fixture_matrix.rehearsal_mode():
+        raise ValueError(
+            f"build_manifest(rehearsal={bool(rehearsal)}) contradicts the process-wide "
+            f"rehearsal mode (fixtures.matrix.rehearsal_mode()="
+            f"{fixture_matrix.rehearsal_mode()}): the manifest's frozen_design.rehearsal, "
+            "the frozen fixture matrix and the frozen candidate space must all come from "
+            "the same switch (call fixtures.matrix.set_rehearsal_mode() first)"
+        )
     root = Path(repo_root)
     head_sha, dirty, _git_error = c0_validate._inspect_checkout_identity(root)
 
@@ -562,6 +599,12 @@ def build_manifest(
             "cost_caps": cost_caps_section,
             "stop_rules": stop_rules_section,
             "max_claim_scope": max_claim_scope_section,
+            #: v1.2 WP2: rehearsal 経路（`--rehearsal`）かどうかを **常に**
+            #: 記録する（本番は `False` を明示する。欠落は `c0_validate` の
+            #: REQUIRED_BLOCKING violation）。core payload の一部なので
+            #: Gate 2 が署名する `manifest_core_sha` に含まれ、rehearsal
+            #: 承認を本番 freeze へ流用することはできない。
+            "rehearsal": bool(rehearsal),
         },
         "independence_ledger": {
             c.candidate_id: c.independence_tier.value for c in registry.ALL_CANDIDATES
@@ -638,8 +681,26 @@ def manifest_core_sha(manifest: Mapping[str, object]) -> str:
     return _full_manifest_sha(core_payload(manifest))
 
 
+#: v1.2 WP2: rehearsal campaign id の接頭辞。本番の `RUN10-CAL-...` と字句で
+#: 一目で区別でき、`campaigns/` 一覧・ledger・報告文のどこでも rehearsal 由来の
+#: 成果物を claim へ取り違えないための機械的な標識。
+REHEARSAL_CAMPAIGN_ID_PREFIX = "REHEARSAL-"
+
+
+def manifest_declares_rehearsal(manifest: Mapping[str, object]) -> bool:
+    """`frozen_design.rehearsal` が明示的に `True` か（欠落・非 bool は False。
+    欠落そのものは `c0_validate` の REQUIRED_BLOCKING violation で別途 BLOCK
+    される——本関数は「rehearsal と宣言されているか」だけを答える）。"""
+    frozen_design = manifest.get("frozen_design")
+    if not isinstance(frozen_design, Mapping):
+        return False
+    return frozen_design.get("rehearsal") is True
+
+
 def campaign_id_for(manifest: Mapping[str, object]) -> str:
-    """`RUN10-CAL-<YYYYMMDD>-<manifest_core_sha[:8]>`（IMPLEMENTATION_MAP §6.2）。"""
+    """`RUN10-CAL-<YYYYMMDD>-<manifest_core_sha[:8]>`（IMPLEMENTATION_MAP §6.2）。
+    `frozen_design.rehearsal is True` の manifest では
+    `REHEARSAL-RUN10-CAL-<YYYYMMDD>-<sha8>`（v1.2 WP2 §B(iii)）。"""
     meta = manifest.get("campaign_meta")
     if not isinstance(meta, Mapping) or not isinstance(meta.get("campaign_date_utc"), str):
         raise ValueError("campaign_id_for: manifest.campaign_meta.campaign_date_utc missing")
@@ -648,7 +709,8 @@ def campaign_id_for(manifest: Mapping[str, object]) -> str:
     if len(yyyymmdd) != 8 or not yyyymmdd.isdigit():
         raise ValueError(f"campaign_id_for: campaign_date_utc must be YYYY-MM-DD, got {date_str!r}")
     sha = manifest_core_sha(manifest)
-    return f"RUN10-CAL-{yyyymmdd}-{sha[:8]}"
+    prefix = REHEARSAL_CAMPAIGN_ID_PREFIX if manifest_declares_rehearsal(manifest) else ""
+    return f"{prefix}RUN10-CAL-{yyyymmdd}-{sha[:8]}"
 
 
 def _attach_freeze_extras(
@@ -802,7 +864,7 @@ def _merge_e_use_table_violations(
     )
 
 
-def _check_max_claim_scope(scope: object) -> list[str]:
+def _check_max_claim_scope(scope: object, *, rehearsal: bool = False) -> list[str]:
     """Gate 1 `max_claim_scope`（設計正本 §18: このキャンペーンで claim して
     よい construct の上限範囲）の凍結時検証（第 11 巡採用）。`build_manifest()`
     は Gate 1 record の値をそのまま `frozen_design.max_claim_scope` へ転記
@@ -824,6 +886,11 @@ def _check_max_claim_scope(scope: object) -> list[str]:
       `construct` にも一致しない id を含むなら、その id ごとに個別の
       violation を BLOCK（typo や廃止済み construct が承認スコープへ
       紛れ込むのを防ぐ）。
+    - `rehearsal=True`（PR #349 第 1 巡採用）: registry 突合の代わりに、
+      `[REHEARSAL_CLAIM_SCOPE_SENTINEL]` との完全一致のみを受理する。
+      通常 construct-id を含む形や sentinel との混在は、rehearsal が
+      実質的な claim を伴って武装される抜け道になるため単一 violation で
+      即時 BLOCK する。
 
     違反は `e_use_table` と同じ prefix 慣例で `"max_claim_scope: <理由>"`
     形式で返す（`_merge_e_use_table_violations()` で
@@ -837,6 +904,23 @@ def _check_max_claim_scope(scope: object) -> list[str]:
         return [f"max_claim_scope: must be a list, got {type(scope).__name__}"]
     if len(scope) == 0:
         return ["max_claim_scope: must be non-empty (Gate 1 approval names no construct)"]
+    #: PR #349 第 1 巡採用: rehearsal は claim を生まない疎通試験（§W2 不変
+    #: 条件）なので、Gate 1 の `max_claim_scope` は sentinel 単独
+    #: `["REHEARSAL"]` の一致でのみ受理する。`approvals.load_approval()` が
+    #: 既にこの形を loader 段階で強制しているが、manifest から読み戻した
+    #: list を検査する経路（`ABSENT` センチネル以外の呼び出し全般）でも
+    #: 同じ不変条件を独立に再検証する（producer 側の縦深防御。単一
+    #: sentinel 以外の形はここで registry 未知 id 判定に流さず、専用の
+    #: violation として即時 BLOCK する）。
+    if rehearsal:
+        normalized = [str(c) for c in scope]
+        if normalized != [REHEARSAL_CLAIM_SCOPE_SENTINEL]:
+            return [
+                "max_claim_scope: a rehearsal (--rehearsal) campaign requires "
+                f"max_claim_scope to be exactly {[REHEARSAL_CLAIM_SCOPE_SENTINEL]!r}, "
+                f"got {normalized!r}"
+            ]
+        return []
     known_constructs = {c.construct for c in registry.ALL_CANDIDATES}
     violations: list[str] = []
     for construct_id in sorted({str(c) for c in scope} - known_constructs):
@@ -845,6 +929,84 @@ def _check_max_claim_scope(scope: object) -> list[str]:
             "candidate in the registry"
         )
     return violations
+
+
+# ---------------------------------------------------------------------------
+# v1.2 WP2 addendum（D108 の欠陥）: Gate 1/2 承認時刻の順序検査
+#
+# D108（campaign RUN10-CAL-20260906-a4ed65c1 の abort）は「Gate 2 承認時刻が
+# freeze より後」という provenance 汚染を **事後**にしか検出できなかった。
+# 承認は freeze を authorize する行為なので、承認時刻が freeze event 時刻より
+# 後（= 事後追認）であってはならない。`unseal.py` の Gate 3 検査
+# （`freeze_time < gate3_time <= now + 60s`）の鏡像として、Gate 1/2 には
+# `approved_at_utc < freeze_event_time`（かつ未来日付でない）を要求する。
+# ---------------------------------------------------------------------------
+
+#: `campaign.unseal._CLOCK_SKEW_TOLERANCE_SECONDS` と同値（60 秒）を、
+#: `campaign` パッケージに依存せず本モジュールで独立に宣言する（他の
+#: `_REPO_ROOT`/`SECRET_DIR_ENV_VAR` 系の独立宣言と同じ規約）。
+_GATE_APPROVAL_CLOCK_SKEW_TOLERANCE_SECONDS = 60
+
+
+def _parse_iso8601_utc(value: object) -> datetime | None:
+    """`approvals._is_iso8601_utc_timestamp` と同じ意味論（`Z` または
+    `+00:00` の明示 UTC オフセットのみ許容）で ISO 8601 を解析する。
+    `campaign.unseal._parse_iso8601_utc` と同一実装だが、`campaign`
+    パッケージには依存しない。"""
+    if not isinstance(value, str) or not value:
+        return None
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        return None
+    return parsed
+
+
+def _check_gate_approval_ordering(
+    all_approvals: Mapping[Gate, ApprovalLoadResult], freeze_event_time: datetime
+) -> list[str]:
+    """Gate 1/Gate 2 の `approved_at_utc` が freeze event 時刻より **前**
+    （かつ `freeze_event_time + 60s` 以内 = 未来日付でない）ことを検査する。
+
+    違反理由の語彙は 3 種:
+    `gate<N>_approval_not_before_freeze` / `gate<N>_approval_future_dated` /
+    `gate<N>_approval_unparsable_timestamp`（loader が既に ISO 8601 UTC を
+    要求しているため最後の 1 つは防御的経路）。承認自体が未成立の Gate は
+    ここでは何も言わない（`AUTHORIZATION_REQUIRED` が別途拒否している）。
+    """
+    reasons: list[str] = []
+    for gate in (Gate.GATE1_CAMPAIGN_EXECUTION, Gate.GATE2_C0_FREEZE):
+        short = GATE_SHORT_NAME[gate]
+        result = all_approvals.get(gate)
+        if result is None or not result.approved or result.record is None:
+            continue
+        approved_at = _parse_iso8601_utc(result.record.approved_at_utc)
+        if approved_at is None:
+            reasons.append(
+                f"{short}_approval_unparsable_timestamp: approved_at_utc="
+                f"{result.record.approved_at_utc!r}"
+            )
+            continue
+        if approved_at > freeze_event_time + timedelta(
+            seconds=_GATE_APPROVAL_CLOCK_SKEW_TOLERANCE_SECONDS
+        ):
+            reasons.append(
+                f"{short}_approval_future_dated: approved_at_utc="
+                f"{approved_at.isoformat()} is later than the freeze event time "
+                f"{freeze_event_time.isoformat()} + "
+                f"{_GATE_APPROVAL_CLOCK_SKEW_TOLERANCE_SECONDS}s tolerance"
+            )
+        elif approved_at >= freeze_event_time:
+            reasons.append(
+                f"{short}_approval_not_before_freeze: approved_at_utc="
+                f"{approved_at.isoformat()} is not strictly before the freeze event "
+                f"time {freeze_event_time.isoformat()} (an approval must precede the "
+                "freeze it authorizes; D108)"
+            )
+    return reasons
 
 
 @dataclass(frozen=True)
@@ -873,6 +1035,7 @@ def dry_run(
     *,
     cli_armed: bool = False,
     e_use_table_path: Path | None = None,
+    rehearsal: bool = False,
 ) -> FreezeReport:
     """manifest を生成・検証して報告するだけ（書込なし・secret なし）。
 
@@ -881,8 +1044,13 @@ def dry_run(
     #5: 同一承認ファイルを二重に読まない）。
     """
     root = Path(repo_root)
-    all_approvals = load_all_approvals(approval_dir, repo_root=root)
-    manifest = build_manifest(root, approvals=all_approvals, campaign_date_utc=_today_utc())
+    all_approvals = load_all_approvals(approval_dir, repo_root=root, rehearsal=rehearsal)
+    manifest = build_manifest(
+        root,
+        approvals=all_approvals,
+        campaign_date_utc=_today_utc(),
+        rehearsal=rehearsal,
+    )
 
     # 第 12 巡採用: E_use table の sha256 pin (`frozen_inputs.e_use_table_sha256`)
     # は now part of the *core* payload -- it must be read/hashed and attached
@@ -915,12 +1083,12 @@ def dry_run(
         frozen_design.get("max_claim_scope") if isinstance(frozen_design, Mapping) else None
     )
     validation = _merge_e_use_table_violations(
-        validation, _check_max_claim_scope(max_claim_scope_value)
+        validation, _check_max_claim_scope(max_claim_scope_value, rehearsal=rehearsal)
     )
 
     gate2_arming = check_armed(
         Gate.GATE2_C0_FREEZE, cli_armed, env, approval_dir, repo_root=root,
-        preloaded=all_approvals,
+        preloaded=all_approvals, rehearsal=rehearsal,
     )
     return FreezeReport(
         manifest=manifest,
@@ -1309,6 +1477,7 @@ def armed_freeze(
     secret_dir: Path,
     campaigns_dir: Path,
     e_use_table_path: Path | None = None,
+    rehearsal: bool = False,
 ) -> ArmedFreezeResult:
     """武装 C0 freeze。副作用なしで拒否する経路が 3 つ（AUTHORIZATION_REQUIRED /
     MANIFEST_CORE_SHA_MISMATCH / VALIDATION_BLOCKED）、staging→read-back→
@@ -1325,10 +1494,10 @@ def armed_freeze(
     """
     root = Path(repo_root)
 
-    all_approvals = load_all_approvals(approval_dir, repo_root=root)
+    all_approvals = load_all_approvals(approval_dir, repo_root=root, rehearsal=rehearsal)
     gate2_arming = check_armed(
         Gate.GATE2_C0_FREEZE, cli_armed, env, approval_dir, repo_root=root,
-        preloaded=all_approvals,
+        preloaded=all_approvals, rehearsal=rehearsal,
     )
     if not gate2_arming.armed:
         return ArmedFreezeResult(
@@ -1342,7 +1511,12 @@ def armed_freeze(
             gate2_arming=gate2_arming,
         )
 
-    core_manifest = build_manifest(root, approvals=all_approvals, campaign_date_utc=_today_utc())
+    core_manifest = build_manifest(
+        root,
+        approvals=all_approvals,
+        campaign_date_utc=_today_utc(),
+        rehearsal=rehearsal,
+    )
 
     # E_use evidence table (Part A/D1b, `[UNDERSPEC-CAL-D10]`): `_check_e_use_table()`
     # reads `table_path` exactly once and hands back those same bytes — reused
@@ -1465,7 +1639,7 @@ def armed_freeze(
     # Realize the split *before* assembling the full manifest: §7 requires the
     # realized row->split table to be inlined into the manifest itself (PR
     # review round 4), so `full_manifest` cannot be built until this exists.
-    matrix_rows = build_matrix()
+    matrix_rows = fixture_matrix.active_matrix()
     row_inputs = _row_inputs_for_split(matrix_rows, STRATUM_FACTOR_NAMES)
 
     # v1.1 §V2.2 段 1+段 2: holdout sweep pinning は split_secret 依存
@@ -1532,7 +1706,7 @@ def armed_freeze(
         frozen_design.get("max_claim_scope") if isinstance(frozen_design, Mapping) else None
     )
     validation = _merge_e_use_table_violations(
-        validation, _check_max_claim_scope(max_claim_scope_value)
+        validation, _check_max_claim_scope(max_claim_scope_value, rehearsal=rehearsal)
     )
     if validation.is_blocked:
         return ArmedFreezeResult(
@@ -1554,6 +1728,24 @@ def armed_freeze(
             "unreachable: e_use_table validation must have blocked before this point"
         )
 
+    # v1.2 WP2 addendum（D108）: freeze event 時刻をここで一度だけ確定し、
+    # Gate 1/2 の承認時刻がそれより前であることを publish 前に検査する
+    # （事後追認された承認で武装された freeze を公開しない — fail-closed）。
+    freeze_event_time = datetime.now(timezone.utc)
+    approval_ordering_reasons = _check_gate_approval_ordering(all_approvals, freeze_event_time)
+    if approval_ordering_reasons:
+        return ArmedFreezeResult(
+            outcome=FreezeOutcome.VALIDATION_BLOCKED,
+            campaign_id=campaign_id,
+            manifest_core_sha=core_sha,
+            manifest_sha=full_sha,
+            campaign_dir=None,
+            secret_dir=None,
+            detail="gate approval ordering: " + "; ".join(approval_ordering_reasons),
+            gate2_arming=gate2_arming,
+            validation=validation,
+        )
+
     freeze_event_payload = {
         "kind": "c0_freeze",
         "campaign_id": campaign_id,
@@ -1563,7 +1755,7 @@ def armed_freeze(
         "e_use_table_sha256": e_use_table_sha256,
         "commitments": dict(commitments),
         "approvals": dict(approval_digests),
-        "event_time_utc": datetime.now(timezone.utc).isoformat(),
+        "event_time_utc": freeze_event_time.isoformat(),
     }
     # round 14 finding #1: `provenance.Ledger.check_leakage` (via
     # `_verified_split_freeze_commitment`) requires exactly one pre-render
@@ -1992,6 +2184,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         f"{DEFAULT_E_USE_TABLE_RELATIVE_PATH!r} repo-relative)",
     )
     parser.add_argument(
+        "--rehearsal",
+        action="store_true",
+        default=False,
+        help=(
+            "v1.2 WP2: rehearsal 経路（claim を生まない疎通試験）で freeze する。"
+            "縮小行列 (`fixtures.matrix.build_rehearsal_matrix()`) へ切替え、manifest に "
+            "`frozen_design.rehearsal=true` を記録し、campaign_id を "
+            f"'{REHEARSAL_CAMPAIGN_ID_PREFIX}RUN10-CAL-...' にする。"
+            "--campaigns-dir/--secret-dir/--approval-dir の明示が必須で、checkout 配下の "
+            "campaigns/ や ~/.vg_cal/ を指すと BLOCKED_REHEARSAL_PATH で拒否する。"
+        ),
+    )
+    parser.add_argument(
         "--maintenance-orphans",
         action="store_true",
         default=False,
@@ -2004,6 +2209,46 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     return parser
+
+
+#: v1.2 WP2 §B(iv): rehearsal の path ガード拒否理由。`vocab.BlockedCode` は
+#: 凍結 6 値のまま増やさない（`[UNDERSPEC-CAL-D78]` の規約）ため、CLI が印字
+#: する理由文字列としてのみ定義する。
+BLOCKED_REHEARSAL_PATH = "BLOCKED_REHEARSAL_PATH"
+
+
+def rehearsal_path_violations(
+    paths: Mapping[str, Path | None], *, repo_root: Path
+) -> list[str]:
+    """`--rehearsal` が要求する path 制約を検査する（v1.2 WP2 §B(iv)）。
+
+    - 各 path は **明示必須**（既定解決に落とすと本番の `~/.vg_cal/` /
+      checkout 配下 `campaigns/` へ書き込みうるため）。
+    - checkout 配下の `voice_genesis/calibration/campaigns/` および
+      `~/.vg_cal/` の**配下**（同一 path 自身も含む）を指してはならない
+      ——rehearsal の成果物は本番 campaign registry・本番 secret store と
+      同居させない（claim を生む経路の provenance を汚さない）。
+
+    戻り値は違反理由文字列のリスト（空 = 制約充足）。
+    """
+    forbidden_roots = [
+        default_campaigns_dir(repo_root).expanduser().resolve(),
+        (Path.home() / ".vg_cal").expanduser().resolve(),
+    ]
+    violations: list[str] = []
+    for label, path in paths.items():
+        if path is None:
+            violations.append(f"{label} must be given explicitly when --rehearsal is used")
+            continue
+        resolved = Path(path).expanduser().resolve()
+        for root in forbidden_roots:
+            if resolved == root or root in resolved.parents:
+                violations.append(
+                    f"{label}={str(resolved)!r} is under {str(root)!r}; a rehearsal must not "
+                    "write into the canonical campaign registry or the production secret store"
+                )
+                break
+    return violations
 
 
 def _print_orphan_report(orphans: OrphanReport) -> None:
@@ -2019,6 +2264,24 @@ def _print_orphan_report(orphans: OrphanReport) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
     root = args.repo_root if args.repo_root is not None else _REPO_ROOT
+
+    # v1.2 WP2 §B(i)/(iv): rehearsal は「行列切替」より先に「どこへ書くか」を
+    # 検査する（既定解決へ落ちる前の生の引数を見るため、`args.*_dir` を
+    # そのまま渡す）。違反時は副作用ゼロで exit 1。
+    if args.rehearsal:
+        path_violations = rehearsal_path_violations(
+            {
+                "--campaigns-dir": args.campaigns_dir,
+                "--secret-dir": args.secret_dir,
+                "--approval-dir": args.approval_dir,
+            },
+            repo_root=root,
+        )
+        if path_violations:
+            print(f"{BLOCKED_REHEARSAL_PATH}: " + "; ".join(path_violations))
+            return 1
+        fixture_matrix.set_rehearsal_mode(True)
+
     approval_dir = (
         args.approval_dir if args.approval_dir is not None else default_approval_dir()
     )
@@ -2040,7 +2303,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         # `detect_orphans()` (PR review round 6 #2) — that creates
         # `secret_dir`/its lock file as a side effect, which a plain dry-run
         # must never do (tests assert this).
-        report = dry_run(root, approval_dir, os.environ, cli_armed=False, e_use_table_path=e_use_table_path)
+        report = dry_run(
+            root,
+            approval_dir,
+            os.environ,
+            cli_armed=False,
+            e_use_table_path=e_use_table_path,
+            rehearsal=args.rehearsal,
+        )
         print(f"manifest_core_sha: {report.manifest_core_sha}")
         print(f"campaign_id (if frozen today): {report.campaign_id}")
         print(f"authorization_nonce: {report.authorization_nonce}")
@@ -2073,6 +2343,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         secret_dir=secret_dir,
         campaigns_dir=campaigns_dir,
         e_use_table_path=e_use_table_path,
+        rehearsal=args.rehearsal,
     )
     if result.outcome != FreezeOutcome.AUTHORIZATION_REQUIRED:
         # Orphan maintenance is part of the armed path only (PR review round 6
