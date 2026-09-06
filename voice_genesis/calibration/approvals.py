@@ -400,7 +400,19 @@ def _parse_gate1_payload(
         # 別途 manifest 側で行う責務であり、本モジュールは registry に依存
         # しないため踏み込まない）。
         reasons.append("max_claim_scope: must not contain duplicate construct-id strings")
-    elif REHEARSAL_CLAIM_SCOPE_SENTINEL in scope and not rehearsal:
+    elif rehearsal and scope != [REHEARSAL_CLAIM_SCOPE_SENTINEL]:
+        # PR #349 第 1 巡採用: rehearsal は claim を生まない疎通試験（§W2 不変
+        # 条件）であり、Gate 1 承認の `max_claim_scope` は rehearsal sentinel
+        # 単独 `["REHEARSAL"]` の一致でのみ受理する。通常 construct-id を含む
+        # 形（`["formant_frequency"]`）や sentinel と construct-id の混在
+        # （`["REHEARSAL", "formant_frequency"]`）は、rehearsal が実質的な
+        # construct claim を伴って武装される抜け道になるため loader 段階で
+        # fail-closed に拒否する。
+        reasons.append(
+            "max_claim_scope: a rehearsal (--rehearsal) campaign requires max_claim_scope "
+            f"to be exactly {[REHEARSAL_CLAIM_SCOPE_SENTINEL]!r}, got {scope!r}"
+        )
+    elif not rehearsal and REHEARSAL_CLAIM_SCOPE_SENTINEL in scope:
         # v1.2 WP2 §B(vii): rehearsal sentinel は rehearsal 経路でのみ受理する。
         # 本番 freeze/campaign が `["REHEARSAL"]` を含む Gate 1 承認を拾って
         # しまう（= claim を生む経路が「claim しない」承認で武装される）ことを

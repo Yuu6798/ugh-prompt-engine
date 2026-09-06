@@ -886,6 +886,11 @@ def _check_max_claim_scope(scope: object, *, rehearsal: bool = False) -> list[st
       `construct` にも一致しない id を含むなら、その id ごとに個別の
       violation を BLOCK（typo や廃止済み construct が承認スコープへ
       紛れ込むのを防ぐ）。
+    - `rehearsal=True`（PR #349 第 1 巡採用）: registry 突合の代わりに、
+      `[REHEARSAL_CLAIM_SCOPE_SENTINEL]` との完全一致のみを受理する。
+      通常 construct-id を含む形や sentinel との混在は、rehearsal が
+      実質的な claim を伴って武装される抜け道になるため単一 violation で
+      即時 BLOCK する。
 
     違反は `e_use_table` と同じ prefix 慣例で `"max_claim_scope: <理由>"`
     形式で返す（`_merge_e_use_table_violations()` で
@@ -899,13 +904,24 @@ def _check_max_claim_scope(scope: object, *, rehearsal: bool = False) -> list[st
         return [f"max_claim_scope: must be a list, got {type(scope).__name__}"]
     if len(scope) == 0:
         return ["max_claim_scope: must be non-empty (Gate 1 approval names no construct)"]
-    known_constructs = {c.construct for c in registry.ALL_CANDIDATES}
-    #: v1.2 WP2 §B(vii): rehearsal は claim を生まない疎通試験なので、Gate 1 の
-    #: `max_claim_scope` は construct-id ではない sentinel `["REHEARSAL"]` で
-    #: 受理する（rehearsal manifest のときだけ。本番 manifest の scope に
-    #: `REHEARSAL` が混ざれば registry 未知 id として従来どおり BLOCK する）。
+    #: PR #349 第 1 巡採用: rehearsal は claim を生まない疎通試験（§W2 不変
+    #: 条件）なので、Gate 1 の `max_claim_scope` は sentinel 単独
+    #: `["REHEARSAL"]` の一致でのみ受理する。`approvals.load_approval()` が
+    #: 既にこの形を loader 段階で強制しているが、manifest から読み戻した
+    #: list を検査する経路（`ABSENT` センチネル以外の呼び出し全般）でも
+    #: 同じ不変条件を独立に再検証する（producer 側の縦深防御。単一
+    #: sentinel 以外の形はここで registry 未知 id 判定に流さず、専用の
+    #: violation として即時 BLOCK する）。
     if rehearsal:
-        known_constructs = known_constructs | {REHEARSAL_CLAIM_SCOPE_SENTINEL}
+        normalized = [str(c) for c in scope]
+        if normalized != [REHEARSAL_CLAIM_SCOPE_SENTINEL]:
+            return [
+                "max_claim_scope: a rehearsal (--rehearsal) campaign requires "
+                f"max_claim_scope to be exactly {[REHEARSAL_CLAIM_SCOPE_SENTINEL]!r}, "
+                f"got {normalized!r}"
+            ]
+        return []
+    known_constructs = {c.construct for c in registry.ALL_CANDIDATES}
     violations: list[str] = []
     for construct_id in sorted({str(c) for c in scope} - known_constructs):
         violations.append(

@@ -173,9 +173,14 @@ instance 反復数の削減が対象）——次 revision の縮小候補とし�
 
 armed freeze は「一度は実経路（rehearsal を含む）で実行され green だったコード」
 にのみ許可する。placeholder・未実行経路を pin した armed freeze を禁止する。
-rehearsal green を armed freeze の前提とし、`c0_validate` は各ステージが実 gate
-で end-to-end 実行済みであること（rehearsal ledger の kind 列を pin 入力とする）を
-検査する。
+rehearsal green は armed freeze の**運用上の前提条件**とする——本 revision では
+人手が rehearsal green を armed freeze の前に確認する運用規則であり、manifest
+への rehearsal 証跡の pin と `c0_validate` による機械強制は行わない（PR #349
+第 1 巡採用: 従来の記述は `c0_validate` が rehearsal ledger の kind 列を pin
+入力として検査する既定機能であるかのように読めたが、そのような検証器は
+実装されていない）。rehearsal ledger 証跡の manifest pin 化と検証器の機械強制は
+次 revision の候補として登録する（§W0 ルール 7: 段階 2〔測定〕の答えが定まって
+いないうちに段階 3〔検証〕を突き詰めない）。
 
 ### (e) Gate 1/2 承認時刻の順序 fail-closed 検査（D108 是正）
 

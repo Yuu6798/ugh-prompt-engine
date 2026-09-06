@@ -1253,7 +1253,7 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
 | §W2(d)（freeze 前提 = 実経路で動いたコードのみ） | （運用規約。実装は rehearsal E2E 経由） | `tests/test_rehearsal_e2e.py`（`VG_CAL_REHEARSAL_E2E=1` 明示 opt-in。既定 skip） | 実測（WP2b）: 40.0 分（2400.6 秒）で `campaign_closed` 到達、`BLOCKED_*` 0 件。目標 30 分は未達（律速 = c1 render 290 と c2/c4 instance 数） |
 | §W2(e)（Gate 1/2 承認時刻の順序 fail-closed 検査、D108 是正） | `c0_freeze.py` | `_check_gate_approval_ordering()`, `_GATE_APPROVAL_CLOCK_SKEW_TOLERANCE_SECONDS = 60`（`unseal.py` Gate 3 検査と同値） | 理由語彙: `gate<N>_approval_not_before_freeze`/`_future_dated`/`_unparsable_timestamp` |
 | | `c0_validate.py` | `_check_gate_approval_ordering()`（`C0ValidationResult.gate_approval_ordering_notes`、非ブロッキング） | 承認記録が `approvals/records/` に無い場合はスキップ |
-| §W3（統治文書切替・2 段連鎖 pin） | `approvals.py` | `DESIGN_DOC_RELATIVE_PATH`(→v1.2), `BASE_DESIGN_DOC_RELATIVE_PATH`(→v1.1), `BASE_BASE_DESIGN_DOC_RELATIVE_PATH`(新設、→v1.0), `_verify_single_base_pin()`, `_verify_base_document_pin()`（2 段連鎖） | `c0_validate.scan_calibration_tree_inventory()` の union は本 revision では v1.2/v1.1 の 2 文書のみ据え置き（v1.0 の path inventory 再収載は次 revision の課題として境界宣言） |
+| §W3（統治文書切替・2 段連鎖 pin） | `approvals.py` | `DESIGN_DOC_RELATIVE_PATH`(→v1.2), `BASE_DESIGN_DOC_RELATIVE_PATH`(→v1.1), `BASE_BASE_DESIGN_DOC_RELATIVE_PATH`(新設、→v1.0), `_verify_single_base_pin()`, `_verify_base_document_pin()`（2 段連鎖） | `c0_validate.scan_calibration_tree_inventory()` の union は v1.2/v1.1/v1.0 の 3 文書すべてを含む（PR #349 第 1 巡採用: 旧記述は v1.0 の path inventory 再収載を次 revision 送りとしていたが、実装は既に 3 文書を union している） |
 
 ### 再 freeze 前提条件（§W2(b)/(d) の運用化）
 
@@ -1265,8 +1265,10 @@ freeze）を実行しない:
    verdict）を返すこと。
 2. **帰属義務の充足**: 各修正候補について「原因 X・修正 Y で消える」の帰属
    仮説と C-1 での検証結果が `README.md` 逸脱台帳に記録されていること。
-3. **rehearsal green**: `--rehearsal` 経路で C0 freeze → c1 → c2 → c3a → c3b
-   → c4 → close の全 stage が実行され、`c0_validate` の実経路検査を通過
+3. **rehearsal green**（運用上の前提条件。PR #349 第 1 巡採用: manifest への
+   証跡 pin と `c0_validate` による機械強制は次 revision の候補、現状は人手
+   確認）: `--rehearsal` 経路で C0 freeze → c1 → c2 → c3a → c3b → c4 → close
+   の全 stage が実行され green だったことを、armed freeze の前に人手で確認
    すること。
 4. **承認時刻の実測**: Gate 1/Gate 2 の `approved_at_utc` が
    `date -u +%Y-%m-%dT%H:%M:%SZ` の実測値であり、freeze event 時刻より前

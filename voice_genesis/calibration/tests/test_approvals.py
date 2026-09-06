@@ -1040,16 +1040,49 @@ def test_gate1_rehearsal_sentinel_scope_is_refused_in_production(tmp_path: Path)
     assert any("REHEARSAL" in reason and "max_claim_scope" in reason for reason in result.reasons)
 
 
-def test_gate1_normal_scope_is_unaffected_by_rehearsal_flag(tmp_path: Path) -> None:
-    """sentinel を含まない通常 scope は rehearsal フラグの有無で挙動が変わらない。"""
+def test_gate1_normal_scope_is_approved_in_production(tmp_path: Path) -> None:
+    """sentinel を含まない通常 scope は本番（`rehearsal=False`）では従来どおり
+    approved になる。"""
     _write_gate1(tmp_path)
-    for rehearsal in (False, True):
-        result = approvals.load_approval(
-            approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path, rehearsal=rehearsal
-        )
-        assert result.approved, (rehearsal, result.reasons)
-        assert result.record is not None
-        assert result.record.max_claim_scope == ("formant_frequency",)
+    result = approvals.load_approval(approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path)
+    assert result.approved, result.reasons
+    assert result.record is not None
+    assert result.record.max_claim_scope == ("formant_frequency",)
+
+
+def test_gate1_normal_scope_is_refused_under_rehearsal(tmp_path: Path) -> None:
+    """PR #349 第 1 巡採用: rehearsal（claim を生まない疎通試験、§W2）では
+    `max_claim_scope` が sentinel 単独 `["REHEARSAL"]` のとき以外を拒否する
+    ——通常 construct-id だけの形（sentinel なし）もここで fail-closed に
+    塞ぐ（rehearsal が実質的な construct claim を伴って武装される抜け道の
+    往復側）。"""
+    _write_gate1(tmp_path)
+    result = approvals.load_approval(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path, rehearsal=True
+    )
+    assert result.approved is False
+    assert any(
+        "max_claim_scope" in reason and "REHEARSAL" in reason for reason in result.reasons
+    )
+
+
+def test_gate1_mixed_sentinel_and_construct_scope_is_refused_under_rehearsal(
+    tmp_path: Path,
+) -> None:
+    """PR #349 第 1 巡採用: rehearsal で sentinel と通常 construct-id が混在
+    する形（`["REHEARSAL", "formant_frequency"]`）も拒否する——sentinel 単独
+    一致のみが受理される不変条件の往復側。"""
+    _write_gate1(
+        tmp_path,
+        max_claim_scope=[approvals.REHEARSAL_CLAIM_SCOPE_SENTINEL, "formant_frequency"],
+    )
+    result = approvals.load_approval(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path, rehearsal=True
+    )
+    assert result.approved is False
+    assert any(
+        "max_claim_scope" in reason and "REHEARSAL" in reason for reason in result.reasons
+    )
 
 
 def test_check_armed_gate1_propagates_rehearsal_to_loader(tmp_path: Path, monkeypatch) -> None:
