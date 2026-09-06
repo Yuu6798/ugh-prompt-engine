@@ -6136,3 +6136,97 @@ def test_phase_order_violation_still_charges_counters_json_not_ledger(
     reloaded = load_frozen_campaign(campaign_dir, secret_root)
     new_entries = list(reloaded.ledger.entries)[entries_before:]
     assert new_entries == []
+
+
+# ---------------------------------------------------------------------------
+# v1.2 WP1 配線（WP2 で実施）: sanctioned abstention (SILENCE, F0_UNUSABLE)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_c3b_silence_row_missing_with_f0_unusable_is_sanctioned_abstention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.2 WP1 §1.4 の CLI 側配線テスト: SILENCE negative control 行が
+    `F0_UNUSABLE` で欠測した F0 依存候補は、C3b の
+    `negative_controls_incomplete` を **発火させない**（sanctioned
+    abstention）。配線が抜けていると（`control_class_by_negative_row_id` /
+    `missing_reason_by_negative_row_id` を渡さないと）同じ状況で `True` に
+    なる——その往復も同じ fixture 上で確認する。"""
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+    from voice_genesis.calibration.fixtures.controls import negative_control_row_ids
+    from voice_genesis.calibration.fixtures.matrix import build_matrix as _real_build_matrix
+
+    family_rows = [mr for mr in _real_build_matrix() if mr.row.family == "APERIODICITY_GT"]
+    silence_rows = [mr for mr in family_rows if mr.row.control_class == "SILENCE"]
+    assert silence_rows
+    truth_rows = [mr for mr in family_rows if mr.row.block == "TRUTH_CORE"][:2]
+    subset = truth_rows + silence_rows[:1]
+    silence_row_id = silence_rows[0].row_id
+
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    assert campaign.realized_split.assignment[silence_row_id].value == "SELECTION"
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    baseline_entry = campaign.ledger.append(
+        {"kind": "baseline_audit", "artifact_sha": "7" * 64, "payload": {}}
+    )
+    campaign.ledger.append(
+        {"kind": "baseline_audited", "baseline_audit_sha": baseline_entry.entry_sha}
+    )
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": "F0-B0-CURRENT",
+            "outcome": "SELECTED",
+        }
+    )
+
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.APERIODICITY_GT:
+            return (harmonic_residual,)
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+
+    result = cli._run_c3b(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    missing_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "measurement_missing"
+    ]
+    assert any(
+        m["reason"] == "F0_UNUSABLE"
+        and any(cell[0] == silence_row_id for cell in m["cells"])
+        for m in missing_events
+    ), missing_events
+
+    sf_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "selection_frozen"
+    ]
+    assert sf_events
+    fail_filters = sf_events[-1]["fail_filters_by_family"]["APERIODICITY_GT"]
+    assert fail_filters[harmonic_residual.candidate_id]["negative_controls_incomplete"] is False
+
+    # 往復: 配線を外す（判定材料を渡さない）と同じ状況で fail-closed に戻る。
+    neg_ids = negative_control_row_ids(subset)
+    assert silence_row_id in neg_ids
+    _criteria, unwired_report, _scope = cli._criteria_with_fail_filters(
+        harmonic_residual,
+        [],
+        {},
+        negative_control_ids=neg_ids,
+        positive_control_ids=frozenset(),
+        max_claim_scope=frozenset({harmonic_residual.construct}),
+    )
+    assert unwired_report["negative_controls_incomplete"] is True

@@ -266,6 +266,9 @@ def _complete_manifest() -> dict[str, object]:
                 "budget": "no paid API calls (fully local pipeline)",
             },
             "stop_rules": ["ABORT_ON_UNSEEDED_RNG", "ABORT_ON_HASH_MISMATCH"],
+            # v1.2 WP2 §B(ii): 本番 manifest は `false` を明示記録する
+            # （欠落は REQUIRED_BLOCKING violation）。
+            "rehearsal": False,
         },
         "independence_ledger": _full_independence_ledger(),
         "rng_ledger": _full_rng_ledger(),
@@ -1408,3 +1411,153 @@ def test_required_string_scalar_fields_reject_non_strings(
     dotted = ".".join(path)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     assert any(item.startswith(f"{dotted}: type") for item in result.missing_required_keys)
+
+
+# ---------------------------------------------------------------------------
+# v1.2 WP2 §B(ii)/(vi) — frozen_design.rehearsal
+# ---------------------------------------------------------------------------
+
+
+def test_rehearsal_key_missing_is_required_blocking() -> None:
+    manifest = _delete_dotted(_complete_manifest(), "frozen_design.rehearsal")
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert "frozen_design.rehearsal" in result.missing_required_keys
+
+
+def test_rehearsal_key_non_bool_is_required_blocking() -> None:
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["rehearsal"] = "true"  # type: ignore[index]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert any(
+        k.startswith("frozen_design.rehearsal: type") for k in result.missing_required_keys
+    ), result.missing_required_keys
+
+
+def test_rehearsal_true_is_accepted_as_a_recorded_value() -> None:
+    """`true` そのものは violation ではない（設置場所の制約が別途効く）。"""
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["rehearsal"] = True  # type: ignore[index]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert not any(
+        k.startswith("frozen_design.rehearsal") for k in result.missing_required_keys
+    )
+
+
+def _write_manifest_at(path: Path, manifest: dict[str, object]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    return path
+
+
+def test_rehearsal_manifest_under_canonical_campaigns_dir_is_a_violation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§B(vi): rehearsal manifest を canonical campaign registry の配下に
+    置くのは violation（本 test は実リポジトリの `campaigns/` を一切触らず、
+    `_REPO_ROOT` を tmp_path へ差し替えた合成 registry で検証する）。"""
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["rehearsal"] = True  # type: ignore[index]
+    monkeypatch.setattr(c0_validate, "_REPO_ROOT", tmp_path)
+    inside = _write_manifest_at(
+        tmp_path / "voice_genesis/calibration/campaigns/REHEARSAL-X/c0_manifest.json", manifest
+    )
+    violations = c0_validate._check_rehearsal_location(manifest, inside)
+    assert violations and "canonical campaign registry" in violations[0]
+
+    outside = _write_manifest_at(tmp_path / "elsewhere/REHEARSAL-X/c0_manifest.json", manifest)
+    assert c0_validate._check_rehearsal_location(manifest, outside) == []
+
+
+def test_non_rehearsal_manifest_under_canonical_campaigns_dir_is_fine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = _complete_manifest()
+    monkeypatch.setattr(c0_validate, "_REPO_ROOT", tmp_path)
+    inside = _write_manifest_at(
+        tmp_path / "voice_genesis/calibration/campaigns/RUN10-CAL-X/c0_manifest.json", manifest
+    )
+    assert c0_validate._check_rehearsal_location(manifest, inside) == []
+
+
+# ---------------------------------------------------------------------------
+# v1.2 WP2 §C-9 — Gate 承認時刻 x c0_freeze ledger event の順序
+# ---------------------------------------------------------------------------
+
+
+def _approval_record_bytes(approved_at_utc: str) -> bytes:
+    return json.dumps(
+        {"gate": "GATE2_C0_FREEZE", "approver": "tester", "approved_at_utc": approved_at_utc},
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _campaign_with_freeze_ledger(
+    tmp_path: Path, *, freeze_time_utc: str, approvals_section: dict[str, str]
+) -> tuple[dict[str, object], Path]:
+    campaign_dir = tmp_path / "campaign"
+    campaign_dir.mkdir(parents=True, exist_ok=True)
+    manifest = _complete_manifest()
+    manifest["approvals"] = approvals_section
+    manifest_path = campaign_dir / "c0_manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (campaign_dir / "ledger.jsonl").write_text(
+        json.dumps(
+            {"payload": {"kind": "c0_freeze", "event_time_utc": freeze_time_utc}},
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return manifest, manifest_path
+
+
+def _write_records_dir(repo_root: Path, records: dict[str, bytes]) -> None:
+    records_dir = repo_root / c0_validate._APPROVAL_RECORDS_RELATIVE
+    records_dir.mkdir(parents=True, exist_ok=True)
+    for name, raw in records.items():
+        (records_dir / name).write_bytes(raw)
+
+
+def test_gate_approval_ordering_accepts_approval_before_freeze(tmp_path: Path) -> None:
+    raw = _approval_record_bytes("2026-09-06T00:00:00Z")
+    sha = hashlib.sha256(raw).hexdigest()
+    manifest, manifest_path = _campaign_with_freeze_ledger(
+        tmp_path,
+        freeze_time_utc="2026-09-06T01:00:00Z",
+        approvals_section={"gate2_sha256": sha},
+    )
+    _write_records_dir(tmp_path, {"gate2_c0_freeze.2026-09-06.json": raw})
+    report = c0_validate._check_gate_approval_ordering(manifest, manifest_path, repo_root=tmp_path)
+    assert report.violations == ()
+
+
+def test_gate_approval_ordering_rejects_approval_after_freeze(tmp_path: Path) -> None:
+    """D108 の実欠陥そのもの（Gate 2 承認が freeze より後 = 事後追認）。"""
+    raw = _approval_record_bytes("2026-09-06T02:00:00Z")
+    sha = hashlib.sha256(raw).hexdigest()
+    manifest, manifest_path = _campaign_with_freeze_ledger(
+        tmp_path,
+        freeze_time_utc="2026-09-06T01:00:00Z",
+        approvals_section={"gate2_sha256": sha},
+    )
+    _write_records_dir(tmp_path, {"gate2_c0_freeze.2026-09-06.json": raw})
+    report = c0_validate._check_gate_approval_ordering(manifest, manifest_path, repo_root=tmp_path)
+    assert any("gate2_approval_future_dated" in v for v in report.violations), report
+
+
+def test_gate_approval_ordering_skips_and_notes_when_record_absent(tmp_path: Path) -> None:
+    manifest, manifest_path = _campaign_with_freeze_ledger(
+        tmp_path,
+        freeze_time_utc="2026-09-06T01:00:00Z",
+        approvals_section={"gate2_sha256": "0" * 64},
+    )
+    _write_records_dir(tmp_path, {})
+    report = c0_validate._check_gate_approval_ordering(manifest, manifest_path, repo_root=tmp_path)
+    assert report.violations == ()
+    assert any("not checkable" in note for note in report.notes), report
+
+
+def test_gate_approval_ordering_is_a_noop_for_in_memory_manifests() -> None:
+    report = c0_validate._check_gate_approval_ordering(_complete_manifest(), None)
+    assert report.violations == () and report.notes == ()

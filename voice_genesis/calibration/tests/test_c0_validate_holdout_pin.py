@@ -1176,7 +1176,7 @@ def test_holdout_sweeps_genuine_partial_degradation_passes_with_secret(monkeypat
     )
     assert len(holdout_sweeps["TILT_GT"]) == 1  # 公称 k_hold=2 は infeasible、k=1 へ縮退
 
-    monkeypatch.setattr(c0_validate, "build_matrix", lambda: synth)
+    monkeypatch.setattr(c0_validate, "_pin_check_matrix", lambda: synth)
     manifest = _holdout_sweeps_manifest(holdout_sweeps)
     violations = c0_validate._check_holdout_sweeps_declaration_match(manifest, _SECRET)
     assert violations == ()

@@ -45,6 +45,13 @@ from voice_genesis.calibration.cost_caps import CostCaps, cost_caps_from_mapping
 #: 手続き前ゲートであり、manifest の内容検証結果ではない。
 AUTHORIZATION_REQUIRED = "AUTHORIZATION_REQUIRED"
 
+#: v1.2 WP2 §B(vii): rehearsal（claim を生まない疎通試験）専用の Gate 1
+#: `max_claim_scope` sentinel。construct-id ではないため、rehearsal ではない
+#: 承認にこれが含まれていれば `load_approval()` が fail-closed で拒否する
+#: （逆に rehearsal 経路では registry construct と混在させない = これ単独が
+#: 期待形）。`c0_freeze._check_max_claim_scope()` 側の許容も同じ定数を読む。
+REHEARSAL_CLAIM_SCOPE_SENTINEL = "REHEARSAL"
+
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 #: `c0_freeze.py` 同様、本ファイルから 2 階層上が repo root。
@@ -324,7 +331,7 @@ def _require_iso8601_utc_timestamp(
 
 
 def _parse_gate1_payload(
-    payload: Mapping[str, Any], reasons: list[str]
+    payload: Mapping[str, Any], reasons: list[str], *, rehearsal: bool = False
 ) -> dict[str, Any]:
     out: dict[str, Any] = {}
     nonce = _require_nonblank_str(payload, "authorization_nonce", reasons)
@@ -357,6 +364,15 @@ def _parse_gate1_payload(
         # 別途 manifest 側で行う責務であり、本モジュールは registry に依存
         # しないため踏み込まない）。
         reasons.append("max_claim_scope: must not contain duplicate construct-id strings")
+    elif REHEARSAL_CLAIM_SCOPE_SENTINEL in scope and not rehearsal:
+        # v1.2 WP2 §B(vii): rehearsal sentinel は rehearsal 経路でのみ受理する。
+        # 本番 freeze/campaign が `["REHEARSAL"]` を含む Gate 1 承認を拾って
+        # しまう（= claim を生む経路が「claim しない」承認で武装される）ことを
+        # loader 段階で fail-closed に塞ぐ。
+        reasons.append(
+            f"max_claim_scope: {REHEARSAL_CLAIM_SCOPE_SENTINEL!r} sentinel is only "
+            "accepted for a rehearsal (--rehearsal) campaign"
+        )
     else:
         out["max_claim_scope"] = tuple(scope)
     return out
@@ -391,7 +407,11 @@ _GATE_PAYLOAD_PARSERS = {
 
 
 def load_approval(
-    gate: Gate, approval_dir: Path, *, repo_root: Path | None = None
+    gate: Gate,
+    approval_dir: Path,
+    *,
+    repo_root: Path | None = None,
+    rehearsal: bool = False,
 ) -> ApprovalLoadResult:
     """`<approval_dir>/gate{1,2,3}_*.json` を読み、shape 検証 + 実ファイル
     hash 照合を行う。`approval_dir` は呼び出し側が明示的に渡した値のみを使い
@@ -468,7 +488,12 @@ def load_approval(
             f"{declared_memo_sha!r}, current file is {actual_memo_sha!r}"
         )
 
-    gate_specific = _GATE_PAYLOAD_PARSERS[gate](payload, reasons)
+    if gate is Gate.GATE1_CAMPAIGN_EXECUTION:
+        # v1.2 WP2 §B(vii): Gate 1 のみ rehearsal 文脈を受け取る
+        # （`max_claim_scope` sentinel の受理可否）。
+        gate_specific = _parse_gate1_payload(payload, reasons, rehearsal=rehearsal)
+    else:
+        gate_specific = _GATE_PAYLOAD_PARSERS[gate](payload, reasons)
 
     # §V6「基底文書の実行時 pin」: 承認ファイル自体の shape/hash 検査とは独立に、
     # checkout 上の v1.1/v1.0 バイト列の整合を毎回検証する（承認ファイルの
@@ -501,10 +526,14 @@ def load_approval(
 
 
 def load_all_approvals(
-    approval_dir: Path, *, repo_root: Path | None = None
+    approval_dir: Path, *, repo_root: Path | None = None, rehearsal: bool = False
 ) -> dict[Gate, ApprovalLoadResult]:
-    """3 Gate 全てを `load_approval()` する。"""
-    return {gate: load_approval(gate, approval_dir, repo_root=repo_root) for gate in Gate}
+    """3 Gate 全てを `load_approval()` する。`rehearsal`（v1.2 WP2）は Gate 1 の
+    `max_claim_scope` sentinel 受理可否としてそのまま伝播する。"""
+    return {
+        gate: load_approval(gate, approval_dir, repo_root=repo_root, rehearsal=rehearsal)
+        for gate in Gate
+    }
 
 
 @dataclass(frozen=True)
@@ -600,6 +629,7 @@ def check_armed(
     *,
     repo_root: Path | None = None,
     preloaded: Mapping[Gate, ApprovalLoadResult] | None = None,
+    rehearsal: bool = False,
 ) -> ArmingDecision:
     """三要素武装判定: `--armed` フラグ AND 対応する環境変数 `=1` AND 有効な
     承認ファイル。1 つでも欠ければ `armed=False`（`AUTHORIZATION_REQUIRED`）。
@@ -626,7 +656,7 @@ def check_armed(
     result = (
         preloaded[gate]
         if preloaded is not None
-        else load_approval(gate, approval_dir, repo_root=repo_root)
+        else load_approval(gate, approval_dir, repo_root=repo_root, rehearsal=rehearsal)
     )
     if not result.approved:
         for reason in result.reasons:
@@ -637,7 +667,12 @@ def check_armed(
         gate1_result = (
             preloaded[Gate.GATE1_CAMPAIGN_EXECUTION]
             if preloaded is not None
-            else load_approval(Gate.GATE1_CAMPAIGN_EXECUTION, approval_dir, repo_root=repo_root)
+            else load_approval(
+                Gate.GATE1_CAMPAIGN_EXECUTION,
+                approval_dir,
+                repo_root=repo_root,
+                rehearsal=rehearsal,
+            )
         )
         if (
             gate1_result.approved
@@ -716,6 +751,7 @@ if __name__ == "__main__":
 
 __all__ = [
     "AUTHORIZATION_REQUIRED",
+    "REHEARSAL_CLAIM_SCOPE_SENTINEL",
     "DESIGN_DOC_RELATIVE_PATH",
     "BASE_DESIGN_DOC_RELATIVE_PATH",
     "MEMO_RELATIVE_PATH",

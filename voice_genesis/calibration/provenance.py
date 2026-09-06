@@ -1825,9 +1825,9 @@ class Ledger:
         ):
             return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
 
-        from voice_genesis.calibration.fixtures.matrix import build_matrix
+        from voice_genesis.calibration.fixtures.matrix import active_matrix
 
-        canonical_matrix = build_matrix()
+        canonical_matrix = active_matrix()
         canonical_by_id = {row.row_id: row for row in canonical_matrix}
         canonical_row_ids = set(canonical_by_id)
         verification_row_ids = [row.row_id for row in split_verification_rows]
@@ -1957,9 +1957,9 @@ class Ledger:
         # identifies as truth-free negative controls.  Truth-bearing/unknown rows
         # supplied here remain sealed.
         from voice_genesis.calibration.fixtures.controls import negative_control_row_ids
-        from voice_genesis.calibration.fixtures.matrix import build_matrix
+        from voice_genesis.calibration.fixtures.matrix import active_matrix
 
-        frozen_negative_controls = negative_control_row_ids(build_matrix())
+        frozen_negative_controls = negative_control_row_ids(active_matrix())
         control_set = set(control_row_ids) & set(frozen_negative_controls)
         control_excluded_count = 0
         for entry in ledger_entries:

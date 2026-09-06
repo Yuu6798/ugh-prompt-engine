@@ -51,7 +51,7 @@ freeze event 記録のいずれも一切行わない（IMPLEMENTATION_MAP_v1.md 
     `fixture_spec={"family": "F0_CONTROL"}` のような hollow な
     placeholder manifest が素通りしていた finding の直接該当箇所）。
     `declared_sweeps` は非空 mapping であることに加え（`_MAPPING_SHAPE_
-    FIELDS`）、宣言値そのものが凍結 matrix (`fixtures.matrix.build_matrix()`)
+    FIELDS`）、宣言値そのものが凍結 matrix (`fixtures.matrix.active_matrix()`)
     から `declared_sweeps_by_family()` で導出される mapping と完全一致
     することを要求する（UNDERSPEC-CAL-D77 ruling (1)。不一致は
     `BLOCKED_C0_MANIFEST_INCOMPLETE`（detail:
@@ -153,6 +153,7 @@ import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import approvals, streams, vocab
@@ -174,10 +175,10 @@ from .fixtures import uncertainty as fixture_uncertainty
 #: されるため循環 import を起こさない）。
 from .provenance import Ledger
 from .tools import archive_aborted_ledger
+from .fixtures import matrix as fixture_matrix
 from .fixtures.matrix import (
     HoldoutPinDegradationExhausted,
     HoldoutPinInfeasible,
-    build_matrix,
     claim_relevant_fields_by_family,
     declared_sweeps_by_family,
     holdout_pin_params_by_family,
@@ -197,9 +198,12 @@ from .fixtures.matrix import (
 #: （`_check_holdout_pin_feasibility`/`_check_holdout_sweeps_declaration_
 #: match`）は `armed_freeze()` が実際に pin/split した行集合と突き合わせる
 #: ため、`build_matrix`（差し替え可能な束縛）を引き続き使う——`armed_freeze()`
-#: 自身の pin 計算 (`c0_freeze.py` の `matrix_rows = build_matrix()`) も同じ
+#: 自身の pin 計算 (`c0_freeze.py` の `matrix_rows = active_matrix()`) も同じ
 #: 差し替え可能な参照を使うため、対応関係が一致する。
-from .fixtures.matrix import build_matrix as _canonical_build_matrix
+#:
+#: v1.2 WP2: 両入口の実体は `fixtures.matrix.active_matrix()` に一本化した
+#: （`--rehearsal` 時は宣言側・pin 側とも縮小行列から導出する）。名前の
+#: 分離は「テストが片方だけを monkeypatch できる」自由度のためだけに残す。
 from .gates import MIN_RESOLVABLE_PAIRS_PER_SWEEP
 #: R10 対応（2026-09-05）: `armed_freeze()` が実際に holdout sweep を
 #: pin/split するのと**同一の**縮退ループ入口（`splitter.
@@ -211,6 +215,20 @@ from .gates import MIN_RESOLVABLE_PAIRS_PER_SWEEP
 #: `splitter.py` の該当節 docstring、および
 #: `_check_holdout_sweeps_declaration_match()` の docstring を参照）。
 from .splitter import STRATUM_FACTOR_NAMES, pin_and_realize_holdout, row_inputs_for_split
+
+
+def _canonical_build_matrix() -> list[fixture_matrix.MatrixRow]:
+    """宣言照合系 3 検査（declared sweep truth level / declaration match /
+    claim-relevant field）が読む「常に凍結 matrix」の入口。上のコメント参照。"""
+    return fixture_matrix.active_matrix()
+
+
+def _pin_check_matrix() -> list[fixture_matrix.MatrixRow]:
+    """holdout sweep pin 関連 2 検査（`_check_holdout_pin_feasibility` /
+    `_check_holdout_sweeps_declaration_match`）が読む差し替え可能な入口
+    （`armed_freeze()` が実際に pin/split した行集合と対応する）。"""
+    return fixture_matrix.active_matrix()
+
 
 # ---------------------------------------------------------------------------
 # 二層キー語彙（設計正本 §3.1 / §3.2 の機械可読な写像）
@@ -255,6 +273,11 @@ REQUIRED_BLOCKING_KEYS: tuple[str, ...] = (
     "frozen_design.provenance_spec",
     "frozen_design.cost_caps",
     "frozen_design.stop_rules",
+    #: v1.2 WP2 §B(ii): rehearsal 経路かどうかの明示宣言。**常に**記録される
+    #: （本番は `false`）ため欠落は REQUIRED_BLOCKING violation。値の型検査
+    #: （bool 厳密）は `_check_required_blocking()` の専用分岐で行う——欠落を
+    #: 許すと「rehearsal かどうか不明」な manifest が claim 経路へ紛れ込む。
+    "frozen_design.rehearsal",
     "independence_ledger",
     "rng_ledger",
 )
@@ -777,7 +800,7 @@ class SweepManifestViolationDetail:
     事後追加禁止規約の対象外）:
 
     - ``"sweep_truth_level_insufficient"``: D76 ruling (2)。凍結 matrix
-      (`fixtures.matrix.build_matrix()`) が manifest 非依存に §10.4 の
+      (`fixtures.matrix.active_matrix()`) が manifest 非依存に §10.4 の
       truth-level 下限（`gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP`）を構造的に
       満たせない（`_check_declared_sweep_truth_levels()`）。
     - ``"sweep_declaration_mismatch"``: D77 ruling (1)。manifest の
@@ -875,6 +898,11 @@ class C0ValidationResult:
     u_gt_u_num_bound_violations: tuple[SweepManifestViolationDetail, ...] = field(
         default_factory=tuple
     )
+    #: v1.2 WP2 §C-9: Gate 承認時刻の順序検査が **実施できなかった** 理由
+    #: （承認記録が `approvals/records/` に無い・ledger が読めない等）。
+    #: 非ブロッキングの情報項目——順序逆転そのものは `missing_required_keys`
+    #: へ入る。
+    gate_approval_ordering_notes: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def is_blocked(self) -> bool:
@@ -943,6 +971,13 @@ def _check_required_blocking(
         found, value = _resolve(manifest, key)
         if not found or value is None or _is_hollow(value):
             missing.append(key)
+            continue
+        if key == "frozen_design.rehearsal" and not isinstance(value, bool):
+            # v1.2 WP2 §B(ii): `false` は `_is_hollow()` を通過する（意図的な
+            # 記録値）ので、ここで bool 厳密性だけを別途要求する。
+            missing.append(
+                f"{key}: type (must be exactly a bool, got {type(value).__name__})"
+            )
             continue
         if key == "repo.dirty_tree" and value is not False:
             missing.append(f"{key} (must be exactly false, got {value!r})")
@@ -1516,11 +1551,11 @@ def _check_declared_sweep_truth_levels(
 
     `_check_hash_content_match` と同じ「宣言でなく実体を検査する」規約を
     採る: `manifest` の `frozen_design.fixture_spec.<FAMILY>.declared_sweeps`
-    宣言値ではなく、`fixtures.matrix.build_matrix()` が返す実際の凍結
+    宣言値ではなく、`fixtures.matrix.active_matrix()` が返す実際の凍結
     matrix から直接再導出する（`manifest` 引数は他の `_check_*` と呼び出し
     規約を揃えるためだけに受け取り、内容は参照しない — 「matrix 生成ロジック
     自体が §10.4 の前提を構造的に満たせるか」という manifest 非依存の構造
-    検査であり、`declared_sweeps_by_family()` が今後もこの `build_matrix()`
+    検査であり、`declared_sweeps_by_family()` が今後もこの `active_matrix()`
     を唯一の権威として使う限り、manifest の宣言値は定義上ここで数える値と
     一致する）。
 
@@ -1594,7 +1629,7 @@ def _check_declared_sweep_declaration_match(
 ) -> tuple[SweepManifestViolationDetail, ...]:
     """UNDERSPEC-CAL-D77 ruling (1)（#344 round 8 finding #1 ADOPT, 分類②）:
     `frozen_design.fixture_spec.<FAMILY>.declared_sweeps` の**宣言値**が、
-    凍結 matrix (`fixtures.matrix.build_matrix()`) から
+    凍結 matrix (`fixtures.matrix.active_matrix()`) から
     `fixtures.matrix.declared_sweeps_by_family()` で直接導出される
     mapping と **完全一致**（sweep_id 集合・各 sweep の member row_id の
     並び順まで）することを検査する。
@@ -2177,7 +2212,7 @@ def _check_holdout_pin_feasibility(
     ためだけの未使用引数）。456 セル canonical matrix では発生しない。
     """
     del manifest
-    rows = build_matrix()
+    rows = _pin_check_matrix()
     params = holdout_pin_params_by_family(rows)
     violations: list[SweepManifestViolationDetail] = []
     for fam in sorted(params):
@@ -2332,7 +2367,7 @@ def _check_holdout_sweeps_declaration_match(
             ),
         )
 
-    rows = build_matrix()
+    rows = _pin_check_matrix()
     declared = declared_sweeps_by_family(rows)
     params = holdout_pin_params_by_family(rows)
 
@@ -2592,6 +2627,198 @@ def _check_holdout_sweeps_realized_membership(
     return tuple(violations)
 
 
+# ---------------------------------------------------------------------------
+# v1.2 WP2 — rehearsal manifest の設置場所 + Gate 承認時刻の順序（addendum）
+# ---------------------------------------------------------------------------
+
+#: `c0_freeze.default_campaigns_dir()` と同じ canonical campaign registry の
+#: repo 相対 path（`c0_freeze` へは依存しない——本モジュールを `c0_freeze` が
+#: import するため逆方向は循環になる）。
+_CANONICAL_CAMPAIGNS_RELATIVE = "voice_genesis/calibration/campaigns"
+
+#: `c0_freeze._GATE_APPROVAL_CLOCK_SKEW_TOLERANCE_SECONDS`/`campaign.unseal.
+#: _CLOCK_SKEW_TOLERANCE_SECONDS` と同値（60 秒）の独立宣言。
+_GATE_APPROVAL_CLOCK_SKEW_TOLERANCE_SECONDS = 60
+
+#: repo 内の承認記録アーカイブ（`approvals/records/gate{1,2,3}_*.json`）。
+#: manifest の `approvals.gate{1,2}_sha256` に一致する content sha256 の記録が
+#: ここにあれば、その `approved_at_utc` と ledger の `c0_freeze` event 時刻の
+#: 順序を検査できる。無ければ検査不能としてスキップする（v1.2 WP2 §C-9）。
+_APPROVAL_RECORDS_RELATIVE = "voice_genesis/calibration/approvals/records"
+
+
+def _parse_iso8601_utc(value: object) -> datetime | None:
+    """`approvals._is_iso8601_utc_timestamp` と同じ意味論（`Z`/`+00:00` の
+    明示 UTC オフセットのみ許容）で ISO 8601 を解析する。"""
+    if not isinstance(value, str) or not value:
+        return None
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        return None
+    return parsed
+
+
+def _check_rehearsal_location(
+    manifest: Mapping[str, object], manifest_path: Path | str | None
+) -> list[str]:
+    """v1.2 WP2 §B(vi): `frozen_design.rehearsal is True` の manifest が
+    canonical campaign registry（`<repo>/voice_genesis/calibration/campaigns/`）
+    配下に置かれていれば violation。rehearsal は claim を生まない疎通試験で
+    あり、その成果物を本番 campaign registry に同居させてはならない。
+
+    `manifest_path` が渡されない（in-memory 検証）場合は何も言わない——
+    設置場所の制約は producer 側 CLI (`c0_freeze.rehearsal_path_violations()`)
+    が freeze 前に fail-closed で拒否する。
+    """
+    if manifest_path is None:
+        return []
+    frozen_design = manifest.get("frozen_design")
+    rehearsal = (
+        frozen_design.get("rehearsal") if isinstance(frozen_design, Mapping) else None
+    )
+    if rehearsal is not True:
+        return []
+    resolved = Path(manifest_path).expanduser().resolve()
+    canonical = (_REPO_ROOT / _CANONICAL_CAMPAIGNS_RELATIVE).resolve()
+    if canonical in resolved.parents:
+        return [
+            f"frozen_design.rehearsal: a rehearsal manifest must not live under the "
+            f"canonical campaign registry {str(canonical)!r} (found at {str(resolved)!r})"
+        ]
+    return []
+
+
+def _approval_records_by_content_sha(repo_root: Path | None = None) -> dict[str, Mapping[str, object]]:
+    """`approvals/records/*.json` を content sha256 -> payload の写像として
+    読む（読めない/JSON 不正なファイルは黙って飛ばす——本検査は「記録がある
+    ときだけ順序を見る」補助検査であり、記録アーカイブの健全性検査ではない）。"""
+    root = repo_root if repo_root is not None else _REPO_ROOT
+    records_dir = root / _APPROVAL_RECORDS_RELATIVE
+    out: dict[str, Mapping[str, object]] = {}
+    if not records_dir.is_dir():
+        return out
+    for path in sorted(records_dir.glob("*.json")):
+        try:
+            raw = path.read_bytes()
+            payload = json.loads(raw.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, Mapping):
+            out[hashlib.sha256(raw).hexdigest()] = payload
+    return out
+
+
+def _freeze_event_time(manifest_path: Path) -> datetime | None:
+    """`manifest_path` と同じ campaign directory の `ledger.jsonl` 先頭付近に
+    ある `c0_freeze` event の `event_time_utc`。読めない/無い場合は `None`。"""
+    ledger_path = manifest_path.parent / "ledger.jsonl"
+    try:
+        text = ledger_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        payload = entry.get("payload") if isinstance(entry, Mapping) else None
+        if isinstance(payload, Mapping) and payload.get("kind") == "c0_freeze":
+            return _parse_iso8601_utc(payload.get("event_time_utc"))
+    return None
+
+
+@dataclass(frozen=True)
+class GateApprovalOrderingReport:
+    """`_check_gate_approval_ordering()` の結果。`violations` は fail-closed
+    な順序逆転（`missing_required_keys` へ合流する）、`notes` は「検査不能」
+    （承認記録が `approvals/records/` に無い・ledger が読めない等）の理由。"""
+
+    violations: tuple[str, ...]
+    notes: tuple[str, ...]
+
+
+def _check_gate_approval_ordering(
+    manifest: Mapping[str, object],
+    manifest_path: Path | str | None,
+    *,
+    repo_root: Path | None = None,
+) -> GateApprovalOrderingReport:
+    """v1.2 WP2 §C-9（D108 の欠陥）: manifest の `approvals.gate1_sha256` /
+    `gate2_sha256` に一致する承認記録が `approvals/records/` にある場合、その
+    `approved_at_utc` と ledger の `c0_freeze` event 時刻の順序を検査し、
+    逆転（承認が freeze より後 = 事後追認）を violation とする。
+
+    記録が無い場合はスキップし、検査不能の理由を `notes` に残す
+    （`c0_freeze.armed_freeze()` は publish 前に同じ順序を実測の承認ファイル
+    に対して検査するので、こちらは on-disk manifest の事後監査用）。
+    """
+    if manifest_path is None:
+        return GateApprovalOrderingReport(violations=(), notes=())
+    path = Path(manifest_path).expanduser().resolve()
+    approvals_section = manifest.get("approvals")
+    if not isinstance(approvals_section, Mapping):
+        return GateApprovalOrderingReport(
+            violations=(),
+            notes=("gate_approval_ordering: manifest has no approvals section (not checkable)",),
+        )
+    freeze_time = _freeze_event_time(path)
+    if freeze_time is None:
+        return GateApprovalOrderingReport(
+            violations=(),
+            notes=(
+                "gate_approval_ordering: no readable c0_freeze ledger event next to "
+                f"{str(path)!r} (not checkable)",
+            ),
+        )
+    records = _approval_records_by_content_sha(repo_root)
+    violations: list[str] = []
+    notes: list[str] = []
+    for short in ("gate1", "gate2"):
+        declared_sha = approvals_section.get(f"{short}_sha256")
+        if not isinstance(declared_sha, str):
+            notes.append(
+                f"gate_approval_ordering: manifest approvals.{short}_sha256 missing "
+                "(not checkable)"
+            )
+            continue
+        record = records.get(declared_sha)
+        if record is None:
+            notes.append(
+                f"gate_approval_ordering: no approval record with content sha256 "
+                f"{declared_sha!r} under {_APPROVAL_RECORDS_RELATIVE} (not checkable)"
+            )
+            continue
+        approved_at = _parse_iso8601_utc(record.get("approved_at_utc"))
+        if approved_at is None:
+            violations.append(
+                f"{short}_approval_unparsable_timestamp: approved_at_utc="
+                f"{record.get('approved_at_utc')!r}"
+            )
+            continue
+        if approved_at > freeze_time + timedelta(
+            seconds=_GATE_APPROVAL_CLOCK_SKEW_TOLERANCE_SECONDS
+        ):
+            violations.append(
+                f"{short}_approval_future_dated: approved_at_utc={approved_at.isoformat()} "
+                f"is later than the c0_freeze event time {freeze_time.isoformat()} + "
+                f"{_GATE_APPROVAL_CLOCK_SKEW_TOLERANCE_SECONDS}s tolerance"
+            )
+        elif approved_at >= freeze_time:
+            violations.append(
+                f"{short}_approval_not_before_freeze: approved_at_utc="
+                f"{approved_at.isoformat()} is not strictly before the c0_freeze event "
+                f"time {freeze_time.isoformat()} (D108)"
+            )
+    return GateApprovalOrderingReport(violations=tuple(violations), notes=tuple(notes))
+
+
 def _legacy_v1_0_opt_in_verified(
     manifest: Mapping[str, object], manifest_path: Path | str | None
 ) -> bool:
@@ -2819,6 +3046,11 @@ def validate_c0_manifest(
     missing_required += _check_independence_ledger(manifest)
     missing_required += _check_rng_ledger_shape(manifest)
     missing_required += _check_rng_ledger_closed_set(manifest)
+    # v1.2 WP2 §B(vi)/§C-9: rehearsal manifest の設置場所 + Gate 承認時刻の
+    # 順序（どちらも `manifest_path` が渡された on-disk 検証でのみ有効）。
+    missing_required += _check_rehearsal_location(manifest, manifest_path)
+    gate_ordering = _check_gate_approval_ordering(manifest, manifest_path)
+    missing_required += list(gate_ordering.violations)
 
     missing_recorded, downgrades = _check_recorded_or_absent(manifest)
     all_missing = tuple(missing_required + missing_recorded)
@@ -2874,6 +3106,7 @@ def validate_c0_manifest(
         claim_relevant_field_violations=claim_relevant_violations,
         invariance_axis_violations=invariance_axis_violations,
         u_gt_u_num_bound_violations=u_gt_u_num_violations,
+        gate_approval_ordering_notes=gate_ordering.notes,
         holdout_pin_feasibility_violations=holdout_pin_feasibility_violations,
         holdout_pin_declaration_violations=holdout_pin_declaration_violations,
         holdout_pin_membership_violations=holdout_pin_membership_violations,

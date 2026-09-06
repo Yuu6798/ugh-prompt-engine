@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ast
 import random
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -9,10 +11,15 @@ from voice_genesis.calibration.fixtures import axes, controls
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
 from voice_genesis.calibration.fixtures.matrix import (
     FixtureRow,
+    active_matrix,
     build_matrix,
+    build_rehearsal_matrix,
     compute_domain,
     declared_sweeps_by_family,
     f0_band_ok,
+    rehearsal_mode,
+    set_rehearsal_mode,
+    single_axis_nuisance_tag_axis,
     truth_identity_for_row,
     validate_matrix,
 )
@@ -474,3 +481,148 @@ def test_truth_core_coverage_min_2_property_over_random_secrets() -> None:
             for split in (Split.SELECTION, Split.HOLDOUT):
                 truth_core_count = _truth_core_count(rows, realized.assignment, family, split)
                 assert truth_core_count >= 2, (family, split, truth_core_count, secret.hex())
+
+
+# ---------------------------------------------------------------------------
+# v1.2 WP2 — rehearsal 行列（縮小行列と 1 箇所切替）
+# ---------------------------------------------------------------------------
+
+#: `build_rehearsal_matrix()` の実測行数（決定論的部分集合なので固定値で
+#: 縛る——canonical matrix の構成が変われば必ずここが落ち、rehearsal 経路の
+#: 被覆を無言で失わないための番人）。
+REHEARSAL_MATRIX_ROW_COUNT = 58
+
+
+def test_rehearsal_matrix_is_deterministic_subset() -> None:
+    """§A-3: 部分集合であること・`build_matrix()` の列挙順を保存すること・
+    全 family / 全 control_class / 単一軸 nuisance 行 >= 1 / anchor >= 1 を
+    満たすこと・呼び出しの間で決定論的であること。"""
+    full = build_matrix()
+    rehearsal = build_rehearsal_matrix()
+
+    full_ids = [mr.row_id for mr in full]
+    rehearsal_ids = [mr.row_id for mr in rehearsal]
+
+    # 部分集合 + 重複なし。
+    assert len(set(rehearsal_ids)) == len(rehearsal_ids)
+    assert set(rehearsal_ids) <= set(full_ids)
+    # 列挙順の保存（full の順で filter したものと完全一致）。
+    kept = set(rehearsal_ids)
+    assert rehearsal_ids == [rid for rid in full_ids if rid in kept]
+    # 決定論（同一入力 -> 同一出力）。
+    assert [mr.row_id for mr in build_rehearsal_matrix()] == rehearsal_ids
+    # 行数は実測値で固定する。
+    assert len(rehearsal) == REHEARSAL_MATRIX_ROW_COUNT
+
+    families = {mr.row.family for mr in rehearsal}
+    assert families == {family.value for family in axes.FAMILY_ORDER}
+
+    # (c) 全 control_class が残る。
+    assert {mr.row.control_class for mr in rehearsal if mr.row.control_class is not None} == {
+        mr.row.control_class for mr in full if mr.row.control_class is not None
+    }
+
+    for family in axes.FAMILY_ORDER:
+        fam_rows = [mr for mr in rehearsal if mr.row.family == family.value]
+        # (a) truth core の declared sweep が §10.4 の下限を満たす。
+        assert len([mr for mr in fam_rows if mr.row.block == "TRUTH_CORE"]) >= (
+            MIN_RESOLVABLE_PAIRS_PER_SWEEP
+        ), family
+        # (b) 単一軸 nuisance 主効果の CONFOUND 行 >= 1。
+        assert [
+            mr
+            for mr in fam_rows
+            if mr.row.block == "CONFOUND" and single_axis_nuisance_tag_axis(mr.row) is not None
+        ], family
+        # (d) anchor（positive control）>= 1。
+        assert [mr for mr in fam_rows if mr.row.positive_control], family
+
+
+def test_rehearsal_matrix_declared_sweeps_meet_truth_level_floor() -> None:
+    """縮小行列が生む declared sweep はすべて §10.4 の truth level 下限
+    （`MIN_RESOLVABLE_PAIRS_PER_SWEEP`）を満たす——満たさないと
+    `c0_validate._check_declared_sweep_truth_levels()` が rehearsal freeze を
+    構造的に必ず BLOCK する（この不変が本 WP の C0 疎通の前提）。"""
+    rehearsal = build_rehearsal_matrix()
+    row_by_id = {mr.row_id: mr.row for mr in rehearsal}
+    declared = declared_sweeps_by_family(rehearsal)
+    for family, sweeps in declared.items():
+        assert sweeps, family
+        for sweep_id, member_ids in sweeps.items():
+            levels = {truth_identity_for_row(row_by_id[rid]) for rid in member_ids}
+            assert len(levels) >= MIN_RESOLVABLE_PAIRS_PER_SWEEP, (family, sweep_id, levels)
+
+
+def test_active_matrix_switches_only_under_rehearsal_mode() -> None:
+    """`active_matrix()` は既定で本番 456 セル、`set_rehearsal_mode(True)` の
+    下でのみ縮小行列を返す（プロセス大域状態なので必ず戻す）。"""
+    assert not rehearsal_mode()
+    assert len(active_matrix()) == 456
+    try:
+        set_rehearsal_mode(True)
+        assert rehearsal_mode()
+        assert [mr.row_id for mr in active_matrix()] == [
+            mr.row_id for mr in build_rehearsal_matrix()
+        ]
+    finally:
+        set_rehearsal_mode(False)
+    assert not rehearsal_mode()
+    assert len(active_matrix()) == 456
+
+
+#: `build_matrix()` を直接呼んでよい production モジュール。
+#:
+#: - `fixtures/matrix.py`: 定義元（`active_matrix()`/`build_rehearsal_matrix()`
+#:   の実装そのものが呼ぶ）。
+#: - `campaign/diagnose.py`: C-1 探索ステージ（RUN10-CAL-v1.2 WP4）。freeze も
+#:   封印も ledger も持たない **armed campaign ではない** cheap gate であり、
+#:   `--rehearsal` の対象外（rehearsal は「campaign 経路の疎通試験」であって、
+#:   その前段の診断まで縮小する意味は無い）。
+_BUILD_MATRIX_CALL_SITE_ALLOWLIST = frozenset(
+    {
+        "voice_genesis/calibration/fixtures/matrix.py",
+        "voice_genesis/calibration/campaign/diagnose.py",
+    }
+)
+
+
+def _direct_build_matrix_calls(source: str) -> list[int]:
+    """`source` 中で `build_matrix(...)` を **実際に呼んでいる** 行番号
+    （docstring/コメント中の言及は AST に現れないので自動的に除外される）。
+    `x.build_matrix()` のような属性呼び出しも対象にする。"""
+    lines: list[int] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = (
+            func.id
+            if isinstance(func, ast.Name)
+            else func.attr
+            if isinstance(func, ast.Attribute)
+            else None
+        )
+        if name == "build_matrix":
+            lines.append(node.lineno)
+    return lines
+
+
+def test_no_direct_build_matrix_call_sites_outside_matrix_module() -> None:
+    """§A-2: `build_matrix()` の直接呼び出しが allowlist 以外の production
+    モジュールに無いことを全数で固定する（テストは対象外——テストは意図的に
+    「常に本番 456 セル」を読む）。新しい call site が `active_matrix()` を
+    経由し忘れると rehearsal 切替が片肺になるため、この全数検査を凍結する。"""
+    calibration_root = Path(__file__).resolve().parents[1]
+    repo_root = calibration_root.parents[1]
+    offenders: list[str] = []
+    for path in sorted(calibration_root.rglob("*.py")):
+        rel = path.relative_to(repo_root).as_posix()
+        if "/tests/" in f"/{rel}" or rel in _BUILD_MATRIX_CALL_SITE_ALLOWLIST:
+            continue
+        for lineno in _direct_build_matrix_calls(path.read_text(encoding="utf-8")):
+            offenders.append(f"{rel}:{lineno}")
+    assert not offenders, (
+        "direct build_matrix() call site(s) outside the allowlist — route them "
+        "through fixtures.matrix.active_matrix() so --rehearsal switches every "
+        f"consumer at once: {offenders}"
+    )

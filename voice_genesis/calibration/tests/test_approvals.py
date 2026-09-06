@@ -965,3 +965,55 @@ def test_load_approval_reads_design_doc_exactly_once(
 
     design_doc_reads = [p for p in read_bytes_calls if p == design_doc_path]
     assert len(design_doc_reads) == 1, read_bytes_calls
+
+
+# ---------------------------------------------------------------------------
+# v1.2 WP2 §B(vii) — rehearsal 用 max_claim_scope sentinel
+# ---------------------------------------------------------------------------
+
+
+def test_gate1_rehearsal_sentinel_scope_is_accepted_only_under_rehearsal(tmp_path: Path) -> None:
+    """`["REHEARSAL"]` は `rehearsal=True` の読み込みでのみ approved になる。"""
+    _write_gate1(tmp_path, max_claim_scope=[approvals.REHEARSAL_CLAIM_SCOPE_SENTINEL])
+    result = approvals.load_approval(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path, rehearsal=True
+    )
+    assert result.approved, result.reasons
+    assert result.record is not None
+    assert result.record.max_claim_scope == (approvals.REHEARSAL_CLAIM_SCOPE_SENTINEL,)
+
+
+def test_gate1_rehearsal_sentinel_scope_is_refused_in_production(tmp_path: Path) -> None:
+    """本番（`rehearsal=False`、既定）では sentinel を含む承認を拒否する
+    ——claim を生む経路が「claim しない」承認で武装されないための往復側。"""
+    _write_gate1(tmp_path, max_claim_scope=[approvals.REHEARSAL_CLAIM_SCOPE_SENTINEL])
+    result = approvals.load_approval(approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path)
+    assert result.approved is False
+    assert any("REHEARSAL" in reason and "max_claim_scope" in reason for reason in result.reasons)
+
+
+def test_gate1_normal_scope_is_unaffected_by_rehearsal_flag(tmp_path: Path) -> None:
+    """sentinel を含まない通常 scope は rehearsal フラグの有無で挙動が変わらない。"""
+    _write_gate1(tmp_path)
+    for rehearsal in (False, True):
+        result = approvals.load_approval(
+            approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path, rehearsal=rehearsal
+        )
+        assert result.approved, (rehearsal, result.reasons)
+        assert result.record is not None
+        assert result.record.max_claim_scope == ("formant_frequency",)
+
+
+def test_check_armed_gate1_propagates_rehearsal_to_loader(tmp_path: Path, monkeypatch) -> None:
+    """`check_armed()` も rehearsal を loader へ伝播する（本番では
+    sentinel 承認で武装できない）。"""
+    _write_gate1(tmp_path, max_claim_scope=[approvals.REHEARSAL_CLAIM_SCOPE_SENTINEL])
+    env = {approvals.GATE_ENV_VAR[approvals.Gate.GATE1_CAMPAIGN_EXECUTION]: "1"}
+    production = approvals.check_armed(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, True, env, tmp_path
+    )
+    assert production.armed is False
+    rehearsal = approvals.check_armed(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, True, env, tmp_path, rehearsal=True
+    )
+    assert rehearsal.armed is True, rehearsal.missing_factors
