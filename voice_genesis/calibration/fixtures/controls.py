@@ -29,9 +29,12 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 
+from voice_genesis.calibration.candidates import adapter
 from voice_genesis.calibration.fixtures.matrix import MatrixRow
 from voice_genesis.calibration.vocab import Domain
 
@@ -49,6 +52,52 @@ class ControlClass(str, Enum):
     OUT_OF_BAND_POLE = "OUT_OF_BAND_POLE"
     TOO_SHORT = "TOO_SHORT"
     INVALID_SR = "INVALID_SR"
+
+
+@dataclass(frozen=True)
+class DetectionPredicate:
+    """`detected()` の非既定 fire 判定: `output.values[field]` が存在・有限で
+    `>= min_value` のとき fire とみなす（RUN10-CAL-v1.2 WP1 設計）。"""
+
+    field: str
+    min_value: float
+
+
+def detected(output: adapter.MeterOutput, predicate: DetectionPredicate | None = None) -> bool:
+    """「検出した」判定の一本化（RUN10-CAL-v1.2 WP1、`[UNDERSPEC-CAL-D24]`/
+    round 20 finding #2 の後継）。従来 `campaign.selection_stage._detected()`
+    （any-finite-value）と `campaign.holdout_stage._detected_output()`
+    （values 非空 + 全値有限）の 2 通りに乖離していた fire 定義をここへ統合し、
+    両 stage はこの関数を呼ぶ（`values={}` を返す候補実装が将来現れても
+    selection/holdout の判定が食い違わない）。
+
+    - `predicate` 省略時（既定）: R20-2 の厳格版——`missing_reason`/
+      `ineligible` のいずれでも説明されず、かつ `values` が非空で全値が
+      有限であることを要求する（`holdout_stage._detected_output()` と同一
+      挙動）。
+    - `predicate` 指定時: `output.values[predicate.field]` が存在し有限で
+      `>= predicate.min_value` のとき True。フィールド欠落・非有限は False
+      （missing_reason/ineligible による欠落も含め「欠落は False」に一様に
+      写像する）。registry 側で候補ごとに任意宣言する `Candidate.
+      detection_predicate`（既定 `None` = 本関数の既定分岐）の消費側。
+    """
+    if output.missing_reason is not None or output.ineligible:
+        return False
+    if predicate is None:
+        return bool(output.values) and all(math.isfinite(v) for v in output.values.values())
+    value = output.values.get(predicate.field)
+    if value is None or not math.isfinite(value):
+        return False
+    return value >= predicate.min_value
+
+
+#: sanctioned abstention の閉語彙（RUN10-CAL-v1.2 WP1）: negative control 行
+#: (control_class) × ledger `measurement_missing` の `missing_reason` の組で
+#: 「棄権が正当」と事前登録された組み合わせのみを列挙する。追加は次 revision
+#: の preregistration 経由のみ（本 revision でのアドホックな追加は禁止）。
+SANCTIONED_ABSTENTIONS: frozenset[tuple[ControlClass, str]] = frozenset(
+    {(ControlClass.SILENCE, "F0_UNUSABLE")}
+)
 
 
 def negative_control_row_ids(rows: Iterable[MatrixRow]) -> frozenset[str]:

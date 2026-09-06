@@ -6,8 +6,9 @@ Codex レビュー 2026-09-01 P1: positive control 行を leakage 除外集合�
 from __future__ import annotations
 
 from voice_genesis.calibration import splitter
+from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.fixtures import controls, matrix
-from voice_genesis.calibration.vocab import Domain, Split
+from voice_genesis.calibration.vocab import Domain, MissingReason, Split
 
 _DUMMY_SPLIT_SECRET = b"dummy-secret-for-controls-test-only"
 
@@ -202,4 +203,92 @@ def test_non_boundary_selection_instances_includes_confound_rows_somewhere() -> 
     assert confound_row_ids_seen, (
         "expected at least one CONFOUND row assigned to SELECTION split across all "
         "families under the dummy split secret"
+    )
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.2 WP1: `detected()` — the single fire-判定 that
+# `campaign.selection_stage`/`campaign.holdout_stage` both now call (the two
+# modules previously diverged: `selection_stage._detected()` did not require
+# `values` to be non-empty, `holdout_stage._detected_output()` — the R20-2
+# strict version — did). Default (`predicate=None`) reproduces the R20-2
+# strict version exactly; a `DetectionPredicate` switches to a field-specific
+# threshold test for candidates that declare one via `registry.Candidate.
+# detection_predicate`.
+# ---------------------------------------------------------------------------
+
+
+def test_detected_default_missing_reason_is_false() -> None:
+    output = MeterOutput(values={"f0_hz": 220.0}, missing_reason=MissingReason.OUTPUT_MISSING)
+    assert controls.detected(output) is False
+
+
+def test_detected_default_ineligible_is_false() -> None:
+    output = MeterOutput(values={"f0_hz": 220.0}, ineligible=True, ineligible_reason="no dep")
+    assert controls.detected(output) is False
+
+
+def test_detected_default_empty_values_is_false() -> None:
+    """round 20 finding #2's regression target: `missing_reason=None,
+    ineligible=False, values={}` (a candidate that ran cleanly and found
+    nothing) must not be misread as a detection."""
+    output = MeterOutput(values={})
+    assert controls.detected(output) is False
+
+
+def test_detected_default_nonfinite_value_is_false() -> None:
+    output = MeterOutput(values={"f0_hz": float("nan")})
+    assert controls.detected(output) is False
+
+
+def test_detected_default_finite_nonempty_values_is_true() -> None:
+    output = MeterOutput(values={"f0_hz": 220.0})
+    assert controls.detected(output) is True
+
+
+def test_detected_with_predicate_field_present_above_threshold_is_true() -> None:
+    predicate = controls.DetectionPredicate(field="energy_db", min_value=6.0)
+    output = MeterOutput(values={"energy_db": 12.0})
+    assert controls.detected(output, predicate) is True
+
+
+def test_detected_with_predicate_field_present_below_threshold_is_false() -> None:
+    predicate = controls.DetectionPredicate(field="energy_db", min_value=6.0)
+    output = MeterOutput(values={"energy_db": 3.0})
+    assert controls.detected(output, predicate) is False
+
+
+def test_detected_with_predicate_field_missing_is_false() -> None:
+    predicate = controls.DetectionPredicate(field="energy_db", min_value=6.0)
+    output = MeterOutput(values={"other_field": 100.0})
+    assert controls.detected(output, predicate) is False
+
+
+def test_detected_with_predicate_missing_reason_is_false() -> None:
+    """the `missing_reason`/`ineligible` gate applies uniformly regardless of
+    whether a predicate is supplied."""
+    predicate = controls.DetectionPredicate(field="energy_db", min_value=6.0)
+    output = MeterOutput(
+        values={"energy_db": 12.0}, missing_reason=MissingReason.OUTPUT_MISSING
+    )
+    assert controls.detected(output, predicate) is False
+
+
+def test_detected_with_predicate_nonfinite_value_is_false() -> None:
+    predicate = controls.DetectionPredicate(field="energy_db", min_value=6.0)
+    output = MeterOutput(values={"energy_db": float("inf")})
+    assert controls.detected(output, predicate) is False
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.2 WP1: `SANCTIONED_ABSTENTIONS` closed vocabulary.
+# ---------------------------------------------------------------------------
+
+
+def test_sanctioned_abstentions_is_the_single_preregistered_pair() -> None:
+    """closed vocabulary — additions are preregistration-only for the next
+    revision (module docstring). Locks the current membership so an
+    unreviewed addition shows up as a test diff."""
+    assert controls.SANCTIONED_ABSTENTIONS == frozenset(
+        {(controls.ControlClass.SILENCE, "F0_UNUSABLE")}
     )

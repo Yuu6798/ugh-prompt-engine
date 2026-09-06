@@ -258,30 +258,13 @@ class GateInputError(RuntimeError):
     INPUT_MISSING」へ写像する。"""
 
 
-def _detected_output(output: measure_stage.adapter.MeterOutput) -> bool:
-    """`campaign.selection_stage._detected()` を基にした「検出した」判定を
-    本モジュールから独立に持つ（private helper を跨 module 参照しない
-    既存方針）。missing_reason/ineligible のいずれでも説明されず、かつ
-    **`values` が非空で全値が有限**な出力のみを「検出した」とみなす。
-
-    round 20 finding #2 追補（Codex レビュー第 20 巡 P1 採用、2026-09-05）:
-    `campaign.selection_stage._detected()` は `values` の非空性を検査しない
-    （`missing_reason is None and not ineligible` のみ）ため、型システム上は
-    `missing_reason=None, ineligible=False, values={}`（「候補は正常に実行
-    され、かつ何も見つからなかった」という、missing_reason にも ineligible
-    にも頼らない有効な非検出）を「検出した」と誤判定しうる。全 candidate
-    実装（`PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY` が宣言する必須
-    field を持つ）は現状この状態を produce しないため実挙動への影響は無いが、
-    `_negative_fired()`/`_positive_detected()` が要求する「有効な出力が
-    存在し、かつ発火していない」という negative control 成功条件
-    （下記 `control_detection_for_family()` docstring 参照）を型として
-    正しく表現できるようにするための最小差分。`values` を検査しない旧定義を
-    `_positive_detected()`（`all()`）にも共有していたが、`values={}` は
-    positive control 上でも「非検出」の一種であり non-fire（失敗）に写像
-    されるべきなので、この変更は positive 側の既存契約とも整合する。"""
-    if output.missing_reason is not None or output.ineligible:
-        return False
-    return bool(output.values) and all(math.isfinite(v) for v in output.values.values())
+# RUN10-CAL-v1.2 WP1: `_negative_fired()`/`_positive_detected()` の「検出した」
+# 判定は `fixtures.controls.detected()` に一本化した（旧 `_detected_output()`
+# private helper は削除——`campaign.selection_stage`'s `_detected()` も同時に
+# 削除され、両 stage はこの共有関数を直接呼ぶ。R20-2 で追加した厳格版
+# （missing_reason/ineligible のいずれでも説明されず、かつ `values` が非空で
+# 全値が有限）は `fixtures.controls.detected()` の既定 predicate=None 分岐が
+# そのまま再現する——挙動は本 WP 前と完全に同一）。
 
 
 def _per_instance_output_repeats(
@@ -360,8 +343,8 @@ def control_detection_for_family(
     では次の 2 経路で「missing/invalid の分子算入」（v1.0 §10.1）に違反して
     いた: (a) instance の own record が 1 件も無い（`render_and_measure_
     holdout()` が測定を落とした等）場合を `False`＝非発火＝成功と誤って
-    写像していた、(b) 複数 repeat のうち一部が実際に発火（`_detected_output`
-    True）していても、他の repeat が missing/invalid（`_detected_output`
+    写像していた、(b) 複数 repeat のうち一部が実際に発火（`fixture_controls.detected()`
+    True）していても、他の repeat が missing/invalid（`fixture_controls.detected()`
     False）であれば `all()` が `False` を返し、実在する偽検出を非発火＝
     成功へ隠蔽していた:
 
@@ -371,7 +354,7 @@ def control_detection_for_family(
       `usable_primary_instances` 全件一致規約と対称）。record が 1 件も
       無い instance は不発火（失敗）。
     - **negative control**（`_negative_fired()`）: **いずれか 1 repeat でも**
-      detected（`_detected_output` True。真の偽検出）なら「発火（失敗）」
+      detected（`fixture_controls.detected()` True。真の偽検出）なら「発火（失敗）」
       （`candidates.adapter.negative_control_false_fire()` と同じ any-fire
       規約）。record が 1 件も無い instance も「発火（失敗）」——missing
       repeat を「非検出＝成功」に丸め込まない。
@@ -380,7 +363,7 @@ def control_detection_for_family(
       「fresh evidence」— round 12 対応後も残っていた穴）: 上記 round 12
       対応は instance の own record が **1 件も無い**（group 自体が空）場合
       のみを失敗へ倒したが、**group が非空で、その中身が missing_reason/
-      ineligible の repeat のみ**（`_detected_output` が全 record で False）
+      ineligible の repeat のみ**（`fixture_controls.detected()` が全 record で False）
       のケースは旧実装のまま「非発火（成功）」に丸め込まれ続けていた
       （`any()` が空集合でなく False の列に対しても False を返すため）。
       v1.1 §V3.6 の一次契約文（`observables.detection_rates()` docstring
@@ -393,7 +376,7 @@ def control_detection_for_family(
       非検出は正当」という別文脈（`candidates.adapter.
       within_fresh_process_mismatch()` — within/fresh 一致検査という
       **別の fail filter**）の定義をこちらへ横流しするのは誤りだった。
-      本関数の「不発火（成功）」は **`_detected_output()`（`values` が
+      本関数の「不発火（成功）」は **`fixture_controls.detected()`（`values` が
       非空かつ有限）で False になる record が 1 件も無く、かつ 1 件でも
       missing_reason/ineligible の record が無い**場合のみに限定する——
       missing_reason はいずれかの record に立った時点で（他の record が
@@ -411,9 +394,9 @@ def control_detection_for_family(
 
     def _positive_detected(instance: tuple[str, int]) -> bool:
         # round 20 finding #2 audit (positive side, no analogous hole found):
-        # `all()` already requires every repeat to be `_detected_output()`
-        # True for "fired (success)" — a single missing_reason/ineligible
-        # repeat (or, after the `_detected_output()` refinement above, a
+        # `all()` already requires every repeat to be `fixture_controls.
+        # detected()` True for "fired (success)" — a single missing_reason/
+        # ineligible repeat (or, after the round 20 finding #2 refinement, a
         # repeat with an empty `values` dict) already makes `all()` False,
         # correctly landing on non-fire (failure) per §V3.6's positive-side
         # contract ("positive control の missing/invalid は不発火（失敗）
@@ -422,7 +405,7 @@ def control_detection_for_family(
         group = by_instance.get(instance)
         if not group:
             return False
-        return all(_detected_output(r.output) for r in group)
+        return all(fixture_controls.detected(r.output) for r in group)
 
     def _negative_fired(instance: tuple[str, int]) -> bool:
         group = by_instance.get(instance)
@@ -435,7 +418,7 @@ def control_detection_for_family(
             # real false-fire — either way this instance is already a
             # failure, so the specific reason does not change the outcome).
             return True
-        return any(_detected_output(r.output) for r in group)
+        return any(fixture_controls.detected(r.output) for r in group)
 
     neg_outcomes = {
         instance_id_str(row_id, probe_index): _negative_fired((row_id, probe_index))

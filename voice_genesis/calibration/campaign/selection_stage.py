@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import hashlib
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,6 +57,7 @@ from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.candidates import adapter
 from voice_genesis.calibration.candidates.registry import ALL_CANDIDATES, Candidate
 from voice_genesis.calibration.canonical import manifest_sha
+from voice_genesis.calibration.fixtures import controls as fixture_controls
 from voice_genesis.calibration.fixtures.matrix import FixtureRow
 from voice_genesis.calibration.observables import bias, error_terms, q95, two_stage_median
 from voice_genesis.calibration.selection import CandidateCriteria, SelectionOutcome, select_across_ceilings
@@ -65,7 +66,12 @@ from voice_genesis.calibration.vocab import ClaimCeiling
 
 def candidate_space_sha(candidates: Sequence[Candidate] | None = None) -> str:
     """`registry.ALL_CANDIDATES`（または明示指定した候補集合）の canonical
-    snapshot sha。C0 で凍結済みの 99 候補宣言を C3 時点で再確認・記録する。"""
+    snapshot sha。C0 で凍結済みの 99 候補宣言を C3 時点で再確認・記録する。
+
+    RUN10-CAL-v1.2 WP1: `detection_predicate`（任意、既定 `None`）を payload
+    へ含める——registry が候補ごとに宣言する fire 判定も凍結対象の一部と
+    みなす（`None` の候補は `null`/`null` のペアとしてハッシュに載るため、
+    既存 99 候補全員が未宣言のままの本 revision では sha は不変）。"""
     pool = candidates if candidates is not None else ALL_CANDIDATES
     payload = {
         c.candidate_id: {
@@ -80,6 +86,11 @@ def candidate_space_sha(candidates: Sequence[Candidate] | None = None) -> str:
             "claim_ceiling": c.claim_ceiling.value,
             "complexity_rank": c.complexity_rank,
             "implementation_ref": c.implementation_ref,
+            "detection_predicate": (
+                {"field": c.detection_predicate.field, "min_value": c.detection_predicate.min_value}
+                if c.detection_predicate is not None
+                else None
+            ),
         }
         for c in pool
     }
@@ -318,18 +329,43 @@ FAIL_FILTER_NAMES: tuple[str, ...] = (
 )
 
 
-def _detected(output: adapter.MeterOutput) -> bool:
-    """`negative_control_false_fire`/`positive_control_non_fire` が要求する
-    「detections: Iterable[bool]」を、連続値 meter の `MeterOutput` から
-    導出する運用上の定義（`[UNDERSPEC-CAL-D24]`）: `missing_reason`/
-    `ineligible` のいずれでも説明されない、通常の finite 出力を返したことを
-    以て「検出した」とみなす。negative control（sweep truth を運ばない
-    fixture）上でこれが True なら偽検出、positive control（family anchor の
-    truth core 行）上でこれが False なら不発火——同じ boolean 信号を 2 つの
-    instance 母集団（negative/positive control 行）へ適用するだけで、
-    F0/tilt/aperiodicity 等どの family の連続値 meter にも一様に使える
-    （detector 型 meter 専用の閾値判定を新規発明しない）。"""
-    return output.missing_reason is None and not output.ineligible
+def _sanctioned_abstention_row_ids(
+    missing_row_ids: Iterable[str],
+    control_class_by_row_id: Mapping[str, str] | None,
+    missing_reason_by_row_id: Mapping[str, str] | None,
+) -> frozenset[str]:
+    """RUN10-CAL-v1.2 WP1: `missing_row_ids`（宣言された negative control 行の
+    うち own record が皆無だった行）のうち、`fixtures.controls.
+    SANCTIONED_ABSTENTIONS`（現行は `(SILENCE, "F0_UNUSABLE")` 1 組のみの
+    閉語彙）に列挙された (control_class, missing_reason) の組と一致する行
+    だけを返す。
+
+    `control_class_by_row_id`（row_id -> `fixtures.controls.ControlClass`
+    の値文字列。宣言された negative control 行のみを対象とする）と
+    `missing_reason_by_row_id`（row_id -> 当該候補に対する ledger
+    `measurement_missing` イベントの `reason`。1 行内で probe ごとに reason
+    が割れるケースは現行パイプラインでは発生しない——`measure_stage.
+    run_measure_stage()` の `missing_reason` は 1 呼び出し内で単一の理由
+    文字列を全 skip cell に一様に適用する——ため、呼び出し側は行単位で
+    1 つの reason 文字列を渡せばよい）は、いずれも省略可（既定 `None`）。
+    どちらも渡されなければ空集合を返す（後方互換 — 既存呼び出しは判定材料を
+    持たないため一切 sanctioned にならず、`negative_controls_incomplete`/
+    `negative_control_false_fire` は本 revision 前と同じ挙動を保つ）。"""
+    if not control_class_by_row_id or not missing_reason_by_row_id:
+        return frozenset()
+    out: set[str] = set()
+    for row_id in missing_row_ids:
+        control_class_value = control_class_by_row_id.get(row_id)
+        reason = missing_reason_by_row_id.get(row_id)
+        if control_class_value is None or reason is None:
+            continue
+        try:
+            control_class = fixture_controls.ControlClass(control_class_value)
+        except ValueError:
+            continue
+        if (control_class, reason) in fixture_controls.SANCTIONED_ABSTENTIONS:
+            out.add(row_id)
+    return frozenset(out)
 
 
 def candidate_fail_filter_report(
@@ -341,6 +377,8 @@ def candidate_fail_filter_report(
     expected_coverage_instances: frozenset[tuple[str, int]] = frozenset(),
     within_fresh_tol: float = 0.0,
     noise_only_control_row_ids: frozenset[str] = frozenset(),
+    control_class_by_negative_row_id: Mapping[str, str] | None = None,
+    missing_reason_by_negative_row_id: Mapping[str, str] | None = None,
 ) -> dict[str, bool | float | int | None]:
     """finding #8: `candidates.adapter` の共通 5 fail filter（schema 違反 /
     無説明非有限 / within-process と fresh-process の不一致 / negative
@@ -460,7 +498,32 @@ def candidate_fail_filter_report(
     へ配線する。この 3 キー（`noise_only_false_detection_rate`/
     `noise_only_instances_detected`/`noise_only_instances_total`）は
     `FAIL_FILTER_NAMES` に含まれないため `eligible_after_fail_filters()`
-    の判定には一切影響しない（純粋な監査・配線用の追加情報）。"""
+    の判定には一切影響しない（純粋な監査・配線用の追加情報）。
+
+    RUN10-CAL-v1.2 WP1（`c3b_failclosed_analysis.md` §5.1「実装バグ疑い」の
+    是正）: `negative_controls_incomplete` は `coverage_incomplete` が
+    BOUNDARY-domain 行（negative control 行を含む）を design-sanctioned な
+    欠測として除外しているのと非対称に、同じ SILENCE negative control 行
+    への record 皆無をゼロ許容で ineligible 化していた——F0 依存候補
+    (`measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES`) は SILENCE 行で
+    `F0_UNUSABLE` により一切呼ばれず record が皆無になるため、品質に関係
+    なく 100% 発火する決定論的デッドロックだった。`control_class_by_
+    negative_row_id`（row_id -> `fixtures.controls.ControlClass` の値文字列。
+    宣言された negative control 行のみ）と `missing_reason_by_negative_row_id`
+    （row_id -> 当該候補への ledger `measurement_missing` の `reason`）を
+    渡すと、両方が非 `None` の行のうち組が `fixtures.controls.
+    SANCTIONED_ABSTENTIONS`（閉語彙、現行 `(SILENCE, "F0_UNUSABLE")` のみ）
+    に含まれる行を「present かつ non-fired」として扱う——
+    `negative_controls_incomplete` の completeness 判定からは除外し（fail-
+    closed のまま維持されるのは非 sanctioned な欠測のみ）、
+    `negative_control_false_fire` の any-fire 判定には `False`（非発火）
+    として算入する（一方も他方も渡されない、または該当行が組に一致しない
+    ——`control_class_by_negative_row_id`/`missing_reason_by_negative_row_id`
+    省略時を含む——場合は本 revision 前と完全に同じ挙動を保つ、後方互換の
+    既定 `None`）。sanctioned 行以外の欠測（例: `OUTPUT_MISSING` による
+    行欠落や NOISE_ONLY の control_class）は従来どおり incomplete のまま。
+    粒度混在（本 filter は row_id 単位、`coverage_incomplete` は instance
+    単位）は v1.2 では変更しない（境界宣言）。"""
     own_records = [r for r in records if r.candidate_id == candidate.candidate_id]
 
     required_field = measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY.get(
@@ -487,8 +550,48 @@ def candidate_fail_filter_report(
                 mismatch = True
                 break
 
-    neg_detections = [_detected(r.output) for r in own_records if r.row_id in negative_control_row_ids]
-    pos_detections = [_detected(r.output) for r in own_records if r.row_id in positive_control_row_ids]
+    # v1.1 §V1: completeness is checked over the *union* of the zero-tolerance
+    # `negative_control_row_ids` and the (default-empty) `noise_only_control_
+    # row_ids` — a caller that splits F0_CONTROL's C3a population by control
+    # class must not lose the "every declared negative-control row has a
+    # record" safety net for the NOISE_ONLY subset just because it is exempt
+    # from the any-fire `negative_control_false_fire` filter below.
+    #
+    # v1.2 WP1: this bookkeeping is computed before `neg_detections` so a
+    # sanctioned abstention (`_sanctioned_abstention_row_ids()`, docstring
+    # above) can be folded into both the any-fire and completeness filters
+    # uniformly — see the docstring section above for the design rationale.
+    declared_negative_row_ids = negative_control_row_ids | noise_only_control_row_ids
+    seen_negative_row_ids = {r.row_id for r in own_records if r.row_id in declared_negative_row_ids}
+    missing_negative_row_ids = declared_negative_row_ids - seen_negative_row_ids
+    sanctioned_missing_row_ids = _sanctioned_abstention_row_ids(
+        missing_negative_row_ids,
+        control_class_by_negative_row_id,
+        missing_reason_by_negative_row_id,
+    )
+
+    neg_detections = [
+        fixture_controls.detected(r.output)
+        for r in own_records
+        if r.row_id in negative_control_row_ids
+    ]
+    # v1.2 WP1: a sanctioned-abstention row has zero own records because the
+    # F0-dependent candidate was never called on it (a skip, not a call that
+    # came back silent) — fold it into the any-fire population as `False`
+    # (present, non-fired), the same contribution a genuinely-called-and-
+    # silent record would make. Only rows also declared in the zero-tolerance
+    # `negative_control_row_ids` population count here (mirrors how the loop
+    # above filters `own_records`); a sanctioned row that is NOISE_ONLY-only
+    # (declared solely via `noise_only_control_row_ids`) never reaches the
+    # any-fire filter at all, exactly as before.
+    neg_detections.extend(
+        False for row_id in sanctioned_missing_row_ids if row_id in negative_control_row_ids
+    )
+    pos_detections = [
+        fixture_controls.detected(r.output)
+        for r in own_records
+        if r.row_id in positive_control_row_ids
+    ]
     neg_fire = adapter.negative_control_false_fire(neg_detections) if neg_detections else False
     pos_non_fire = adapter.positive_control_non_fire(pos_detections) if pos_detections else False
     # round 13 finding #1: a *declared* (non-empty) positive population that
@@ -501,16 +604,11 @@ def candidate_fail_filter_report(
     # non-empty intersection — a partial population (some declared rows
     # missing) silently under-counts `neg_detections` and can hide a false
     # fire that only occurs on the missing row.
-    # v1.1 §V1: completeness is checked over the *union* of the zero-tolerance
-    # `negative_control_row_ids` and the (default-empty) `noise_only_control_
-    # row_ids` — a caller that splits F0_CONTROL's C3a population by control
-    # class must not lose the "every declared negative-control row has a
-    # record" safety net for the NOISE_ONLY subset just because it is exempt
-    # from the any-fire `negative_control_false_fire` filter below.
-    declared_negative_row_ids = negative_control_row_ids | noise_only_control_row_ids
-    seen_negative_row_ids = {r.row_id for r in own_records if r.row_id in declared_negative_row_ids}
+    # v1.2 WP1: a sanctioned-abstention row (above) counts as "present" here
+    # — see the docstring section above / `fixtures.controls.
+    # SANCTIONED_ABSTENTIONS`. Every other missing row remains fail-closed.
     negative_controls_incomplete = bool(declared_negative_row_ids) and not (
-        declared_negative_row_ids <= seen_negative_row_ids
+        declared_negative_row_ids <= (seen_negative_row_ids | sanctioned_missing_row_ids)
     )
     # v1.1 §V1: NOISE_ONLY detections are excluded from the any-fire
     # `negative_control_false_fire` filter above and instead consumed as a
@@ -530,7 +628,7 @@ def candidate_fail_filter_report(
         if r.row_id in noise_only_control_row_ids:
             noise_only_detections_by_instance.setdefault(
                 (r.row_id, r.probe_index), []
-            ).append(_detected(r.output))
+            ).append(fixture_controls.detected(r.output))
     noise_only_instances_total = len(noise_only_detections_by_instance)
     noise_only_instances_detected = sum(
         1 for dets in noise_only_detections_by_instance.values() if any(dets)

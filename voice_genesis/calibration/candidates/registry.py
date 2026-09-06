@@ -51,6 +51,7 @@ import itertools
 from dataclasses import dataclass
 
 from .. import vocab
+from ..fixtures.controls import DetectionPredicate
 
 # ---------------------------------------------------------------------------
 # Candidate 値オブジェクト
@@ -78,6 +79,11 @@ class Candidate:
     implementation_ref: str
     """`module:function` 形式（`voice_genesis.calibration.candidates.impl.<module>:<function>`
     の完全修飾のうち `candidates.impl.` を省略した短縮形）。"""
+    detection_predicate: DetectionPredicate | None = None
+    """RUN10-CAL-v1.2 WP1: `fixtures.controls.detected()` へ渡す非既定 fire
+    判定（任意）。既定 `None` は `detected()` の既定分岐（missing_reason/
+    ineligible のいずれでも説明されず values が非空かつ全値有限）を使うことを
+    意味し、既存の全候補は本 revision では宣言しない（挙動不変）。"""
 
     def params_dict(self) -> dict[str, object]:
         return dict(self.parameters)
