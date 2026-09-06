@@ -1,0 +1,21 @@
+{
+  "gate": "GATE1_CAMPAIGN_EXECUTION",
+  "approver": "Yuu6798 (delegated to Claude Fable 5.1 — renewed approval 2026-09-05 (explicit: 承認事項を承認する。そのまま進めて); original delegation 2026-09-02T01:46:11Z; session 01TCUb3k1qePkUkG23a9MTYn)",
+  "approved_at_utc": "2026-09-06T06:28:00Z",
+  "design_doc_sha256": "def109dbc031807103bc630b25622d868a208189ea00665d16d20bd9f6de3a0f",
+  "memo_sha256": "4b1030311db774e842cd908ca89d21656409f5312ff9632b4efe8212ae7efcaf",
+  "authorization_nonce": "a1329e63182bdb54f4972ad24fe7af93",
+  "cost_caps": {
+    "compute": 172800,
+    "storage": 4294967296,
+    "budget": 20,
+    "budget_accounting_mode": "local_zero_cost"
+  },
+  "e_use_bound_accepted": true,
+  "max_claim_scope": [
+    "formant_frequency",
+    "source_spectral_tilt",
+    "injected_noise_fraction",
+    "fundamental_frequency"
+  ]
+}
