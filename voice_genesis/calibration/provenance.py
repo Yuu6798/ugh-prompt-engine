@@ -31,7 +31,12 @@ from pathlib import Path
 from typing import Any
 
 from voice_genesis.calibration.canonical import canonical_json, manifest_sha
-from voice_genesis.calibration.splitter import RealizedSplitMap, RowInput, verify_split
+from voice_genesis.calibration.splitter import (
+    RealizedSplitMap,
+    RowInput,
+    nuisance_axis_for_row,
+    verify_split,
+)
 from voice_genesis.calibration.vocab import BlockedCode
 
 
@@ -241,7 +246,13 @@ class LeakageCheckResult:
     語彙を拡張せずに `BLOCKED_LEAKAGE` の内訳を区別する補助フィールド。既定は
     `None`（従来どおりの汎用 `BLOCKED_LEAKAGE`）。`holdout_unseal` の選択チェーン
     参照は正当だが Gate 3 参照（`gate3_accepted_sha`）の検証に失敗した場合のみ
-    `"UNSEAL_GATE3_UNVERIFIED"` を持つ。"""
+    `"UNSEAL_GATE3_UNVERIFIED"` を持つ。D105（`UNDERSPEC-CAL-D105`）で追加した
+    2 値: `split_verification_rows` の 1 行以上が独立再構築した canonical row
+    と（`nuisance_axis` を含む）属性不一致の場合は `"SPLIT_VERIFICATION_ROW_
+    MISMATCH"`、行属性は一致するのに `verify_split()` の再導出が凍結済み
+    `realized_split_map` と一致しない場合は `"SPLIT_REDERIVATION_MISMATCH"`
+    （どちらも汎用 `BLOCKED_LEAKAGE` の内訳区別であり、素通りして無言で
+    fail-closed していた D105 実障害の再発時に原因切り分けを速める目的）。"""
 
     blocked: BlockedCode | None
     control_excluded_count: int
@@ -1868,6 +1879,16 @@ class Ledger:
                 truth_level=fixture_row.block,
                 generator_impl=fixture_row.generator_impl,
                 boundary_class=matrix_row.domain.value,
+                # D105: `nuisance_axis` (v1.1 §V3.5) must be reconstructed the
+                # same way `splitter.row_inputs_for_split()` does, and
+                # compared below, or a caller-supplied row set that silently
+                # differs only in `nuisance_axis` (e.g. a stale local
+                # RowInput-building duplicate that never set it) passes this
+                # per-row check and only fails much later, silently, inside
+                # `verify_split()`'s coverage-repair re-derivation —
+                # `campaign RUN10-CAL-20260905-410b25f2`'s C4
+                # `BLOCKED_LEAKAGE(control_excluded_count=0)` incident.
+                nuisance_axis=nuisance_axis_for_row(fixture_row),
             )
 
         for supplied in split_verification_rows:
@@ -1878,9 +1899,12 @@ class Ledger:
                 or supplied.truth_level != expected.truth_level
                 or supplied.generator_impl != expected.generator_impl
                 or supplied.boundary_class != expected.boundary_class
+                or supplied.nuisance_axis != expected.nuisance_axis
             ):
                 return LeakageCheckResult(
-                    blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0
+                    blocked=BlockedCode.BLOCKED_LEAKAGE,
+                    control_excluded_count=0,
+                    reason="SPLIT_VERIFICATION_ROW_MISMATCH",
                 )
 
         try:
@@ -1892,7 +1916,21 @@ class Ledger:
         except (KeyError, TypeError, ValueError):
             split_verified = False
         if not split_verified:
-            return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
+            # D105: every row-level attribute (including `nuisance_axis`)
+            # supplied here already matched the independently-reconstructed
+            # canonical row above, yet re-running the split algorithm on
+            # these same rows did not reproduce the frozen realized map —
+            # i.e. a split re-derivation mismatch whose row inputs may
+            # nonetheless differ from what was actually used at freeze time
+            # in some way this function's row-attribute comparison does not
+            # cover (e.g. `pinned_holdout_row_ids` drift). Distinct from the
+            # `SPLIT_VERIFICATION_ROW_MISMATCH` case above, which is caught
+            # before ever calling `verify_split()`.
+            return LeakageCheckResult(
+                blocked=BlockedCode.BLOCKED_LEAKAGE,
+                control_excluded_count=0,
+                reason="SPLIT_REDERIVATION_MISMATCH",
+            )
 
         frozen_split = _verified_split_freeze_commitment(ledger_entries)
         if frozen_split is None:

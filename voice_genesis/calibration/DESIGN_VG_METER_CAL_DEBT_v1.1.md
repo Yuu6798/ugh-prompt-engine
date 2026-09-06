@@ -445,6 +445,11 @@ duration / noise / context）を invariance 軸として一律宣言する一方
 - **§10.1 の意味論は不変**: 未達軸が 1 つでもあれば ABSOLUTE 不可（実測で pair が
   欠落した場合は従来どおり正直に fail）。本追補は「宣言と行列の不整合による構造的
   偽失敗」だけを除去する。
+- **D105 追補（2026-09-06）**: `RowInput` 構築（`nuisance_axis` を含む）は
+  `splitter.row_inputs_for_split()` が唯一の正本であり、他モジュールでの
+  ローカル複製を禁止する。leakage ゲート（`provenance.Ledger.check_leakage()`）
+  の canonical 突合は `nuisance_axis` を含む（`README.md` 逸脱台帳
+  `UNDERSPEC-CAL-D105`）。
 
 ### V3.6 追補 — control 出力欠落の分子算入（同 P1 採用、2026-09-05）
 
@@ -561,3 +566,28 @@ next_actions:
   - 実行へ進む場合のみ v1.0 §18 の 3 承認 Gate を順に処理（Gate 3 は armed freeze 後）
   - 結果は改竄せず記録する（gate の正直な fail は正当な終端）
 ```
+
+## V8. v1.2 候補課題（campaign `410b25f2` c3b 観測 = D106 由来）
+
+2026-09-06、campaign `RUN10-CAL-20260905-410b25f2`（本設計 v1.1）は c3b まで
+到達し UNSEALED としたが、C4 が `BLOCKED_LEAKAGE`（D105、修正 `2f24507`。ただし
+render_stage.py は当該 campaign の manifest schema_paths に pin 済みのため
+継続不可）で入場できず abort した。c3b の選定結果（`UNDERSPEC-CAL-D106`）から
+次改訂（v1.2）で検討すべき設計課題を 4 点、暫定候補として記録する（いずれも
+本改訂での裁定は行わない — 次 Design Memo での取り扱いを待つ）:
+
+- **対照意味論: SILENCE × F0_UNUSABLE の明示 abstention** — `negative_controls_incomplete`
+  は SILENCE 対照が F0_UNUSABLE のとき F0 依存候補の record が 0 件になり
+  無条件発火する一方、`coverage_incomplete` は同じ行を設計上の除外として扱う。
+  両者の非整合は `selection_stage.py:510-514` 付近の実装バグ疑いで、v1.2 では
+  「F0 が使用不能な対照行をどちらの判定が優先して扱うか」を明文化する必要がある
+- **FORMANT の fire 定義** — c3b で FORMANT 系候補 43/43 が negative false-fire
+  となり、選定成立ゼロが構造的に固定されている。fire/no-fire の閾値・対照設計
+  自体が候補空間と整合しているかを再検討する
+- **TILT ceiling** — TILT の clean 候補 ceiling が NONE で固定されており、
+  現行 sweep/candidate 設計で到達可能な ceiling が原理的に存在するかを見直す
+- **`c0_validate` の post-freeze 検証モード** — 今回のように armed freeze 後に
+  campaign 側コード（render_stage.py 等）の欠陥が判明した場合、manifest
+  schema_paths pin により campaign 継続が不可能になる。freeze 済み campaign の
+  コード欠陥を「continue 可能」と「abort 必須」に分ける検証モード（または
+  pin 対象の粒度）を `c0_validate` 側に導入できないかを検討する

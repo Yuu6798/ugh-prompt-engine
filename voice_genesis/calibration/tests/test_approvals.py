@@ -25,16 +25,6 @@ def _memo_sha() -> str:
     return hashlib.sha256((_REPO_ROOT / approvals.MEMO_RELATIVE_PATH).read_bytes()).hexdigest()
 
 
-def _base_design_sha() -> str:
-    """v1.0（read-only 基底文書）の実測 sha256。v1.1 統治文書切替後、
-    `_design_sha()` は `approvals.DESIGN_DOC_RELATIVE_PATH`（= v1.1）を指す
-    ため、v1.0 に直接 pin された過去の承認レコード（v1.1 切替前に発行）を
-    照合するにはこちらを使う。"""
-    return hashlib.sha256(
-        (_REPO_ROOT / approvals.BASE_DESIGN_DOC_RELATIVE_PATH).read_bytes()
-    ).hexdigest()
-
-
 #: PR レビュー第 5 巡: gate1/gate2 は同一 authorization_nonce を要求する。
 #: テストの既定値は両者一致させておく（不一致ケースは個別テストで上書きする）。
 _TEST_NONCE = "test-nonce-0000000000000000"
@@ -673,6 +663,18 @@ def test_cli_refresh_missing_gate_arg_errors() -> None:
 # 「manifest に pin 済み（consumed）= 不変・pin 一致のみ確認 / 未消費 = 従来
 # どおり tree-at-head 追随を要求」の二分岐に改める。D51 が守りたかった
 # 「生きている参照コピーのドリフト検知」は未消費コピーに対して維持する。
+#
+# 2026-09-06 改訂: 上記の「pin 一致のみ確認」を実装した 0b2bcff は、consumed
+# 判定の中身を実際には「`design_doc_sha256` == v1.0 実測 sha」という別の
+# tree-at-head 照合に置き換えていた。2026-09-02 record（v1.0 時代に発行）
+# までは pin 先文書がたまたま v1.0 だったため区別がつかなかったが、v1.1
+# 統治文書切替後に発行され `RUN10-CAL-20260905-410b25f2` の manifest に
+# consumed された `gate1_campaign_execution.2026-09-05T095826Z.json` は v1.1
+# 統治文書（発行当時の sha）を pin しており、v1.0 照合は誤検知する。
+# consumed record の正しさは「pin している manifest とのバイト一致」のみで
+# 担保される（`record_sha in pinned_shas` の分類自体がそれを保証している）
+# ため、ここでは `design_doc_sha256` が発行当時の統治文書 sha を指す 64 桁
+# hex 文字列であることの形式検査に留め、特定バージョンとの一致は課さない。
 # ---------------------------------------------------------------------------
 
 _GATE1_RECORD_COPY_GLOB = "gate1_campaign_execution.*.json"
@@ -700,11 +702,14 @@ def test_repo_gate1_record_copies_consumed_pins_or_tree_at_head() -> None:
     - **consumed**（レコードのバイト sha256 が、いずれかの campaign の
       `c0_manifest.json` の `approvals.gate1_sha256` と一致する）: そのレコードは
       既に freeze で消費された監査証跡であり、以後不変（再 stamp 禁止 —
-      書き換えると closed campaign の pin と食い違い将来汚染になる）。
-      `design_doc_sha256` が `_base_design_sha()`（v1.0、常に不変の read-only
-      基底文書）と一致することのみ確認する。memo_sha256 の tree-at-head 比較
-      は行わない — v1.1 §7 のようなメモ追記でここが動くのは正当な変更であり
-      regression ではない。
+      書き換えると closed campaign の pin と食い違い将来汚染になる）。正しさは
+      「pin している manifest とのバイト一致」で担保される（`record_sha in
+      pinned_shas` という分類そのものがそれを検証している）ため、
+      `design_doc_sha256`/`memo_sha256` を working tree や特定バージョンの
+      統治文書と照合することはしない。record の `design_doc_sha256` は発行
+      当時の統治文書のバージョンを指すため、v1.0 発行分（2026-09-02）と v1.1
+      発行分（2026-09-05 以降）が混在し得る — ここでは `design_doc_sha256` が
+      64 桁 hex 文字列であることのみ形式的に確認する。
     - **未消費**（どの manifest の pin にも一致しない = まだ freeze で
       消費されていない生きた参照コピー）: 従来どおり `design_doc_sha256`/
       `memo_sha256` が現在の working tree（`approvals.DESIGN_DOC_RELATIVE_PATH`
@@ -712,23 +717,27 @@ def test_repo_gate1_record_copies_consumed_pins_or_tree_at_head() -> None:
       と一致することを要求する regression guard（round 23 ADOPT (1):
       `memo_sha256` が stale だった finding の再発防止をここで維持する）。
 
-    期待値は `_design_sha()`/`_memo_sha()`/`_base_design_sha()` が現在の
-    working tree から都度実測する値であり、本テスト内にハッシュを一切
-    ハードコードしない。比較対象は「committed record の値」と「working tree
-    のドキュメント実体」であり、`c0_validate.py` の `repo.dirty_tree` チェック
-    （未コミット差分の有無）とは無関係 — 本テストが dirty tree で意味を変える
-    ことはない（GATE1_DECISION_RECORD.md 冒頭の注記どおり、承認ファイルの
-    正本自体は git 管理外）。
+    期待値は `_design_sha()`/`_memo_sha()` が現在の working tree から都度実測
+    する値であり、本テスト内にハッシュを一切ハードコードしない。比較対象は
+    「committed record の値」と「working tree のドキュメント実体」であり、
+    `c0_validate.py` の `repo.dirty_tree` チェック（未コミット差分の有無）とは
+    無関係 — 本テストが dirty tree で意味を変えることはない
+    （GATE1_DECISION_RECORD.md 冒頭の注記どおり、承認ファイルの正本自体は
+    git 管理外）。
 
     走査結果が 0 件（レコードコピーが 1 つも見つからない）場合は、ガードの
     空振り防止のため fail する。少なくとも 1 件は consumed（pin 済み campaign
-    が存在する）ことも合わせて assert する。
+    が存在する）ことも合わせて assert する。また、consumed 判定が単一の
+    統治文書バージョンに偏った実装（v1.0 sha 固定照合）に退行していないことを
+    示すため、v1.0 時代発行（2026-09-02）と v1.1 時代発行（2026-09-05）の
+    record が両方とも consumed 分類になることを明示的に確認する。
     """
     record_paths = sorted((_REPO_ROOT / _GATE1_RECORD_COPY_DIR).glob(_GATE1_RECORD_COPY_GLOB))
     assert record_paths, "no gate1_campaign_execution.*.json reference copies found"
 
     pinned_shas = _pinned_gate1_shas()
     consumed_count = 0
+    consumed_names: set[str] = set()
     for record_path in record_paths:
         record_bytes = record_path.read_bytes()
         record_sha = hashlib.sha256(record_bytes).hexdigest()
@@ -736,12 +745,26 @@ def test_repo_gate1_record_copies_consumed_pins_or_tree_at_head() -> None:
 
         if record_sha in pinned_shas:
             consumed_count += 1
-            assert payload["design_doc_sha256"] == _base_design_sha(), record_path
+            consumed_names.add(record_path.name)
+            design_doc_sha256 = payload["design_doc_sha256"]
+            assert isinstance(design_doc_sha256, str), record_path
+            assert approvals._SHA256_HEX_RE.match(design_doc_sha256), record_path
         else:
             assert payload["design_doc_sha256"] == _design_sha(), record_path
             assert payload["memo_sha256"] == _memo_sha(), record_path
 
     assert consumed_count >= 1, "expected at least one gate1 record copy pinned by a closed campaign manifest"
+    # v1.0 時代発行と v1.1 時代発行が両方 consumed 分類になることを確認する
+    # regression guard（0b2bcff は v1.0 sha 固定照合だったため v1.1 発行分で
+    # 誤検知した — この2ファイルが両方揃わない限りこのテストは空振りする）。
+    _v1_0_ERA_RECORD = "gate1_campaign_execution.2026-09-02.json"
+    _v1_1_ERA_RECORD = "gate1_campaign_execution.2026-09-05T095826Z.json"
+    assert _v1_0_ERA_RECORD in consumed_names, (
+        f"expected v1.0-era record {_v1_0_ERA_RECORD!r} to be classified consumed"
+    )
+    assert _v1_1_ERA_RECORD in consumed_names, (
+        f"expected v1.1-era record {_v1_1_ERA_RECORD!r} to be classified consumed"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,11 @@ working tree 側の実測 sha256 が動いても、そのコピー自体は書�
 tree との整合（`refresh_document_hashes()` での追随）が要求されるのは、
 まだどの manifest にも pin されていない**未消費**の参照コピーのみ
 （`tests/test_approvals.py` の regression guard もこの区別で判定する）。
+consumed な参照コピーの正しさは、その `design_doc_sha256`/`memo_sha256` を
+working tree の現行版と突き合わせることではなく、pin している manifest との
+バイト一致で担保される — 記載された `design_doc_sha256` は working tree の
+現行統治文書ではなく、**発行当時**の統治文書（`DESIGN_VG_METER_CAL_DEBT_v1.0.md`
+または `v1.1.md`）のバージョンを指す。
 
 ## 配置場所
 

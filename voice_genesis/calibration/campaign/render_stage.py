@@ -62,49 +62,31 @@ from voice_genesis.calibration.cost_caps import check as cost_caps_check
 from voice_genesis.calibration.fixtures.controls import control_row_ids
 from voice_genesis.calibration.fixtures.matrix import FixtureRow, MatrixRow
 from voice_genesis.calibration.provenance import Ledger, LedgerEntry
-from voice_genesis.calibration.splitter import RowInput
+from voice_genesis.calibration.splitter import STRATUM_FACTOR_NAMES, row_inputs_for_split
 from voice_genesis.calibration.vocab import BlockedCode, Split
 
 #: `campaign.caps.CostCapExceededError` を本モジュール名前空間へ再公開する
 #: （finding #1: render_stage/measure_stage で単一の cap 超過 error 型を
 #: 共有する）。
 
-#: `c0_freeze.STRATUM_FACTOR_NAMES` と同一の stratum 化因子（`c0_freeze.py` は
-#: 他 agent が並行編集中のため import せず、値のみをここに複製する — この値
-#: 自体は既に凍結済みの decision であり本モジュール独自の UNDERSPEC ではない）。
-STRATUM_FACTOR_NAMES: tuple[str, ...] = ("truth_level", "boundary_class")
-
-
-def _row_inputs_for_split(
-    matrix_rows: Sequence[MatrixRow], stratum_factor_names: Sequence[str]
-) -> list[RowInput]:
-    """`provenance.Ledger.check_leakage` の `canonical_split_inputs` 構築と
-    同一の規約で `RowInput` を組み立てる（`c0_freeze._row_inputs_for_split`
-    と同一ロジック）。"""
-    out: list[RowInput] = []
-    for mrow in matrix_rows:
-        fr = mrow.row
-        stratum: dict[str, object] = {}
-        for name in stratum_factor_names:
-            if name == "truth_level":
-                stratum[name] = fr.block
-            elif name in ("boundary_class", "domain"):
-                stratum[name] = mrow.domain.value
-            elif name == "generator_impl":
-                stratum[name] = fr.generator_impl
-            else:
-                stratum[name] = getattr(fr, name, None)
-        out.append(
-            RowInput(
-                row_id=mrow.row_id,
-                family=fr.family,
-                stratum=stratum,
-                truth_level=fr.block,
-                generator_impl=fr.generator_impl,
-                boundary_class=mrow.domain.value,
-            )
-        )
-    return out
+#: D105 是正（2026-09-06）: 以前はここに `splitter.STRATUM_FACTOR_NAMES` の
+#: 値を複製したローカル定数 + `_row_inputs_for_split()`（`RowInput` 組み立ての
+#: 独自ローカル複製）を持っていた。この複製が v1.1 §V3.5 で `splitter.
+#: row_inputs_for_split()` に追加された `nuisance_axis` 計算に追随せず、常に
+#: `nuisance_axis=None` の行を C4 leakage ゲート（`_refuse_if_pre_unseal_
+#: holdout()`）へ渡していた——`realize_split()` の coverage 修復は
+#: `nuisance_axis` を見るため、凍結時（`splitter.row_inputs_for_split()` 経由）
+#: と本ゲート（複製経由）とで再導出結果が食い違い、`Ledger.check_leakage()`
+#: 内の `verify_split()` が無言で False になって `BLOCKED_LEAKAGE
+#: (control_excluded_count=0)` を返す——campaign データは無傷なのに C4 が
+#: 構造的に入場不能になる致命的バグだった（campaign
+#: `RUN10-CAL-20260905-410b25f2` で実際に発現。`README.md` 逸脱台帳
+#: `UNDERSPEC-CAL-D105`）。修正: ローカル複製を削除し、`splitter.
+#: row_inputs_for_split()`/`splitter.STRATUM_FACTOR_NAMES` を直接 import
+#: して RowInput 構築を単一の正本へ一本化した（C0 freeze 側の
+#: `c0_freeze._row_inputs_for_split` は元々 `splitter.row_inputs_for_split`
+#: の re-export であり複製ではなかった — 二重実装が存在したのは本モジュール
+#: だけ、と全数監査で確認済み）。
 
 
 def _children_cpu_seconds() -> float:
@@ -707,7 +689,7 @@ def _refuse_if_pre_unseal_holdout(
     holdout_row_ids = frozenset(
         rid for rid, split in campaign.realized_split.assignment.items() if split == Split.HOLDOUT
     )
-    split_verification_rows = _row_inputs_for_split(matrix_rows, STRATUM_FACTOR_NAMES)
+    split_verification_rows = row_inputs_for_split(matrix_rows, STRATUM_FACTOR_NAMES)
     result = Ledger.check_leakage(
         campaign.ledger.entries,
         holdout_row_ids,

@@ -2517,8 +2517,8 @@ def test_armed_freeze_through_full_campaign_cli_never_hits_blocked_leakage(
     from voice_genesis.calibration.campaign.render_stage import (
         STRATUM_FACTOR_NAMES as render_stratum_names,
     )
-    from voice_genesis.calibration.campaign.render_stage import _row_inputs_for_split
     from voice_genesis.calibration.fixtures.controls import control_row_ids
+    from voice_genesis.calibration.splitter import row_inputs_for_split
     from voice_genesis.calibration.vocab import Split
 
     campaign = load_frozen_campaign(campaign_dir, secret_dir)
@@ -2527,13 +2527,17 @@ def test_armed_freeze_through_full_campaign_cli_never_hits_blocked_leakage(
         rid for rid, split in campaign.realized_split.assignment.items() if split == Split.HOLDOUT
     )
     assert holdout_row_ids - control_ids, "test setup must realize a non-control holdout row"
+    # D105: `render_stage` no longer has its own local `_row_inputs_for_split`
+    # duplicate — it now imports `splitter.row_inputs_for_split()` directly
+    # (same function `_refuse_if_pre_unseal_holdout` calls in production), so
+    # this independent confirmation calls that same production entrypoint.
     result = Ledger.check_leakage(
         campaign.ledger.entries,
         holdout_row_ids,
         None,
         control_row_ids=control_ids,
         realized_split_map=campaign.realized_split,
-        split_verification_rows=_row_inputs_for_split(tiny_matrix, render_stratum_names),
+        split_verification_rows=row_inputs_for_split(tiny_matrix, render_stratum_names),
         split_secret=campaign.split_secret,
     )
     assert result.blocked is None, result.blocked
