@@ -27,23 +27,64 @@ determinism 検査・`FrozenCampaign` 前提）を呼ばない。代わりに:
    ledger 記帳・cost cap 課金は行わない）を `repeats=1` で呼ぶ
    （CLI `--repeats` は probe_index の本数であり、`run_within_process_calls`
    内部の repeat 数とは別軸）。
-3. **F0 injection**: 実経路 `campaign.cli._build_f0_by_instance()` は
-   C3a で選定された F0 candidate の within/fresh 全 process 出力を集約
-   （二段階中央値）し、finite かつ厳密正の instance だけを F0 依存候補へ
-   注入する（`campaign.measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES`）。
-   本モジュールは selection を経由せず、registry の F0 baseline
-   （`F0-B0-CURRENT`）を同じ signal に対して 1 回 within-process 実行した
-   単一値をそのまま使う。F0 が使用不能（欠測 or 非有限 or 非正）な instance
-   では、実経路の「候補を一切呼ばない」skip 挙動を模して候補呼び出し自体を
-   省略し、`missing_reason="F0_UNUSABLE"` を合成する（`fixtures.controls.
-   SANCTIONED_ABSTENTIONS` の `(SILENCE, "F0_UNUSABLE")` 判定を意味のある
-   ものにするため。実経路ではこれは `MeterOutput.missing_reason` ではなく
-   `measurement_missing` ledger event の `reason` フィールドだが、
-   ledger を持たない本モジュールでは `CellOutcome.missing_reason` という
-   別軸のラベルとして同じ役割を代替する）。
+3. **F0 injection**（RUN10-CAL-v1.2 WP4b 改訂）: 実経路
+   `campaign.cli._build_f0_by_instance()` は C3a で選定された F0 candidate
+   の within/fresh 全 process 出力を集約（二段階中央値）し、finite かつ
+   厳密正の instance だけを F0 依存候補へ注入する（`campaign.measure_stage.
+   F0_DEPENDENT_ALGORITHM_FAMILIES`）。本モジュールは selection を経由
+   しないため、どの F0 candidate が実 campaign の C3a で選定されるかを
+   事前には知り得ない——`scratchpad/campaign/c3b_failclosed_analysis.md`
+   §3.2 の実測どおり、選定される F0 candidate 次第で negative control 行の
+   F0 使用可否（＝F0 依存候補が実際に呼ばれるか）が変わり、診断結果
+   （特に negative fire）が変わり得る。そのため既定では **registry の
+   F0_CONTROL 候補全件（`f0_registry_candidates()`、candidate_id 昇順）を
+   1 件ずつ prepass に使って診断を掃引し**、候補ごとに結果を出す
+   （出力 JSON は `results[].f0_candidate` で分ける。`f0_prepass` フィールド
+   が `"swept"`）。`--f0-candidate <id>` で 1 件に固定できる
+   （`f0_prepass: "single"`）。F0 依存候補が 1 件も無い診断対象
+   （family=F0_CONTROL 自身を含む）では F0 prepass 自体を行わない
+   （`f0_prepass: "not_applicable"`、`results` は 1 要素で
+   `f0_candidate: null`）。F0 prepass は当該 F0 candidate を同じ signal に
+   対して 1 回 within-process 実行した単一値をそのまま使う（実経路の
+   二段階中央値集約ではなく単発値——診断は cheap gate であり集約統計量の
+   再現は C3a selection stage の責務のまま）。F0 が使用不能（欠測 or
+   非有限 or 非正）な instance では、実経路の「候補を一切呼ばない」skip
+   挙動を模して候補呼び出し自体を省略し、`missing_reason="F0_UNUSABLE"`
+   を合成する（`fixtures.controls.SANCTIONED_ABSTENTIONS` の
+   `(SILENCE, "F0_UNUSABLE")` 判定を意味のあるものにするため。実経路では
+   これは `MeterOutput.missing_reason` ではなく `measurement_missing`
+   ledger event の `reason` フィールドだが、ledger を持たない本モジュール
+   では `CellOutcome.missing_reason` という別軸のラベルとして同じ役割を
+   代替する）。
 4. **selection/holdout/split/approval/ledger**: 一切経由しない。
    `campaigns/` にも `~/.vg_cal/` にも書き込まない（`--out` は任意パスへの
    診断結果 JSON 出力のみ）。
+
+## 判定の意味論（RUN10-CAL-v1.2 WP4b 改訂）
+
+`c3b_failclosed_analysis.md` §5.1 が指摘した「同じ design-sanctioned な
+欠測を 2 つの filter が正反対に扱っている」実装バグ疑いと同型の穴が本
+モジュールの初版（WP4）にもあった: negative control 行が F0_UNUSABLE で
+丸ごとスキップされた（=候補が一度も呼ばれず record が皆無になった）とき、
+`detected()` は欠落を一様に「非発火（False）」へ写像するため、
+`(NOISE_ONLY, "F0_UNUSABLE")` のような **非 sanctioned** な行欠測が
+「negative fire rate 0.0 = clean」という偽の PASS を作れてしまっていた
+（`fixtures.controls.SANCTIONED_ABSTENTIONS` の閉語彙に無いのは
+`(SILENCE, "F0_UNUSABLE")` のみが登録されているため）。
+
+本改訂は `campaign.selection_stage.candidate_fail_filter_report()` の
+`negative_controls_incomplete` filter と同じ意味論をとる: ある negative
+control_class（本モジュールは control_class ごとに行を 1 本しか選ばない
+——`select_diagnostic_cells()`——ため「行」と「control_class」は 1:1）の
+全 probe が F0_UNUSABLE でスキップされ、かつその
+`(ControlClass, "F0_UNUSABLE")` の組が `SANCTIONED_ABSTENTIONS` に無い
+場合、その候補の verdict は当該 control_class の負例に対する判定材料が
+存在しないという理由で `NOT_EVALUABLE`（`verdict_reason=
+"negative_controls_incomplete"`）にする——PASS 側の判定材料としては
+数えない。`PASS` は「全正例で detected、全負例で record があり
+かつ非 detected（sanctioned abstention は非 detected 扱い）、
+ceiling != NONE」の場合のみ。内訳は `negative_controls_incomplete_by_class`
+（control_class -> 当該 class が非 sanctioned な行欠測だったか）に記録する。
 """
 
 from __future__ import annotations
@@ -94,9 +135,14 @@ FAMILY_TO_METER: Mapping[str, MeterId] = {
     FixtureFamily.TRANSITION_GT.value: MeterId.M5_TRANSITION,
 }
 
-#: registry の F0 baseline 候補（C3a で選定される F0 候補の既定に相当する
-#: registry 側の代表値。診断は selection を経由しないため常にこれを使う）。
-F0_BASELINE_CANDIDATE_ID = "F0-B0-CURRENT"
+
+def f0_registry_candidates() -> tuple[Candidate, ...]:
+    """`--f0-candidate` 省略時に既定で掃引する F0 prepass 候補集合
+    （`MeterId.F0_CONTROL` の registry 全候補、candidate_id 昇順で決定論）。"""
+    return tuple(
+        sorted(registry.candidates_for_meter(MeterId.F0_CONTROL), key=lambda c: c.candidate_id)
+    )
+
 
 #: negative control 行が実 candidate 呼び出しを一切スキップした場合に合成する
 #: missing_reason ラベル（実経路の `measurement_missing` ledger event の
@@ -113,7 +159,10 @@ _DIAGNOSE_SECRET = hashlib.sha256(
 _DIAGNOSE_CAMPAIGN_ID = "diagnose"
 _DIAGNOSE_SPLIT = "DIAGNOSE"
 
-SCHEMA = "diagnose/0.1"
+#: v0.2 (RUN10-CAL-v1.2 WP4b): F0 候補掃引対応で top-level 形状が変わった
+#: （旧 `candidates`/`elapsed_seconds` は `results[]` の各要素へ移動し、
+#: `f0_prepass`/`results[].f0_candidate` が新設）。
+SCHEMA = "diagnose/0.2"
 
 _ROLE_POSITIVE = "positive"
 _ROLE_NEGATIVE = "negative"
@@ -224,12 +273,15 @@ def render_diagnose_signal(row: FixtureRow, row_id: str, probe_index: int) -> tu
     return measure_stage.pcm_bytes_to_signal(gen_common.pcm16_bytes(pcm), row.sr_hz)
 
 
-def resolve_f0_prepass(signal: np.ndarray, sr: int, row_id: str, probe_index: int) -> float | None:
-    """registry の F0 baseline 候補 (`F0_BASELINE_CANDIDATE_ID`) を `signal`
-    上で 1 回 within-process 実行し、finite かつ厳密正の f0 推定値を返す
-    （`campaign.cli._build_f0_by_instance()` の finite/strictly-positive
-    guard を単一候補・単一 call に単純化したもの）。使用不能なら `None`。"""
-    f0_candidate = registry.candidate_by_id(F0_BASELINE_CANDIDATE_ID)
+def resolve_f0_prepass(
+    f0_candidate: Candidate, signal: np.ndarray, sr: int, row_id: str, probe_index: int
+) -> float | None:
+    """`f0_candidate`（呼び出し側が選んだ registry の F0_CONTROL 候補
+    ——`--f0-candidate` 指定値、または `f0_registry_candidates()` 掃引中の
+    1 件）を `signal` 上で 1 回 within-process 実行し、finite かつ厳密正の
+    f0 推定値を返す（`campaign.cli._build_f0_by_instance()` の
+    finite/strictly-positive guard を単一候補・単一 call に単純化したもの。
+    実経路の within/fresh 二段階中央値集約はしない）。使用不能なら `None`。"""
     records = measure_stage.run_within_process_calls(
         f0_candidate, signal, sr, f0_hz=None, row_id=row_id, probe_index=probe_index, repeats=1
     )
@@ -291,28 +343,52 @@ def _round_or_none(value: float | None) -> float | None:
 
 
 def _verdict(
-    ceiling: ClaimCeiling, positive_rate: float | None, negative_rate: float | None, all_ineligible: bool
-) -> str:
-    if positive_rate is None or negative_rate is None or all_ineligible:
-        return "NOT_EVALUABLE"
+    ceiling: ClaimCeiling,
+    positive_rate: float | None,
+    negative_rate: float | None,
+    all_ineligible: bool,
+    incomplete_classes: frozenset[str],
+) -> tuple[str, str | None]:
+    """`(verdict, verdict_reason)`。`verdict_reason` は `NOT_EVALUABLE` の
+    3 分岐（判定材料が無い / 全 ineligible / 非 sanctioned な負例欠測）を
+    区別する（WP4b 改訂: 3 番目の `negative_controls_incomplete` が新設）。
+    PASS/FAIL_POSITIVE/FAIL_NEGATIVE/NO_CEILING では常に `None`。"""
+    if positive_rate is None or negative_rate is None:
+        return "NOT_EVALUABLE", "no_positive_or_negative_rows"
+    if all_ineligible:
+        return "NOT_EVALUABLE", "all_ineligible"
+    if incomplete_classes:
+        return "NOT_EVALUABLE", "negative_controls_incomplete"
     if positive_rate < 1.0:
-        return "FAIL_POSITIVE"
+        return "FAIL_POSITIVE", None
     if negative_rate > 0.0:
-        return "FAIL_NEGATIVE"
+        return "FAIL_NEGATIVE", None
     if ceiling == ClaimCeiling.NONE:
-        return "NO_CEILING"
-    return "PASS"
+        return "NO_CEILING", None
+    return "PASS", None
 
 
 def evaluate_candidate(candidate: Candidate, outcomes: Sequence[CellOutcome]) -> dict[str, Any]:
     """`outcomes`（`measure_cell()` の結果列、または合成 `CellOutcome`）から
     1 候補分の診断レポートを組み立てる純関数。CONFOUND cell は
     `missing_by_reason` にのみ寄与し、positive/negative fire rate・
-    verdict の分母には含めない。"""
+    verdict の分母には含めない。
+
+    WP4b 改訂: 本モジュールは control_class ごとに行を 1 本しか選ばない
+    （`select_diagnostic_cells()`）ため「行」と「control_class」は 1:1。
+    ある negative control_class の全 outcome が F0_UNUSABLE スキップ合成
+    （`F0_UNUSABLE_REASON`）で、かつ `(ControlClass, "F0_UNUSABLE")` の組が
+    `SANCTIONED_ABSTENTIONS` に無ければ、その class は「判定材料が消えた」
+    non-sanctioned な行欠測として `incomplete_classes` へ入れ、verdict を
+    `NOT_EVALUABLE(negative_controls_incomplete)` にする
+    （`campaign.selection_stage.candidate_fail_filter_report()` の
+    `negative_controls_incomplete` filter と同じ意味論）。sanctioned な行
+    （現行 `(SILENCE, "F0_UNUSABLE")` のみ）はここでの `sanctioned_
+    abstentions` に数え、not-fired（False）として fire rate に算入する
+    （従来どおり）。"""
     positive_flags: list[bool] = []
-    negative_flags_by_class: dict[str, list[bool]] = {}
+    negative_outcomes_by_class: dict[str, list[CellOutcome]] = {}
     missing_by_reason: Counter[str] = Counter()
-    sanctioned_abstentions = 0
     verdict_relevant_total = 0
     verdict_relevant_ineligible = 0
 
@@ -324,38 +400,59 @@ def evaluate_candidate(candidate: Candidate, outcomes: Sequence[CellOutcome]) ->
         verdict_relevant_total += 1
         if outcome.output.ineligible:
             verdict_relevant_ineligible += 1
-        fired = detected(outcome.output, predicate=candidate.detection_predicate)
         if outcome.role == _ROLE_POSITIVE:
-            positive_flags.append(fired)
+            positive_flags.append(detected(outcome.output, predicate=candidate.detection_predicate))
         else:
             cc = outcome.control_class
             if cc is None:
                 raise ValueError("evaluate_candidate: negative-role outcome missing control_class")
-            negative_flags_by_class.setdefault(cc, []).append(fired)
-            if outcome.missing_reason is not None and (
-                ControlClass(cc),
-                outcome.missing_reason,
-            ) in SANCTIONED_ABSTENTIONS:
+            negative_outcomes_by_class.setdefault(cc, []).append(outcome)
+
+    negative_fire_by_control_class: dict[str, float | None] = {}
+    negative_controls_incomplete_by_class: dict[str, bool] = {}
+    incomplete_classes: set[str] = set()
+    sanctioned_abstentions = 0
+    negative_flags_all: list[bool] = []
+
+    for cc, class_outcomes in sorted(negative_outcomes_by_class.items()):
+        flags = [
+            detected(o.output, predicate=candidate.detection_predicate) for o in class_outcomes
+        ]
+        negative_flags_all.extend(flags)
+        negative_fire_by_control_class[cc] = _round_or_none(_rate(flags))
+
+        row_all_skipped = all(o.missing_reason == F0_UNUSABLE_REASON for o in class_outcomes)
+        sanctioned = row_all_skipped and (
+            ControlClass(cc),
+            F0_UNUSABLE_REASON,
+        ) in SANCTIONED_ABSTENTIONS
+        negative_controls_incomplete_by_class[cc] = row_all_skipped and not sanctioned
+        if row_all_skipped:
+            if sanctioned:
                 sanctioned_abstentions += 1
+            else:
+                incomplete_classes.add(cc)
 
     positive_rate = _rate(positive_flags)
-    negative_flags_all = [f for flags in negative_flags_by_class.values() for f in flags]
     negative_rate = _rate(negative_flags_all)
     all_ineligible = verdict_relevant_total > 0 and verdict_relevant_ineligible == verdict_relevant_total
-    verdict = _verdict(candidate.claim_ceiling, positive_rate, negative_rate, all_ineligible)
+    verdict, verdict_reason = _verdict(
+        candidate.claim_ceiling, positive_rate, negative_rate, all_ineligible, frozenset(incomplete_classes)
+    )
 
     return {
         "candidate_id": candidate.candidate_id,
         "ceiling": candidate.claim_ceiling.value,
         "positive_fire_rate": _round_or_none(positive_rate),
         "negative_fire_rate": _round_or_none(negative_rate),
-        "negative_fire_by_control_class": {
-            cc: _round_or_none(_rate(flags))
-            for cc, flags in sorted(negative_flags_by_class.items())
-        },
+        "negative_fire_by_control_class": negative_fire_by_control_class,
+        "negative_controls_incomplete_by_class": dict(
+            sorted(negative_controls_incomplete_by_class.items())
+        ),
         "sanctioned_abstentions": sanctioned_abstentions,
         "missing_by_reason": dict(sorted(missing_by_reason.items())),
         "verdict": verdict,
+        "verdict_reason": verdict_reason,
     }
 
 
@@ -364,14 +461,31 @@ def evaluate_candidate(candidate: Candidate, outcomes: Sequence[CellOutcome]) ->
 # ---------------------------------------------------------------------------
 
 
-def run_diagnosis(
+def _serialize_cells(cells: Sequence[tuple[MatrixRow, str]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "row_id": mr.row_id,
+            "block": mr.row.block,
+            "control_class": mr.row.control_class,
+            "selection_rule": role,
+        }
+        for mr, role in cells
+    ]
+
+
+def run_diagnosis_for_f0_candidate(
     family_value: str,
     candidates: Sequence[Candidate],
-    max_cells: int,
+    cells: Sequence[tuple[MatrixRow, str]],
     repeats: int,
+    f0_candidate: Candidate | None,
 ) -> dict[str, Any]:
+    """`cells`（`select_diagnostic_cells()` の戻り値、呼び出し側で 1 回だけ
+    選抜し F0 候補間で共有する——セル選抜は F0 に依存しないため）を、単一の
+    F0 prepass 候補 `f0_candidate` の下で render + measure + 判定する。
+    `candidates` のいずれも `needs_f0_injection()` でなければ `f0_candidate`
+    は使われない（`None` で構わない）。"""
     started = time.monotonic()
-    cells = select_diagnostic_cells(family_value, max_cells)
 
     signal_cache: dict[tuple[str, int], tuple[np.ndarray, int]] = {}
     f0_cache: dict[tuple[str, int], float | None] = {}
@@ -385,10 +499,15 @@ def run_diagnosis(
         return cached
 
     def _f0_for(mr: MatrixRow, probe_index: int) -> float | None:
+        if f0_candidate is None:
+            raise ValueError(
+                "run_diagnosis_for_f0_candidate: f0_candidate is required when a "
+                "candidate needs F0 injection"
+            )
         key = (mr.row_id, probe_index)
         if key not in f0_cache:
             signal, sr = _signal_for(mr, probe_index)
-            f0_cache[key] = resolve_f0_prepass(signal, sr, mr.row_id, probe_index)
+            f0_cache[key] = resolve_f0_prepass(f0_candidate, signal, sr, mr.row_id, probe_index)
         return f0_cache[key]
 
     outcomes_by_candidate: dict[str, list[CellOutcome]] = {c.candidate_id: [] for c in candidates}
@@ -410,19 +529,54 @@ def run_diagnosis(
     elapsed = time.monotonic() - started
 
     return {
-        "schema": SCHEMA,
-        "family": family_value,
-        "cells": [
-            {
-                "row_id": mr.row_id,
-                "block": mr.row.block,
-                "control_class": mr.row.control_class,
-                "selection_rule": role,
-            }
-            for mr, role in cells
-        ],
+        "f0_candidate": f0_candidate.candidate_id if f0_candidate is not None else None,
         "candidates": candidate_reports,
         "elapsed_seconds": round(elapsed, 3),
+    }
+
+
+def run_diagnosis(
+    family_value: str,
+    candidates: Sequence[Candidate],
+    max_cells: int,
+    repeats: int,
+    f0_candidate_id: str | None = None,
+) -> dict[str, Any]:
+    """全体オーケストレーション（CLI のエントリポイント）。`candidates` の
+    いずれかが `needs_f0_injection()` なら、F0 prepass 候補を掃引する:
+    `f0_candidate_id` 指定時はその 1 件のみ（`f0_prepass: "single"`）、
+    省略時は `f0_registry_candidates()` の全件（`f0_prepass: "swept"`、
+    RUN10-CAL-v1.2 WP4b — 実 campaign の C3a が選ぶ F0 候補次第で negative
+    control 行の F0 使用可否が変わるため、既定は 1 候補に決め打ちしない）。
+    F0 依存候補が 1 件も無ければ prepass 自体を省略する
+    （`f0_prepass: "not_applicable"`、`results` は `f0_candidate: null` の
+    1 要素）。セル選抜は F0 候補に依存しないため 1 回だけ行い、全 F0 候補
+    ですべて共有する（出力 `cells` は掃引の外側に 1 つだけ持つ）。"""
+    cells = select_diagnostic_cells(family_value, max_cells)
+    needs_any_injection = any(needs_f0_injection(c) for c in candidates)
+
+    f0_candidates: tuple[Candidate | None, ...]
+    if not needs_any_injection:
+        f0_prepass = "not_applicable"
+        f0_candidates = (None,)
+    elif f0_candidate_id is not None:
+        f0_prepass = "single"
+        f0_candidates = (registry.candidate_by_id(f0_candidate_id),)
+    else:
+        f0_prepass = "swept"
+        f0_candidates = f0_registry_candidates()
+
+    results = [
+        run_diagnosis_for_f0_candidate(family_value, candidates, cells, repeats, f0_candidate)
+        for f0_candidate in f0_candidates
+    ]
+
+    return {
+        "schema": SCHEMA,
+        "family": family_value,
+        "cells": _serialize_cells(cells),
+        "f0_prepass": f0_prepass,
+        "results": results,
         "claimable": False,
     }
 
@@ -464,6 +618,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-cells", type=int, default=30, help="診断セル数の上限（既定 30）")
     parser.add_argument("--repeats", type=int, default=1, help="セルあたりの probe 数（既定 1）")
+    parser.add_argument(
+        "--f0-candidate",
+        default=None,
+        help=(
+            "F0 prepass に固定する registry F0_CONTROL candidate_id（省略時は "
+            "f0_registry_candidates() の全件を掃引し候補ごとに結果を出す。F0 依存"
+            "候補が対象に無ければ無視される）"
+        ),
+    )
     parser.add_argument("--out", type=Path, default=None, help="結果 JSON の出力先（省略時 stdout）")
     return parser
 
@@ -503,7 +666,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         candidates = candidates_for_family(args.family)
 
-    report = run_diagnosis(args.family, candidates, args.max_cells, args.repeats)
+    if args.f0_candidate is not None:
+        try:
+            f0_candidate = registry.candidate_by_id(args.f0_candidate)
+        except KeyError as exc:
+            _print({"result": "ERROR", "detail": str(exc)})
+            return 1
+        if f0_candidate.meter != MeterId.F0_CONTROL:
+            _print(
+                {
+                    "result": "ERROR",
+                    "detail": (
+                        f"--f0-candidate {args.f0_candidate!r} is not an "
+                        f"{MeterId.F0_CONTROL.value!r} candidate"
+                    ),
+                }
+            )
+            return 1
+
+    report = run_diagnosis(
+        args.family, candidates, args.max_cells, args.repeats, f0_candidate_id=args.f0_candidate
+    )
 
     if args.out is not None:
         args.out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
