@@ -2756,6 +2756,82 @@ def test_rehearsal_manifest_candidate_space_passes_validation_production_pool_do
     assert any("registry.ALL_CANDIDATES" in v for v in violations)
 
 
+# ---------------------------------------------------------------------------
+# #349 第 3 巡 ② P2 (c0_validate.py:223): standalone `python -m
+# voice_genesis.calibration.c0_validate` が rehearsal manifest を検証すると
+# 偽 BLOCKED_C0_MANIFEST_INCOMPLETE になっていた経路の回帰テスト。
+# ---------------------------------------------------------------------------
+
+
+def test_standalone_validate_of_rehearsal_manifest_does_not_false_block(
+    tmp_path: Path, rehearsal_mode: None
+) -> None:
+    """standalone CLI（`c0_validate.main()`）は `--rehearsal` の配線
+    （`set_rehearsal_mode()`）を一切経由しないため、大域フラグは常に `False`
+    のまま。修正前は `_check_declared_sweep_declaration_match()`/
+    `_check_claim_relevant_fields_match()`/`_check_invariance_axes_match()`/
+    holdout pin 系検査が縮小行列/縮小候補プールに対する manifest の宣言を
+    本番 456 セル/99 候補と比較してしまい、偽の `BLOCKED_C0_MANIFEST_
+    INCOMPLETE` を発行していた。`validate_c0_manifest()` が manifest 自身の
+    `frozen_design.rehearsal` から検証中だけモードを導出するようになった今、
+    on-disk canonical dir の外に置かれた rehearsal manifest は Gate 1 未承認
+    由来の欠落以外の violation を一切出さないことを固定する。"""
+    report = c0_freeze.dry_run(_REPO_ROOT, tmp_path, os.environ, rehearsal=True)
+    manifest = report.manifest
+
+    # standalone CLI と同じ状態を再現する: manifest 生成後、検証呼び出し前に
+    # 大域フラグを production (False) へ落とす（`c0_validate.main()` は
+    # `set_rehearsal_mode()` を一切呼ばないため、これが実際の初期状態）。
+    fixture_matrix.set_rehearsal_mode(False)
+
+    manifest_path = tmp_path / "elsewhere" / "c0_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = c0_validate.validate_c0_manifest(manifest, manifest_path=manifest_path)
+
+    def _is_allowed(reason: str) -> bool:
+        # Gate 1 未承認由来（cost_caps/stop_rules/e_use_table）と、開発中の
+        # 実 checkout が dirty であること由来の理由だけは許容する
+        # （`test_dry_run_blocking_reasons_are_only_gate1_dependent_or_dirty_tree`
+        # と同じロバスト化——本 fix の対象である行列/候補プールの
+        # ミスマッチ由来の violation とは無関係）。
+        if reason.startswith(_GATE1_DEPENDENT_REASON_PREFIXES):
+            return True
+        if "dirty_tree" in reason or "dirty-tree" in reason or "checkout_identity" in reason:
+            return True
+        return False
+
+    disallowed = [r for r in result.missing_required_keys if not _is_allowed(r)]
+    assert disallowed == [], disallowed
+    assert result.sweep_declaration_violations == ()
+    assert result.sweep_declaration_mismatch_violations == ()
+    assert result.claim_relevant_field_violations == ()
+    assert result.invariance_axis_violations == ()
+    assert result.holdout_pin_feasibility_violations == ()
+    assert result.holdout_pin_declaration_violations == ()
+    assert result.holdout_pin_membership_violations == ()
+    # 検証後、大域フラグは呼び出し直前の値（`False`、standalone の実態）へ
+    # 戻る——次のテストで「常に False へ倒すだけの実装ではない」ことを確認する。
+    assert fixture_matrix.rehearsal_mode() is False
+
+
+def test_validate_c0_manifest_restores_previous_ambient_rehearsal_mode(
+    tmp_path: Path,
+) -> None:
+    """検証後に大域フラグが「常に production (False) へ戻す」のではなく
+    「呼び出し直前の値」へ復帰することを確認する（try/finally の save-restore
+    実装であって、決め打ちの後始末ではないことの回帰防止）。"""
+    production_manifest = c0_freeze.dry_run(_REPO_ROOT, tmp_path, os.environ).manifest
+    assert fixture_matrix.rehearsal_mode() is False
+    fixture_matrix.set_rehearsal_mode(True)
+    try:
+        c0_validate.validate_c0_manifest(production_manifest)
+        assert fixture_matrix.rehearsal_mode() is True
+    finally:
+        fixture_matrix.set_rehearsal_mode(False)
+
+
 def test_rehearsal_path_violations_require_explicit_dirs_outside_canonical(
     tmp_path: Path,
 ) -> None:

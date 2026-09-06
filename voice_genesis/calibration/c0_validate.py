@@ -3077,6 +3077,18 @@ def _legacy_v1_0_opt_in_verified(
     return _freeze_identity_matches(entries)
 
 
+def _manifest_declared_rehearsal(manifest: Mapping[str, object]) -> bool:
+    """manifest 自身が宣言する `frozen_design.rehearsal` を読む（#349 第 3 巡
+    P2 対応）。欠落/非 bool は `False` 扱いに倒す——形状違反そのものは
+    `_check_required_blocking()`（欠落）/`_check_required_blocking()` 内の
+    専用分岐（非 bool）が別途 violation にするので、ここでは判定を複製せず
+    「rehearsal 行列/候補プールへ切り替えるかどうか」の入力としてのみ使う。"""
+    frozen_design = manifest.get("frozen_design")
+    if not isinstance(frozen_design, Mapping):
+        return False
+    return frozen_design.get("rehearsal") is True
+
+
 def validate_c0_manifest(
     manifest: Mapping[str, object],
     *,
@@ -3094,7 +3106,43 @@ def validate_c0_manifest(
     closed/aborted と確認できない場合は `True` を渡しても legacy 扱いに
     ならない（fail-closed）。`c0_freeze.dry_run()`/`armed_freeze()` が呼ぶ
     新規 freeze 経路はこの引数を一切渡さない（常に v1.1 必須のまま）。
-    """
+
+    #349 第 3 巡 P2 対応: `fixtures.matrix.active_matrix()`/`active_candidates()`
+    経由の比較検査（宣言照合系・holdout pin 系）は、プロセス大域の
+    `fixtures.matrix._REHEARSAL_MODE` を唯一の入口として凍結 matrix/候補空間を
+    選ぶ。`c0_freeze.dry_run()`/`armed_freeze()` はその大域フラグを呼び出し元
+    CLI が manifest 生成前に `set_rehearsal_mode()` で明示的に立てるため常に
+    manifest の `frozen_design.rehearsal` と一致するが、standalone CLI
+    （本モジュールの `main()`、on-disk の既存 rehearsal manifest を独立に
+    検証する経路）はその配線を経由しないため大域フラグは常に `False` のまま
+    ——rehearsal manifest を検証すると縮小行列/縮小候補プールに対する宣言が
+    常に本番 456 セル/99 候補と比較され、偽の `BLOCKED_C0_MANIFEST_INCOMPLETE`
+    を発行していた。ここで manifest 自身の宣言から大域フラグを検証中だけ
+    導出し、終了時（成功・例外いずれでも）に呼び出し前の値へ復帰する
+    （`try`/`finally`）——`dry_run()`/`armed_freeze()` の既存呼び出しでは
+    呼び出し前の値と検証中の値が常に一致するため副作用は無い。"""
+    previous_rehearsal_mode = fixture_matrix.rehearsal_mode()
+    fixture_matrix.set_rehearsal_mode(_manifest_declared_rehearsal(manifest))
+    try:
+        return _validate_c0_manifest_impl(
+            manifest,
+            split_secret=split_secret,
+            allow_legacy_v1_0=allow_legacy_v1_0,
+            manifest_path=manifest_path,
+        )
+    finally:
+        fixture_matrix.set_rehearsal_mode(previous_rehearsal_mode)
+
+
+def _validate_c0_manifest_impl(
+    manifest: Mapping[str, object],
+    *,
+    split_secret: bytes | None,
+    allow_legacy_v1_0: bool,
+    manifest_path: Path | str | None,
+) -> C0ValidationResult:
+    """`validate_c0_manifest()` の実体（rehearsal モード切替の外側に置いた
+    薄いラッパから呼ばれる）。"""
     legacy_design_revision_ok = allow_legacy_v1_0 and _legacy_v1_0_opt_in_verified(
         manifest, manifest_path
     )

@@ -5,6 +5,9 @@ Codex レビュー 2026-09-01 P1: positive control 行を leakage 除外集合�
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 from voice_genesis.calibration import splitter
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.fixtures import controls, matrix
@@ -291,4 +294,66 @@ def test_sanctioned_abstentions_is_the_single_preregistered_pair() -> None:
     unreviewed addition shows up as a test diff."""
     assert controls.SANCTIONED_ABSTENTIONS == frozenset(
         {(controls.ControlClass.SILENCE, "F0_UNUSABLE")}
+    )
+
+
+# ---------------------------------------------------------------------------
+# #349 第 3 巡 ③ P2 (selection_stage.py:640 `noise_only_false_detection_rate`):
+# `detected()` の omitted `predicate=` を第 2 巡が取りこぼした穴。同型の穴が
+# 他 call site に残っていないかを AST で全数固定し、このファミリーを終端する。
+# ---------------------------------------------------------------------------
+
+
+def _detected_calls_without_predicate_kwarg(source: str) -> list[int]:
+    """`source` 中で `detected(...)` を呼び出しているが `predicate=` キーワード
+    引数を渡していない行番号（`x.detected()` の属性呼び出しも対象）。
+    `def detected(...)` 自体は `ast.Call` に現れないため自動的に除外される。"""
+    lines: list[int] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = (
+            func.id
+            if isinstance(func, ast.Name)
+            else func.attr
+            if isinstance(func, ast.Attribute)
+            else None
+        )
+        if name != "detected":
+            continue
+        has_predicate_kwarg = any(kw.arg == "predicate" for kw in node.keywords)
+        # `detected(output, predicate)` のような位置引数渡しも許容する
+        # （`fixtures.controls.detected` の第 2 位置引数は `predicate`）。
+        has_predicate_positional = len(node.args) >= 2
+        if not (has_predicate_kwarg or has_predicate_positional):
+            lines.append(node.lineno)
+    return lines
+
+
+def test_no_detected_call_sites_omit_predicate_outside_tests() -> None:
+    """`voice_genesis/calibration` 配下の production コードで `detected(`
+    を呼ぶ全 call site が `predicate=`（または第 2 位置引数）で
+    `Candidate.detection_predicate` を伝播していることを固定する
+    （`fixtures/controls.py` 自身の `def detected(...)`/docstring 中の言及は
+    `ast.Call` に現れないため対象外。テストは意図的に既定分岐
+    `predicate=None` を検証するため対象外）。第 2 巡が selection_stage.py の
+    `noise_only_false_detection_rate` 1 箇所を取りこぼした反省から、この
+    全数検査をもって「detected の predicate 伝播ファミリー」を終端する。"""
+    calibration_root = Path(__file__).resolve().parents[1]
+    repo_root = calibration_root.parents[1]
+    offenders: list[str] = []
+    for path in sorted(calibration_root.rglob("*.py")):
+        rel = path.relative_to(repo_root).as_posix()
+        if "/tests/" in f"/{rel}":
+            continue
+        if path.name == "controls.py" and path.parent.name == "fixtures":
+            # `detected()` 自身の定義モジュール — 内部の再帰呼び出しは無い。
+            continue
+        for lineno in _detected_calls_without_predicate_kwarg(path.read_text(encoding="utf-8")):
+            offenders.append(f"{rel}:{lineno}")
+    assert not offenders, (
+        "detected() call site(s) without predicate= found outside tests — "
+        "propagate Candidate.detection_predicate so per-candidate fire "
+        f"thresholds are honored everywhere: {offenders}"
     )

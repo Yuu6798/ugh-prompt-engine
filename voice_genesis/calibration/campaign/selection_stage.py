@@ -637,7 +637,7 @@ def candidate_fail_filter_report(
         if r.row_id in noise_only_control_row_ids:
             noise_only_detections_by_instance.setdefault(
                 (r.row_id, r.probe_index), []
-            ).append(fixture_controls.detected(r.output))
+            ).append(fixture_controls.detected(r.output, predicate=candidate.detection_predicate))
     noise_only_instances_total = len(noise_only_detections_by_instance)
     noise_only_instances_detected = sum(
         1 for dets in noise_only_detections_by_instance.values() if any(dets)
