@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from voice_genesis.calibration import c0_validate, vocab
 from voice_genesis.calibration.c0_freeze import STRATUM_FACTOR_NAMES, _row_inputs_for_split
 from voice_genesis.calibration.canonical import canonical_json
@@ -705,6 +707,53 @@ def test_legacy_v1_0_opt_in_verified_for_gz_archived_campaign(tmp_path: Path) ->
     assert not ledger_path.is_file()  # ensure_archived removes the original
 
     assert c0_validate._legacy_v1_0_opt_in_verified(manifest, manifest_path) is True
+
+
+def test_legacy_v1_0_opt_in_reads_gz_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R26 対応（Codex 第 26 巡 P2 採用, "Reuse the verified gzip snapshot for
+    identity checking"）: aborted 経路は `ledger.jsonl.gz` を **1 回だけ**
+    バイト列として読み、sidecar/chain 検証と freeze identity 照合の両方を
+    その同一バイト列から行う——という単一読取契約を、`Path.read_bytes()` の
+    呼び出し回数そのものを数えて固定する。修正前は `_verify_gz_sidecar_pair()`
+    内部の読取（1 回目）と、この関数自身が freeze identity 照合のために
+    行っていた読取（2 回目）の 2 回読んでおり、その間に on-disk の gz が
+    差し替わると sidecar 未検証のペアで opt-in が通り得た（TOCTOU）。"""
+    campaign_dir = tmp_path / "campaign"
+    campaign_dir.mkdir()
+    manifest = {"frozen_design": {}}
+    manifest_path, manifest_sha, manifest_core_sha = _write_manifest_and_freeze_identity(
+        campaign_dir, manifest
+    )
+    ledger_path = campaign_dir / "ledger.jsonl"
+    _write_chain_valid_ledger(
+        ledger_path,
+        [
+            {
+                "kind": "c0_freeze",
+                "manifest_sha": manifest_sha,
+                "manifest_core_sha": manifest_core_sha,
+            },
+            {"kind": "holdout_executed_valid"},
+        ],
+    )
+    result = archive_aborted_ledger.ensure_archived(campaign_dir)
+    assert result.action == "archived"
+
+    gz_path = campaign_dir / archive_aborted_ledger.GZ_FILENAME
+    real_read_bytes = Path.read_bytes
+    gz_read_count = {"n": 0}
+
+    def _counting_read_bytes(self: Path) -> bytes:
+        if self == gz_path:
+            gz_read_count["n"] += 1
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _counting_read_bytes)
+
+    assert c0_validate._legacy_v1_0_opt_in_verified(manifest, manifest_path) is True
+    assert gz_read_count["n"] == 1
 
 
 def test_legacy_v1_0_opt_in_not_verified_for_fabricated_gz(tmp_path: Path) -> None:

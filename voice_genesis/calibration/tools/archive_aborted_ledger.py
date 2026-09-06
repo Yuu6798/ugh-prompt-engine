@@ -331,14 +331,35 @@ def _parse_sidecar(text: str) -> tuple[str, str]:
     return sha_hex, filename
 
 
-def _verify_gz_sidecar_pair(gz_path: Path, sidecar_path: Path) -> str:
+def _verify_gz_sidecar_pair(
+    gz_path: Path, sidecar_path: Path, *, gz_bytes: bytes | None = None
+) -> tuple[str, bytes]:
     """`gz_path`/`sidecar_path` の組を検証する: (a) sidecar が読める・形式が
     正しい、(b) gz が実伸長できる、(c) 伸長結果の sha256 が sidecar の宣言と
     一致する、(d) 伸長結果を一時ファイルへ書いて
     `Ledger.load_with_verification()` の chain 検証が通る。
 
-    いずれか 1 つでも欠ければ `ArchiveError` を送出する。成功時は伸長した
-    非圧縮バイト列の sha256（== sidecar の宣言値）を返す。
+    いずれか 1 つでも欠ければ `ArchiveError` を送出する。成功時は
+    `(伸長した非圧縮バイト列の sha256（== sidecar の宣言値）, 伸長した非圧縮
+    バイト列)` を返す。
+
+    R26 対応（Codex 第 26 巡 P2 採用、"Reuse the verified gzip snapshot for
+    identity checking"）: `gz_bytes` を渡した場合はそのバイト列をそのまま
+    検証対象とし、`gz_path` の再読取は行わない。呼び出し側（`c0_validate.
+    _legacy_v1_0_opt_in_verified()`）が sidecar/chain 検証と、その後段の
+    freeze identity 照合とを **同一の 1 回だけ読んだバイト列** から導出
+    できるようにするための契約——`gz_path` を渡した状態で本関数が内部で
+    読み直し、呼び出し側がそれとは別にもう一度 `gz_path.read_bytes()` して
+    いた旧実装では、2 回の読取の間に on-disk の gz が差し替わると、sidecar/
+    chain 検証はバージョン A に対して通り、freeze identity 照合はバージョン
+    B に対して行われる——という TOCTOU で、B が chain-valid かつ同一
+    genesis identity を持つ限り、sidecar 未検証のペアで legacy opt-in が
+    True になり得た（R16 の「単一読取の同一バイト列から導出」原則と同型）。
+    戻り値に伸長済みバイト列を含めたのは、呼び出し側がこの後の処理
+    （identity 照合や `ensure_archived()` の回復分岐）で再び伸長し直す
+    （＝もう一度ファイルを読む）必要をなくすため——`archive_aborted_ledger`
+    自身の `ensure_archived()` 回復分岐も本関数の戻り値をそのまま再利用する
+    よう合わせて改め、挙動（検証内容・エラー条件）は変えていない。
     """
     if not gz_path.is_file():
         raise ArchiveError(f"missing gz artifact: {gz_path}")
@@ -352,8 +373,13 @@ def _verify_gz_sidecar_pair(gz_path: Path, sidecar_path: Path) -> str:
             f"got {sidecar_filename!r}"
         )
 
+    if gz_bytes is None:
+        try:
+            gz_bytes = gz_path.read_bytes()
+        except OSError as exc:
+            raise ArchiveError(f"gz artifact does not decompress: {gz_path}: {exc}") from exc
     try:
-        decompressed = gzip.decompress(gz_path.read_bytes())
+        decompressed = gzip.decompress(gz_bytes)
     except OSError as exc:  # gzip raises OSError/BadGzipFile on corrupt input
         raise ArchiveError(f"gz artifact does not decompress: {gz_path}: {exc}") from exc
 
@@ -380,7 +406,7 @@ def _verify_gz_sidecar_pair(gz_path: Path, sidecar_path: Path) -> str:
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    return actual_sha
+    return actual_sha, decompressed
 
 
 def _discard_if_exists(path: Path) -> None:
@@ -594,7 +620,7 @@ def _write_and_publish_archive(
     _fsync_file(staging_sidecar_path)
     _fsync_dir(campaign_dir)
 
-    verified_sha = _verify_gz_sidecar_pair(staging_gz_path, staging_sidecar_path)
+    verified_sha, _ = _verify_gz_sidecar_pair(staging_gz_path, staging_sidecar_path)
     if verified_sha != sha256_hex:  # pragma: no cover - defensive only
         raise ArchiveError(
             "staging verification sha256 does not match source bytes "
@@ -605,7 +631,7 @@ def _write_and_publish_archive(
     os.rename(staging_sidecar_path, sidecar_path)
     _fsync_dir(campaign_dir)
 
-    republished_sha = _verify_gz_sidecar_pair(gz_path, sidecar_path)
+    republished_sha, _ = _verify_gz_sidecar_pair(gz_path, sidecar_path)
     if republished_sha != sha256_hex:  # pragma: no cover - defensive only
         raise ArchiveError(
             "published artifact failed post-publish verification — refusing to "
@@ -783,7 +809,7 @@ def ensure_archived(campaign_dir: Path) -> ArchiveResult:
         # --- 回復判定: 公開物が両方あれば検証を試みる。 ---
         if has_gz and has_sidecar:
             try:
-                published_sha = _verify_gz_sidecar_pair(gz_path, sidecar_path)
+                published_sha, decompressed_gz = _verify_gz_sidecar_pair(gz_path, sidecar_path)
             except ArchiveError as invalid_pair_exc:
                 if not ledger_path.is_file():
                     # 公開物は壊れていて、原本も無い — 正本喪失。手順どおりに
@@ -815,10 +841,11 @@ def ensure_archived(campaign_dir: Path) -> ArchiveResult:
                 # `_restore_original_from_verified_gz()` run, or other damage):
                 # such a stale original would otherwise silently pass as "the
                 # original exists" forever, permanently blocking recovery.
-                # `gz_path`'s bytes are already sidecar-sha256- and
-                # chain-verified by `_verify_gz_sidecar_pair()` above, so
-                # decompressing them again here is safe to trust.
-                decompressed_gz = gzip.decompress(gz_path.read_bytes())
+                # `decompressed_gz` is exactly the byte string
+                # `_verify_gz_sidecar_pair()` already sidecar-sha256- and
+                # chain-verified above (R26: reuse it — no re-read of
+                # `gz_path`, which would reopen the same TOCTOU window this
+                # fix closes in `c0_validate._legacy_v1_0_opt_in_verified()`).
                 if _ledger_bytes_contain_campaign_closed(decompressed_gz):
                     original_missing = not ledger_path.is_file()
                     original_corrupt = not original_missing and (
@@ -957,7 +984,7 @@ def ensure_archived(campaign_dir: Path) -> ArchiveResult:
         _fsync_dir(campaign_dir)
 
         # (2) staging を実伸長して sidecar sha・原本バイト列・chain を検証する。
-        verified_sha = _verify_gz_sidecar_pair(staging_gz_path, staging_sidecar_path)
+        verified_sha, _ = _verify_gz_sidecar_pair(staging_gz_path, staging_sidecar_path)
         if verified_sha != original_sha256:  # pragma: no cover - defensive only
             raise ArchiveError(
                 "staging verification sha256 does not match original ledger bytes "
@@ -971,7 +998,7 @@ def ensure_archived(campaign_dir: Path) -> ArchiveResult:
 
         # 公開直後にもう一度検証する（defense-in-depth: rename 自体が壊れる
         # ことは通常想定しないが、原本削除の前提を軽く二重化しておく）。
-        republished_sha = _verify_gz_sidecar_pair(gz_path, sidecar_path)
+        republished_sha, _ = _verify_gz_sidecar_pair(gz_path, sidecar_path)
         if republished_sha != original_sha256:  # pragma: no cover - defensive only
             raise ArchiveError(
                 "published artifact failed post-publish verification — refusing to "

@@ -1226,6 +1226,7 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
 | （同上: replay 検証器の legacy 互換） | `provenance.py` | `_c0_freeze_ordering_violation()`, `_verified_holdout_unseal_detail()` | D97 |
 | §V3.3 追補（R25-1: legacy opt-in を manifest 自己 hash + ledger freeze identity に束縛） / §V4 追補（R25-2: archive 成果物が片方でも残れば append 拒否） | `c0_validate.py` | `_legacy_v1_0_opt_in_verified()` | D103 |
 | | `provenance.py` | `Ledger.append()`（create-on-append の archive 判定を `or` へ）, `LedgerArchivedError` | D103 |
+| §V6 追補（R26: legacy opt-in の検証を単一読取の同一バイト列から導出） | `c0_validate.py`, `tools/archive_aborted_ledger.py` | `_legacy_v1_0_opt_in_verified()` | D104 |
 | §V3.5 追補（D105: C4 leakage ゲートの RowInput 複製排除・`nuisance_axis` 突合） | `campaign/render_stage.py` | `_refuse_if_pre_unseal_holdout()`（`splitter.row_inputs_for_split()` を直接使用、ローカル複製 `_row_inputs_for_split()` は削除） | D105 |
 | | `splitter.py` | `nuisance_axis_for_row()`（新設、`row_inputs_for_split()` と `provenance.py` の共有導出入口） | D105 |
 | | `provenance.py` | `Ledger.check_leakage()`（`canonical_split_inputs` の `nuisance_axis` 補完 + 比較、`LeakageCheckResult.reason` に `SPLIT_VERIFICATION_ROW_MISMATCH`/`SPLIT_REDERIVATION_MISMATCH` を追加） | D105 |
