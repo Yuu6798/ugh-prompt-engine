@@ -62,6 +62,7 @@ U_num 凍結・invariance 軸宣言・破棄 ledger 圧縮保全）は v1.1（�
 | 4 | wrap-up / STATUS.md のサマリーが「completed」「全マージ」といった手続き完了で進捗を語り、答えられていない問い（TILT ceiling・FORMANT fire 定義）が見えにくくなっていた | **進捗の定義を科学的状態で書く**。「答えた問い / 証拠 / 負債の terminal status」を必須行にする。「完走」「全マージ」「巡数消化」は進捗として記載しない | `.claude/skills/wrap-up/SKILL.md`、`.claude/memory/_index.md` |
 | 5 | #346 が 26 巡（実害 3 分類に基づく採用の連鎖であって空転ではないが、コストは実測として重い）でマージに至り、レビュー予算の運用が曖昧だった | **レビュー予算を固定する**: 通算 10 巡で機械的打ち切り。「基盤 PR ≤ 問いに答える PR」を STATUS で計上する | `AGENTS.md` §3-4、`CLAUDE.md` bot レビュー節 |
 | 6 | §V3.5 で `nuisance_axis` を含む `RowInput` 構築のローカル複製が `render_stage.py` に生じ、`splitter.row_inputs_for_split()` との乖離が C4 入場不能（D105）を招いた | **分岐軸を増やしたら fixture も増やす**。新しい導出軸は、その軸が None でない行を含む fixture テストとセットでのみ入れる。導出ロジックの複製は禁止する | `AGENTS.md` §7 起草チェックリスト item 11、`splitter.row_inputs_for_split()` 呼び出し site の全数テスト |
+| 7 | 段階（生成/測定/検証）を区別せず、段階 2（実測による仮説検定）の答えが出る前から段階 3（測定器・生成物の堅牢化）のレビュー指摘を採用し、目的因果が逆転していた（測定器を通すための生成物を作る側に流れた） | **順序の固定と生成・測定の分離**: (1) 仮説どおりの生成物 → (2) 実測で仮説検定 → (3) その後に測定器・生成物の検証、の順序を前後させない。生成過程と測定過程を分離し、測定器を通すための生成物を作らない（目的因果の逆転禁止）。検証器は生成物と測定器が無いうちに突き詰めない。レビュー指摘は「どの段階のどの目的に必要か」を Fable が判定してから採否を決め、段階 1・2 が未回答のうちは段階 3 の堅牢化指摘は境界宣言で次周へ送る（実害 3 分類に該当しても段階が違えば当該 PR では不採用）。RUN10-CAL への当てはめ: 生成物 = 合成 fixture／測定器 = meter 候補／検証器 = `c0_validate`・provenance・ledger・approvals。v1.0–v1.1 は段階 3 に偏った = 逆転の実例 | `AGENTS.md` §3 item 6、`CLAUDE.md` bot レビュー節 |
 
 ## W1. 対照意味論の是正（v1.1 §V8 候補課題 1 の裁定）
 
@@ -92,7 +93,9 @@ campaign `410b25f2` の c3b 観測（D106）で、`negative_controls_incomplete`
 - **閉語彙の拡張は preregistration 経由に限る**: `SANCTIONED_ABSTENTIONS` への追加は
   次 revision の事前登録（本書のように既に閉じた campaign の観察に基づく凍結）を
   経ること。実行中の campaign の都合で緩めることを禁止する（v1.1 §V1.3 の正直性の
-  宣言と同型の規律）。
+  宣言と同型の規律）。**sanctioned abstention は「測定器が正しく棄権した事実の記録」
+  に限定し、候補を通すための緩和として語彙を拡張しない**（§W0 ルール 7 と同型の
+  目的因果——検証器の都合で測定意味論を緩めることの禁止）。
 - **registry `detection_predicate`（任意拡張点）**: `Candidate` に
   `detection_predicate: DetectionPredicate | None = None`（`field`/`min_value` の
   frozen dataclass）を追加する。**既存の全候補は未宣言のまま**とし、挙動は完全に
@@ -108,6 +111,10 @@ campaign `410b25f2` の c3b 観測（D106）で、`negative_controls_incomplete`
 両側条件（v1.0 §4.2）はいずれも不変。
 
 ## W2. 探索・疎通・freeze 前提
+
+段階割り当て（§W0 ルール 7）: `campaign.diagnose` は段階 2（実測による仮説検定）、
+rehearsal は段階 3（測定器・生成物の検証）——段階 2 の答えが出た family のみ
+rehearsal を経て本番へ進める。
 
 ### (a) C-1 診断ステージ（`campaign.diagnose`）
 
