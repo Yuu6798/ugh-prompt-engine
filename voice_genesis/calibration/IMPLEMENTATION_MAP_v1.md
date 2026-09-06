@@ -1230,3 +1230,44 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
 | §V3.5 追補（D105: C4 leakage ゲートの RowInput 複製排除・`nuisance_axis` 突合） | `campaign/render_stage.py` | `_refuse_if_pre_unseal_holdout()`（`splitter.row_inputs_for_split()` を直接使用、ローカル複製 `_row_inputs_for_split()` は削除） | D105 |
 | | `splitter.py` | `nuisance_axis_for_row()`（新設、`row_inputs_for_split()` と `provenance.py` の共有導出入口） | D105 |
 | | `provenance.py` | `Ledger.check_leakage()`（`canonical_split_inputs` の `nuisance_axis` 補完 + 比較、`LeakageCheckResult.reason` に `SPLIT_VERIFICATION_ROW_MISMATCH`/`SPLIT_REDERIVATION_MISMATCH` を追加） | D105 |
+
+## 8. v1.2 改訂の実装マップ
+
+設計正本 `DESIGN_VG_METER_CAL_DEBT_v1.2.md`（§W0–§W4）の各節を実装した
+モジュール・関数の対応表。実装の詳細な逸脱・境界宣言・採否根拠は
+`README.md` 逸脱台帳 `UNDERSPEC-CAL-D107` が正（本表は経路の索引のみ）。
+
+| v1.2 節 | 実装モジュール | 関数名 | 備考 |
+|---|---|---|---|
+| §W1（対照意味論の是正: fire 判定一本化・sanctioned abstention） | `fixtures/controls.py` | `detected()`（既定分岐は旧 `holdout_stage._detected_output()` と同一挙動）, `DetectionPredicate`, `SANCTIONED_ABSTENTIONS = {(ControlClass.SILENCE, "F0_UNUSABLE")}` | 閉語彙。追加は次 revision の preregistration 経由 |
+| | `campaign/selection_stage.py` | `candidate_fail_filter_report()`（kwonly `control_class_by_negative_row_id`/`missing_reason_by_negative_row_id`）, `candidate_space_sha()`（payload に `detection_predicate` 追加。既存候補は全て `None` のため sha 値は不変） | |
+| | `campaign/holdout_stage.py` | `_detected()`/`_detected_output()` を削除し `fixture_controls.detected()` へ置換 | |
+| | `candidates/registry.py` | `Candidate.detection_predicate: DetectionPredicate \| None = None`（既存 99 候補は全て未宣言 = 挙動不変） | FORMANT 候補への宣言は次 revision |
+| | `campaign/cli.py` | `_criteria_with_fail_filters()`（新 2 引数を c3a/c3b 双方から配線）, `_measurement_missing_reason_index()`, `_control_class_by_negative_row_id()` | |
+| §W2(a)（C-1 診断ステージ） | `campaign/diagnose.py`（新設） | `run_diagnosis()`, `select_diagnostic_cells()`, `evaluate_candidate()`, `resolve_f0_prepass()`, `f0_registry_candidates()`, CLI `--family`/`--candidate`/`--max-cells`/`--repeats`/`--f0-candidate`/`--out` | freeze/封印/ledger なし・claim 不可（`claimable` 常に `False`）。`build_matrix()` 直呼びは rehearsal 対象外の allowlist 1 件として `test_matrix.py` に登録 |
+| §W2(c)（rehearsal 経路） | `fixtures/matrix.py` | `build_rehearsal_matrix()`, `active_matrix()`, `active_candidates()`, `set_rehearsal_mode()` | 456→58 行（決定論・順序保存・部分集合） |
+| | `c0_freeze.py` | `--rehearsal`（`frozen_design.rehearsal` を core payload へ常時記録）, `manifest_declares_rehearsal()`, `rehearsal_campaign_id_prefix()`, `_check_max_claim_scope(rehearsal=...)` | rehearsal 承認は本番 freeze へ流用不可（core sha が変わる） |
+| | `campaign/cli.py` | `--rehearsal`, `_rehearsal_path_violations()`, `_manifest_declares_rehearsal()` | canonical `campaigns/`/`~/.vg_cal/` 配下を path ガードで拒否 |
+| | `campaign/close.py` | `derived.debt_discharged` を rehearsal では常に `false` 固定, `RehearsalRevealRefusedError` | |
+| | `approvals.py` | `REHEARSAL_CLAIM_SCOPE_SENTINEL = "REHEARSAL"`（`load_approval(rehearsal=...)`/`check_armed(rehearsal=...)` でのみ受理） | |
+| §W2(d)（freeze 前提 = 実経路で動いたコードのみ） | （運用規約。実装は rehearsal E2E 経由） | `tests/test_rehearsal_e2e.py`（`VG_CAL_REHEARSAL_E2E=1` 明示 opt-in。既定 skip） | 実測: <WP2b 実測>（プレースホルダ、実測後に転記） |
+| §W2(e)（Gate 1/2 承認時刻の順序 fail-closed 検査、D108 是正） | `c0_freeze.py` | `_check_gate_approval_ordering()`, `_GATE_APPROVAL_CLOCK_SKEW_TOLERANCE_SECONDS = 60`（`unseal.py` Gate 3 検査と同値） | 理由語彙: `gate<N>_approval_not_before_freeze`/`_future_dated`/`_unparsable_timestamp` |
+| | `c0_validate.py` | `_check_gate_approval_ordering()`（`C0ValidationResult.gate_approval_ordering_notes`、非ブロッキング） | 承認記録が `approvals/records/` に無い場合はスキップ |
+| §W3（統治文書切替・2 段連鎖 pin） | `approvals.py` | `DESIGN_DOC_RELATIVE_PATH`(→v1.2), `BASE_DESIGN_DOC_RELATIVE_PATH`(→v1.1), `BASE_BASE_DESIGN_DOC_RELATIVE_PATH`(新設、→v1.0), `_verify_single_base_pin()`, `_verify_base_document_pin()`（2 段連鎖） | `c0_validate.scan_calibration_tree_inventory()` の union は本 revision では v1.2/v1.1 の 2 文書のみ据え置き（v1.0 の path inventory 再収載は次 revision の課題として境界宣言） |
+
+### 再 freeze 前提条件（§W2(b)/(d) の運用化）
+
+次の 4 点がすべて揃うまで、本番 campaign（`--rehearsal` を伴わない armed
+freeze）を実行しない:
+
+1. **C-1 診断 PASS**: 修正対象 meter family（今回は FORMANT_GT/TILT_GT）が
+   `campaign.diagnose` で `PASS`（または claim-critical 外なら意図した
+   verdict）を返すこと。
+2. **帰属義務の充足**: 各修正候補について「原因 X・修正 Y で消える」の帰属
+   仮説と C-1 での検証結果が `README.md` 逸脱台帳に記録されていること。
+3. **rehearsal green**: `--rehearsal` 経路で C0 freeze → c1 → c2 → c3a → c3b
+   → c4 → close の全 stage が実行され、`c0_validate` の実経路検査を通過
+   すること。
+4. **承認時刻の実測**: Gate 1/Gate 2 の `approved_at_utc` が
+   `date -u +%Y-%m-%dT%H:%M:%SZ` の実測値であり、freeze event 時刻より前
+   であることを `_check_gate_approval_ordering()` が確認すること。

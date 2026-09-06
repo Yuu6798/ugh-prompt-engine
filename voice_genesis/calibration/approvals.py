@@ -57,16 +57,22 @@ _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 #: `c0_freeze.py` 同様、本ファイルから 2 階層上が repo root。
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-#: 承認 hash が束縛する 2 文書（`c0_freeze.py` と同じ repo root からの相対 path）。
-#: v1.1 (`DESIGN_VG_METER_CAL_DEBT_v1.1.md` §V6, 2026-09-04 統治文書切替):
-#: pin 対象は v1.1 統治文書へ切り替わった。v1.0 は read-only の基底文書として
-#: 残り、`BASE_DESIGN_DOC_RELATIVE_PATH` 経由で実行時 pin の対象になる
-#: （下記 `_verify_base_document_pin()` 参照）。
-DESIGN_DOC_RELATIVE_PATH = "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.1.md"
-#: v1.1 の基底（承継元）文書。v1.1 front matter の `base_document_sha256` が
+#: 承認 hash が束縛する統治文書（`c0_freeze.py` と同じ repo root からの相対
+#: path）。v1.2 (`DESIGN_VG_METER_CAL_DEBT_v1.2.md` §V6 継承, 2026-09-06
+#: 統治文書切替): pin 対象は v1.2 統治文書へ切り替わった。v1.1/v1.0 は
+#: read-only の基底文書として残り、`BASE_DESIGN_DOC_RELATIVE_PATH`/
+#: `BASE_BASE_DESIGN_DOC_RELATIVE_PATH` 経由で実行時 pin の対象になる
+#: （下記 `_verify_base_document_pin()` 参照。2 段連鎖）。
+DESIGN_DOC_RELATIVE_PATH = "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.2.md"
+#: v1.2 の基底（承継元）文書。v1.2 front matter の `base_document_sha256` が
 #: これの実測 sha256 と一致することを `load_approval()` が毎回検証する
-#: （信頼の連鎖: 承認 → v1.1 バイト列 → v1.0 バイト列。§V6）。
-BASE_DESIGN_DOC_RELATIVE_PATH = "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.0.md"
+#: （信頼の連鎖の第 1 段: 承認 → v1.2 バイト列 → v1.1 バイト列）。
+BASE_DESIGN_DOC_RELATIVE_PATH = "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.1.md"
+#: v1.1 のさらなる基底（承継元）文書。v1.1 front matter 自身の
+#: `base_document_sha256` がこれの実測 sha256 と一致することを検証する
+#: （信頼の連鎖の第 2 段: v1.1 バイト列 → v1.0 バイト列。v1.2 で統治文書が
+#: 1 世代進んだことにより、v1.1 時代は 1 段だった連鎖が 2 段になった）。
+BASE_BASE_DESIGN_DOC_RELATIVE_PATH = "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.0.md"
 MEMO_RELATIVE_PATH = "voice_genesis/calibration/IMPLEMENTATION_MAP_v1.md"
 
 #: front matter を区切る `---` 行（先頭固定・複数行 YAML ブロック）を抜き出す
@@ -91,62 +97,92 @@ def _parse_front_matter(text: str) -> Mapping[str, Any] | None:
     return data
 
 
-def _verify_base_document_pin(repo_root: Path, design_doc_bytes: bytes) -> list[str]:
-    """v1.1 統治文書（`DESIGN_DOC_RELATIVE_PATH`）の front matter が宣言する
-    `base_document_sha256` と、checkout 上の基底文書
-    （`BASE_DESIGN_DOC_RELATIVE_PATH` = v1.0）の実測 sha256 の一致を検証する
-    （§V6「基底文書の実行時 pin」）。
-
-    v1.1 だけを pin すると、承継元 v1.0 が承認後・freeze 後に改変されても
-    `check_armed()` が無効化されない穴が残るため、この検証を毎回の
-    `load_approval()` に組み込む。不一致・欠落・パース不能はすべて
-    fail-closed の reason 文字列として返す（空リストは pin 成立、つまり
-    「未承認にする理由がない」ことを意味する — 承認そのものが成り立つかは
-    呼び出し側の他の検査と合わせて判定される）。
-
-    `design_doc_bytes` は呼び出し側（`load_approval()`）が v1.1 統治文書を
-    **1 回だけ** 読み取ったバイト列をそのまま受け取る。本関数はここで
-    v1.1 を再度読まない — hash 算出用の読取と front matter 解析用の読取を
-    分けると、その間隔で文書が差し替わった場合に「hash は版 A・base pin は
-    版 B」の組み合わせで承認が成立し得る（Codex PR #346 第 16 巡指摘。承認
-    provenance の汚染）。同一バッファから両方を導出することでこの穴を閉じる。
-    """
-    reasons: list[str] = []
-    design_doc_path = repo_root / DESIGN_DOC_RELATIVE_PATH
+def _verify_single_base_pin(
+    pinning_doc_path: Path, pinning_doc_bytes: bytes, pinned_doc_path: Path
+) -> list[str]:
+    """1 リンク分の base pin 検証: `pinning_doc_path`（バイト列
+    `pinning_doc_bytes`）の front matter が宣言する `base_document_sha256` と、
+    `pinned_doc_path` の実測 sha256 の一致を検証する。不一致・欠落・パース
+    不能はすべて fail-closed の reason 文字列として返す（空リストはこの
+    リンクの pin が成立していることを意味する）。`_verify_base_document_pin()`
+    が v1.2→v1.1→v1.0 の 2 段連鎖を組み立てる際の共通実装。"""
     try:
-        design_doc_text = design_doc_bytes.decode("utf-8")
+        pinning_doc_text = pinning_doc_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
         return [
-            f"base_document_sha256: cannot decode design doc {design_doc_path} "
+            f"base_document_sha256: cannot decode design doc {pinning_doc_path} "
             f"as utf-8: {exc}"
         ]
 
-    front_matter = _parse_front_matter(design_doc_text)
+    front_matter = _parse_front_matter(pinning_doc_text)
     if front_matter is None:
         return [
             "base_document_sha256: design doc front matter is missing or unparsable "
-            f"({design_doc_path})"
+            f"({pinning_doc_path})"
         ]
 
     declared_base_sha = front_matter.get("base_document_sha256")
     if not isinstance(declared_base_sha, str) or _SHA256_HEX_RE.match(declared_base_sha) is None:
         return [
             "base_document_sha256: design doc front matter missing/invalid "
-            "base_document_sha256 (must be a 64-char lowercase hex sha256 string)"
+            f"base_document_sha256 (must be a 64-char lowercase hex sha256 string) "
+            f"({pinning_doc_path})"
         ]
 
-    base_doc_path = repo_root / BASE_DESIGN_DOC_RELATIVE_PATH
     try:
-        actual_base_sha = _sha256_file(base_doc_path)
+        actual_base_sha = _sha256_file(pinned_doc_path)
     except OSError as exc:
-        return [f"base_document_sha256: cannot read base document {base_doc_path}: {exc}"]
+        return [f"base_document_sha256: cannot read base document {pinned_doc_path}: {exc}"]
 
     if declared_base_sha != actual_base_sha:
-        reasons.append(
+        return [
             "base_document_sha256 mismatch: design doc front matter pins "
-            f"{declared_base_sha!r}, current base document ({base_doc_path}) is "
-            f"{actual_base_sha!r}"
+            f"{declared_base_sha!r}, current base document ({pinned_doc_path}) is "
+            f"{actual_base_sha!r} ({pinning_doc_path})"
+        ]
+    return []
+
+
+def _verify_base_document_pin(repo_root: Path, design_doc_bytes: bytes) -> list[str]:
+    """v1.2 統治文書（`DESIGN_DOC_RELATIVE_PATH`）の front matter が宣言する
+    `base_document_sha256` が checkout 上の v1.1（`BASE_DESIGN_DOC_RELATIVE_PATH`）
+    の実測 sha256 と一致し、**かつ** v1.1 自身の front matter が宣言する
+    `base_document_sha256` が checkout 上の v1.0
+    （`BASE_BASE_DESIGN_DOC_RELATIVE_PATH`）の実測 sha256 と一致することを
+    検証する（§V6「基底文書の実行時 pin」の v1.2 拡張: 統治文書が 1 世代
+    進んだことで連鎖が 2 段になった）。
+
+    どちらか一方だけを pin すると、承継元文書が承認後・freeze 後に改変されても
+    `check_armed()` が無効化されない穴が残るため、両リンクをこの検証で毎回の
+    `load_approval()` に組み込む。両リンクは独立に検証し、reasons は連結して
+    返す（片方が失敗しても、もう片方の状態も同時に報告する）。空リストは
+    2 リンクとも pin が成立していることを意味する — 承認そのものが成り立つかは
+    呼び出し側の他の検査と合わせて判定される。
+
+    `design_doc_bytes` は呼び出し側（`load_approval()`）が v1.2 統治文書を
+    **1 回だけ** 読み取ったバイト列をそのまま受け取る（第 1 段）。本関数は
+    第 2 段（v1.1 → v1.0）のために v1.1 を新たに 1 回だけ読み、そのバイト列を
+    hash 算出（第 1 段の相手側）と front matter 解析（第 2 段のピン元）の
+    両方に使う——hash 算出用の読取と front matter 解析用の読取を分けると、
+    その間隔で文書が差し替わった場合に「hash は版 A・base pin は版 B」の
+    組み合わせで承認が成立し得る（Codex PR #346 第 16 巡指摘。承認
+    provenance の汚染）という同じ原則を、段を跨いで v1.1 にも適用する。
+    """
+    design_doc_path = repo_root / DESIGN_DOC_RELATIVE_PATH
+    base_doc_path = repo_root / BASE_DESIGN_DOC_RELATIVE_PATH
+    reasons = _verify_single_base_pin(design_doc_path, design_doc_bytes, base_doc_path)
+
+    base_base_doc_path = repo_root / BASE_BASE_DESIGN_DOC_RELATIVE_PATH
+    try:
+        base_doc_bytes = base_doc_path.read_bytes()
+    except OSError as exc:
+        reasons.append(
+            f"base_document_sha256: cannot read base document {base_doc_path} "
+            f"for chained pin verification: {exc}"
         )
+        return reasons
+
+    reasons.extend(_verify_single_base_pin(base_doc_path, base_doc_bytes, base_base_doc_path))
     return reasons
 
 #: `VG_CAL_APPROVAL_DIR` の既定値（checkout 外。IMPLEMENTATION_MAP §6.1）。
@@ -253,7 +289,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def _read_design_doc(repo_root: Path) -> bytes:
-    """v1.1 統治文書（`DESIGN_DOC_RELATIVE_PATH`）を 1 回だけ読み込む。
+    """v1.2 統治文書（`DESIGN_DOC_RELATIVE_PATH`）を 1 回だけ読み込む。
     呼び出し側（`load_approval()`）はこの同一バイト列から sha256 と front
     matter（`_verify_base_document_pin()`）の両方を導出し、別々の読取に
     基づく TOCTOU（読取間の差し替え）で「hash は版 A・base pin は版 B」が
@@ -456,7 +492,7 @@ def load_approval(
     declared_design_sha = _require_sha256_hex(payload, "design_doc_sha256", reasons)
     declared_memo_sha = _require_sha256_hex(payload, "memo_sha256", reasons)
 
-    # R16 対応: v1.1 は 1 回だけ読み、同じバイト列を hash（ここ）と
+    # R16 対応: v1.2 は 1 回だけ読み、同じバイト列を hash（ここ）と
     # front matter 解析（`_verify_base_document_pin()`、下方で再利用）の
     # 両方に使う（読取を分けない = TOCTOU 閉塞）。
     design_doc_bytes: bytes | None
@@ -495,12 +531,13 @@ def load_approval(
     else:
         gate_specific = _GATE_PAYLOAD_PARSERS[gate](payload, reasons)
 
-    # §V6「基底文書の実行時 pin」: 承認ファイル自体の shape/hash 検査とは独立に、
-    # checkout 上の v1.1/v1.0 バイト列の整合を毎回検証する（承認ファイルの
-    # 内容に関わらず必須 — v1.0 の事後改変を無効化する経路がこれ以外にない）。
-    # design_doc_bytes が None（上の読取が OSError で失敗）のときは、その
-    # 事実が既に reasons に積まれているため fail-closed は成立済み — ここで
-    # 改めて v1.1 を読み直しはしない（R16: 読取を 1 回に固定する）。
+    # §V6「基底文書の実行時 pin」(v1.2 で 2 段連鎖に拡張): 承認ファイル自体の
+    # shape/hash 検査とは独立に、checkout 上の v1.2/v1.1/v1.0 バイト列の整合を
+    # 毎回検証する（承認ファイルの内容に関わらず必須 — v1.1/v1.0 の事後改変を
+    # 無効化する経路がこれ以外にない）。design_doc_bytes が None（上の読取が
+    # OSError で失敗）のときは、その事実が既に reasons に積まれているため
+    # fail-closed は成立済み — ここで改めて v1.2 を読み直しはしない（R16:
+    # 読取を 1 回に固定する）。
     if design_doc_bytes is not None:
         reasons.extend(_verify_base_document_pin(root, design_doc_bytes))
 
@@ -558,10 +595,11 @@ def refresh_document_hashes(
     approval_path: Path, repo_root: Path | None = None
 ) -> HashRefreshResult:
     """既存の承認ファイルを再読込し、`design_doc_sha256`/`memo_sha256` を
-    現在の `DESIGN_VG_METER_CAL_DEBT_v1.1.md`/`IMPLEMENTATION_MAP_v1.md` の
+    現在の `DESIGN_VG_METER_CAL_DEBT_v1.2.md`/`IMPLEMENTATION_MAP_v1.md` の
     実測ハッシュへ書き換えて atomic に書き戻す（他フィールドは一切変更
-    しない）。v1.0 基底文書の pin（`base_document_sha256`）は v1.1 の
-    front matter 側にあり、本関数の再スタンプ対象ではない。
+    しない）。v1.1/v1.0 基底文書の 2 段連鎖 pin（`base_document_sha256`）は
+    それぞれ v1.2/v1.1 の front matter 側にあり、本関数の再スタンプ対象では
+    ない。
 
     メモ編集はハッシュ束縛を毎回無効化するため、承認者はメモ編集の都度
     再承認しなければならない（`load_approval()` の hash mismatch 検査）。
@@ -708,12 +746,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "refresh",
         help=(
             "Re-stamp design_doc_sha256/memo_sha256 on an existing approval file to "
-            "the current DESIGN_VG_METER_CAL_DEBT_v1.1.md/IMPLEMENTATION_MAP_v1.md "
+            "the current DESIGN_VG_METER_CAL_DEBT_v1.2.md/IMPLEMENTATION_MAP_v1.md "
             "file hashes. All other fields untouched. Every memo edit invalidates "
             "the old hash binding; the approver must still re-issue/re-confirm the "
             "approval — this only re-stamps the hash fields mechanically. Note: "
-            "the v1.0 base document is pinned separately via its sha256 embedded "
-            "in the v1.1 front matter (base_document_sha256), not via this refresh."
+            "the v1.1/v1.0 base documents are pinned separately via the 2-link "
+            "base_document_sha256 chain embedded in the v1.2/v1.1 front matter, "
+            "not via this refresh."
         ),
     )
     refresh.add_argument(
@@ -754,6 +793,7 @@ __all__ = [
     "REHEARSAL_CLAIM_SCOPE_SENTINEL",
     "DESIGN_DOC_RELATIVE_PATH",
     "BASE_DESIGN_DOC_RELATIVE_PATH",
+    "BASE_BASE_DESIGN_DOC_RELATIVE_PATH",
     "MEMO_RELATIVE_PATH",
     "DEFAULT_APPROVAL_DIR",
     "APPROVAL_DIR_ENV_VAR",
