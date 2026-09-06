@@ -55,7 +55,7 @@ import voice_genesis.calibration.selection as selection_module
 from voice_genesis.calibration.campaign import measure_stage
 from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.candidates import adapter
-from voice_genesis.calibration.candidates.registry import ALL_CANDIDATES, Candidate
+from voice_genesis.calibration.candidates.registry import Candidate, active_candidates
 from voice_genesis.calibration.canonical import manifest_sha
 from voice_genesis.calibration.fixtures import controls as fixture_controls
 from voice_genesis.calibration.fixtures.matrix import FixtureRow
@@ -65,14 +65,18 @@ from voice_genesis.calibration.vocab import ClaimCeiling
 
 
 def candidate_space_sha(candidates: Sequence[Candidate] | None = None) -> str:
-    """`registry.ALL_CANDIDATES`（または明示指定した候補集合）の canonical
+    """`registry.active_candidates()`（または明示指定した候補集合）の canonical
     snapshot sha。C0 で凍結済みの 99 候補宣言を C3 時点で再確認・記録する。
 
     RUN10-CAL-v1.2 WP1: `detection_predicate`（任意、既定 `None`）を payload
     へ含める——registry が候補ごとに宣言する fire 判定も凍結対象の一部と
     みなす（`None` の候補は `null`/`null` のペアとしてハッシュに載るため、
-    既存 99 候補全員が未宣言のままの本 revision では sha は不変）。"""
-    pool = candidates if candidates is not None else ALL_CANDIDATES
+    既存 99 候補全員が未宣言のままの本 revision では sha は不変）。
+
+    v1.2 WP2b: 既定 pool は `ALL_CANDIDATES` ではなく `active_candidates()`
+    ——`--rehearsal` では C0 が凍結した縮小プールと同じ集合を C3 で再確認する
+    （本番では `ALL_CANDIDATES` と同一なので sha は不変）。"""
+    pool = candidates if candidates is not None else active_candidates()
     payload = {
         c.candidate_id: {
             "meter": c.meter.value,

@@ -11,22 +11,36 @@ campaigns/secrets/approvals に限る。リポジトリの
 ——`--rehearsal` 自身がそれらの配下を指す path を `BLOCKED_REHEARSAL_PATH`
 で拒否する（`c0_freeze.rehearsal_path_violations()`）。
 
-**既定で skip する理由（実測、2026-09-06）**: 設計時の目標は「十数分」だったが、
-縮小行列（58 行 / 実現 split は c1=250・c2=150・c3a=20・c3b=120・c4=40 instance）
-でも到達しない。実測（他エージェントの test 実行と同居した負荷下）:
+**既定で skip する理由（実測、2026-09-06）**: 第 1 回の実測は縮小行列
+（456 -> 58 行）だけで **約 3 時間**だった。律速は行数ではなく
+「候補数 (99) x instance x fresh-process 起動」の積である。Fable 判定
+（v1.2 WP2b）: rehearsal は claim を生まないので候補プールの縮小も許容する
+——`candidates.registry.rehearsal_candidate_pool()`（family ごとに B0 +
+`claim_ceiling != NONE` の先頭 1 件 = 99 -> 12 候補）。
 
-- C0 freeze -> c1 -> c2 -> c3a: **約 26 分**（render 245 + meter_call 約 5.4k）
-- c3b: 実測 **46 meter_call/min**、必要量は 20 instance x family 候補数
-  (M3_FORMANTS 43 / M2_APERIODICITY 24 / M2_SPECTRAL_TILT 13 / M5_TRANSITION 7 /
-  M4_RESONANCE 5 / M6_IDENTITY 2) x 約 3.3 call ≈ **6.2k** -> 約 2.2 時間
-- 合計 **約 3 時間**（c4/close 込みの概算）
+再実測（同 checkout・同一機、2026-09-06。stage ごとに実 CLI を駆動）:
 
-矛盾ではなく前提の更新であり、**行の削減だけでは「候補数 x instance」の積が
-律速のまま**という観測そのもの（fresh-process の subprocess 起動が支配的で、
-`--workers 2` でも桁は変わらない）。既定の `pytest` / CI（`slow` 込み）を
-数時間拘束しないよう、環境変数 `VG_CAL_REHEARSAL_E2E=1` を明示したときだけ
-実行する。所要時間そのものの設計判断（rehearsal に候補プールの縮小まで
-許すのか、CI からは外したまま手動 gate として使うのか）は Fable に委ねる。
+| 段 | 実測秒 |
+|---|---|
+| c0 dry-run / armed freeze | 0.4 / 0.6 |
+| c1-fixtures | 466.7 |
+| c2-baseline | 398.5 |
+| c3a-f0-selection | 125.8 |
+| c3b-selection | 957.1（`--time-budget-seconds 450` の 3 slice 合計） |
+| unseal | 2.4 |
+| c4-holdout | 447.1 |
+| close | 2.0 |
+| **合計** | **2400.6 秒 = 40.0 分**（3 時間 -> 1/4.5。meter_call 6540） |
+
+目標の 30 分には届かない（残る律速は c1 の render 290 と c2/c4 の instance 数で、
+どちらも候補プールとは独立）。それでも既定の `pytest` / CI（`slow` を skip
+しない規約）を 40 分拘束するのは実害なので、環境変数
+`VG_CAL_REHEARSAL_E2E=1` を明示したときだけ実行する（手動 gate）。
+
+1 回の呼び出しに 10 分の上限があるハーネスからは、本テストの代わりに
+`campaign` CLI を段ごとに直接駆動できる: 長い段は
+`--time-budget-seconds <n>` を付けると `PARTIAL_SLICE` を返して途中終了し、
+同じコマンドの再実行で続きから進む（上表の c3b はこの方法で計測した）。
 
 **subprocess で回す理由**: 本 WP が配線したのは CLI の引数解析から
 `set_rehearsal_mode()`・manifest への `rehearsal` 記録・path ガード・
@@ -150,6 +164,16 @@ def _ledger_payloads(campaign_dir: Path) -> list[dict[str, object]]:
     return out
 
 
+def _kind_counts(payloads: list[dict[str, object]]) -> dict[str, int]:
+    """ledger の `kind` 列とその件数（報告へ転記するための観測値）。"""
+    counts: dict[str, int] = {}
+    for payload in payloads:
+        kind = payload.get("kind")
+        if isinstance(kind, str):
+            counts[kind] = counts.get(kind, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 @pytest.mark.slow
 def test_rehearsal_campaign_runs_c0_through_close(tmp_path: Path) -> None:
     if os.environ.get(REHEARSAL_E2E_ENV_VAR) != "1":
@@ -191,8 +215,23 @@ def test_rehearsal_campaign_runs_c0_through_close(tmp_path: Path) -> None:
     ]
 
     started = time.monotonic()
+    #: 段ごとの実測所要（秒）。所要時間そのものは主張ではなく観測値なので、
+    #: 段が終わるたびに flush して出力する——途中で中断されても、どこまでで
+    #: 何秒かかったかが必ず記録に残る（v1.2 WP2b の再実測要件）。
+    stage_seconds: dict[str, float] = {}
 
-    dry = _run(freeze_argv, base_env)
+    def _timed(label: str, fn):
+        mark = time.monotonic()
+        try:
+            return fn()
+        finally:
+            stage_seconds[label] = time.monotonic() - mark
+            print(
+                f"rehearsal E2E stage={label} seconds={stage_seconds[label]:.1f}",
+                flush=True,
+            )
+
+    dry = _timed("c0-dry-run", lambda: _run(freeze_argv, base_env))
     core_sha = next(
         line.split(": ", 1)[1].strip()
         for line in dry.stdout.splitlines()
@@ -204,7 +243,7 @@ def test_rehearsal_campaign_runs_c0_through_close(tmp_path: Path) -> None:
 
     freeze_env = dict(base_env)
     freeze_env["VG_CAL_C0_FREEZE_AUTHORIZED"] = "1"
-    armed = _run([*freeze_argv, "--armed"], freeze_env)
+    armed = _timed("c0-armed-freeze", lambda: _run([*freeze_argv, "--armed"], freeze_env))
     assert armed.returncode == 0, armed.stdout + armed.stderr
     assert "outcome: PUBLISHED" in armed.stdout, armed.stdout
     campaign_id = next(
@@ -223,20 +262,23 @@ def test_rehearsal_campaign_runs_c0_through_close(tmp_path: Path) -> None:
     campaign_env["VG_CAL_CAMPAIGN_AUTHORIZED"] = "1"
 
     def run_stage(subcommand: str) -> dict[str, object]:
-        proc = _run(
-            [
-                "voice_genesis.calibration.campaign",
-                subcommand,
-                "--campaign-dir",
-                str(campaign_dir),
-                "--secret-dir",
-                str(secret_dir),
-                "--approval-dir",
-                str(approval_dir),
-                "--rehearsal",
-                "--armed",
-            ],
-            campaign_env,
+        proc = _timed(
+            subcommand,
+            lambda: _run(
+                [
+                    "voice_genesis.calibration.campaign",
+                    subcommand,
+                    "--campaign-dir",
+                    str(campaign_dir),
+                    "--secret-dir",
+                    str(secret_dir),
+                    "--approval-dir",
+                    str(approval_dir),
+                    "--rehearsal",
+                    "--armed",
+                ],
+                campaign_env,
+            ),
         )
         assert proc.returncode == 0, f"{subcommand}: {proc.stdout}\n{proc.stderr}"
         out = json.loads(proc.stdout)
@@ -296,3 +338,17 @@ def test_rehearsal_campaign_runs_c0_through_close(tmp_path: Path) -> None:
 
     # 所要時間は主張ではなく観測値。失敗時に必ず目に入るよう出力する。
     print(f"rehearsal E2E elapsed_seconds={elapsed_seconds:.1f}")
+    print(
+        "rehearsal E2E stage_seconds="
+        + json.dumps({k: round(v, 1) for k, v in stage_seconds.items()})
+    )
+    print("rehearsal E2E ledger kinds=" + json.dumps(_kind_counts(payloads)))
+    print(
+        "rehearsal E2E per_meter terminal_status="
+        + json.dumps(
+            {
+                meter_id: entry.get("terminal_status")
+                for meter_id, entry in sorted(per_meter.items())
+            }
+        )
+    )

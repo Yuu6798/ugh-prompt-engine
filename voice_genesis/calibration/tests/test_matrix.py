@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from voice_genesis.calibration.candidates import registry as candidate_registry
 from voice_genesis.calibration.fixtures import axes, controls
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
 from voice_genesis.calibration.fixtures.matrix import (
@@ -25,7 +26,7 @@ from voice_genesis.calibration.fixtures.matrix import (
 )
 from voice_genesis.calibration.gates import MIN_RESOLVABLE_PAIRS_PER_SWEEP
 from voice_genesis.calibration.splitter import RowInput, realize_split
-from voice_genesis.calibration.vocab import Domain, Split
+from voice_genesis.calibration.vocab import ClaimCeiling, Domain, Split
 
 SPLIT_SECRET = b"\x09" * 32
 
@@ -625,4 +626,141 @@ def test_no_direct_build_matrix_call_sites_outside_matrix_module() -> None:
         "direct build_matrix() call site(s) outside the allowlist — route them "
         "through fixtures.matrix.active_matrix() so --rehearsal switches every "
         f"consumer at once: {offenders}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# v1.2 WP2b — rehearsal 候補プール（`candidates.registry.active_candidates()`）
+# ---------------------------------------------------------------------------
+
+
+def test_rehearsal_candidate_pool_is_deterministic_subset_in_registry_order() -> None:
+    """縮小プールは `ALL_CANDIDATES` の部分集合であり、registry の宣言順を
+    保存し、呼ぶたびに同一（手選び・辞書順依存が入っていない）。"""
+    pool = candidate_registry.rehearsal_candidate_pool()
+    assert pool == candidate_registry.rehearsal_candidate_pool()
+    ids = [c.candidate_id for c in pool]
+    all_ids = [c.candidate_id for c in candidate_registry.ALL_CANDIDATES]
+    assert set(ids) <= set(all_ids)
+    assert ids == [cid for cid in all_ids if cid in set(ids)]
+    assert len(ids) == len(set(ids))
+
+
+def test_rehearsal_candidate_pool_takes_b0_plus_one_usable_per_family() -> None:
+    """規則の全数固定: family ごとに (i) B0 先頭 1 件 + (ii) `claim_ceiling !=
+    NONE` の先頭 1 件（B0 を持たない family は (ii) の 1 件のみ）。"""
+    pool = candidate_registry.rehearsal_candidate_pool()
+    by_meter: dict[object, list[str]] = {}
+    for c in pool:
+        by_meter.setdefault(c.meter, []).append(c.candidate_id)
+
+    all_meters = {c.meter for c in candidate_registry.ALL_CANDIDATES}
+    assert set(by_meter) == all_meters, "縮小プールは全 meter family を残す"
+
+    for meter in all_meters:
+        family_all = [c for c in candidate_registry.ALL_CANDIDATES if c.meter == meter]
+        expected: list[str] = []
+        b0 = next((c for c in family_all if "-B0-" in c.candidate_id), None)
+        if b0 is not None:
+            expected.append(b0.candidate_id)
+        usable = next(
+            (
+                c
+                for c in family_all
+                if c.candidate_id not in expected
+                and c.claim_ceiling is not ClaimCeiling.NONE
+            ),
+            None,
+        )
+        if usable is not None:
+            expected.append(usable.candidate_id)
+        assert sorted(by_meter[meter]) == sorted(expected), meter
+        assert len(by_meter[meter]) <= 2, meter
+
+
+def test_active_candidates_switches_only_under_rehearsal_mode() -> None:
+    """`active_candidates()` は行列と **同じ 1 つのフラグ**で切り替わる
+    （行列だけ縮小して候補は全件、のような未定義の組を作らせない）。"""
+    assert not rehearsal_mode()
+    assert candidate_registry.active_candidates() == candidate_registry.ALL_CANDIDATES
+    try:
+        set_rehearsal_mode(True)
+        assert (
+            candidate_registry.active_candidates()
+            == candidate_registry.rehearsal_candidate_pool()
+        )
+        for meter in {c.meter for c in candidate_registry.ALL_CANDIDATES}:
+            assert candidate_registry.active_candidates_for_meter(meter) == tuple(
+                c for c in candidate_registry.rehearsal_candidate_pool() if c.meter == meter
+            )
+    finally:
+        set_rehearsal_mode(False)
+    assert candidate_registry.active_candidates() == candidate_registry.ALL_CANDIDATES
+
+
+#: `ALL_CANDIDATES` / `candidates_for_meter()` を **直接**読んでよい production
+#: モジュールと、そこでの参照回数（AST 上の Name/Attribute 出現数）。
+#:
+#: - `candidates/registry.py`: 定義元（`active_candidates()` の実装が読む）。
+#: - `c0_validate.py`: 凍結 manifest を **registry 全体**と突合する検証器。
+#:   `independence_ledger` の全件一致（99 候補の tier 宣言）と、v1.2 WP2b の
+#:   候補空間 x rehearsal フラグ検査（本番は全件・rehearsal は縮小プール）。
+#: - `e_use_table.py`: E_use evidence 表の key 集合は registry 全体に対する
+#:   静的 config の被覆要求であり、campaign の候補空間とは別物。
+#: - `c0_freeze.py`: `independence_ledger`（registry 全体の tier 宣言）と
+#:   `max_claim_scope` の construct 語彙検査。どちらも候補空間ではない。
+#: - `campaign/diagnose.py`: C-1 探索ステージ（WP4）。freeze も封印も ledger も
+#:   持たない armed campaign ではない cheap gate であり `--rehearsal` の対象外
+#:   （`_BUILD_MATRIX_CALL_SITE_ALLOWLIST` と同じ判定）。
+_CANDIDATE_ENUMERATION_ALLOWLIST: dict[str, dict[str, int]] = {
+    # `candidates_for_meter` の定義そのもの（`ast.FunctionDef`）は Name/
+    # Attribute ではないのでここには数えられない。
+    "voice_genesis/calibration/candidates/registry.py": {"ALL_CANDIDATES": 6},
+    "voice_genesis/calibration/c0_validate.py": {"ALL_CANDIDATES": 4},
+    "voice_genesis/calibration/e_use_table.py": {"ALL_CANDIDATES": 1},
+    "voice_genesis/calibration/c0_freeze.py": {"ALL_CANDIDATES": 2},
+    "voice_genesis/calibration/campaign/diagnose.py": {"candidates_for_meter": 2},
+}
+
+
+def _candidate_enumeration_references(source: str) -> dict[str, int]:
+    """`source` 中の `ALL_CANDIDATES` / `candidates_for_meter` 参照回数
+    （Name / Attribute の双方。docstring/コメントは AST に現れない）。"""
+    counts: dict[str, int] = {}
+    for node in ast.walk(ast.parse(source)):
+        name = (
+            node.id
+            if isinstance(node, ast.Name)
+            else node.attr
+            if isinstance(node, ast.Attribute)
+            else None
+        )
+        if name in {"ALL_CANDIDATES", "candidates_for_meter"}:
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def test_candidate_enumeration_call_sites_are_frozen() -> None:
+    """v1.2 WP2b: 候補列挙の call site を全数で固定する。
+
+    `--rehearsal` の縮小プールは `active_candidates()` の 1 箇所でしか
+    切り替わらないため、新しい call site が `ALL_CANDIDATES` /
+    `candidates_for_meter()` を直接読むと rehearsal が片肺になる（行列だけ
+    縮小され候補は 99 のまま = 実測 3 時間の元凶）。allowlist に載る参照は
+    「registry 全体を意図的に見る検証器/静的 config」に限る。"""
+    calibration_root = Path(__file__).resolve().parents[1]
+    repo_root = calibration_root.parents[1]
+    actual: dict[str, dict[str, int]] = {}
+    for path in sorted(calibration_root.rglob("*.py")):
+        rel = path.relative_to(repo_root).as_posix()
+        if "/tests/" in f"/{rel}":
+            continue
+        counts = _candidate_enumeration_references(path.read_text(encoding="utf-8"))
+        if counts:
+            actual[rel] = counts
+    assert actual == _CANDIDATE_ENUMERATION_ALLOWLIST, (
+        "candidate enumeration call sites changed — route production consumers "
+        "through candidates.registry.active_candidates()/active_candidates_for_meter() "
+        "so --rehearsal switches every consumer at once, then update this frozen "
+        f"allowlist with the reason: {actual}"
     )

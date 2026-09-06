@@ -128,7 +128,17 @@ def _shape_valid_nested_value(key: str, seed: str) -> object:
     if key in ("boundary_probes", "negative_controls", "stop_rules"):
         return [f"{seed}_{key}_0", f"{seed}_{key}_1"]
     if key == "parameter_grid":
-        return {f"{seed}_{key}_axis": [0, 1]}
+        # v1.2 WP2b: `declared_sweeps`/`confound_axes` と同じ理由で placeholder
+        # では通らない——`_check_candidate_space_pool()` は凍結された候補空間
+        # （= 全 meter の `parameter_grid` 鍵集合）が `frozen_design.rehearsal`
+        # に対応する候補プール（本番 = registry 全件）と完全一致することを
+        # 要求する。`seed` は `meter_id.lower()`（meter_specs のみが本 key を
+        # 持つため fixture_spec 側からこの分岐に到達することはない）。
+        meter = vocab.MeterId(seed.upper())
+        return {
+            c.candidate_id: dict(c.parameters)
+            for c in candidate_registry.candidates_for_meter(meter)
+        }
     if key == "declared_sweeps":
         # UNDERSPEC-CAL-D77 ruling (1): このフィールドだけは placeholder では
         # なく、`_check_declared_sweep_declaration_match()` の完全一致検査を

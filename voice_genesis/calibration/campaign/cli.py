@@ -110,7 +110,10 @@ from voice_genesis.calibration.campaign.state import (
     load_frozen_campaign,
 )
 from voice_genesis.calibration.campaign.time_budget import SliceStatus, TimeBudget
-from voice_genesis.calibration.candidates.registry import candidate_by_id, candidates_for_meter
+from voice_genesis.calibration.candidates.registry import (
+    active_candidates_for_meter,
+    candidate_by_id,
+)
 from voice_genesis.calibration.cost_caps import (
     BudgetAccountingUndeclaredError,
     CapCounters,
@@ -1402,7 +1405,7 @@ def _run_c3a(
         if mr.row.family == FixtureFamily.F0_CONTROL.value
         for p in range(_PROBE_REPEATS)
     }
-    candidates = candidates_for_meter(MeterId.F0_CONTROL)
+    candidates = active_candidates_for_meter(MeterId.F0_CONTROL)
 
     if time_budget_seconds is not None:
         records, slice_status = measure_stage.run_measure_stage(
@@ -1865,10 +1868,14 @@ _FAMILY_TO_METER: Mapping[FixtureFamily, MeterId] = {
 
 
 def _candidates_for_family(family: FixtureFamily) -> tuple[Any, ...]:
+    """family の候補列挙（c3b / c4 の唯一の入口）。
+
+    v1.2 WP2b: `registry.active_candidates_for_meter()` 経由なので
+    `--rehearsal` では縮小プール（family あたり最大 2 件）になる。"""
     meter = _FAMILY_TO_METER.get(family)
     if meter is None:
         return ()
-    return candidates_for_meter(meter)
+    return active_candidates_for_meter(meter)
 
 
 def _run_unseal(

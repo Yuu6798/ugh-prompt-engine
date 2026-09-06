@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -19,6 +20,7 @@ import pytest
 
 from voice_genesis.calibration import approvals, c0_freeze, c0_validate
 from voice_genesis.calibration.candidates import registry as candidate_registry
+from voice_genesis.calibration.fixtures import matrix as fixture_matrix
 from voice_genesis.calibration.splitter import realize_split, verify_split
 
 _REPO_ROOT = c0_freeze._REPO_ROOT
@@ -49,6 +51,17 @@ def clean_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
         return "a" * 40, False, None
 
     monkeypatch.setattr(c0_validate, "_inspect_checkout_identity", fake_identity)
+
+
+@pytest.fixture()
+def rehearsal_mode() -> Iterator[None]:
+    """v1.2 WP2b: プロセス大域の rehearsal フラグを立てて必ず戻す
+    （`fixtures.matrix._REHEARSAL_MODE` は行列と候補プールの共有スイッチ）。"""
+    fixture_matrix.set_rehearsal_mode(True)
+    try:
+        yield None
+    finally:
+        fixture_matrix.set_rehearsal_mode(False)
 
 
 #: PR レビュー第 5 巡: gate1/gate2 は同一 authorization_nonce を要求する。
@@ -2663,22 +2676,84 @@ def test_gate_approval_ordering_helper_accepts_past_approvals() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _declared_candidate_ids(manifest: dict) -> set[str]:
+    """manifest が凍結した候補空間の candidate_id 全集合
+    （`c0_validate._declared_candidate_ids()` と同じ導出をテスト側で独立に行う）。"""
+    ids: set[str] = set()
+    for entry in manifest["frozen_design"]["meter_specs"].values():
+        ids.update(entry["parameter_grid"].keys())
+    return ids
+
+
 def test_production_manifest_records_rehearsal_false(tmp_path: Path) -> None:
     report = c0_freeze.dry_run(_REPO_ROOT, tmp_path, os.environ)
     assert report.manifest["frozen_design"]["rehearsal"] is False
     assert report.campaign_id.startswith("RUN10-CAL-")
+    # v1.2 WP2b: 本番の候補空間は registry 全件（縮小プールでは freeze できない）。
+    assert _declared_candidate_ids(report.manifest) == {
+        c.candidate_id for c in candidate_registry.ALL_CANDIDATES
+    }
 
 
 def test_rehearsal_manifest_records_rehearsal_true_and_prefixed_campaign_id(
-    tmp_path: Path,
+    tmp_path: Path, rehearsal_mode: None
 ) -> None:
     report = c0_freeze.dry_run(_REPO_ROOT, tmp_path, os.environ, rehearsal=True)
     assert report.manifest["frozen_design"]["rehearsal"] is True
     assert report.campaign_id.startswith(c0_freeze.REHEARSAL_CAMPAIGN_ID_PREFIX + "RUN10-CAL-")
+    # v1.2 WP2b: rehearsal の候補空間は縮小プールそのもの（family あたり最大 2 件）。
+    assert _declared_candidate_ids(report.manifest) == {
+        c.candidate_id for c in candidate_registry.rehearsal_candidate_pool()
+    }
     # rehearsal フラグは core payload の一部なので manifest_core_sha が変わる
     # （rehearsal 承認を本番 freeze へ流用できない）。
+    fixture_matrix.set_rehearsal_mode(False)
     production = c0_freeze.dry_run(_REPO_ROOT, tmp_path, os.environ)
     assert report.manifest_core_sha != production.manifest_core_sha
+
+
+def test_build_manifest_refuses_rehearsal_flag_without_process_mode(tmp_path: Path) -> None:
+    """v1.2 WP2b: `rehearsal=` 引数とプロセス大域フラグの不一致は fail-fast
+    （片方だけ立つと「rehearsal を名乗る本番行列/本番候補空間」という内部
+    矛盾した manifest が黙って作られる）。"""
+    with pytest.raises(ValueError, match="contradicts the process-wide rehearsal mode"):
+        c0_freeze.build_manifest(
+            _REPO_ROOT, approvals={}, campaign_date_utc="2026-09-06", rehearsal=True
+        )
+
+
+def test_rehearsal_manifest_candidate_space_passes_validation_production_pool_does_not(
+    tmp_path: Path, rehearsal_mode: None
+) -> None:
+    """v1.2 WP2b: `frozen_design.rehearsal` と候補空間の組は両方向に固定される
+    ——rehearsal manifest に registry 全件を差し戻すと violation になり
+    （= 「rehearsal を名乗る本番候補空間」を通さない）、本番 manifest に縮小
+    プールを差し込んでも violation になる（= 縮小プールで測った証拠を claim
+    経路へ持ち込ませない）。"""
+    report = c0_freeze.dry_run(_REPO_ROOT, tmp_path, os.environ, rehearsal=True)
+    rehearsal_manifest = report.manifest
+    assert c0_validate._check_candidate_space_pool(rehearsal_manifest) == []
+
+    fixture_matrix.set_rehearsal_mode(False)
+    production_manifest = c0_freeze.dry_run(_REPO_ROOT, tmp_path, os.environ).manifest
+    assert c0_validate._check_candidate_space_pool(production_manifest) == []
+
+    # 交叉させる: 本番の meter_specs を rehearsal manifest に移植 -> violation。
+    swapped_rehearsal = json.loads(json.dumps(rehearsal_manifest))
+    swapped_rehearsal["frozen_design"]["meter_specs"] = production_manifest["frozen_design"][
+        "meter_specs"
+    ]
+    violations = c0_validate._check_candidate_space_pool(swapped_rehearsal)
+    assert violations and all("outside" in v for v in violations)
+
+    # rehearsal の meter_specs を本番 manifest に移植 -> violation（欠落側）。
+    swapped_production = json.loads(json.dumps(production_manifest))
+    swapped_production["frozen_design"]["meter_specs"] = rehearsal_manifest["frozen_design"][
+        "meter_specs"
+    ]
+    violations = c0_validate._check_candidate_space_pool(swapped_production)
+    assert violations and all("missing candidate_id" in v for v in violations)
+    assert any("registry.ALL_CANDIDATES" in v for v in violations)
 
 
 def test_rehearsal_path_violations_require_explicit_dirs_outside_canonical(

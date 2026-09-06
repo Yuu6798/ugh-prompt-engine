@@ -294,10 +294,20 @@ def _meter_spec_for(candidates: Sequence[Candidate]) -> dict[str, object]:
 
 
 def _meter_specs() -> dict[str, object]:
+    """凍結される候補空間（`frozen_design.meter_specs`）。
+
+    v1.2 WP2b: 候補列挙は `registry.active_candidates_for_meter()` 経由
+    ——`--rehearsal` の下では縮小プール（family あたり最大 2 件）が凍結され、
+    本番では常に registry 全件。両方向の一致は
+    `c0_validate._check_candidate_space_pool()` が固定する
+    （本番 manifest が縮小プールで凍結されていれば violation）。
+    `independence_ledger` は候補空間ではなく registry 全体の tier 宣言なので
+    rehearsal でも全件のまま（`_check_independence_ledger()` が全件一致を要求）。
+    """
     return {
-        meter.value: _meter_spec_for(registry.candidates_for_meter(meter))
+        meter.value: _meter_spec_for(registry.active_candidates_for_meter(meter))
         for meter in vocab.MeterId
-        if registry.candidates_for_meter(meter)
+        if registry.active_candidates_for_meter(meter)
     }
 
 
@@ -533,7 +543,23 @@ def build_manifest(
     （`_check_max_claim_scope()`、`dry_run()`/`armed_freeze()` が呼ぶ）が
     別途行う — `build_manifest()` 自体は Gate 1 record の値をそのまま転記
     するのみで検証しない（`cost_caps`/`e_use_table` と同じ責務分離）。
+
+    v1.2 WP2b: `rehearsal` 引数はプロセス大域の rehearsal フラグ
+    （`fixtures.matrix.rehearsal_mode()`）と **一致していなければならない**。
+    manifest に記録する `frozen_design.rehearsal` と、実際に凍結される
+    fixture matrix（`active_matrix()`）・候補空間（`active_candidates()`）は
+    同じフラグから導かれるため、片方だけ立っていると「rehearsal を名乗る
+    本番行列」のような内部矛盾した artifact が黙って作られてしまう。
+    ここで `ValueError` として fail-fast させる。
     """
+    if bool(rehearsal) is not fixture_matrix.rehearsal_mode():
+        raise ValueError(
+            f"build_manifest(rehearsal={bool(rehearsal)}) contradicts the process-wide "
+            f"rehearsal mode (fixtures.matrix.rehearsal_mode()="
+            f"{fixture_matrix.rehearsal_mode()}): the manifest's frozen_design.rehearsal, "
+            "the frozen fixture matrix and the frozen candidate space must all come from "
+            "the same switch (call fixtures.matrix.set_rehearsal_mode() first)"
+        )
     root = Path(repo_root)
     head_sha, dirty, _git_error = c0_validate._inspect_checkout_identity(root)
 

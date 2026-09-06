@@ -638,11 +638,14 @@ def scan_calibration_tree_inventory(repo_root: Path | None = None) -> frozenset[
     自己完結性のため同じ集合に含めておく）。
 
     v1.1 §V6（統合3, `[UNDERSPEC-CAL-D79]`, WP2d 報告の申し送り）: 統治設計
-    文書 2 本（v1.1 統治正本 `approvals.DESIGN_DOC_RELATIVE_PATH` / 読み取り
-    専用基底 `approvals.BASE_DESIGN_DOC_RELATIVE_PATH`）を scan 結果へ union
-    する — どちらも `.py` ではないため `rglob("*.py")` からは構造的に漏れて
-    おり、v1.1 §V6 が要求する「v1.0/v1.1 両文書を path inventory 検査対象へ」
-    が未実施のままだった。文書パスに対する sha 検査等の意味論は追加しない
+    文書を scan 結果へ union する — どれも `.py` ではないため `rglob("*.py")`
+    からは構造的に漏れており、§V6 が要求する「統治文書を path inventory 検査
+    対象へ」が未実施のままだった。v1.2 で pin が 2 段連鎖（v1.2 統治正本
+    `approvals.DESIGN_DOC_RELATIVE_PATH` → 基底 v1.1
+    `approvals.BASE_DESIGN_DOC_RELATIVE_PATH` → 基底の基底 v1.0
+    `approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH`）になったため、**3 本とも**
+    union する（連鎖の末端 v1.0 が監査集合から抜けると、pin されている文書が
+    inventory の外に落ちる）。文書パスに対する sha 検査等の意味論は追加しない
     （既存の inventory 項目と同じ「対象集合に含まれる」以上の扱いを増やさない
     ——過剰設計しない）。
     """
@@ -652,6 +655,7 @@ def scan_calibration_tree_inventory(repo_root: Path | None = None) -> frozenset[
     paths.add((package_dir / PATH_INVENTORY_FILENAME).relative_to(root).as_posix())
     paths.add(approvals.DESIGN_DOC_RELATIVE_PATH)
     paths.add(approvals.BASE_DESIGN_DOC_RELATIVE_PATH)
+    paths.add(approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH)
     return frozenset(paths)
 
 
@@ -2692,6 +2696,71 @@ def _check_rehearsal_location(
     return []
 
 
+def _declared_candidate_ids(manifest: Mapping[str, object]) -> set[str] | None:
+    """`frozen_design.meter_specs.<METER>.parameter_grid` の鍵集合
+    = manifest が凍結した候補空間（`candidate_space`）の candidate_id 全集合。
+
+    形状が壊れている場合は `None`（= 判定不能）を返す——形状違反は
+    `_check_meter_spec_nested_keys()` / `_check_mapping_shape_fields()` が
+    別途 violation にする責務であり、本関数は二重報告しない。"""
+    found, meter_specs = _resolve(manifest, "frozen_design.meter_specs")
+    if not found or not isinstance(meter_specs, Mapping) or not meter_specs:
+        return None
+    ids: set[str] = set()
+    for entry in meter_specs.values():
+        if not isinstance(entry, Mapping):
+            return None
+        grid = entry.get("parameter_grid")
+        if not isinstance(grid, Mapping):
+            return None
+        ids.update(k for k in grid.keys() if isinstance(k, str))
+    return ids
+
+
+def _check_candidate_space_pool(manifest: Mapping[str, object]) -> list[str]:
+    """v1.2 WP2b: 凍結された候補空間が `frozen_design.rehearsal` と整合するか。
+
+    - `rehearsal is False`（本番）: `candidate_space` は
+      `candidates.registry.ALL_CANDIDATES` の **全件**でなければならない
+      ——縮小プール（rehearsal 用）で凍結された manifest を本番 claim 経路へ
+      持ち込ませない（縮小プールで測った証拠は候補比較として不完全）。
+    - `rehearsal is True`: `registry.rehearsal_candidate_pool()` と完全一致。
+      rehearsal を名乗りながら全 99 候補を回すのも、規則外の任意の部分集合を
+      使うのも、いずれも「疎通試験の定義」から外れるため violation にする。
+
+    `rehearsal` が bool でない/欠落している場合は `_check_required_blocking()`
+    が既に捕捉しているのでここでは何も言わない。
+    """
+    frozen_design = manifest.get("frozen_design")
+    rehearsal = frozen_design.get("rehearsal") if isinstance(frozen_design, Mapping) else None
+    if not isinstance(rehearsal, bool):
+        return []
+    declared = _declared_candidate_ids(manifest)
+    if declared is None:
+        return []
+    if rehearsal:
+        expected_ids = {c.candidate_id for c in candidate_registry.rehearsal_candidate_pool()}
+        label = "the rehearsal candidate pool (registry.rehearsal_candidate_pool())"
+    else:
+        expected_ids = {c.candidate_id for c in candidate_registry.ALL_CANDIDATES}
+        label = "the full candidate registry (registry.ALL_CANDIDATES)"
+    missing_ids = sorted(expected_ids - declared)
+    unknown_ids = sorted(declared - expected_ids)
+    violations: list[str] = []
+    violations.extend(
+        f"frozen_design.meter_specs (candidate_space missing candidate_id {cid!r}; "
+        f"with frozen_design.rehearsal={rehearsal} the candidate space must be exactly "
+        f"{label}, {len(expected_ids)} candidates)"
+        for cid in missing_ids
+    )
+    violations.extend(
+        f"frozen_design.meter_specs (candidate_space has candidate_id {cid!r} outside "
+        f"{label}; frozen_design.rehearsal={rehearsal})"
+        for cid in unknown_ids
+    )
+    return violations
+
+
 def _approval_records_by_content_sha(repo_root: Path | None = None) -> dict[str, Mapping[str, object]]:
     """`approvals/records/*.json` を content sha256 -> payload の写像として
     読む（読めない/JSON 不正なファイルは黙って飛ばす——本検査は「記録がある
@@ -3049,6 +3118,8 @@ def validate_c0_manifest(
     # v1.2 WP2 §B(vi)/§C-9: rehearsal manifest の設置場所 + Gate 承認時刻の
     # 順序（どちらも `manifest_path` が渡された on-disk 検証でのみ有効）。
     missing_required += _check_rehearsal_location(manifest, manifest_path)
+    # v1.2 WP2b: 候補空間と rehearsal フラグの整合（in-memory 検証でも有効）。
+    missing_required += _check_candidate_space_pool(manifest)
     gate_ordering = _check_gate_approval_ordering(manifest, manifest_path)
     missing_required += list(gate_ordering.violations)
 
