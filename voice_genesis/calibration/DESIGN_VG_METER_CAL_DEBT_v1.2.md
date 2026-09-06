@@ -99,8 +99,12 @@ campaign `410b25f2` の c3b 観測（D106）で、`negative_controls_incomplete`
 - **registry `detection_predicate`（任意拡張点）**: `Candidate` に
   `detection_predicate: DetectionPredicate | None = None`（`field`/`min_value` の
   frozen dataclass）を追加する。**既存の全候補は未宣言のまま**とし、挙動は完全に
-  不変（`candidate_space_sha()` の payload に含めるが、既存候補が使わない限り sha
-  値自体は変わらない）。FORMANT 候補群への `detection_predicate` 宣言（W1.1 が示唆する
+  不変（`candidate_space_sha()` の payload に含めるが、`None` は canonical
+  serialization からキー自体を省略するため、未宣言候補の sha 値自体は変わらない
+  ——Codex レビュー #349 第 2 巡採用: 全候補へ `"detection_predicate": null` を
+  一律出力する実装では、本 WP 以前に無かったキーが payload へ新規追加される時点で
+  sha が変わってしまい「未宣言候補では sha 不変」という主張が偽になっていた）。
+  FORMANT 候補群への `detection_predicate` 宣言（W1.1 が示唆する
   「fire 定義そのものの再検討」）は **本revisionでは行わない** — 宣言は次 revision の
   設計判断であり、拡張点の用意のみを本revisionのスコープとする。
 

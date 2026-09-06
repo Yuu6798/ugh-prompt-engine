@@ -70,15 +70,21 @@ def candidate_space_sha(candidates: Sequence[Candidate] | None = None) -> str:
 
     RUN10-CAL-v1.2 WP1: `detection_predicate`（任意、既定 `None`）を payload
     へ含める——registry が候補ごとに宣言する fire 判定も凍結対象の一部と
-    みなす（`None` の候補は `null`/`null` のペアとしてハッシュに載るため、
-    既存 99 候補全員が未宣言のままの本 revision では sha は不変）。
+    みなす。**未宣言（`None`）の候補では payload にキー自体を出力しない**
+    （Codex レビュー #349 第 2 巡採用: `"detection_predicate": null` を全候補
+    へ一律出力すると、本 WP 以前は存在しなかったキーが payload へ新規追加
+    される時点でハッシュ入力が変わり「既存 99 候補全員が未宣言のままの本
+    revision では sha は不変」という主張自体が偽になっていた——宣言時のみ
+    キーを出力することで、未宣言候補の payload を本 WP 以前と bit-for-bit
+    同一に保ち、この不変性の主張を実装で真にする）。
 
     v1.2 WP2b: 既定 pool は `ALL_CANDIDATES` ではなく `active_candidates()`
     ——`--rehearsal` では C0 が凍結した縮小プールと同じ集合を C3 で再確認する
     （本番では `ALL_CANDIDATES` と同一なので sha は不変）。"""
     pool = candidates if candidates is not None else active_candidates()
-    payload = {
-        c.candidate_id: {
+    payload = {}
+    for c in pool:
+        entry: dict[str, object] = {
             "meter": c.meter.value,
             "construct": c.construct,
             "unit": c.unit,
@@ -90,14 +96,13 @@ def candidate_space_sha(candidates: Sequence[Candidate] | None = None) -> str:
             "claim_ceiling": c.claim_ceiling.value,
             "complexity_rank": c.complexity_rank,
             "implementation_ref": c.implementation_ref,
-            "detection_predicate": (
-                {"field": c.detection_predicate.field, "min_value": c.detection_predicate.min_value}
-                if c.detection_predicate is not None
-                else None
-            ),
         }
-        for c in pool
-    }
+        if c.detection_predicate is not None:
+            entry["detection_predicate"] = {
+                "field": c.detection_predicate.field,
+                "min_value": c.detection_predicate.min_value,
+            }
+        payload[c.candidate_id] = entry
     return manifest_sha(payload)
 
 
@@ -575,7 +580,7 @@ def candidate_fail_filter_report(
     )
 
     neg_detections = [
-        fixture_controls.detected(r.output)
+        fixture_controls.detected(r.output, predicate=candidate.detection_predicate)
         for r in own_records
         if r.row_id in negative_control_row_ids
     ]
@@ -592,7 +597,7 @@ def candidate_fail_filter_report(
         False for row_id in sanctioned_missing_row_ids if row_id in negative_control_row_ids
     )
     pos_detections = [
-        fixture_controls.detected(r.output)
+        fixture_controls.detected(r.output, predicate=candidate.detection_predicate)
         for r in own_records
         if r.row_id in positive_control_row_ids
     ]

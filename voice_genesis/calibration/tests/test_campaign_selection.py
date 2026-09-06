@@ -407,6 +407,44 @@ def test_all_negative_control_records_present_is_complete() -> None:
     # pairing per instance (covered elsewhere) and is orthogonal to negative
     # control coverage.
     assert report["negative_controls_incomplete"] is False
+
+
+def test_candidate_fail_filter_report_applies_candidate_detection_predicate() -> None:
+    """#349 第2巡 P2 採用: `candidate_fail_filter_report()` の
+    `neg_detections`/`pos_detections` は候補の `detection_predicate`
+    （宣言時）をそのまま `fixture_controls.detected()` へ渡さなければ
+    ならない——従来は predicate 無し固定で呼んでおり、registry が宣言した
+    非既定 predicate が selection の本番 fail filter 判定で無視されていた
+    （`candidate_space_sha()` には記帳されるが判定に反映されない静かな
+    不一致）。
+
+    `min_value=100.0` の predicate を宣言した合成候補で、閾値未満の有限値
+    （`f0_hz=50.0`）を負 control 行へ与える——predicate 無しの既定分岐なら
+    `_record(detected=True)` が生成する有限値は無条件に「検出」と判定され
+    `negative_control_false_fire=True` になるところ、predicate 有りでは
+    `50.0 < 100.0` のため非発火（`negative_control_false_fire=False`）で
+    なければならない。正 control 側も対称に、閾値未満の値では不発火
+    （`positive_control_non_fire=True`）と判定されることを固定する。"""
+    candidate = dataclasses.replace(
+        candidate_by_id("F0-B0-CURRENT"),
+        detection_predicate=controls_module.DetectionPredicate(field="f0_hz", min_value=100.0),
+    )
+    records = [
+        _record(
+            "row-negctl", 0, candidate_id=candidate.candidate_id, detected=True, value=50.0
+        ),
+        _record(
+            "row-posctl", 0, candidate_id=candidate.candidate_id, detected=True, value=50.0
+        ),
+    ]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-negctl"}),
+        positive_control_row_ids=frozenset({"row-posctl"}),
+    )
+    assert report["negative_control_false_fire"] is False
+    assert report["positive_control_non_fire"] is True
     assert report["negative_control_false_fire"] is False
 
 
@@ -1562,3 +1600,60 @@ def test_candidate_space_sha_unchanged_for_existing_undeclared_candidates() -> N
     assert selection_stage.candidate_space_sha() == selection_stage.candidate_space_sha(
         explicit_none_pool
     )
+
+
+def test_candidate_space_sha_payload_omits_detection_predicate_key_when_undeclared() -> None:
+    """#349 第2巡 P2 採用: `candidate_space_sha()` の canonical serialization
+    は未宣言（`None`）の候補では `detection_predicate` キー自体を出力しては
+    ならない。全候補へ `"detection_predicate": null` を一律出力する実装は、
+    本 WP 以前は存在しなかったキーが payload へ新規追加される時点でハッシュ
+    入力そのものを変えてしまい、DESIGN_VG_METER_CAL_DEBT_v1.2.md §W1 /
+    IMPLEMENTATION_MAP_v1.md が主張する「未宣言候補では sha 不変」を偽に
+    していた（sha が等しいことは別テストで固定済みだが、それだけでは
+    「キーが存在しない」ことまでは保証しない——本テストは payload の形状
+    そのものを直接検査する）。"""
+    from voice_genesis.calibration.canonical import manifest_sha
+
+    base_candidate = candidate_by_id("F0-B0-CURRENT")
+    declared = dataclasses.replace(
+        base_candidate,
+        detection_predicate=controls_module.DetectionPredicate(field="f0_hz", min_value=1.0),
+    )
+
+    def _entry(c) -> dict[str, object]:
+        entry: dict[str, object] = {
+            "meter": c.meter.value,
+            "construct": c.construct,
+            "unit": c.unit,
+            "algorithm_family": c.algorithm_family,
+            "parameters": dict(c.parameters),
+            "domain": c.domain,
+            "missing_rule": c.missing_rule,
+            "independence_tier": c.independence_tier.value,
+            "claim_ceiling": c.claim_ceiling.value,
+            "complexity_rank": c.complexity_rank,
+            "implementation_ref": c.implementation_ref,
+        }
+        if c.detection_predicate is not None:
+            entry["detection_predicate"] = {
+                "field": c.detection_predicate.field,
+                "min_value": c.detection_predicate.min_value,
+            }
+        return entry
+
+    undeclared_payload = {base_candidate.candidate_id: _entry(base_candidate)}
+    assert "detection_predicate" not in undeclared_payload[base_candidate.candidate_id]
+
+    # sha over the single-candidate undeclared pool must equal the sha
+    # `candidate_space_sha()` itself computes for that same pool (proves the
+    # production payload construction also omits the key, not just this
+    # test's mirror of it).
+    assert manifest_sha(undeclared_payload) == selection_stage.candidate_space_sha(
+        (base_candidate,)
+    )
+    declared_sha = selection_stage.candidate_space_sha((declared,))
+    assert declared_sha != selection_stage.candidate_space_sha((base_candidate,))
+    # sanity: the declared candidate's own payload does carry the key.
+    declared_payload = {declared.candidate_id: _entry(declared)}
+    assert "detection_predicate" in declared_payload[declared.candidate_id]
+    assert manifest_sha(declared_payload) == declared_sha

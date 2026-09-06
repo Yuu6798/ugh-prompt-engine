@@ -1240,8 +1240,8 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
 | v1.2 節 | 実装モジュール | 関数名 | 備考 |
 |---|---|---|---|
 | §W1（対照意味論の是正: fire 判定一本化・sanctioned abstention） | `fixtures/controls.py` | `detected()`（既定分岐は旧 `holdout_stage._detected_output()` と同一挙動）, `DetectionPredicate`, `SANCTIONED_ABSTENTIONS = {(ControlClass.SILENCE, "F0_UNUSABLE")}` | 閉語彙。追加は次 revision の preregistration 経由 |
-| | `campaign/selection_stage.py` | `candidate_fail_filter_report()`（kwonly `control_class_by_negative_row_id`/`missing_reason_by_negative_row_id`）, `candidate_space_sha()`（payload に `detection_predicate` 追加。既存候補は全て `None` のため sha 値は不変） | |
-| | `campaign/holdout_stage.py` | `_detected()`/`_detected_output()` を削除し `fixture_controls.detected()` へ置換 | |
+| | `campaign/selection_stage.py` | `candidate_fail_filter_report()`（kwonly `control_class_by_negative_row_id`/`missing_reason_by_negative_row_id`。neg/pos detection の両呼び出しへ `candidate.detection_predicate` を伝播 — #349 第2巡）, `candidate_space_sha()`（payload に `detection_predicate` 追加。`None` はキー自体を省略するため既存候補の sha 値は不変 — #349 第2巡で全候補一律出力の誤りを是正） | |
+| | `campaign/holdout_stage.py` | `_detected()`/`_detected_output()` を削除し `fixture_controls.detected()` へ置換（`control_detection_for_family()` の positive/negative 両呼び出しへ `candidate.detection_predicate` を伝播 — #349 第2巡） | |
 | | `candidates/registry.py` | `Candidate.detection_predicate: DetectionPredicate \| None = None`（既存 99 候補は全て未宣言 = 挙動不変） | FORMANT 候補への宣言は次 revision |
 | | `campaign/cli.py` | `_criteria_with_fail_filters()`（新 2 引数を c3a/c3b 双方から配線）, `_measurement_missing_reason_index()`, `_control_class_by_negative_row_id()` | |
 | §W2(a)（C-1 診断ステージ） | `campaign/diagnose.py`（新設） | `run_diagnosis()`, `select_diagnostic_cells()`, `evaluate_candidate()`, `resolve_f0_prepass()`, `f0_registry_candidates()`, CLI `--family`/`--candidate`/`--max-cells`/`--repeats`/`--f0-candidate`/`--out` | freeze/封印/ledger なし・claim 不可（`claimable` 常に `False`）。`build_matrix()` 直呼びは rehearsal 対象外の allowlist 1 件として `test_matrix.py` に登録 |

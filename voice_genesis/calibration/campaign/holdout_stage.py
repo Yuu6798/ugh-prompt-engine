@@ -405,7 +405,10 @@ def control_detection_for_family(
         group = by_instance.get(instance)
         if not group:
             return False
-        return all(fixture_controls.detected(r.output) for r in group)
+        return all(
+            fixture_controls.detected(r.output, predicate=candidate.detection_predicate)
+            for r in group
+        )
 
     def _negative_fired(instance: tuple[str, int]) -> bool:
         group = by_instance.get(instance)
@@ -418,7 +421,10 @@ def control_detection_for_family(
             # real false-fire — either way this instance is already a
             # failure, so the specific reason does not change the outcome).
             return True
-        return any(fixture_controls.detected(r.output) for r in group)
+        return any(
+            fixture_controls.detected(r.output, predicate=candidate.detection_predicate)
+            for r in group
+        )
 
     neg_outcomes = {
         instance_id_str(row_id, probe_index): _negative_fired((row_id, probe_index))
