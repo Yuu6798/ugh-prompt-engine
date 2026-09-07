@@ -257,7 +257,7 @@ REQUIRED_BLOCKING_KEYS: tuple[str, ...] = (
     "sample_format.resampling_parameters",
     #: R22-1 対応（Codex 第 22 巡 finding (1)、2026-09-05）: marker 自体を
     #: REQUIRED_BLOCKING 化する（旧: 欠落は legacy v1.0 として黙って許容して
-    #: いたため、marker を削除/改変するだけで `_is_v1_1_manifest()` が False
+    #: いたため、marker を削除/改変するだけで `_is_v1_1_or_later()` が False
     #: になり、bound/formula/unit 必須化 (R20-3/R21/R22-2) がまるごと無効化
     #: できてしまっていた）。値の閉語彙判定は `_check_required_blocking()`
     #: 内の専用分岐（`_ALLOWED_DESIGN_REVISIONS`）で行う——legacy v1.0
@@ -971,6 +971,16 @@ def _check_required_blocking(
                         "manifests require validate_c0_manifest(allow_legacy_v1_0=True) "
                         "opt-in restricted to closed/aborted campaigns, R22-1)"
                     )
+            continue
+        if key == "frozen_design.rehearsal" and not _is_v1_2_or_later(manifest):
+            # 2026-09-07（#349 第 5 巡 P1 採用、PRRT_kwDOSD2OOM6fwr6q）:
+            # `frozen_design.rehearsal` は v1.2 WP2 §B(ii) で新設されたフィー
+            # ルドであり、v1.1 以下（design_revision marker 欠落の legacy
+            # v1.0 を含む）の manifest には存在し得ない——2 件の aborted
+            # v1.1 campaign 実物（`RUN10-CAL-20260905-410b25f2`/
+            # `RUN10-CAL-20260906-a4ed65c1`）を含む。これらを不当にブロック
+            # しないよう、v1.2 未満の manifest はこのキーの要求から除外する
+            # （archive 済みで再検証はしない）。
             continue
         found, value = _resolve(manifest, key)
         if not found or value is None or _is_hollow(value):
@@ -1872,18 +1882,62 @@ _U_GT_U_NUM_ABSENT_ONLY_FAMILIES: frozenset[str] = frozenset(
 #: 従来の後方互換経路（欠落キーは fail-closed にしない）を維持する。
 _V1_1_DESIGN_REVISION: str = "1.1"
 
-#: R22-1 対応（Codex 第 22 巡 finding (1)、2026-09-05）: `_check_required_
-#: blocking()` が `frozen_design.design_revision` を照合する閉語彙。現状は
-#: `_V1_1_DESIGN_REVISION` のみを含む単一要素集合だが、将来 v1.2 等が追加
-#: された際に両バージョンを同時に許容できるよう set として持つ（`"1.0"` を
-#: 含む他の値・欠落はすべて REQUIRED_BLOCKING violation。legacy v1.0 は
-#: `allow_legacy_v1_0=True` opt-in 経由でのみ通す）。
-_ALLOWED_DESIGN_REVISIONS: frozenset[str] = frozenset({_V1_1_DESIGN_REVISION})
+#: 2026-09-07（#349 第 5 巡 P1 採用、PRRT_kwDOSD2OOM6fwr6q）: `c0_freeze.
+#: _DESIGN_REVISION` が v1.2 統治文書切替に合わせて "1.2" を発行するように
+#: なったことに同期する新版マーカー。
+_V1_2_DESIGN_REVISION: str = "1.2"
+
+#: R22-1 対応（Codex 第 22 巡 finding (1)、2026-09-05。2026-09-07 #349 第 5 巡
+#: で v1.2 追加）: `_check_required_blocking()` が `frozen_design.
+#: design_revision` を照合する閉語彙。`"1.0"` を含む他の値・欠落はすべて
+#: REQUIRED_BLOCKING violation（legacy v1.0 は `allow_legacy_v1_0=True`
+#: opt-in 経由でのみ通す）。
+_ALLOWED_DESIGN_REVISIONS: frozenset[str] = frozenset(
+    {_V1_1_DESIGN_REVISION, _V1_2_DESIGN_REVISION}
+)
+
+#: `_design_revision_at_least()` が「N 以上」を判定するための新旧順（辞書順
+#: ではなく設計上の版数順）。新しい revision を追加したらここに追記する。
+_DESIGN_REVISION_ORDER: tuple[str, ...] = (_V1_1_DESIGN_REVISION, _V1_2_DESIGN_REVISION)
 
 
-def _is_v1_1_manifest(manifest: Mapping[str, object]) -> bool:
+def _design_revision(manifest: Mapping[str, object]) -> str | None:
+    """`frozen_design.design_revision` の宣言値を返す。欠落・非文字列・閉語彙
+    `_ALLOWED_DESIGN_REVISIONS` 外（legacy v1.0 formatを含む）は `None`。"""
     found, value = _resolve(manifest, "frozen_design.design_revision")
-    return found and isinstance(value, str) and value.strip() == _V1_1_DESIGN_REVISION
+    if not found or not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped if stripped in _ALLOWED_DESIGN_REVISIONS else None
+
+
+def _design_revision_at_least(manifest: Mapping[str, object], floor: str) -> bool:
+    """manifest の宣言 `design_revision` が `_DESIGN_REVISION_ORDER` の並び順で
+    `floor` 以上なら True。marker 欠落/閉語彙外（legacy v1.0 含む）は False
+    （= 「v1.1 以上」「v1.2 以上」いずれの判定でも legacy は一律 False）。"""
+    revision = _design_revision(manifest)
+    if revision is None:
+        return False
+    return _DESIGN_REVISION_ORDER.index(revision) >= _DESIGN_REVISION_ORDER.index(floor)
+
+
+def _is_v1_1_or_later(manifest: Mapping[str, object]) -> bool:
+    """v1.1 §V2.2/§V3.3 等で新設された検査（bound/unit/holdout_sweeps 必須）が
+    適用対象とする manifest 群。v1.1・v1.2 いずれの manifest にも適用する
+    （2026-09-07 #349 第 5 巡 P1: 旧 `_is_v1_1_manifest()` は "1.1" 完全一致
+    だったため、`_DESIGN_REVISION` が "1.2" を発行するようになった時点で
+    これらの検査が新規 manifest から静かに外れてしまう欠陥があった）。"""
+    return _design_revision_at_least(manifest, _V1_1_DESIGN_REVISION)
+
+
+def _is_v1_2_or_later(manifest: Mapping[str, object]) -> bool:
+    """v1.2 WP2 で新設された検査（`frozen_design.rehearsal` 必須・
+    candidate_space と rehearsal の整合・Gate 承認順序の blocking 化）が
+    適用対象とする manifest 群。v1.1 でマークされた manifest（本 PR 以前に
+    発行された 2 件の aborted campaign `RUN10-CAL-20260905-410b25f2`/
+    `RUN10-CAL-20260906-a4ed65c1` を含む）は対象外のまま——いずれも既に
+    archive 済みで再検証しない（`tests/test_archive_aborted_ledger.py` 参照）。"""
+    return _design_revision_at_least(manifest, _V1_2_DESIGN_REVISION)
 
 
 def _check_u_gt_u_num_bounds(
@@ -1903,10 +1957,10 @@ def _check_u_gt_u_num_bounds(
     `u_num_bound` は `FIXTURE_SPEC_REQUIRED_KEYS` に含まれない任意キーで
     あり続ける（v1.0 §V3.3 実装以前に構築された legacy manifest fixture・
     campaign を壊さないため）。判別は `frozen_design.design_revision`
-    （`_is_v1_1_manifest()` — `c0_freeze._DESIGN_REVISION` と同期する
-    machine-readable marker）で行う:
+    （`_is_v1_1_or_later()` — `c0_freeze._DESIGN_REVISION` と同期する
+    machine-readable marker。"1.1"/"1.2" いずれも対象）で行う:
 
-    - marker が `"1.1"` を宣言する manifest（v1.1 完全 manifest）では、
+    - marker が `"1.1"` 以上を宣言する manifest（v1.1/v1.2 完全 manifest）では、
       `u_gt_bound`/`u_num_bound`/両 `*_formula` の**キー自体の欠落も**
       fail-closed の violation にする（本 finding: 両フィールドを削っても
       検証をすり抜け、C4 で全 real gate が NOT_EVALUABLE/INPUT_MISSING に
@@ -1925,8 +1979,14 @@ def _check_u_gt_u_num_bounds(
     要求する。欠落・改変を素通しすると、候補宣言 unit と偶然一致する
     forged unit が条件 (c) を成立させ偽の `CALIBRATED_DIRECTIONAL` を
     許してしまう。legacy manifest（marker 無し）はこの検査の対象外。
+
+    2026-09-07（#349 第 5 巡）: `is_v1_1` はここでは実質「v1.1 以上
+    （`_is_v1_1_or_later()`）」を意味する——v1.2 manifest にもこの v1.1 由来の
+    検査は引き続き適用する（`_DESIGN_REVISION` が "1.2" を発行するように
+    なったことで、旧来の "1.1" 完全一致判定だと v1.2 manifest がこの検査を
+    静かにすり抜けてしまうため）。
     """
-    is_v1_1 = _is_v1_1_manifest(manifest)
+    is_v1_1 = _is_v1_1_or_later(manifest)
     violations: list[SweepManifestViolationDetail] = []
     for family in fixture_axes.FixtureFamily:
         fam = family.value
@@ -2311,7 +2371,7 @@ def _check_holdout_sweeps_declaration_match(
     `holdout_sweeps` キー自体を manifest から削除すれば `found_holdout=False`
     になり、R11 の必須化もそれ以降の per-family 照合も丸ごと沈黙していた
     （`_check_holdout_sweeps_realized_membership()` も同型で沈黙）。本関数は
-    v1.1 manifest（`_is_v1_1_manifest()`）かつ **`realized_split` も存在する
+    v1.1 以上の manifest（`_is_v1_1_or_later()`）かつ **`realized_split` も存在する
     full/armed-shape manifest**（`c0_freeze._attach_freeze_extras()` が
     `realized_split`/`holdout_sweeps` を同一呼び出しで同時に付与するため、
     両者の有無は常に揃うはずという不変を利用する）に限り、top-level
@@ -2327,7 +2387,11 @@ def _check_holdout_sweeps_declaration_match(
     する（後方互換）。
     """
     found_holdout, holdout_section = _resolve(manifest, "holdout_sweeps")
-    is_v1_1 = _is_v1_1_manifest(manifest)
+    # 2026-09-07（#349 第 5 巡）: v1.1 由来の必須化のため「v1.1 以上」
+    # （`_is_v1_1_or_later()`）で判定する — v1.2 manifest も対象に含める
+    # （`_DESIGN_REVISION` が "1.2" を発行するようになったため、旧来の "1.1"
+    # 完全一致判定だと v1.2 manifest がこの必須化を静かにすり抜けてしまう）。
+    is_v1_1 = _is_v1_1_or_later(manifest)
     found_realized_split, _realized_split_section = _resolve(manifest, "realized_split")
 
     # R23 対応（Codex 第 23 巡 P2 採用, 2026-09-05, PRRT_kwDOSD2OOM6fgdGg）:
@@ -2339,8 +2403,8 @@ def _check_holdout_sweeps_declaration_match(
     # (`campaign/cli.py::_run_c4`) の `expected_sweep_ids` フォールバックが
     # 全宣言 sweep（HOLDOUT 非常駐 sweep を含む）を使って偽の
     # `DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT` terminal を生み得た。
-    # `frozen_design.design_revision` marker（`_is_v1_1_manifest()`）が
-    # `"1.1"` を宣言し、かつ `realized_split`（`holdout_sweeps` と常に同時に
+    # `frozen_design.design_revision` marker（`_is_v1_1_or_later()`）が
+    # `"1.1"` 以上を宣言し、かつ `realized_split`（`holdout_sweeps` と常に同時に
     # 付与される sibling 非-core キー）が存在する full/armed-shape manifest
     # に限り、top-level `holdout_sweeps` キー自体の存在を必須化する——
     # 欠落は他の宣言内容と無関係に単独の `holdout_pin_declaration_mismatch`
@@ -2730,7 +2794,15 @@ def _check_candidate_space_pool(manifest: Mapping[str, object]) -> list[str]:
 
     `rehearsal` が bool でない/欠落している場合は `_check_required_blocking()`
     が既に捕捉しているのでここでは何も言わない。
+
+    v1.2 で新設された検査のため、v1.2 未満の manifest（`rehearsal` フィール
+    ド自体が存在し得ない legacy v1.0/v1.1）には適用しない（2026-09-07 #349
+    第 5 巡 P1 採用、PRRT_kwDOSD2OOM6fwr6q）——実運用では `rehearsal` が
+    そもそも bool でないためこの guard 無しでも同じ結果になるが、判定意図を
+    明示する。
     """
+    if not _is_v1_2_or_later(manifest):
+        return []
     frozen_design = manifest.get("frozen_design")
     rehearsal = frozen_design.get("rehearsal") if isinstance(frozen_design, Mapping) else None
     if not isinstance(rehearsal, bool):
@@ -3169,7 +3241,12 @@ def _validate_c0_manifest_impl(
     # v1.2 WP2b: 候補空間と rehearsal フラグの整合（in-memory 検証でも有効）。
     missing_required += _check_candidate_space_pool(manifest)
     gate_ordering = _check_gate_approval_ordering(manifest, manifest_path)
-    missing_required += list(gate_ordering.violations)
+    # 2026-09-07（#349 第 5 巡 P1 採用、PRRT_kwDOSD2OOM6fwr6q）: Gate 承認
+    # 順序の blocking 化（D108, v1.2 WP2 §C-9）も v1.2 で新設された検査の
+    # ため、v1.2 未満の manifest には適用しない（`notes` の生成自体は
+    # バージョンに依らず維持——「検査不能」の情報項目は無害）。
+    if _is_v1_2_or_later(manifest):
+        missing_required += list(gate_ordering.violations)
 
     missing_recorded, downgrades = _check_recorded_or_absent(manifest)
     all_missing = tuple(missing_required + missing_recorded)

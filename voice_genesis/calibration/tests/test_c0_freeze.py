@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -509,19 +510,37 @@ def test_manifest_core_sha_round_trips_from_full_manifest(
 
 
 def test_armed_freeze_holdout_sweeps_is_non_core_and_matches_k_hold(
-    tmp_path: Path, clean_checkout: None
+    tmp_path: Path, clean_checkout: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """v1.1 §V2.2: `holdout_sweeps` is a split_secret-dependent, non-core
     top-level key (same placement rationale as `realized_split` — see the
     `_CORE_ONLY_EXCLUDED_KEYS` docstring) attached only at `armed_freeze()`
     time. It must (a) be absent from `dry_run()`'s manifest (no secret
     exists yet there), (b) be stripped by `core_payload()`/excluded from
-    `manifest_core_sha`, (c) declare exactly `k_hold` pinned sweeps per
-    family (§V2.2 frozen table), and (d) have every member row_id assigned
+    `manifest_core_sha`, (c) declare between `degradation_floor` and
+    `k_hold` pinned sweeps per family inclusive (§V2.2 縮退規則 — see the
+    per-family assertion below), and (d) have every member row_id assigned
     to HOLDOUT in the same manifest's `realized_split.assignment` (§V2.3).
+
+    決定論化（CI flaky 修正, 2026-09-07）: `armed_freeze()` は secret を内部
+    生成する（`secrets.token_bytes(32)`）ため、乱数 secret ごとに TILT_GT の
+    pin 縮退量（§V2.2 縮退規則、0..k_hold の範囲内のどこに落ち着くか）が
+    変わり得る。既存の慣例（`test_holdout_sweep_pinning.py` の
+    `DUMMY_SECRETS` 固定シード）に倣い、ここでも secret 生成自体を固定して
+    再現性を確保する。`secrets.token_hex()` は内部で `token_bytes()` を呼ぶ
+    ため（`authorization_nonce`/`invocation_token` 発行を含む）、呼び出し
+    回数に依らず尽きない無限カウンタ由来の疑似ソースにする。
     """
     from voice_genesis.calibration.fixtures.axes import FixtureFamily
     from voice_genesis.calibration.fixtures.matrix import build_matrix, holdout_pin_params_by_family
+
+    fixed_token_bytes_counter = itertools.count()
+
+    def _fixed_token_bytes(n: int) -> bytes:
+        seed = next(fixed_token_bytes_counter)
+        return hashlib.sha256(f"c0-freeze-test-fixed-secret-{seed}".encode()).digest()[:n]
+
+    monkeypatch.setattr(c0_freeze.secrets, "token_bytes", _fixed_token_bytes)
 
     approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
     dry_report = c0_freeze.dry_run(_REPO_ROOT, approval_dir, env)
@@ -545,15 +564,25 @@ def test_armed_freeze_holdout_sweeps_is_non_core_and_matches_k_hold(
     assignment = full_manifest["realized_split"]["assignment"]
     for family in FixtureFamily:
         family_sweeps = holdout_sweeps[family.value]
-        # v1.1 §V3.5 実装時発見（2026-09-05）: `TILT_GT` の `nuisance_axis`
-        # coverage 制約は nominal k_hold では非 pin HOLDOUT 枠に収まらず、
-        # §V2.2 縮退規則（`splitter.pin_and_realize_holdout()`）が全 secret
-        # で決定論的に k_hold を 1 段階縮退させて解決する（`degradation_floor`
-        # は不変——被覆保証は弱めていない）。よってここは `<=` で検査する
-        # （`test_k_hold_matches_v2_2_frozen_table` が nominal 値自体は
-        # 別途固定済み）。
-        assert len(family_sweeps) <= params[family.value].k_hold, family.value
-        assert len(family_sweeps) >= 1, family.value
+        family_params = params[family.value]
+        # v1.1 §V3.5 実装時発見（2026-09-05, 2026-09-07 修正）: `TILT_GT` の
+        # `nuisance_axis` coverage 制約は nominal k_hold では非 pin HOLDOUT
+        # 枠に収まらないことがあり、§V2.2 縮退規則
+        # （`splitter.pin_and_realize_holdout()`）が secret 依存でどこまで
+        # 縮退するかを解決する。縮退の下限は family の
+        # `degradation_floor`（TILT_GT は multi-field cardinality を持たない
+        # ため 0）であり、固定値 `>= 1` は縮退規則の設計と食い違う
+        # （実測: campaign 410b25f2 で 0 巡、a4ed65c1 で 1 巡 —
+        # いずれも正当な縮退結果で bug ではない）。よってここは
+        # `holdout_pin_params_by_family()` が返す `degradation_floor` と
+        # `k_hold` の範囲で検査する（`test_k_hold_matches_v2_2_frozen_table`
+        # が nominal 値自体は別途固定済み）。
+        assert family_params.degradation_floor <= len(family_sweeps) <= family_params.k_hold, (
+            family.value,
+            family_params.degradation_floor,
+            family_params.k_hold,
+            len(family_sweeps),
+        )
         for member_row_ids in family_sweeps.values():
             for rid in member_row_ids:
                 assert assignment[rid] == "HOLDOUT", (family.value, rid)

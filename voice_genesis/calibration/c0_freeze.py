@@ -477,15 +477,23 @@ _PROVENANCE_SPEC: dict[str, str] = {
 }
 
 #: R20-3 対応（Codex 第 20 巡 finding (3)、2026-09-05）: `c0_validate.
-#: _check_u_gt_u_num_bounds()` が legacy（v1.0）manifest と v1.1 manifest を
+#: _check_u_gt_u_num_bounds()` が legacy（v1.0）manifest と v1.1+ manifest を
 #: 判別する machine-readable version marker。`frozen_design.fixture_spec.
 #: <FAMILY>.u_gt_bound`/`.u_num_bound` を v1.1 §V3.3 追補で core へ常時
 #: 書き込むようになって以降、この marker が `frozen_design` に無い manifest
 #: （既存 closed campaign 3 件を含む）は「両フィールドがそもそも存在しない
 #: v1.0 形式」として legacy 扱いする。値は `approvals.DESIGN_DOC_RELATIVE_PATH`
-#: （v1.1 統治文書）が指す文書のバージョン番号と同期させる——文書側の実測
-#: sha256 も並記し、意味論だけでなく内容の pin としても機能させる。
-_DESIGN_REVISION: str = "1.1"
+#: が指す文書のバージョン番号と同期させる——文書側の実測 sha256 も並記し、
+#: 意味論だけでなく内容の pin としても機能させる。
+#:
+#: 2026-09-07（#349 第 5 巡 P1 採用、PRRT_kwDOSD2OOM6fwr6q）: 統治文書が
+#: v1.2（`DESIGN_VG_METER_CAL_DEBT_v1.2.md`、`approvals.DESIGN_DOC_RELATIVE_
+#: PATH`）へ切り替わった後もここが "1.1" のままだったため、新規 manifest の
+#: design hash・承認チェーン・`rehearsal` スキーマが実際には v1.2 由来なのに
+#: 自己申告だけ v1.1 のままという provenance 矛盾があった
+#: （`c0_validate._design_revision_at_least()` 系のバージョン判別が汚染される）。
+#: `c0_validate._ALLOWED_DESIGN_REVISIONS` と同時に更新すること。
+_DESIGN_REVISION: str = "1.2"
 
 
 def _design_doc_sha256(root: Path) -> str:

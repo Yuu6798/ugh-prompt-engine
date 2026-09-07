@@ -163,22 +163,33 @@ DEFAULT_SECRET_DIR = Path.home() / ".vg_cal" / "secrets"
 
 CAMPAIGN_ARMED_ENV_VAR = "VG_CAL_CAMPAIGN_AUTHORIZED"
 
-#: `c0_validate._V1_1_DESIGN_REVISION`/`_is_v1_1_manifest()` と同一の判定を、
-#: `c0_validate` に依存せず独立に再定義する（モジュール docstring の既存方針、
-#: `_REPO_ROOT`/`SECRET_DIR_ENV_VAR` と同じパターン）。Codex round 23 対応
-#: （P2「Require the top-level holdout sweep section」, ADOPT）: v1.1 manifest
-#: では top-level `holdout_sweeps` を必須化するので、C4 側の
-#: `expected_sweep_ids` フォールバック（下記 `_run_c4`）も v1.1 かどうかで
+#: `c0_validate._ALLOWED_DESIGN_REVISIONS`/`_is_v1_1_or_later()` と同一の
+#: 判定を、`c0_validate` に依存せず独立に再定義する（モジュール docstring の
+#: 既存方針、`_REPO_ROOT`/`SECRET_DIR_ENV_VAR` と同じパターン）。Codex round
+#: 23 対応（P2「Require the top-level holdout sweep section」, ADOPT）: v1.1
+#: manifest では top-level `holdout_sweeps` を必須化するので、C4 側の
+#: `expected_sweep_ids` フォールバック（下記 `_run_c4`）も v1.1 以上かどうかで
 #: 分岐する必要がある。
-_DESIGN_REVISION_V1_1 = "1.1"
+#:
+#: 2026-09-07（#349 第 5 巡 P1、PRRT_kwDOSD2OOM6fwr6q の同型穴の事前是正）:
+#: `c0_freeze._DESIGN_REVISION` が v1.2 統治文書切替に伴い "1.2" を発行する
+#: ようになったため、旧来の "1.1" 完全一致判定のままだと今後の新規 freeze
+#: 全件でこの v1.1 由来の holdout_sweeps 必須化の恩恵（tampered/incomplete
+#: 検出）が静かに外れてしまう。閉語彙を `c0_validate._ALLOWED_DESIGN_
+#: REVISIONS` と同期させ「1.1 以上」で判定する。
+_V1_1_OR_LATER_DESIGN_REVISIONS = frozenset({"1.1", "1.2"})
 
 
 def _manifest_is_v1_1(manifest: Mapping[str, object]) -> bool:
+    """名前は歴史的経緯（round 23 当時は v1.1 のみが対象だった）を残すが、
+    実際の判定は「design_revision が v1.1 以上」（`_V1_1_OR_LATER_DESIGN_
+    REVISIONS`）——呼び出し側のコメントが説明する v1.1 由来の必須化は v1.2
+    manifest にも同様に適用される。"""
     frozen_design = manifest.get("frozen_design")
     if not isinstance(frozen_design, Mapping):
         return False
     value = frozen_design.get("design_revision")
-    return isinstance(value, str) and value.strip() == _DESIGN_REVISION_V1_1
+    return isinstance(value, str) and value.strip() in _V1_1_OR_LATER_DESIGN_REVISIONS
 
 
 def _process_cpu_seconds() -> float:

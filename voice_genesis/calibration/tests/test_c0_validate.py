@@ -395,6 +395,15 @@ def _delete_dotted(manifest: dict[str, object], dotted_path: str) -> dict[str, o
 
 def test_each_required_blocking_key_omission_blocks_with_correct_code() -> None:
     for key in c0_validate.REQUIRED_BLOCKING_KEYS:
+        if key == "frozen_design.rehearsal":
+            # 2026-09-07（#349 第 5 巡）: v1.2 で新設されたフィールドのため、
+            # `_complete_manifest()` の既定 design_revision ("1.1") ではこの
+            # キーの欠落は違反にならない（`_is_v1_2_or_later()` gate）——
+            # v1.2/v1.1 それぞれの挙動は
+            # `test_rehearsal_key_missing_is_required_blocking_on_v1_2_manifest`/
+            # `test_rehearsal_key_missing_on_v1_1_manifest_is_not_required_blocking`
+            # が個別に固定する。
+            continue
         manifest = _delete_dotted(_complete_manifest(), key)
         result = c0_validate.validate_c0_manifest(manifest)
         assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes, key
@@ -493,10 +502,18 @@ def test_hollow_empty_container_manifest_is_blocked() -> None:
     assert result.is_blocked is True
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     # `repo.dirty_tree=False` は hollow ではなく正しい記録値そのものなので missing
-    # に現れない。それ以外の全 REQUIRED_BLOCKING キーは hollow のため missing。
-    expected_missing = set(c0_validate.REQUIRED_BLOCKING_KEYS) - {"repo.dirty_tree"}
+    # に現れない。`frozen_design.rehearsal` は v1.2 で新設されたフィールドで
+    # あり、この hollow manifest には `design_revision` marker 自体が無い
+    # （= legacy v1.0 相当・v1.2 未満）ため `_is_v1_2_or_later()` gate により
+    # 要求対象外（2026-09-07 #349 第 5 巡）。それ以外の全 REQUIRED_BLOCKING
+    # キーは hollow のため missing。
+    expected_missing = set(c0_validate.REQUIRED_BLOCKING_KEYS) - {
+        "repo.dirty_tree",
+        "frozen_design.rehearsal",
+    }
     assert expected_missing.issubset(set(result.missing_required_keys))
     assert "repo.dirty_tree" not in result.missing_required_keys
+    assert "frozen_design.rehearsal" not in result.missing_required_keys
 
 
 def test_hash_map_entry_with_malformed_sha256_blocks() -> None:
@@ -1425,23 +1442,64 @@ def test_required_string_scalar_fields_reject_non_strings(
 
 # ---------------------------------------------------------------------------
 # v1.2 WP2 §B(ii)/(vi) — frozen_design.rehearsal
+#
+# 2026-09-07（#349 第 5 巡 P1 採用、PRRT_kwDOSD2OOM6fwr6q）: `frozen_design.
+# rehearsal` は v1.2 で新設されたフィールドであり、v1.1 以下（design_revision
+# marker 欠落の legacy v1.0 を含む）の manifest には存在し得ない——2 件の
+# aborted v1.1 campaign 実物（`RUN10-CAL-20260905-410b25f2`/
+# `RUN10-CAL-20260906-a4ed65c1`、いずれも archive 済みで再検証しない）を含む。
+# このため本節の「必須化/型検査」系テストは `_complete_manifest()` の
+# design_revision を明示的に "1.2" へ差し替えた manifest で検証し、v1.1
+# manifest がこの必須化の対象外であることは専用テストで固定する。
 # ---------------------------------------------------------------------------
 
 
-def test_rehearsal_key_missing_is_required_blocking() -> None:
-    manifest = _delete_dotted(_complete_manifest(), "frozen_design.rehearsal")
+def _complete_v1_2_manifest() -> dict[str, object]:
+    manifest = _complete_manifest()
+    manifest["frozen_design"] = {**manifest["frozen_design"], "design_revision": "1.2"}  # type: ignore[dict-item]
+    return manifest
+
+
+def test_rehearsal_key_missing_is_required_blocking_on_v1_2_manifest() -> None:
+    manifest = _delete_dotted(_complete_v1_2_manifest(), "frozen_design.rehearsal")
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     assert "frozen_design.rehearsal" in result.missing_required_keys
 
 
-def test_rehearsal_key_non_bool_is_required_blocking() -> None:
-    manifest = _complete_manifest()
+def test_rehearsal_key_missing_on_v1_1_manifest_is_not_required_blocking() -> None:
+    """v1.1 manifest（`_complete_manifest()` 既定）は `frozen_design.
+    rehearsal` フィールド自体が v1.2 で新設されたため、欠落は violation に
+    ならない——2 件の aborted v1.1 campaign 実物（本節冒頭コメント参照）が
+    不当にブロックされないことを保証する回帰ガード。"""
+    manifest = _delete_dotted(_complete_manifest(), "frozen_design.rehearsal")
+    assert manifest["frozen_design"]["design_revision"] == "1.1"  # type: ignore[index]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert "frozen_design.rehearsal" not in result.missing_required_keys
+    assert not any(
+        k.startswith("frozen_design.rehearsal") for k in result.missing_required_keys
+    )
+
+
+def test_rehearsal_key_non_bool_is_required_blocking_on_v1_2_manifest() -> None:
+    manifest = _complete_v1_2_manifest()
     manifest["frozen_design"]["rehearsal"] = "true"  # type: ignore[index]
     result = c0_validate.validate_c0_manifest(manifest)
     assert any(
         k.startswith("frozen_design.rehearsal: type") for k in result.missing_required_keys
     ), result.missing_required_keys
+
+
+def test_rehearsal_key_non_bool_on_v1_1_manifest_is_not_required_blocking() -> None:
+    """同上（型不正）の v1.1 側: フィールド自体が対象外のため、非 bool 値
+    でも violation にならない（field が定義されていない版に対する型検査は
+    無意味であり、fail-closed にする理由がない）。"""
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["rehearsal"] = "true"  # type: ignore[index]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert not any(
+        k.startswith("frozen_design.rehearsal") for k in result.missing_required_keys
+    )
 
 
 def test_rehearsal_true_is_accepted_as_a_recorded_value() -> None:
