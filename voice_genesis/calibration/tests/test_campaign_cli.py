@@ -4091,6 +4091,82 @@ def test_c4_holdout_render_precedes_f0_prepass_end_to_end(
 
 
 # ---------------------------------------------------------------------------
+# Codex round 4 finding P2 (`campaign/close.py:170-171` "Handle rehearsal
+# reveal refusals in the CLI"): `close --rehearsal --reveal-split-secret`
+# must be refused *before* any close-transition ledger write, not crash
+# with an unhandled `RehearsalRevealRefusedError` after `campaign_closed`
+# has already been durably appended.
+# ---------------------------------------------------------------------------
+
+
+def test_run_close_refuses_reveal_on_rehearsal_campaign_before_close(tmp_path: Path) -> None:
+    """`_run_close(campaign, reveal=True)` on a rehearsal campaign must
+    refuse up front with a structured `{"result": "REHEARSAL_REVEAL_REFUSED",
+    ...}` and leave the ledger completely untouched -- no `campaign_closed`,
+    no `stage_summary`, nothing (`close_stage.close_campaign()` must never
+    be reached at all for this combination). Mirrors the `dataclasses.
+    replace(campaign, manifest=...)` post-hoc-manifest-mutation pattern
+    already used elsewhere in this file (e.g. the v1.1 `design_revision`
+    forcing above) -- `build_tiny_campaign()` has no `rehearsal=` knob, so a
+    plain campaign is loaded and its `frozen_design.rehearsal` flipped to
+    `True` afterward, which is exactly what `close_stage.campaign_is_
+    rehearsal()`/`_run_close()`'s new guard actually reads."""
+    import dataclasses
+
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    rehearsal_manifest = {
+        **campaign.manifest,
+        "frozen_design": {**campaign.manifest["frozen_design"], "rehearsal": True},
+    }
+    campaign = dataclasses.replace(campaign, manifest=rehearsal_manifest)
+    entries_before = list(campaign.ledger.entries)
+
+    out = cli._run_close(campaign, reveal=True)
+
+    assert out["result"] == "REHEARSAL_REVEAL_REFUSED", out
+    assert isinstance(out.get("detail"), str) and out["detail"]
+    assert list(campaign.ledger.entries) == entries_before, (
+        "rehearsal + reveal-split-secret must not mutate the ledger at all "
+        "(no campaign_closed, no stage_summary, nothing)"
+    )
+
+
+def test_run_close_reveal_still_succeeds_when_not_rehearsal(tmp_path: Path) -> None:
+    """AGENTS §3-5 正規フロー確認 (regression guard for the new rehearsal
+    guard above): an ordinary, non-rehearsal `close --reveal-split-secret`
+    must be entirely unaffected -- `campaign_is_rehearsal()` is `False`, so
+    `_run_close()`'s new pre-close check is a no-op and the call proceeds to
+    `close_campaign()` + `reveal_split_secret()` exactly as before."""
+    from voice_genesis.calibration.campaign import close as close_stage_module
+
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    payload = {
+        "per_meter": {
+            m.value: {
+                "terminal_status": "DIAGNOSTIC_ONLY",
+                "reason_code": None,
+                "ceiling": "NONE",
+                "selected_candidate_id": None,
+                "gate_detail": {},
+            }
+            for m in MeterId
+        }
+    }
+    holdout_entry = campaign.ledger.append({"kind": "holdout_executed_valid", **payload})
+    assert holdout_entry.payload["kind"] == "holdout_executed_valid"
+    assert close_stage_module.campaign_is_rehearsal(campaign) is False
+
+    out = cli._run_close(campaign, reveal=True)
+
+    assert out["result"] == "OK", out
+    assert "split_secret_revealed_entry_sha" in out, out
+    assert any(e.payload.get("kind") == "campaign_closed" for e in campaign.ledger.entries)
+    assert any(e.payload.get("kind") == "split_secret_revealed" for e in campaign.ledger.entries)
+
+
+# ---------------------------------------------------------------------------
 # round 27 ADOPT (1) (`[UNDERSPEC-CAL-D61]`) "Reject unusable F0 values
 # before downstream injection": a non-finite/non-positive f0_hz repeat
 # (durably round-tripped through the ledger since round 26,

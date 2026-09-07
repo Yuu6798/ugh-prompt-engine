@@ -195,8 +195,15 @@ rehearsal green は armed freeze の**運用上の前提条件**とする——�
 `gate<N>_approval_future_dated` / `gate<N>_approval_unparsable_timestamp`）で
 publish しない。`c0_validate`（`_check_gate_approval_ordering()`）は
 `approvals.gate{1,2}_sha256` に一致する記録が `approvals/records/` にあれば ledger
-の `c0_freeze` event 時刻と突合し、逆転を `gate_approval_ordering_notes` に記録する
-（記録が無い場合は非ブロッキング）。**運用規則**: 承認 JSON の `approved_at_utc` は
+の `c0_freeze` event 時刻と突合し、逆転（または承認時刻がパース不能）を
+`GateApprovalOrderingReport.violations` として `missing_required_keys` へ合流させ
+`BLOCKED_C0_MANIFEST_INCOMPLETE` で **blocking** にする——事後追認は検出でき次第
+publish 済み manifest を fail-closed に倒す設計であり、`c0_freeze.armed_freeze()`
+側の事前検査と対の関係にある。`gate_approval_ordering_notes`（非ブロッキング）は
+一致する承認記録が `approvals/records/` に無い・approvals 節や sha256 フィールド
+自体が欠けている・ledger 上の `c0_freeze` event 時刻が読めない等、順序そのものを
+**検査できない**場合専用であり、逆転の記録先ではない。**運用規則**: 承認 JSON の
+`approved_at_utc` は
 書き込み直前に `date -u +%Y-%m-%dT%H:%M:%SZ` で実測した値のみとする。推定・丸め・
 事前記入は禁止する（D108 は運用ミス——承認 JSON の時刻を実測せず記入——が原因だった）。
 

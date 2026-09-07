@@ -2760,6 +2760,18 @@ def _run_c4(
     return {"result": "OK", "holdout_executed_valid_entry_sha": entry.entry_sha}
 
 
+#: Codex round 4 finding P2 (`campaign/close.py:170-171` "Handle rehearsal
+#: reveal refusals in the CLI"): `close --rehearsal --reveal-split-secret`
+#: pre-dispatch refusal code. `close_stage.reveal_split_secret()` always
+#: raises `RehearsalRevealRefusedError` for a rehearsal campaign regardless
+#: of close state (`close.py`'s fail-closed rule is unconditional on
+#: `campaign_is_rehearsal()`, not on when reveal is attempted) — so this
+#: combination is refused unconditionally, not just on some manifest
+#: variant. Not a `vocab.BlockedCode` (same closed-vocabulary rationale as
+#: `BLOCKED_REHEARSAL_PATH`/`ENVIRONMENT_DRIFT_CODE` above).
+REHEARSAL_REVEAL_REFUSED = "REHEARSAL_REVEAL_REFUSED"
+
+
 def _run_close(
     campaign: FrozenCampaign,
     *,
@@ -2769,6 +2781,32 @@ def _run_close(
     parent_cpu_checkpoint: list[float] | None = None,
     invocation_id: str | None = None,
 ) -> dict[str, Any]:
+    # Codex round 4 finding P2 (`campaign/close.py:170-171`): before this
+    # fix, `--rehearsal --reveal-split-secret` reached `close_stage.
+    # close_campaign()` first (appending `campaign_closed`, and later the
+    # `finally` block in `main()` appending `stage_summary`), THEN called
+    # `close_stage.reveal_split_secret()`, which unconditionally raises
+    # `RehearsalRevealRefusedError` for a rehearsal campaign — uncaught here,
+    # propagating past `main()` as an unhandled traceback. Refuse this
+    # combination up front instead, before any close-transition ledger
+    # write: same structured `{"result": ..., "detail": ...}` shape as every
+    # other pre-dispatch refusal in this module (`BLOCKED_REHEARSAL_PATH`/
+    # `AUTHORIZATION_REQUIRED`/`PHASE_ORDER_VIOLATION`/...), so `main()`'s
+    # existing `out.get("result") in ok_results` exit-code logic naturally
+    # yields exit 1 with zero extra plumbing, and the ledger stays exactly
+    # as it was before this call (no `campaign_closed`, no `stage_summary`
+    # for a close transition that never happened).
+    if reveal and close_stage.campaign_is_rehearsal(campaign):
+        return {
+            "result": REHEARSAL_REVEAL_REFUSED,
+            "detail": (
+                "reveal_split_secret: this is a rehearsal campaign "
+                "(frozen_design.rehearsal=true); refusing --reveal-split-secret "
+                "together with --rehearsal before attempting close (rehearsal "
+                "never reveals its split_secret, regardless of close order)"
+            ),
+        }
+
     holdout_payload = None
     for entry in campaign.ledger.entries:
         payload = entry.payload
@@ -2807,7 +2845,25 @@ def _run_close(
         "debt_discharged": result.debt_discharged,
     }
     if reveal:
-        reveal_entry = close_stage.reveal_split_secret(campaign, invocation_id=invocation_id)
+        # Defense in depth (finding P2's second half): the guard above
+        # already refuses `reveal and campaign_is_rehearsal(campaign)`
+        # before `close_campaign()` runs, so this `except` should be
+        # unreachable via `_run_close()` itself (`campaign_is_rehearsal()`
+        # reads the immutable frozen manifest, which cannot change between
+        # the guard check and here within one call) — but
+        # `reveal_split_secret()`'s own fail-closed refusal must never
+        # surface as an unhandled exception from this function either,
+        # regardless of how a future caller reaches this branch. `close_
+        # campaign()` has already appended `campaign_closed` at this point
+        # (append-only ledger; nothing here retracts it), so report the
+        # refusal alongside the otherwise-successful close rather than
+        # raising past it.
+        try:
+            reveal_entry = close_stage.reveal_split_secret(campaign, invocation_id=invocation_id)
+        except close_stage.RehearsalRevealRefusedError as exc:  # pragma: no cover - see above
+            out["result"] = REHEARSAL_REVEAL_REFUSED
+            out["detail"] = str(exc)
+            return out
         out["split_secret_revealed_entry_sha"] = reveal_entry.entry_sha
     return out
 
