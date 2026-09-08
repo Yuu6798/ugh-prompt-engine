@@ -640,22 +640,19 @@ def scan_calibration_tree_inventory(repo_root: Path | None = None) -> frozenset[
     v1.1 §V6（統合3, `[UNDERSPEC-CAL-D79]`, WP2d 報告の申し送り）: 統治設計
     文書を scan 結果へ union する — どれも `.py` ではないため `rglob("*.py")`
     からは構造的に漏れており、§V6 が要求する「統治文書を path inventory 検査
-    対象へ」が未実施のままだった。v1.2 で pin が 2 段連鎖（v1.2 統治正本
-    `approvals.DESIGN_DOC_RELATIVE_PATH` → 基底 v1.1
-    `approvals.BASE_DESIGN_DOC_RELATIVE_PATH` → 基底の基底 v1.0
-    `approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH`）になったため、**3 本とも**
-    union する（連鎖の末端 v1.0 が監査集合から抜けると、pin されている文書が
-    inventory の外に落ちる）。文書パスに対する sha 検査等の意味論は追加しない
-    （既存の inventory 項目と同じ「対象集合に含まれる」以上の扱いを増やさない
-    ——過剰設計しない）。
+    対象へ」が未実施のままだった。v1.3 で pin 連鎖が任意段数のリスト
+    `approvals.DESIGN_DOC_CHAIN`（統治正本 v1.3 → 基底 v1.2 → v1.1 → v1.0）へ
+    一般化されたため、**連鎖の全文書**を union する（連鎖の末端が監査集合から
+    抜けると、pin されている文書が inventory の外に落ちる。新 revision を
+    連鎖の先頭へ足せばここも自動的に追随する）。文書パスに対する sha 検査等の
+    意味論は追加しない（既存の inventory 項目と同じ「対象集合に含まれる」以上の
+    扱いを増やさない——過剰設計しない）。
     """
     root = repo_root if repo_root is not None else _REPO_ROOT
     package_dir = root / "voice_genesis" / "calibration"
     paths = {p.relative_to(root).as_posix() for p in package_dir.rglob("*.py")}
     paths.add((package_dir / PATH_INVENTORY_FILENAME).relative_to(root).as_posix())
-    paths.add(approvals.DESIGN_DOC_RELATIVE_PATH)
-    paths.add(approvals.BASE_DESIGN_DOC_RELATIVE_PATH)
-    paths.add(approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH)
+    paths.update(approvals.DESIGN_DOC_CHAIN)
     return frozenset(paths)
 
 
@@ -1887,18 +1884,28 @@ _V1_1_DESIGN_REVISION: str = "1.1"
 #: なったことに同期する新版マーカー。
 _V1_2_DESIGN_REVISION: str = "1.2"
 
+#: 2026-09-07（v1.3 §X1/§X2 統治文書切替）: `c0_freeze._DESIGN_REVISION` が
+#: "1.3" を発行するようになったことに同期する新版マーカー。v1.3 は
+#: **v1.2 固有検査の適用範囲を広げも狭めもしない**（`_is_v1_2_or_later()` が
+#: 版数順で自動的に v1.3 も含む）。
+_V1_3_DESIGN_REVISION: str = "1.3"
+
 #: R22-1 対応（Codex 第 22 巡 finding (1)、2026-09-05。2026-09-07 #349 第 5 巡
-#: で v1.2 追加）: `_check_required_blocking()` が `frozen_design.
-#: design_revision` を照合する閉語彙。`"1.0"` を含む他の値・欠落はすべて
-#: REQUIRED_BLOCKING violation（legacy v1.0 は `allow_legacy_v1_0=True`
-#: opt-in 経由でのみ通す）。
+#: で v1.2 追加、同日 v1.3 追加）: `_check_required_blocking()` が
+#: `frozen_design.design_revision` を照合する閉語彙。`"1.0"` を含む他の値・
+#: 欠落はすべて REQUIRED_BLOCKING violation（legacy v1.0 は
+#: `allow_legacy_v1_0=True` opt-in 経由でのみ通す）。
 _ALLOWED_DESIGN_REVISIONS: frozenset[str] = frozenset(
-    {_V1_1_DESIGN_REVISION, _V1_2_DESIGN_REVISION}
+    {_V1_1_DESIGN_REVISION, _V1_2_DESIGN_REVISION, _V1_3_DESIGN_REVISION}
 )
 
 #: `_design_revision_at_least()` が「N 以上」を判定するための新旧順（辞書順
 #: ではなく設計上の版数順）。新しい revision を追加したらここに追記する。
-_DESIGN_REVISION_ORDER: tuple[str, ...] = (_V1_1_DESIGN_REVISION, _V1_2_DESIGN_REVISION)
+_DESIGN_REVISION_ORDER: tuple[str, ...] = (
+    _V1_1_DESIGN_REVISION,
+    _V1_2_DESIGN_REVISION,
+    _V1_3_DESIGN_REVISION,
+)
 
 
 def _design_revision(manifest: Mapping[str, object]) -> str | None:
@@ -1936,7 +1943,9 @@ def _is_v1_2_or_later(manifest: Mapping[str, object]) -> bool:
     適用対象とする manifest 群。v1.1 でマークされた manifest（本 PR 以前に
     発行された 2 件の aborted campaign `RUN10-CAL-20260905-410b25f2`/
     `RUN10-CAL-20260906-a4ed65c1` を含む）は対象外のまま——いずれも既に
-    archive 済みで再検証しない（`tests/test_archive_aborted_ledger.py` 参照）。"""
+    archive 済みで再検証しない（`tests/test_archive_aborted_ledger.py` 参照）。
+    v1.3 manifest は版数順で自動的に対象に含まれる（v1.3 は v1.2 固有検査の
+    適用範囲を変えない）。"""
     return _design_revision_at_least(manifest, _V1_2_DESIGN_REVISION)
 
 

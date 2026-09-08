@@ -292,14 +292,19 @@ def test_u_gt_u_num_bounds_real_c0_freeze_manifest_passes() -> None:
     2026-09-07（#349 第 5 巡 P1 採用、PRRT_kwDOSD2OOM6fwr6q）: 統治文書が
     v1.2 へ切り替わったことに合わせ `c0_freeze._DESIGN_REVISION` が "1.2" を
     発行するようになった（provenance の自己矛盾是正 — design hash・承認
-    チェーン・`rehearsal` スキーマはすでに v1.2 由来だったため）。
+    チェーン・`rehearsal` スキーマはすでに v1.2 由来だったため）。同日 v1.3
+    （§X1/§X2）への切替に伴い "1.3" を発行する。v1.2 固有検査の適用範囲は
+    版数順判定（`_is_v1_2_or_later()`）のため変わらない。
     """
+    from voice_genesis.calibration import approvals as approvals_module
     from voice_genesis.calibration import c0_freeze
 
     manifest = c0_freeze.build_manifest(
         c0_freeze._REPO_ROOT, approvals={}, campaign_date_utc="2026-09-05"
     )
-    assert manifest["frozen_design"]["design_revision"] == "1.2"
+    assert manifest["frozen_design"]["design_revision"] == "1.3"
+    # producer が発行する revision は統治正本のファイル名と一致すること。
+    assert approvals_module.DESIGN_DOC_RELATIVE_PATH.endswith("_v1.3.md")
     assert c0_validate._is_v1_1_or_later(manifest)
     assert c0_validate._is_v1_2_or_later(manifest)
     violations = c0_validate._check_u_gt_u_num_bounds(manifest)

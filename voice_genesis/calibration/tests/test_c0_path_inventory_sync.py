@@ -49,16 +49,14 @@ def test_committed_inventory_matches_live_tree_scan() -> None:
 
 
 def test_governance_documents_are_inventoried() -> None:
-    """v1.2 の pin は 2 段連鎖（v1.2 統治正本 -> 基底 v1.1 -> 基底の基底 v1.0）
-    であり、`.md` は `rglob("*.py")` に載らないため union の取りこぼしが起きる
-    ——3 本すべてが scan 結果とコミット済み inventory の双方に含まれること。"""
+    """v1.3 の pin は任意段数の連鎖 `approvals.DESIGN_DOC_CHAIN`（統治正本 v1.3
+    -> 基底 v1.2 -> v1.1 -> v1.0）であり、`.md` は `rglob("*.py")` に載らない
+    ため union の取りこぼしが起きる——連鎖の全文書が scan 結果とコミット済み
+    inventory の双方に含まれること。"""
     scanned = c0_validate.scan_calibration_tree_inventory()
     committed = c0_validate.calibration_path_inventory()
-    for doc in (
-        approvals.DESIGN_DOC_RELATIVE_PATH,
-        approvals.BASE_DESIGN_DOC_RELATIVE_PATH,
-        approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH,
-    ):
+    assert len(approvals.DESIGN_DOC_CHAIN) >= 2, approvals.DESIGN_DOC_CHAIN
+    for doc in approvals.DESIGN_DOC_CHAIN:
         assert doc in scanned, doc
         assert doc in committed, doc
 

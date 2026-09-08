@@ -429,7 +429,7 @@ sha256 と照合する（不一致 → 未承認）。**`campaign_id` は含ま�
     "budget": "ユーザー記入 (課金 budget 上限。通貨単位はユーザー環境依存の無次元数として扱う)"
   },
   "e_use_bound_accepted": "ユーザー記入 (true/false。§2.3 の USER_ACCEPTED_USE_BOUND 行を受容するか)",
-  "max_claim_scope": ["ユーザー記入 (ABSOLUTE を目指してよい construct_id の配列。例: \"formant_frequency\", \"source_spectral_tilt\", \"injected_noise_fraction\")"]
+  "max_claim_scope": ["ユーザー記入 (ABSOLUTE を目指してよい construct_id の配列。v1.3 §X2 以降の推奨は 3 要素: \"source_spectral_tilt\", \"injected_noise_fraction\", \"fundamental_frequency\" — \"formant_frequency\" は v1.3 の claim 縮小により外す)"]
 }
 ```
 

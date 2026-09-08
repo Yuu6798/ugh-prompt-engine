@@ -493,7 +493,12 @@ _PROVENANCE_SPEC: dict[str, str] = {
 #: 自己申告だけ v1.1 のままという provenance 矛盾があった
 #: （`c0_validate._design_revision_at_least()` 系のバージョン判別が汚染される）。
 #: `c0_validate._ALLOWED_DESIGN_REVISIONS` と同時に更新すること。
-_DESIGN_REVISION: str = "1.2"
+#:
+#: 2026-09-07（v1.3 §X1/§X2）: 統治文書が
+#: `DESIGN_VG_METER_CAL_DEBT_v1.3.md`（`approvals.DESIGN_DOC_CHAIN[0]`）へ
+#: 切り替わったため "1.3" を発行する。v1.2 固有検査の適用 floor は
+#: `c0_validate._is_v1_2_or_later()` のまま（版数順で v1.3 も含む）。
+_DESIGN_REVISION: str = "1.3"
 
 
 def _design_doc_sha256(root: Path) -> str:

@@ -1273,3 +1273,29 @@ freeze）を実行しない:
 4. **承認時刻の実測**: Gate 1/Gate 2 の `approved_at_utc` が
    `date -u +%Y-%m-%dT%H:%M:%SZ` の実測値であり、freeze event 時刻より前
    であることを `_check_gate_approval_ordering()` が確認すること。
+
+## 9. v1.3 改訂の実装マップ
+
+設計正本 `DESIGN_VG_METER_CAL_DEBT_v1.3.md`（§X1–§X4）の各節を実装した
+モジュール・関数の対応表。実装の詳細な逸脱・境界宣言・採否根拠は
+`README.md` 逸脱台帳 `UNDERSPEC-CAL-D109` が正（本表は経路の索引のみ）。
+
+| v1.3 節 | 実装モジュール | 関数名 / 定数 | 備考 |
+|---|---|---|---|
+| §X1（TILT detection_predicate の preregistration） | `candidates/impl/tilt_harmonic.py` | `HNR_DETECTION_FRAME_MS=25.0` / `HNR_DETECTION_HOP_MS=10.0` / `HNR_DETECTION_WINDOW="hann"`, `detection_hnr_acf_db()`, `_measure()`（`values` へ `hnr_acf_db` を同梱。非有限はキー省略） | WP-A probe と同一パラメータ。primary output `tilt_db_per_oct` は不変 |
+| | `candidates/registry.py` | `M2T_HNR_DETECTION_FIELD` / `M2T_HNR_DETECTION_MIN_DB=-5.0` / `_M2T_HARMONIC_DETECTION_PREDICATE`（OLS 6 + THEILSEN 6 の 12 候補へ宣言） | `M2T-B0-CURRENT-HYBRID`（ceiling=NONE）は宣言しない。`candidate_space_sha` は変わる |
+| | （消費側は無改変） | `fixtures/controls.py::detected()`, `campaign/selection_stage.py`, `campaign/holdout_stage.py`, `campaign/diagnose.py` | v1.2 §W1.2 で判定経路が一本化済みのため配線追加は不要 |
+| §X2（FORMANT を claim scope から外す） | （承認ファイル側の運用。コード変更なし） | `c0_freeze._check_max_claim_scope()` は `formant_frequency` を含む承認を**拒否しない**（責務は registry 突合） | 効果は `selection_stage.claim_scope_report()`/`capped_ceiling()` の capping = ABSOLUTE 到達が構造的に不可能（cap 先は `DIRECTIONAL`。`M3-B0-CURRENT-CENTROID` は元から `DIAGNOSTIC_ONLY`） |
+| §X3（答えた問い / 証拠 / 負債） | （docs） | `DESIGN_VG_METER_CAL_DEBT_v1.3.md` §X3, `README.md` D109 | 全 meter `NOT_EVALUABLE`・`debt_discharged=false` のまま |
+| §X4（統治文書連鎖の一般化） | `approvals.py` | `DESIGN_DOC_CHAIN`（v1.3→v1.2→v1.1→v1.0 のタプル）, `DESIGN_DOC_RELATIVE_PATH = DESIGN_DOC_CHAIN[0]`, `_verify_base_document_pin()`（全リンクを各段 1 回読取で検証）。`BASE_DESIGN_DOC_RELATIVE_PATH`/`BASE_BASE_DESIGN_DOC_RELATIVE_PATH` は削除（後方互換別名なし） | 新 revision の追加は連鎖の先頭へ 1 行 |
+| | `c0_validate.py` | `scan_calibration_tree_inventory()`（連鎖全文書を union）, `_V1_3_DESIGN_REVISION="1.3"`, `_ALLOWED_DESIGN_REVISIONS={"1.1","1.2","1.3"}`, `_DESIGN_REVISION_ORDER` | v1.2 固有検査の floor は `_is_v1_2_or_later()` のまま（版数順で v1.3 も含む） |
+| | `c0_freeze.py` | `_DESIGN_REVISION = "1.3"` | `frozen_design.design_revision` の発行値 |
+| | `c0_path_inventory.json` | （再生成。114 entry） | v1.3 統治文書を追加 |
+
+### C-1 診断の実測（v1.3 マージ前、`--repeats 5 --max-cells 30 --f0-candidate F0-PYIN-FRAME2048-HOP512`）
+
+| family | verdict の内訳 |
+|---|---|
+| TILT_GT（13） | **12 PASS**（harmonic 12 候補、positive 1.0 / negative 0.0）+ **1 NO_CEILING**（`M2T-B0-CURRENT-HYBRID`） |
+| FORMANT_GT（43） | 43 FAIL_NEGATIVE（v1.3 では未修正・claim scope 外。変化なし） |
+| APERIODICITY_GT（24） | 選定成立実績のある `M2A-B0-AUTOCORR-PERIODICITY` は PASS（変化なし） |

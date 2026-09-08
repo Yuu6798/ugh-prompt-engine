@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from voice_genesis.calibration import approvals, c0_freeze, c0_validate
+from voice_genesis.calibration import approvals, c0_freeze, c0_validate, vocab
 from voice_genesis.calibration.candidates import registry as candidate_registry
 from voice_genesis.calibration.fixtures import matrix as fixture_matrix
 from voice_genesis.calibration.splitter import realize_split, verify_split
@@ -2041,6 +2041,75 @@ def test_dry_run_valid_max_claim_scope_is_recorded_in_manifest(
     core_frozen_design = c0_freeze.core_payload(report.manifest)["frozen_design"]
     assert isinstance(core_frozen_design, dict)
     assert "max_claim_scope" in core_frozen_design
+
+
+# ---------------------------------------------------------------------------
+# v1.3 §X2 — FORMANT を claim scope から外す。除外は **承認ファイル側の運用**
+# であり、`_check_max_claim_scope()` は `formant_frequency` を含む承認を
+# 拒否しない（同関数の責務は registry 突合であって claim 方針の強制ではない）。
+# scope から外れた効果は `selection_stage.claim_scope_report()` の capping。
+# ---------------------------------------------------------------------------
+
+_V1_3_MAX_CLAIM_SCOPE = [
+    "source_spectral_tilt",
+    "injected_noise_fraction",
+    "fundamental_frequency",
+]
+
+
+def test_v1_3_three_element_claim_scope_is_accepted(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """v1.3 §X2 の 3 要素 scope（FORMANT 除外後）が Gate 1 検査を通ること。"""
+    approval_dir = tmp_path / "approvals"
+    approval_dir.mkdir()
+    _write_gate1(approval_dir, scope=list(_V1_3_MAX_CLAIM_SCOPE))
+    report = c0_freeze.dry_run(_REPO_ROOT, approval_dir, os.environ)
+    assert not any(
+        r.startswith("max_claim_scope:") for r in report.validation.missing_required_keys
+    ), report.validation.missing_required_keys
+    frozen_design = report.manifest["frozen_design"]
+    assert isinstance(frozen_design, dict)
+    assert frozen_design["max_claim_scope"] == _V1_3_MAX_CLAIM_SCOPE
+
+
+def test_v1_3_does_not_reject_a_scope_that_still_names_formant_frequency() -> None:
+    """v1.3 は `formant_frequency` を含む承認を **拒否しない**（除外は承認
+    ファイル側の運用。Gate 1 検査は registry 突合のみを行う）。"""
+    assert (
+        c0_freeze._check_max_claim_scope([*_V1_3_MAX_CLAIM_SCOPE, "formant_frequency"]) == []
+    )
+
+
+def test_v1_3_claim_scope_caps_every_formant_candidate() -> None:
+    """v1.3 §X2 の 3 要素 scope の下では、FORMANT_GT の全 43 候補が
+    `claim_scope_report()` で capping され **ABSOLUTE 到達が構造的に不可能**に
+    なること（cap 先は `capped_ceiling()` の設計どおり `DIRECTIONAL`。元から
+    より弱い `M3-B0-CURRENT-CENTROID` は `DIAGNOSTIC_ONLY` のまま据え置き）。
+    scope 内の 3 construct は capping されないことも同時に固定する。"""
+    from voice_genesis.calibration.campaign import selection_stage
+    from voice_genesis.calibration.candidates.registry import ALL_CANDIDATES
+
+    scope = frozenset(_V1_3_MAX_CLAIM_SCOPE)
+    formant = [c for c in ALL_CANDIDATES if c.meter is vocab.MeterId.M3_FORMANTS]
+    assert len(formant) == 43
+
+    for candidate in formant:
+        capped, report = selection_stage.claim_scope_report(candidate, scope)
+        assert capped is not vocab.ClaimCeiling.ABSOLUTE, candidate.candidate_id
+        if candidate.claim_ceiling is vocab.ClaimCeiling.ABSOLUTE:
+            assert capped is vocab.ClaimCeiling.DIRECTIONAL, candidate.candidate_id
+            assert report["capped"] is True, candidate.candidate_id
+        else:
+            # `M3-B0-CURRENT-CENTROID` は元から DIAGNOSTIC_ONLY。
+            assert capped is vocab.ClaimCeiling.DIAGNOSTIC_ONLY, candidate.candidate_id
+
+    in_scope = [c for c in ALL_CANDIDATES if c.construct in scope]
+    assert in_scope
+    for candidate in in_scope:
+        capped, report = selection_stage.claim_scope_report(candidate, scope)
+        assert capped is candidate.claim_ceiling, candidate.candidate_id
+        assert report["capped"] is False, candidate.candidate_id
 
 
 def test_max_claim_scope_is_part_of_manifest_core_sha(tmp_path: Path, clean_checkout: None) -> None:
