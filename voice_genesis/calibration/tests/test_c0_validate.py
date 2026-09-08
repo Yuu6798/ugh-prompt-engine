@@ -128,7 +128,17 @@ def _shape_valid_nested_value(key: str, seed: str) -> object:
     if key in ("boundary_probes", "negative_controls", "stop_rules"):
         return [f"{seed}_{key}_0", f"{seed}_{key}_1"]
     if key == "parameter_grid":
-        return {f"{seed}_{key}_axis": [0, 1]}
+        # v1.2 WP2b: `declared_sweeps`/`confound_axes` と同じ理由で placeholder
+        # では通らない——`_check_candidate_space_pool()` は凍結された候補空間
+        # （= 全 meter の `parameter_grid` 鍵集合）が `frozen_design.rehearsal`
+        # に対応する候補プール（本番 = registry 全件）と完全一致することを
+        # 要求する。`seed` は `meter_id.lower()`（meter_specs のみが本 key を
+        # 持つため fixture_spec 側からこの分岐に到達することはない）。
+        meter = vocab.MeterId(seed.upper())
+        return {
+            c.candidate_id: dict(c.parameters)
+            for c in candidate_registry.candidates_for_meter(meter)
+        }
     if key == "declared_sweeps":
         # UNDERSPEC-CAL-D77 ruling (1): このフィールドだけは placeholder では
         # なく、`_check_declared_sweep_declaration_match()` の完全一致検査を
@@ -266,6 +276,9 @@ def _complete_manifest() -> dict[str, object]:
                 "budget": "no paid API calls (fully local pipeline)",
             },
             "stop_rules": ["ABORT_ON_UNSEEDED_RNG", "ABORT_ON_HASH_MISMATCH"],
+            # v1.2 WP2 §B(ii): 本番 manifest は `false` を明示記録する
+            # （欠落は REQUIRED_BLOCKING violation）。
+            "rehearsal": False,
         },
         "independence_ledger": _full_independence_ledger(),
         "rng_ledger": _full_rng_ledger(),
@@ -382,6 +395,15 @@ def _delete_dotted(manifest: dict[str, object], dotted_path: str) -> dict[str, o
 
 def test_each_required_blocking_key_omission_blocks_with_correct_code() -> None:
     for key in c0_validate.REQUIRED_BLOCKING_KEYS:
+        if key == "frozen_design.rehearsal":
+            # 2026-09-07（#349 第 5 巡）: v1.2 で新設されたフィールドのため、
+            # `_complete_manifest()` の既定 design_revision ("1.1") ではこの
+            # キーの欠落は違反にならない（`_is_v1_2_or_later()` gate）——
+            # v1.2/v1.1 それぞれの挙動は
+            # `test_rehearsal_key_missing_is_required_blocking_on_v1_2_manifest`/
+            # `test_rehearsal_key_missing_on_v1_1_manifest_is_not_required_blocking`
+            # が個別に固定する。
+            continue
         manifest = _delete_dotted(_complete_manifest(), key)
         result = c0_validate.validate_c0_manifest(manifest)
         assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes, key
@@ -480,10 +502,18 @@ def test_hollow_empty_container_manifest_is_blocked() -> None:
     assert result.is_blocked is True
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     # `repo.dirty_tree=False` は hollow ではなく正しい記録値そのものなので missing
-    # に現れない。それ以外の全 REQUIRED_BLOCKING キーは hollow のため missing。
-    expected_missing = set(c0_validate.REQUIRED_BLOCKING_KEYS) - {"repo.dirty_tree"}
+    # に現れない。`frozen_design.rehearsal` は v1.2 で新設されたフィールドで
+    # あり、この hollow manifest には `design_revision` marker 自体が無い
+    # （= legacy v1.0 相当・v1.2 未満）ため `_is_v1_2_or_later()` gate により
+    # 要求対象外（2026-09-07 #349 第 5 巡）。それ以外の全 REQUIRED_BLOCKING
+    # キーは hollow のため missing。
+    expected_missing = set(c0_validate.REQUIRED_BLOCKING_KEYS) - {
+        "repo.dirty_tree",
+        "frozen_design.rehearsal",
+    }
     assert expected_missing.issubset(set(result.missing_required_keys))
     assert "repo.dirty_tree" not in result.missing_required_keys
+    assert "frozen_design.rehearsal" not in result.missing_required_keys
 
 
 def test_hash_map_entry_with_malformed_sha256_blocks() -> None:
@@ -1408,3 +1438,194 @@ def test_required_string_scalar_fields_reject_non_strings(
     dotted = ".".join(path)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     assert any(item.startswith(f"{dotted}: type") for item in result.missing_required_keys)
+
+
+# ---------------------------------------------------------------------------
+# v1.2 WP2 §B(ii)/(vi) — frozen_design.rehearsal
+#
+# 2026-09-07（#349 第 5 巡 P1 採用、PRRT_kwDOSD2OOM6fwr6q）: `frozen_design.
+# rehearsal` は v1.2 で新設されたフィールドであり、v1.1 以下（design_revision
+# marker 欠落の legacy v1.0 を含む）の manifest には存在し得ない——2 件の
+# aborted v1.1 campaign 実物（`RUN10-CAL-20260905-410b25f2`/
+# `RUN10-CAL-20260906-a4ed65c1`、いずれも archive 済みで再検証しない）を含む。
+# このため本節の「必須化/型検査」系テストは `_complete_manifest()` の
+# design_revision を明示的に "1.2" へ差し替えた manifest で検証し、v1.1
+# manifest がこの必須化の対象外であることは専用テストで固定する。
+# ---------------------------------------------------------------------------
+
+
+def _complete_v1_2_manifest() -> dict[str, object]:
+    manifest = _complete_manifest()
+    manifest["frozen_design"] = {**manifest["frozen_design"], "design_revision": "1.2"}  # type: ignore[dict-item]
+    return manifest
+
+
+def test_rehearsal_key_missing_is_required_blocking_on_v1_2_manifest() -> None:
+    manifest = _delete_dotted(_complete_v1_2_manifest(), "frozen_design.rehearsal")
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert "frozen_design.rehearsal" in result.missing_required_keys
+
+
+def test_rehearsal_key_missing_on_v1_1_manifest_is_not_required_blocking() -> None:
+    """v1.1 manifest（`_complete_manifest()` 既定）は `frozen_design.
+    rehearsal` フィールド自体が v1.2 で新設されたため、欠落は violation に
+    ならない——2 件の aborted v1.1 campaign 実物（本節冒頭コメント参照）が
+    不当にブロックされないことを保証する回帰ガード。"""
+    manifest = _delete_dotted(_complete_manifest(), "frozen_design.rehearsal")
+    assert manifest["frozen_design"]["design_revision"] == "1.1"  # type: ignore[index]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert "frozen_design.rehearsal" not in result.missing_required_keys
+    assert not any(
+        k.startswith("frozen_design.rehearsal") for k in result.missing_required_keys
+    )
+
+
+def test_rehearsal_key_non_bool_is_required_blocking_on_v1_2_manifest() -> None:
+    manifest = _complete_v1_2_manifest()
+    manifest["frozen_design"]["rehearsal"] = "true"  # type: ignore[index]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert any(
+        k.startswith("frozen_design.rehearsal: type") for k in result.missing_required_keys
+    ), result.missing_required_keys
+
+
+def test_rehearsal_key_non_bool_on_v1_1_manifest_is_not_required_blocking() -> None:
+    """同上（型不正）の v1.1 側: フィールド自体が対象外のため、非 bool 値
+    でも violation にならない（field が定義されていない版に対する型検査は
+    無意味であり、fail-closed にする理由がない）。"""
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["rehearsal"] = "true"  # type: ignore[index]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert not any(
+        k.startswith("frozen_design.rehearsal") for k in result.missing_required_keys
+    )
+
+
+def test_rehearsal_true_is_accepted_as_a_recorded_value() -> None:
+    """`true` そのものは violation ではない（設置場所の制約が別途効く）。"""
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["rehearsal"] = True  # type: ignore[index]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert not any(
+        k.startswith("frozen_design.rehearsal") for k in result.missing_required_keys
+    )
+
+
+def _write_manifest_at(path: Path, manifest: dict[str, object]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    return path
+
+
+def test_rehearsal_manifest_under_canonical_campaigns_dir_is_a_violation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§B(vi): rehearsal manifest を canonical campaign registry の配下に
+    置くのは violation（本 test は実リポジトリの `campaigns/` を一切触らず、
+    `_REPO_ROOT` を tmp_path へ差し替えた合成 registry で検証する）。"""
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["rehearsal"] = True  # type: ignore[index]
+    monkeypatch.setattr(c0_validate, "_REPO_ROOT", tmp_path)
+    inside = _write_manifest_at(
+        tmp_path / "voice_genesis/calibration/campaigns/REHEARSAL-X/c0_manifest.json", manifest
+    )
+    violations = c0_validate._check_rehearsal_location(manifest, inside)
+    assert violations and "canonical campaign registry" in violations[0]
+
+    outside = _write_manifest_at(tmp_path / "elsewhere/REHEARSAL-X/c0_manifest.json", manifest)
+    assert c0_validate._check_rehearsal_location(manifest, outside) == []
+
+
+def test_non_rehearsal_manifest_under_canonical_campaigns_dir_is_fine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = _complete_manifest()
+    monkeypatch.setattr(c0_validate, "_REPO_ROOT", tmp_path)
+    inside = _write_manifest_at(
+        tmp_path / "voice_genesis/calibration/campaigns/RUN10-CAL-X/c0_manifest.json", manifest
+    )
+    assert c0_validate._check_rehearsal_location(manifest, inside) == []
+
+
+# ---------------------------------------------------------------------------
+# v1.2 WP2 §C-9 — Gate 承認時刻 x c0_freeze ledger event の順序
+# ---------------------------------------------------------------------------
+
+
+def _approval_record_bytes(approved_at_utc: str) -> bytes:
+    return json.dumps(
+        {"gate": "GATE2_C0_FREEZE", "approver": "tester", "approved_at_utc": approved_at_utc},
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _campaign_with_freeze_ledger(
+    tmp_path: Path, *, freeze_time_utc: str, approvals_section: dict[str, str]
+) -> tuple[dict[str, object], Path]:
+    campaign_dir = tmp_path / "campaign"
+    campaign_dir.mkdir(parents=True, exist_ok=True)
+    manifest = _complete_manifest()
+    manifest["approvals"] = approvals_section
+    manifest_path = campaign_dir / "c0_manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (campaign_dir / "ledger.jsonl").write_text(
+        json.dumps(
+            {"payload": {"kind": "c0_freeze", "event_time_utc": freeze_time_utc}},
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return manifest, manifest_path
+
+
+def _write_records_dir(repo_root: Path, records: dict[str, bytes]) -> None:
+    records_dir = repo_root / c0_validate._APPROVAL_RECORDS_RELATIVE
+    records_dir.mkdir(parents=True, exist_ok=True)
+    for name, raw in records.items():
+        (records_dir / name).write_bytes(raw)
+
+
+def test_gate_approval_ordering_accepts_approval_before_freeze(tmp_path: Path) -> None:
+    raw = _approval_record_bytes("2026-09-06T00:00:00Z")
+    sha = hashlib.sha256(raw).hexdigest()
+    manifest, manifest_path = _campaign_with_freeze_ledger(
+        tmp_path,
+        freeze_time_utc="2026-09-06T01:00:00Z",
+        approvals_section={"gate2_sha256": sha},
+    )
+    _write_records_dir(tmp_path, {"gate2_c0_freeze.2026-09-06.json": raw})
+    report = c0_validate._check_gate_approval_ordering(manifest, manifest_path, repo_root=tmp_path)
+    assert report.violations == ()
+
+
+def test_gate_approval_ordering_rejects_approval_after_freeze(tmp_path: Path) -> None:
+    """D108 の実欠陥そのもの（Gate 2 承認が freeze より後 = 事後追認）。"""
+    raw = _approval_record_bytes("2026-09-06T02:00:00Z")
+    sha = hashlib.sha256(raw).hexdigest()
+    manifest, manifest_path = _campaign_with_freeze_ledger(
+        tmp_path,
+        freeze_time_utc="2026-09-06T01:00:00Z",
+        approvals_section={"gate2_sha256": sha},
+    )
+    _write_records_dir(tmp_path, {"gate2_c0_freeze.2026-09-06.json": raw})
+    report = c0_validate._check_gate_approval_ordering(manifest, manifest_path, repo_root=tmp_path)
+    assert any("gate2_approval_future_dated" in v for v in report.violations), report
+
+
+def test_gate_approval_ordering_skips_and_notes_when_record_absent(tmp_path: Path) -> None:
+    manifest, manifest_path = _campaign_with_freeze_ledger(
+        tmp_path,
+        freeze_time_utc="2026-09-06T01:00:00Z",
+        approvals_section={"gate2_sha256": "0" * 64},
+    )
+    _write_records_dir(tmp_path, {})
+    report = c0_validate._check_gate_approval_ordering(manifest, manifest_path, repo_root=tmp_path)
+    assert report.violations == ()
+    assert any("not checkable" in note for note in report.notes), report
+
+
+def test_gate_approval_ordering_is_a_noop_for_in_memory_manifests() -> None:
+    report = c0_validate._check_gate_approval_ordering(_complete_manifest(), None)
+    assert report.violations == () and report.notes == ()

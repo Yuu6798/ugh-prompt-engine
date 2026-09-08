@@ -407,6 +407,44 @@ def test_all_negative_control_records_present_is_complete() -> None:
     # pairing per instance (covered elsewhere) and is orthogonal to negative
     # control coverage.
     assert report["negative_controls_incomplete"] is False
+
+
+def test_candidate_fail_filter_report_applies_candidate_detection_predicate() -> None:
+    """#349 第2巡 P2 採用: `candidate_fail_filter_report()` の
+    `neg_detections`/`pos_detections` は候補の `detection_predicate`
+    （宣言時）をそのまま `fixture_controls.detected()` へ渡さなければ
+    ならない——従来は predicate 無し固定で呼んでおり、registry が宣言した
+    非既定 predicate が selection の本番 fail filter 判定で無視されていた
+    （`candidate_space_sha()` には記帳されるが判定に反映されない静かな
+    不一致）。
+
+    `min_value=100.0` の predicate を宣言した合成候補で、閾値未満の有限値
+    （`f0_hz=50.0`）を負 control 行へ与える——predicate 無しの既定分岐なら
+    `_record(detected=True)` が生成する有限値は無条件に「検出」と判定され
+    `negative_control_false_fire=True` になるところ、predicate 有りでは
+    `50.0 < 100.0` のため非発火（`negative_control_false_fire=False`）で
+    なければならない。正 control 側も対称に、閾値未満の値では不発火
+    （`positive_control_non_fire=True`）と判定されることを固定する。"""
+    candidate = dataclasses.replace(
+        candidate_by_id("F0-B0-CURRENT"),
+        detection_predicate=controls_module.DetectionPredicate(field="f0_hz", min_value=100.0),
+    )
+    records = [
+        _record(
+            "row-negctl", 0, candidate_id=candidate.candidate_id, detected=True, value=50.0
+        ),
+        _record(
+            "row-posctl", 0, candidate_id=candidate.candidate_id, detected=True, value=50.0
+        ),
+    ]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-negctl"}),
+        positive_control_row_ids=frozenset({"row-posctl"}),
+    )
+    assert report["negative_control_false_fire"] is False
+    assert report["positive_control_non_fire"] is True
     assert report["negative_control_false_fire"] is False
 
 
@@ -1322,3 +1360,300 @@ def test_selection_winner_flips_between_raw_and_relative_bias() -> None:
     q_named = dataclasses.replace(q_criteria, candidate_id="cand-Q")
     outcome = select_across_ceilings([p_named, q_named])
     assert outcome.selected_candidate_id == "cand-Q"
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.2 WP1: fire 判定の一本化 (`fixtures.controls.detected()`) +
+# sanctioned abstention ((SILENCE, "F0_UNUSABLE") のみ) — c3b_failclosed_
+# analysis.md §5.1「実装バグ疑い」の是正。`coverage_incomplete` が BOUNDARY
+# -domain 行（negative control 行を含む）を design-sanctioned な欠測として
+# 除外しているのに、`negative_controls_incomplete` は同じ SILENCE 行への
+# record 皆無をゼロ許容で ineligible 化していた（F0 依存候補は SILENCE 行で
+# `F0_UNUSABLE` により一切呼ばれず record が皆無になるため、品質に関係なく
+# 100% 発火する決定論的デッドロック）。
+# ---------------------------------------------------------------------------
+
+_D71_APERIODICITY_HARMONIC_RESIDUAL_ID = "M2A-HARMONIC-RESIDUAL-K8-WINHANN-BANDBROADBAND"
+_D71_APERIODICITY_D4C_ID = "M2A-D4C-BAND-BROADBAND"
+
+
+def test_v12_sanctioned_silence_f0_unusable_abstention_resolves_incomplete_and_false_fire() -> None:  # noqa: E501
+    """(a)+(d): a SILENCE negative-control row an F0-dependent candidate was
+    never called on (`F0_UNUSABLE` skip -> zero own records for the row) must
+    no longer trip `negative_controls_incomplete`, nor (since the row now
+    contributes `False`/non-fire to the any-fire population instead of being
+    absent from it) `negative_control_false_fire`. `coverage_incomplete`
+    (BOUNDARY-row exempt population) must stay non-conflicting on the same
+    fixture — the SILENCE row is simply outside `expected_coverage_
+    instances`, as it always was, regardless of this fix."""
+    candidate = candidate_by_id(_D71_APERIODICITY_HARMONIC_RESIDUAL_ID)
+    records = [_record("row-primary", 0, candidate_id=candidate.candidate_id, detected=True)]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-silence"}),
+        expected_coverage_instances=frozenset({("row-primary", 0)}),
+        control_class_by_negative_row_id={"row-silence": "SILENCE"},
+        missing_reason_by_negative_row_id={"row-silence": "F0_UNUSABLE"},
+    )
+    assert report["negative_controls_incomplete"] is False
+    assert report["negative_control_false_fire"] is False
+    assert report["coverage_incomplete"] is False
+
+
+def test_v12_silence_row_missing_for_unrelated_reason_stays_incomplete() -> None:
+    """(b): the exemption is keyed to `missing_reason == "F0_UNUSABLE"`
+    specifically — a SILENCE row missing for a different reason (here
+    `OUTPUT_MISSING`, a genuinely absent record unrelated to the F0-skip
+    cause) must remain fail-closed."""
+    candidate = candidate_by_id(_D71_APERIODICITY_HARMONIC_RESIDUAL_ID)
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        [],
+        negative_control_row_ids=frozenset({"row-silence"}),
+        control_class_by_negative_row_id={"row-silence": "SILENCE"},
+        missing_reason_by_negative_row_id={"row-silence": "OUTPUT_MISSING"},
+    )
+    assert report["negative_controls_incomplete"] is True
+
+
+def test_v12_noise_only_control_class_f0_unusable_stays_incomplete() -> None:
+    """(c): `SANCTIONED_ABSTENTIONS` is the closed vocabulary
+    `{(SILENCE, "F0_UNUSABLE")}` only — a NOISE_ONLY-classed row missing for
+    the very same `F0_UNUSABLE` reason is not exempted."""
+    candidate = candidate_by_id(_D71_APERIODICITY_HARMONIC_RESIDUAL_ID)
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        [],
+        negative_control_row_ids=frozenset({"row-noise-only"}),
+        control_class_by_negative_row_id={"row-noise-only": "NOISE_ONLY"},
+        missing_reason_by_negative_row_id={"row-noise-only": "F0_UNUSABLE"},
+    )
+    assert report["negative_controls_incomplete"] is True
+
+
+def test_v12_sanctioned_abstention_does_not_mask_false_fire_on_other_row() -> None:
+    """The sanctioned SILENCE row contributes `False` (non-fire) to the
+    any-fire population — it must not suppress a genuine false fire on a
+    different negative-control row declared in the same population."""
+    candidate = candidate_by_id(_D71_APERIODICITY_HARMONIC_RESIDUAL_ID)
+    records = [_record("row-noise-only", 0, candidate_id=candidate.candidate_id, detected=True)]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-silence", "row-noise-only"}),
+        control_class_by_negative_row_id={"row-silence": "SILENCE"},
+        missing_reason_by_negative_row_id={"row-silence": "F0_UNUSABLE"},
+    )
+    assert report["negative_controls_incomplete"] is False
+    assert report["negative_control_false_fire"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+def test_v12_omitted_sanctioned_abstention_args_preserve_prior_behaviour() -> None:
+    """Backward compatibility: omitting `control_class_by_negative_row_id`/
+    `missing_reason_by_negative_row_id` (both default `None`) must reproduce
+    the exact pre-v1.2 fail-closed outcome for a SILENCE row missing entirely
+    — the same fixture as (a) above, minus the new kwargs."""
+    candidate = candidate_by_id(_D71_APERIODICITY_HARMONIC_RESIDUAL_ID)
+    records = [_record("row-primary", 0, candidate_id=candidate.candidate_id, detected=True)]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-silence"}),
+        expected_coverage_instances=frozenset({("row-primary", 0)}),
+    )
+    assert report["negative_controls_incomplete"] is True
+
+
+# ---------------------------------------------------------------------------
+# real-data-derived minimal fixture: reproduces the exact APERIODICITY_GT
+# HARMONIC_RESIDUAL / D4C shape captured in RUN10-CAL-20260905-410b25f2's
+# `selection_frozen` ledger event (`c3b_failclosed_analysis.md` §4 / §5) —
+# a SILENCE row fully F0_UNUSABLE (0 records) and a NOISE_ONLY row partially
+# measured (probes 3/4 present, 0/1/2 F0_UNUSABLE). Not the full ledger — a
+# minimal synthetic recreation of just the negative-control shape that drove
+# `negative_controls_incomplete` for these 15 candidates.
+# ---------------------------------------------------------------------------
+
+
+def test_v12_aperiodicity_harmonic_residual_incomplete_resolves_but_stays_ineligible() -> None:
+    """The 12 `HARMONIC_RESIDUAL` candidates in the real ledger: SILENCE row
+    entirely F0_UNUSABLE (sanctioned -> `negative_controls_incomplete`
+    resolves to False) but NOISE_ONLY row's measured probes (3, 4) genuinely
+    false-fire (`negative_control_false_fire` stays True, untouched by this
+    fix) -> candidate remains ineligible overall, now for the correct
+    (real false-fire) reason instead of the mis-diagnosed incomplete flag."""
+    candidate = candidate_by_id(_D71_APERIODICITY_HARMONIC_RESIDUAL_ID)
+    records = [
+        _record(
+            "row-noise-only", probe_index, candidate_id=candidate.candidate_id, detected=True
+        )
+        for probe_index in (3, 4)
+    ]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-silence", "row-noise-only"}),
+        control_class_by_negative_row_id={
+            "row-silence": "SILENCE",
+            "row-noise-only": "NOISE_ONLY",
+        },
+        missing_reason_by_negative_row_id={
+            "row-silence": "F0_UNUSABLE",
+            "row-noise-only": "F0_UNUSABLE",
+        },
+    )
+    assert report["negative_controls_incomplete"] is False
+    assert report["negative_control_false_fire"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+def test_v12_aperiodicity_d4c_incomplete_resolves_but_stays_ineligible_via_pyworld_absence() -> None:  # noqa: E501
+    """The 3 `D4C_WORLD` candidates in the real ledger: same SILENCE-row
+    sanctioned abstention as HARMONIC_RESIDUAL, but the NOISE_ONLY row's
+    measured probes come back `ineligible=True` (pyworld absent) rather than
+    a false fire, and the positive-control (TRUTH_CORE) instances are
+    likewise all ineligible -> `positive_control_non_fire` fires instead.
+    `negative_controls_incomplete` resolves to False either way; overall
+    eligibility stays False, now attributable to the real (environmental,
+    design-sanctioned) pyworld-absence cause rather than the incomplete
+    mis-diagnosis."""
+    candidate = candidate_by_id(_D71_APERIODICITY_D4C_ID)
+    ineligible_output = MeterOutput(ineligible=True, ineligible_reason="INELIGIBLE_DEPENDENCY_ABSENT")
+    records = [
+        measure_stage.MeasurementRecord(
+            row_id="row-noise-only",
+            probe_index=probe_index,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="within",
+            repeat_index=0,
+            process_id="p0",
+            output=ineligible_output,
+        )
+        for probe_index in (3, 4)
+    ] + [
+        measure_stage.MeasurementRecord(
+            row_id="row-truth-core",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="within",
+            repeat_index=0,
+            process_id="p0",
+            output=ineligible_output,
+        )
+    ]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-silence", "row-noise-only"}),
+        positive_control_row_ids=frozenset({"row-truth-core"}),
+        control_class_by_negative_row_id={
+            "row-silence": "SILENCE",
+            "row-noise-only": "NOISE_ONLY",
+        },
+        missing_reason_by_negative_row_id={
+            "row-silence": "F0_UNUSABLE",
+            "row-noise-only": "F0_UNUSABLE",
+        },
+    )
+    assert report["negative_controls_incomplete"] is False
+    assert report["negative_control_false_fire"] is False
+    assert report["positive_control_non_fire"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.2 WP1 (3): registry `Candidate.detection_predicate` folds into
+# `candidate_space_sha`'s canonical serialization (the C0 candidate-space
+# freeze this campaign re-checks at C3).
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_space_sha_changes_when_a_candidate_declares_a_detection_predicate() -> None:
+    base_candidate = candidate_by_id("F0-B0-CURRENT")
+    without_predicate = (base_candidate,)
+    with_predicate = (
+        dataclasses.replace(
+            base_candidate,
+            detection_predicate=controls_module.DetectionPredicate(
+                field="f0_hz", min_value=1.0
+            ),
+        ),
+    )
+    sha_without = selection_stage.candidate_space_sha(without_predicate)
+    sha_with = selection_stage.candidate_space_sha(with_predicate)
+    assert sha_without != sha_with
+
+
+def test_candidate_space_sha_unchanged_for_existing_undeclared_candidates() -> None:
+    """All 99 registered candidates leave `detection_predicate` at its
+    default `None` in this revision — `candidate_space_sha()` over the real
+    `ALL_CANDIDATES` pool must equal the sha of a pool built by explicitly
+    setting every candidate's `detection_predicate` to `None` (i.e. declaring
+    the field changes nothing for candidates that don't use it)."""
+    from voice_genesis.calibration.candidates.registry import ALL_CANDIDATES
+
+    explicit_none_pool = tuple(
+        dataclasses.replace(c, detection_predicate=None) for c in ALL_CANDIDATES
+    )
+    assert selection_stage.candidate_space_sha() == selection_stage.candidate_space_sha(
+        explicit_none_pool
+    )
+
+
+def test_candidate_space_sha_payload_omits_detection_predicate_key_when_undeclared() -> None:
+    """#349 第2巡 P2 採用: `candidate_space_sha()` の canonical serialization
+    は未宣言（`None`）の候補では `detection_predicate` キー自体を出力しては
+    ならない。全候補へ `"detection_predicate": null` を一律出力する実装は、
+    本 WP 以前は存在しなかったキーが payload へ新規追加される時点でハッシュ
+    入力そのものを変えてしまい、DESIGN_VG_METER_CAL_DEBT_v1.2.md §W1 /
+    IMPLEMENTATION_MAP_v1.md が主張する「未宣言候補では sha 不変」を偽に
+    していた（sha が等しいことは別テストで固定済みだが、それだけでは
+    「キーが存在しない」ことまでは保証しない——本テストは payload の形状
+    そのものを直接検査する）。"""
+    from voice_genesis.calibration.canonical import manifest_sha
+
+    base_candidate = candidate_by_id("F0-B0-CURRENT")
+    declared = dataclasses.replace(
+        base_candidate,
+        detection_predicate=controls_module.DetectionPredicate(field="f0_hz", min_value=1.0),
+    )
+
+    def _entry(c) -> dict[str, object]:
+        entry: dict[str, object] = {
+            "meter": c.meter.value,
+            "construct": c.construct,
+            "unit": c.unit,
+            "algorithm_family": c.algorithm_family,
+            "parameters": dict(c.parameters),
+            "domain": c.domain,
+            "missing_rule": c.missing_rule,
+            "independence_tier": c.independence_tier.value,
+            "claim_ceiling": c.claim_ceiling.value,
+            "complexity_rank": c.complexity_rank,
+            "implementation_ref": c.implementation_ref,
+        }
+        if c.detection_predicate is not None:
+            entry["detection_predicate"] = {
+                "field": c.detection_predicate.field,
+                "min_value": c.detection_predicate.min_value,
+            }
+        return entry
+
+    undeclared_payload = {base_candidate.candidate_id: _entry(base_candidate)}
+    assert "detection_predicate" not in undeclared_payload[base_candidate.candidate_id]
+
+    # sha over the single-candidate undeclared pool must equal the sha
+    # `candidate_space_sha()` itself computes for that same pool (proves the
+    # production payload construction also omits the key, not just this
+    # test's mirror of it).
+    assert manifest_sha(undeclared_payload) == selection_stage.candidate_space_sha(
+        (base_candidate,)
+    )
+    declared_sha = selection_stage.candidate_space_sha((declared,))
+    assert declared_sha != selection_stage.candidate_space_sha((base_candidate,))
+    # sanity: the declared candidate's own payload does carry the key.
+    declared_payload = {declared.candidate_id: _entry(declared)}
+    assert "detection_predicate" in declared_payload[declared.candidate_id]
+    assert manifest_sha(declared_payload) == declared_sha

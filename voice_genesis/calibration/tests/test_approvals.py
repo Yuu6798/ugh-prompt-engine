@@ -768,46 +768,65 @@ def test_repo_gate1_record_copies_consumed_pins_or_tree_at_head() -> None:
 
 
 # ---------------------------------------------------------------------------
-# §V6「統治文書の切替 + 基底文書の実行時 pin」(DESIGN_VG_METER_CAL_DEBT_v1.1.md):
-# `load_approval()` は承認ファイル自体の design_doc_sha256（= v1.1 の実測
-# sha256）照合に加え、v1.1 front matter の `base_document_sha256` と checkout
-# 上の v1.0 の実測 sha256 が一致することを検証する（信頼の連鎖: 承認 →
-# v1.1 バイト列 → v1.0 バイト列）。実リポジトリの v1.0/v1.1 を書き換えずに
-# 検証するため、各テストは独立した tmp repo_root へ両ドキュメント（+ memo）
-# を複製し、そこだけを改変する。
+# §V6「統治文書の切替 + 基底文書の実行時 pin」(DESIGN_VG_METER_CAL_DEBT_v1.1.md,
+# v1.2 で 2 段連鎖へ拡張): `load_approval()` は承認ファイル自体の
+# design_doc_sha256（= v1.2 の実測 sha256）照合に加え、(1) v1.2 front matter の
+# `base_document_sha256` と checkout 上の v1.1 の実測 sha256 が一致すること、
+# (2) v1.1 front matter 自身の `base_document_sha256` と checkout 上の v1.0 の
+# 実測 sha256 が一致すること、の 2 リンクを検証する（信頼の連鎖: 承認 →
+# v1.2 バイト列 → v1.1 バイト列 → v1.0 バイト列）。実リポジトリの
+# v1.0/v1.1/v1.2 を書き換えずに検証するため、各テストは独立した tmp repo_root
+# へ 3 ドキュメント（+ memo）を複製し、そこだけを改変する。
 # ---------------------------------------------------------------------------
 
 
 def _write_base_pin_fixture_repo(
-    tmp_path: Path, *, corrupt_base_doc: bool = False, corrupt_front_matter: bool = False
+    tmp_path: Path,
+    *,
+    corrupt_base_doc: bool = False,
+    corrupt_base_base_doc: bool = False,
+    corrupt_front_matter: bool = False,
 ) -> Path:
-    """`tmp_path` 配下に `DESIGN_DOC_RELATIVE_PATH`/`BASE_DESIGN_DOC_RELATIVE_PATH`/
-    `MEMO_RELATIVE_PATH` と同じ相対 path で実ドキュメントのコピーを作り、
-    そのルート（= 使うべき `repo_root`）を返す。`corrupt_base_doc=True` は
-    v1.0 コピーを 1 バイト改変（front matter の base_document_sha256 と実測が
-    食い違う状態を作る）。`corrupt_front_matter=True` は v1.1 コピーの front
-    matter を壊れた YAML に置換する（パース不能ケース）。"""
-    real_v11 = _REPO_ROOT / approvals.DESIGN_DOC_RELATIVE_PATH
-    real_v10 = _REPO_ROOT / approvals.BASE_DESIGN_DOC_RELATIVE_PATH
+    """`tmp_path` 配下に `DESIGN_DOC_RELATIVE_PATH`(v1.2)/
+    `BASE_DESIGN_DOC_RELATIVE_PATH`(v1.1)/`BASE_BASE_DESIGN_DOC_RELATIVE_PATH`
+    (v1.0)/`MEMO_RELATIVE_PATH` と同じ相対 path で実ドキュメントのコピーを
+    作り、そのルート（= 使うべき `repo_root`）を返す。`corrupt_base_doc=True`
+    は v1.1 コピーを 1 バイト改変（v1.2 front matter が pin する
+    base_document_sha256 と実測が食い違う状態 = 第 1 リンク破壊）。
+    `corrupt_base_base_doc=True` は v1.0 コピーを 1 バイト改変（v1.1 front
+    matter が pin する base_document_sha256 と実測が食い違う状態 = 第 2
+    リンク破壊）。`corrupt_front_matter=True` は v1.2 コピーの front matter
+    を壊れた形式に置換する（パース不能ケース）。"""
+    real_top = _REPO_ROOT / approvals.DESIGN_DOC_RELATIVE_PATH  # v1.2
+    real_base = _REPO_ROOT / approvals.BASE_DESIGN_DOC_RELATIVE_PATH  # v1.1
+    real_base_base = _REPO_ROOT / approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH  # v1.0
     real_memo = _REPO_ROOT / approvals.MEMO_RELATIVE_PATH
 
-    v11_dst = tmp_path / approvals.DESIGN_DOC_RELATIVE_PATH
-    v10_dst = tmp_path / approvals.BASE_DESIGN_DOC_RELATIVE_PATH
+    top_dst = tmp_path / approvals.DESIGN_DOC_RELATIVE_PATH
+    base_dst = tmp_path / approvals.BASE_DESIGN_DOC_RELATIVE_PATH
+    base_base_dst = tmp_path / approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH
     memo_dst = tmp_path / approvals.MEMO_RELATIVE_PATH
-    v11_dst.parent.mkdir(parents=True, exist_ok=True)
+    top_dst.parent.mkdir(parents=True, exist_ok=True)
+    base_dst.parent.mkdir(parents=True, exist_ok=True)
+    base_base_dst.parent.mkdir(parents=True, exist_ok=True)
     memo_dst.parent.mkdir(parents=True, exist_ok=True)
 
-    v11_text = real_v11.read_text(encoding="utf-8")
+    top_text = real_top.read_text(encoding="utf-8")
     if corrupt_front_matter:
         # 先頭の `---` を落として front matter 自体を消す — `yaml.safe_load`
         # 云々ではなく、そもそも `_FRONT_MATTER_RE` にマッチしなくなるケース。
-        v11_text = v11_text.replace("---\n", "***\n", 1)
-    v11_dst.write_text(v11_text, encoding="utf-8")
+        top_text = top_text.replace("---\n", "***\n", 1)
+    top_dst.write_text(top_text, encoding="utf-8")
 
-    v10_bytes = real_v10.read_bytes()
+    base_bytes = real_base.read_bytes()
     if corrupt_base_doc:
-        v10_bytes = v10_bytes + b"\n<!-- tampered for test -->\n"
-    v10_dst.write_bytes(v10_bytes)
+        base_bytes = base_bytes + b"\n<!-- tampered for test -->\n"
+    base_dst.write_bytes(base_bytes)
+
+    base_base_bytes = real_base_base.read_bytes()
+    if corrupt_base_base_doc:
+        base_base_bytes = base_base_bytes + b"\n<!-- tampered for test -->\n"
+    base_base_dst.write_bytes(base_base_bytes)
 
     memo_dst.write_bytes(real_memo.read_bytes())
     return tmp_path
@@ -842,9 +861,10 @@ def _write_gate1_for_repo_root(approval_dir: Path, repo_root: Path, **overrides:
     )
 
 
-def test_base_document_pin_holds_with_unmodified_v10_and_v11(tmp_path: Path) -> None:
-    """(a) 正しい v1.1 front matter（実物そのまま）+ 無改変 v1.0 コピー ->
-    base_document_sha256 検証は pin 成立し、通常どおり approved になる。"""
+def test_base_document_pin_holds_with_unmodified_chain(tmp_path: Path) -> None:
+    """(a) 正しい v1.2 front matter（実物そのまま）+ 無改変 v1.1/v1.0 コピー ->
+    2 段連鎖の base_document_sha256 検証はいずれも pin 成立し、通常どおり
+    approved になる。"""
     repo_root = _write_base_pin_fixture_repo(tmp_path / "repo")
     approval_dir = tmp_path / "approvals"
     approval_dir.mkdir()
@@ -857,11 +877,11 @@ def test_base_document_pin_holds_with_unmodified_v10_and_v11(tmp_path: Path) -> 
     assert result.record is not None
 
 
-def test_base_document_pin_rejects_modified_v10(tmp_path: Path) -> None:
-    """(b) v1.0 を 1 バイト改変すると、front matter が pin する
-    base_document_sha256 と実測 sha256 が食い違い、未承認 + 理由列挙になる
-    （承認ファイル自体は正しくても、というのが要点: base pin は承認ファイル
-    の内容と独立に検証される）。"""
+def test_base_document_pin_rejects_modified_base_doc(tmp_path: Path) -> None:
+    """(b) 第 1 リンク: v1.1（v1.2 front matter が pin する相手）を 1 バイト
+    改変すると、pin する base_document_sha256 と実測 sha256 が食い違い、
+    未承認 + 理由列挙になる（承認ファイル自体は正しくても、というのが要点:
+    base pin は承認ファイルの内容と独立に検証される）。"""
     repo_root = _write_base_pin_fixture_repo(tmp_path / "repo", corrupt_base_doc=True)
     approval_dir = tmp_path / "approvals"
     approval_dir.mkdir()
@@ -876,9 +896,30 @@ def test_base_document_pin_rejects_modified_v10(tmp_path: Path) -> None:
     ), result.reasons
 
 
+def test_base_document_pin_rejects_modified_base_base_doc(tmp_path: Path) -> None:
+    """(b') 第 2 リンク: v1.0（v1.1 front matter が pin する相手）を 1 バイト
+    改変すると、第 1 リンク（v1.2->v1.1）は無傷でも第 2 リンク（v1.1->v1.0）が
+    食い違い、未承認 + 理由列挙になる。2 段連鎖のどちらのリンクが壊れても
+    fail-closed になることの直接確認（v1.2 で連鎖が 1 段から 2 段になった
+    ことの回帰ガード）。"""
+    repo_root = _write_base_pin_fixture_repo(tmp_path / "repo", corrupt_base_base_doc=True)
+    approval_dir = tmp_path / "approvals"
+    approval_dir.mkdir()
+    _write_gate1_for_repo_root(approval_dir, repo_root)
+
+    result = approvals.load_approval(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, approval_dir, repo_root=repo_root
+    )
+    assert result.approved is False
+    assert any(
+        "base_document_sha256 mismatch" in r for r in result.reasons
+    ), result.reasons
+
+
 def test_base_document_pin_rejects_missing_front_matter(tmp_path: Path) -> None:
-    """(c) v1.1 の front matter が読めない（先頭の `---` 区切りが壊れている）
-    場合は base_document_sha256 自体を検証できず、fail-closed で未承認になる。"""
+    """(c) v1.2 の front matter が読めない（先頭の `---` 区切りが壊れている）
+    場合は第 1 リンクの base_document_sha256 自体を検証できず、fail-closed
+    で未承認になる。"""
     repo_root = _write_base_pin_fixture_repo(tmp_path / "repo", corrupt_front_matter=True)
     approval_dir = tmp_path / "approvals"
     approval_dir.mkdir()
@@ -896,19 +937,23 @@ def test_base_document_pin_rejects_missing_front_matter(tmp_path: Path) -> None:
 
 def test_base_document_pin_rejects_missing_base_document_sha_field(tmp_path: Path) -> None:
     """front matter は存在するが `base_document_sha256` フィールド自体が
-    欠落/不正な形式（sha256 hex でない）ケース。"""
+    欠落/不正な形式（sha256 hex でない）ケース（第 1 リンク = v1.2 側）。"""
     repo_root = tmp_path / "repo"
-    v11_dst = repo_root / approvals.DESIGN_DOC_RELATIVE_PATH
-    v10_dst = repo_root / approvals.BASE_DESIGN_DOC_RELATIVE_PATH
+    top_dst = repo_root / approvals.DESIGN_DOC_RELATIVE_PATH
+    base_dst = repo_root / approvals.BASE_DESIGN_DOC_RELATIVE_PATH
+    base_base_dst = repo_root / approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH
     memo_dst = repo_root / approvals.MEMO_RELATIVE_PATH
-    v11_dst.parent.mkdir(parents=True, exist_ok=True)
+    top_dst.parent.mkdir(parents=True, exist_ok=True)
     memo_dst.parent.mkdir(parents=True, exist_ok=True)
 
-    v11_dst.write_text(
+    top_dst.write_text(
         "---\ndocument_id: TEST\nbase_document_path: irrelevant.md\n---\n# body\n",
         encoding="utf-8",
     )
-    v10_dst.write_bytes((_REPO_ROOT / approvals.BASE_DESIGN_DOC_RELATIVE_PATH).read_bytes())
+    base_dst.write_bytes((_REPO_ROOT / approvals.BASE_DESIGN_DOC_RELATIVE_PATH).read_bytes())
+    base_base_dst.write_bytes(
+        (_REPO_ROOT / approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH).read_bytes()
+    )
     memo_dst.write_bytes((_REPO_ROOT / approvals.MEMO_RELATIVE_PATH).read_bytes())
 
     approval_dir = tmp_path / "approvals"
@@ -925,8 +970,9 @@ def test_base_document_pin_rejects_missing_base_document_sha_field(tmp_path: Pat
 
 
 def test_verify_base_document_pin_directly_ok(tmp_path: Path) -> None:
-    """`_verify_base_document_pin()` 単体呼び出しでも、無改変コピーなら空
-    reasons（pin 成立）を返す。R16 対応で v1.1 バイト列は呼び出し側が渡す。"""
+    """`_verify_base_document_pin()` 単体呼び出しでも、無改変コピー（2 段連鎖
+    とも pin 成立）なら空 reasons を返す。R16 対応で v1.2 バイト列は呼び出し
+    側が渡す（第 2 リンクの v1.1 バイト列は本関数自身が読む）。"""
     repo_root = _write_base_pin_fixture_repo(tmp_path / "repo")
     design_doc_bytes = (repo_root / approvals.DESIGN_DOC_RELATIVE_PATH).read_bytes()
     assert approvals._verify_base_document_pin(repo_root, design_doc_bytes) == []
@@ -935,13 +981,15 @@ def test_verify_base_document_pin_directly_ok(tmp_path: Path) -> None:
 def test_load_approval_reads_design_doc_exactly_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R16 対応（Codex PR #346 第 16 巡指摘）: `load_approval()` は v1.1
-    統治文書を **1 回だけ** 読み、その同一バイト列から design_doc_sha256 と
-    `_verify_base_document_pin()` の front matter 解析の両方を導出する。
-    hash 導出と pin 検証が別々の読取に基づくと、その間隔で文書が差し替わり
-    「hash は版 A・base pin は版 B」の組み合わせで承認が通り得た
-    （承認 provenance の汚染）。`Path.read_bytes` の呼び出し回数を数え、
-    v1.1 パスに対する呼び出しがちょうど 1 回であることを固定する。
+    """R16 対応（Codex PR #346 第 16 巡指摘、v1.2 で連鎖の第 1 リンクとして
+    継続適用）: `load_approval()` は v1.2 統治文書を **1 回だけ** 読み、その
+    同一バイト列から design_doc_sha256 と `_verify_base_document_pin()` の
+    front matter 解析の両方を導出する。hash 導出と pin 検証が別々の読取に
+    基づくと、その間隔で文書が差し替わり「hash は版 A・base pin は版 B」の
+    組み合わせで承認が通り得た（承認 provenance の汚染）。`Path.read_bytes`
+    の呼び出し回数を数え、v1.2 パスに対する呼び出しがちょうど 1 回である
+    ことを固定する（第 2 リンクの v1.1 バイト列は `_verify_base_document_pin()`
+    が別途 1 回読む — 本テストの固定対象は第 1 リンクの v1.2 読取のみ）。
     """
     repo_root = _write_base_pin_fixture_repo(tmp_path / "repo")
     approval_dir = tmp_path / "approvals"
@@ -965,3 +1013,88 @@ def test_load_approval_reads_design_doc_exactly_once(
 
     design_doc_reads = [p for p in read_bytes_calls if p == design_doc_path]
     assert len(design_doc_reads) == 1, read_bytes_calls
+
+
+# ---------------------------------------------------------------------------
+# v1.2 WP2 §B(vii) — rehearsal 用 max_claim_scope sentinel
+# ---------------------------------------------------------------------------
+
+
+def test_gate1_rehearsal_sentinel_scope_is_accepted_only_under_rehearsal(tmp_path: Path) -> None:
+    """`["REHEARSAL"]` は `rehearsal=True` の読み込みでのみ approved になる。"""
+    _write_gate1(tmp_path, max_claim_scope=[approvals.REHEARSAL_CLAIM_SCOPE_SENTINEL])
+    result = approvals.load_approval(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path, rehearsal=True
+    )
+    assert result.approved, result.reasons
+    assert result.record is not None
+    assert result.record.max_claim_scope == (approvals.REHEARSAL_CLAIM_SCOPE_SENTINEL,)
+
+
+def test_gate1_rehearsal_sentinel_scope_is_refused_in_production(tmp_path: Path) -> None:
+    """本番（`rehearsal=False`、既定）では sentinel を含む承認を拒否する
+    ——claim を生む経路が「claim しない」承認で武装されないための往復側。"""
+    _write_gate1(tmp_path, max_claim_scope=[approvals.REHEARSAL_CLAIM_SCOPE_SENTINEL])
+    result = approvals.load_approval(approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path)
+    assert result.approved is False
+    assert any("REHEARSAL" in reason and "max_claim_scope" in reason for reason in result.reasons)
+
+
+def test_gate1_normal_scope_is_approved_in_production(tmp_path: Path) -> None:
+    """sentinel を含まない通常 scope は本番（`rehearsal=False`）では従来どおり
+    approved になる。"""
+    _write_gate1(tmp_path)
+    result = approvals.load_approval(approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path)
+    assert result.approved, result.reasons
+    assert result.record is not None
+    assert result.record.max_claim_scope == ("formant_frequency",)
+
+
+def test_gate1_normal_scope_is_refused_under_rehearsal(tmp_path: Path) -> None:
+    """PR #349 第 1 巡採用: rehearsal（claim を生まない疎通試験、§W2）では
+    `max_claim_scope` が sentinel 単独 `["REHEARSAL"]` のとき以外を拒否する
+    ——通常 construct-id だけの形（sentinel なし）もここで fail-closed に
+    塞ぐ（rehearsal が実質的な construct claim を伴って武装される抜け道の
+    往復側）。"""
+    _write_gate1(tmp_path)
+    result = approvals.load_approval(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path, rehearsal=True
+    )
+    assert result.approved is False
+    assert any(
+        "max_claim_scope" in reason and "REHEARSAL" in reason for reason in result.reasons
+    )
+
+
+def test_gate1_mixed_sentinel_and_construct_scope_is_refused_under_rehearsal(
+    tmp_path: Path,
+) -> None:
+    """PR #349 第 1 巡採用: rehearsal で sentinel と通常 construct-id が混在
+    する形（`["REHEARSAL", "formant_frequency"]`）も拒否する——sentinel 単独
+    一致のみが受理される不変条件の往復側。"""
+    _write_gate1(
+        tmp_path,
+        max_claim_scope=[approvals.REHEARSAL_CLAIM_SCOPE_SENTINEL, "formant_frequency"],
+    )
+    result = approvals.load_approval(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path, rehearsal=True
+    )
+    assert result.approved is False
+    assert any(
+        "max_claim_scope" in reason and "REHEARSAL" in reason for reason in result.reasons
+    )
+
+
+def test_check_armed_gate1_propagates_rehearsal_to_loader(tmp_path: Path, monkeypatch) -> None:
+    """`check_armed()` も rehearsal を loader へ伝播する（本番では
+    sentinel 承認で武装できない）。"""
+    _write_gate1(tmp_path, max_claim_scope=[approvals.REHEARSAL_CLAIM_SCOPE_SENTINEL])
+    env = {approvals.GATE_ENV_VAR[approvals.Gate.GATE1_CAMPAIGN_EXECUTION]: "1"}
+    production = approvals.check_armed(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, True, env, tmp_path
+    )
+    assert production.armed is False
+    rehearsal = approvals.check_armed(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, True, env, tmp_path, rehearsal=True
+    )
+    assert rehearsal.armed is True, rehearsal.missing_factors

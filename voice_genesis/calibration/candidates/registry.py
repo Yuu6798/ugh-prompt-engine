@@ -51,6 +51,8 @@ import itertools
 from dataclasses import dataclass
 
 from .. import vocab
+from ..fixtures import matrix as fixture_matrix
+from ..fixtures.controls import DetectionPredicate
 
 # ---------------------------------------------------------------------------
 # Candidate 値オブジェクト
@@ -78,6 +80,11 @@ class Candidate:
     implementation_ref: str
     """`module:function` 形式（`voice_genesis.calibration.candidates.impl.<module>:<function>`
     の完全修飾のうち `candidates.impl.` を省略した短縮形）。"""
+    detection_predicate: DetectionPredicate | None = None
+    """RUN10-CAL-v1.2 WP1: `fixtures.controls.detected()` へ渡す非既定 fire
+    判定（任意）。既定 `None` は `detected()` の既定分岐（missing_reason/
+    ineligible のいずれでも説明されず values が非空かつ全値有限）を使うことを
+    意味し、既存の全候補は本 revision では宣言しない（挙動不変）。"""
 
     def params_dict(self) -> dict[str, object]:
         return dict(self.parameters)
@@ -578,3 +585,74 @@ def candidate_by_id(candidate_id: str) -> Candidate:
         if c.candidate_id == candidate_id:
             return c
     raise KeyError(f"unknown candidate_id: {candidate_id!r}")
+
+
+# ---------------------------------------------------------------------------
+# v1.2 WP2b — rehearsal 候補プール（縮小プールと 1 箇所切替）
+#
+# Fable 判定 2026-09-06: rehearsal E2E の実測 3 時間は「疎通試験」として不合格。
+# 律速は `候補数 (99) x instance x fresh-process 起動` の積であり、行列の縮小
+# （`fixtures.matrix.build_rehearsal_matrix()`、456 -> 58 行）だけでは届かない。
+# rehearsal は claim を生まないため候補プールの縮小は許容される——ただし
+# **本番 manifest が縮小プールで凍結されることは許されない**
+# （`c0_validate._check_candidate_space_pool()` が両方向に固定する）。
+#
+# 切替は行列と同じく 1 箇所（`active_candidates()`）で、分岐フラグも共有する
+# （`fixtures.matrix._REHEARSAL_MODE` / `set_rehearsal_mode()`）——行列と候補が
+# 別々のフラグで動くと「縮小行列 x 全候補」のような未定義の組が作れてしまう。
+# ---------------------------------------------------------------------------
+
+
+def rehearsal_candidate_pool() -> tuple[Candidate, ...]:
+    """`ALL_CANDIDATES` の決定論的部分集合（registry の宣言順を保存する）。
+
+    meter family ごとに次の 2 規則で **最大 2 件**を拾う（手選びの余地は無い）:
+
+    (i)  `candidate_id` に `"-B0-"` を含む baseline 候補の先頭 1 件
+         （B0 は設計正本 §8 が「必ず含める」と定める比較基準であり、
+         c2 baseline audit / c4 holdout の双方が明示的に要求する）。
+    (ii) `claim_ceiling != NONE` かつ (i) で選ばれていない先頭 1 件
+         （selection が「B0 と B0 以外」を比較できる最小構成。ceiling=NONE の
+         候補は校正証拠として無効であり、疎通の対象にする価値が無い）。
+
+    B0 を持たない family（`M5_TRANSITION` / `M6_IDENTITY`）は (ii) の 1 件のみ。
+    `F0_CONTROL` も他 family と同じ規則で扱う（特例を置かない）。
+    """
+    entries_by_meter: dict[vocab.MeterId, list[tuple[int, Candidate]]] = {}
+    for index, candidate in enumerate(ALL_CANDIDATES):
+        entries_by_meter.setdefault(candidate.meter, []).append((index, candidate))
+
+    keep: set[int] = set()
+    for entries in entries_by_meter.values():
+        baseline_index: int | None = None
+        for index, candidate in entries:
+            if "-B0-" in candidate.candidate_id:
+                baseline_index = index
+                keep.add(index)
+                break
+        for index, candidate in entries:
+            if index == baseline_index:
+                continue
+            if candidate.claim_ceiling is not vocab.ClaimCeiling.NONE:
+                keep.add(index)
+                break
+    return tuple(ALL_CANDIDATES[index] for index in sorted(keep))
+
+
+def active_candidates() -> tuple[Candidate, ...]:
+    """候補空間の唯一の実行時入口。既定は `ALL_CANDIDATES`（本番 99 候補）、
+    `fixtures.matrix.set_rehearsal_mode(True)` の下でのみ
+    `rehearsal_candidate_pool()`。
+
+    production 側の候補列挙 call site は **すべて** 本関数（または
+    `active_candidates_for_meter()`）を経由する
+    （`tests/test_matrix.py::test_candidate_enumeration_call_sites_are_frozen`
+    が全数を固定する）。"""
+    if fixture_matrix.rehearsal_mode():
+        return rehearsal_candidate_pool()
+    return ALL_CANDIDATES
+
+
+def active_candidates_for_meter(meter: vocab.MeterId) -> tuple[Candidate, ...]:
+    """`candidates_for_meter()` の rehearsal 対応版（`active_candidates()` 由来）。"""
+    return tuple(c for c in active_candidates() if c.meter == meter)

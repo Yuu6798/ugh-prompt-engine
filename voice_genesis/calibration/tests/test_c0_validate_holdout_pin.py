@@ -283,18 +283,25 @@ def test_u_gt_u_num_bounds_absent_family_with_numeric_value_blocks() -> None:
 def test_u_gt_u_num_bounds_real_c0_freeze_manifest_passes() -> None:
     """実 `c0_freeze.build_manifest()` の出力が本検査を通過することを固定
     する（producer/validator 間の契約回帰ガード）。R20-3 対応後は
-    `build_manifest()` が常に `frozen_design.design_revision="1.1"` の
+    `build_manifest()` が常に `frozen_design.design_revision` の
     version marker を付けるため、この manifest は
-    `_check_u_gt_u_num_bounds()` の**必須化 (v1.1) 経路**を通る——本テストは
-    その経路が real producer 出力に対して偽陽性にならないことも固定する。
+    `_check_u_gt_u_num_bounds()` の**必須化 (v1.1 以上) 経路**を通る——本
+    テストはその経路が real producer 出力に対して偽陽性にならないことも
+    固定する。
+
+    2026-09-07（#349 第 5 巡 P1 採用、PRRT_kwDOSD2OOM6fwr6q）: 統治文書が
+    v1.2 へ切り替わったことに合わせ `c0_freeze._DESIGN_REVISION` が "1.2" を
+    発行するようになった（provenance の自己矛盾是正 — design hash・承認
+    チェーン・`rehearsal` スキーマはすでに v1.2 由来だったため）。
     """
     from voice_genesis.calibration import c0_freeze
 
     manifest = c0_freeze.build_manifest(
         c0_freeze._REPO_ROOT, approvals={}, campaign_date_utc="2026-09-05"
     )
-    assert manifest["frozen_design"]["design_revision"] == "1.1"
-    assert c0_validate._is_v1_1_manifest(manifest)
+    assert manifest["frozen_design"]["design_revision"] == "1.2"
+    assert c0_validate._is_v1_1_or_later(manifest)
+    assert c0_validate._is_v1_2_or_later(manifest)
     violations = c0_validate._check_u_gt_u_num_bounds(manifest)
     assert violations == ()
     axis_violations = c0_validate._check_invariance_axes_match(manifest)
@@ -363,7 +370,7 @@ def test_u_gt_u_num_bounds_legacy_manifest_missing_bounds_still_not_blocked() ->
     """marker が無い legacy (v1.0) manifest は、両フィールド欠落でも従来
     どおり violation を出さない（後方互換の維持を明示的に固定する）。"""
     manifest = _manifest_with_fixture_spec({"TILT_GT": {}})
-    assert not c0_validate._is_v1_1_manifest(manifest)
+    assert not c0_validate._is_v1_1_or_later(manifest)
     violations = c0_validate._check_u_gt_u_num_bounds(manifest)
     assert violations == ()
 
@@ -407,7 +414,7 @@ def test_u_gt_u_num_bounds_v1_1_manifest_complete_passes() -> None:
     """完全な v1.1 manifest（全 family、両 bound + formula + unit 具備）は
     violation を出さない。"""
     manifest = _v1_1_manifest_with_fixture_spec(_complete_v1_1_fixture_spec())
-    assert c0_validate._is_v1_1_manifest(manifest)
+    assert c0_validate._is_v1_1_or_later(manifest)
     violations = c0_validate._check_u_gt_u_num_bounds(manifest)
     assert violations == ()
 
@@ -476,7 +483,7 @@ def test_u_gt_u_num_bounds_legacy_manifest_missing_unit_not_blocked() -> None:
             }
         }
     )
-    assert not c0_validate._is_v1_1_manifest(manifest)
+    assert not c0_validate._is_v1_1_or_later(manifest)
     violations = c0_validate._check_u_gt_u_num_bounds(manifest)
     assert violations == ()
 
@@ -1176,7 +1183,7 @@ def test_holdout_sweeps_genuine_partial_degradation_passes_with_secret(monkeypat
     )
     assert len(holdout_sweeps["TILT_GT"]) == 1  # 公称 k_hold=2 は infeasible、k=1 へ縮退
 
-    monkeypatch.setattr(c0_validate, "build_matrix", lambda: synth)
+    monkeypatch.setattr(c0_validate, "_pin_check_matrix", lambda: synth)
     manifest = _holdout_sweeps_manifest(holdout_sweeps)
     violations = c0_validate._check_holdout_sweeps_declaration_match(manifest, _SECRET)
     assert violations == ()

@@ -51,7 +51,7 @@ freeze event 記録のいずれも一切行わない（IMPLEMENTATION_MAP_v1.md 
     `fixture_spec={"family": "F0_CONTROL"}` のような hollow な
     placeholder manifest が素通りしていた finding の直接該当箇所）。
     `declared_sweeps` は非空 mapping であることに加え（`_MAPPING_SHAPE_
-    FIELDS`）、宣言値そのものが凍結 matrix (`fixtures.matrix.build_matrix()`)
+    FIELDS`）、宣言値そのものが凍結 matrix (`fixtures.matrix.active_matrix()`)
     から `declared_sweeps_by_family()` で導出される mapping と完全一致
     することを要求する（UNDERSPEC-CAL-D77 ruling (1)。不一致は
     `BLOCKED_C0_MANIFEST_INCOMPLETE`（detail:
@@ -153,6 +153,7 @@ import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import approvals, streams, vocab
@@ -174,10 +175,10 @@ from .fixtures import uncertainty as fixture_uncertainty
 #: されるため循環 import を起こさない）。
 from .provenance import Ledger
 from .tools import archive_aborted_ledger
+from .fixtures import matrix as fixture_matrix
 from .fixtures.matrix import (
     HoldoutPinDegradationExhausted,
     HoldoutPinInfeasible,
-    build_matrix,
     claim_relevant_fields_by_family,
     declared_sweeps_by_family,
     holdout_pin_params_by_family,
@@ -197,9 +198,12 @@ from .fixtures.matrix import (
 #: （`_check_holdout_pin_feasibility`/`_check_holdout_sweeps_declaration_
 #: match`）は `armed_freeze()` が実際に pin/split した行集合と突き合わせる
 #: ため、`build_matrix`（差し替え可能な束縛）を引き続き使う——`armed_freeze()`
-#: 自身の pin 計算 (`c0_freeze.py` の `matrix_rows = build_matrix()`) も同じ
+#: 自身の pin 計算 (`c0_freeze.py` の `matrix_rows = active_matrix()`) も同じ
 #: 差し替え可能な参照を使うため、対応関係が一致する。
-from .fixtures.matrix import build_matrix as _canonical_build_matrix
+#:
+#: v1.2 WP2: 両入口の実体は `fixtures.matrix.active_matrix()` に一本化した
+#: （`--rehearsal` 時は宣言側・pin 側とも縮小行列から導出する）。名前の
+#: 分離は「テストが片方だけを monkeypatch できる」自由度のためだけに残す。
 from .gates import MIN_RESOLVABLE_PAIRS_PER_SWEEP
 #: R10 対応（2026-09-05）: `armed_freeze()` が実際に holdout sweep を
 #: pin/split するのと**同一の**縮退ループ入口（`splitter.
@@ -211,6 +215,20 @@ from .gates import MIN_RESOLVABLE_PAIRS_PER_SWEEP
 #: `splitter.py` の該当節 docstring、および
 #: `_check_holdout_sweeps_declaration_match()` の docstring を参照）。
 from .splitter import STRATUM_FACTOR_NAMES, pin_and_realize_holdout, row_inputs_for_split
+
+
+def _canonical_build_matrix() -> list[fixture_matrix.MatrixRow]:
+    """宣言照合系 3 検査（declared sweep truth level / declaration match /
+    claim-relevant field）が読む「常に凍結 matrix」の入口。上のコメント参照。"""
+    return fixture_matrix.active_matrix()
+
+
+def _pin_check_matrix() -> list[fixture_matrix.MatrixRow]:
+    """holdout sweep pin 関連 2 検査（`_check_holdout_pin_feasibility` /
+    `_check_holdout_sweeps_declaration_match`）が読む差し替え可能な入口
+    （`armed_freeze()` が実際に pin/split した行集合と対応する）。"""
+    return fixture_matrix.active_matrix()
+
 
 # ---------------------------------------------------------------------------
 # 二層キー語彙（設計正本 §3.1 / §3.2 の機械可読な写像）
@@ -239,7 +257,7 @@ REQUIRED_BLOCKING_KEYS: tuple[str, ...] = (
     "sample_format.resampling_parameters",
     #: R22-1 対応（Codex 第 22 巡 finding (1)、2026-09-05）: marker 自体を
     #: REQUIRED_BLOCKING 化する（旧: 欠落は legacy v1.0 として黙って許容して
-    #: いたため、marker を削除/改変するだけで `_is_v1_1_manifest()` が False
+    #: いたため、marker を削除/改変するだけで `_is_v1_1_or_later()` が False
     #: になり、bound/formula/unit 必須化 (R20-3/R21/R22-2) がまるごと無効化
     #: できてしまっていた）。値の閉語彙判定は `_check_required_blocking()`
     #: 内の専用分岐（`_ALLOWED_DESIGN_REVISIONS`）で行う——legacy v1.0
@@ -255,6 +273,11 @@ REQUIRED_BLOCKING_KEYS: tuple[str, ...] = (
     "frozen_design.provenance_spec",
     "frozen_design.cost_caps",
     "frozen_design.stop_rules",
+    #: v1.2 WP2 §B(ii): rehearsal 経路かどうかの明示宣言。**常に**記録される
+    #: （本番は `false`）ため欠落は REQUIRED_BLOCKING violation。値の型検査
+    #: （bool 厳密）は `_check_required_blocking()` の専用分岐で行う——欠落を
+    #: 許すと「rehearsal かどうか不明」な manifest が claim 経路へ紛れ込む。
+    "frozen_design.rehearsal",
     "independence_ledger",
     "rng_ledger",
 )
@@ -615,11 +638,14 @@ def scan_calibration_tree_inventory(repo_root: Path | None = None) -> frozenset[
     自己完結性のため同じ集合に含めておく）。
 
     v1.1 §V6（統合3, `[UNDERSPEC-CAL-D79]`, WP2d 報告の申し送り）: 統治設計
-    文書 2 本（v1.1 統治正本 `approvals.DESIGN_DOC_RELATIVE_PATH` / 読み取り
-    専用基底 `approvals.BASE_DESIGN_DOC_RELATIVE_PATH`）を scan 結果へ union
-    する — どちらも `.py` ではないため `rglob("*.py")` からは構造的に漏れて
-    おり、v1.1 §V6 が要求する「v1.0/v1.1 両文書を path inventory 検査対象へ」
-    が未実施のままだった。文書パスに対する sha 検査等の意味論は追加しない
+    文書を scan 結果へ union する — どれも `.py` ではないため `rglob("*.py")`
+    からは構造的に漏れており、§V6 が要求する「統治文書を path inventory 検査
+    対象へ」が未実施のままだった。v1.2 で pin が 2 段連鎖（v1.2 統治正本
+    `approvals.DESIGN_DOC_RELATIVE_PATH` → 基底 v1.1
+    `approvals.BASE_DESIGN_DOC_RELATIVE_PATH` → 基底の基底 v1.0
+    `approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH`）になったため、**3 本とも**
+    union する（連鎖の末端 v1.0 が監査集合から抜けると、pin されている文書が
+    inventory の外に落ちる）。文書パスに対する sha 検査等の意味論は追加しない
     （既存の inventory 項目と同じ「対象集合に含まれる」以上の扱いを増やさない
     ——過剰設計しない）。
     """
@@ -629,6 +655,7 @@ def scan_calibration_tree_inventory(repo_root: Path | None = None) -> frozenset[
     paths.add((package_dir / PATH_INVENTORY_FILENAME).relative_to(root).as_posix())
     paths.add(approvals.DESIGN_DOC_RELATIVE_PATH)
     paths.add(approvals.BASE_DESIGN_DOC_RELATIVE_PATH)
+    paths.add(approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH)
     return frozenset(paths)
 
 
@@ -777,7 +804,7 @@ class SweepManifestViolationDetail:
     事後追加禁止規約の対象外）:
 
     - ``"sweep_truth_level_insufficient"``: D76 ruling (2)。凍結 matrix
-      (`fixtures.matrix.build_matrix()`) が manifest 非依存に §10.4 の
+      (`fixtures.matrix.active_matrix()`) が manifest 非依存に §10.4 の
       truth-level 下限（`gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP`）を構造的に
       満たせない（`_check_declared_sweep_truth_levels()`）。
     - ``"sweep_declaration_mismatch"``: D77 ruling (1)。manifest の
@@ -875,6 +902,11 @@ class C0ValidationResult:
     u_gt_u_num_bound_violations: tuple[SweepManifestViolationDetail, ...] = field(
         default_factory=tuple
     )
+    #: v1.2 WP2 §C-9: Gate 承認時刻の順序検査が **実施できなかった** 理由
+    #: （承認記録が `approvals/records/` に無い・ledger が読めない等）。
+    #: 非ブロッキングの情報項目——順序逆転そのものは `missing_required_keys`
+    #: へ入る。
+    gate_approval_ordering_notes: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def is_blocked(self) -> bool:
@@ -940,9 +972,26 @@ def _check_required_blocking(
                         "opt-in restricted to closed/aborted campaigns, R22-1)"
                     )
             continue
+        if key == "frozen_design.rehearsal" and not _is_v1_2_or_later(manifest):
+            # 2026-09-07（#349 第 5 巡 P1 採用、PRRT_kwDOSD2OOM6fwr6q）:
+            # `frozen_design.rehearsal` は v1.2 WP2 §B(ii) で新設されたフィー
+            # ルドであり、v1.1 以下（design_revision marker 欠落の legacy
+            # v1.0 を含む）の manifest には存在し得ない——2 件の aborted
+            # v1.1 campaign 実物（`RUN10-CAL-20260905-410b25f2`/
+            # `RUN10-CAL-20260906-a4ed65c1`）を含む。これらを不当にブロック
+            # しないよう、v1.2 未満の manifest はこのキーの要求から除外する
+            # （archive 済みで再検証はしない）。
+            continue
         found, value = _resolve(manifest, key)
         if not found or value is None or _is_hollow(value):
             missing.append(key)
+            continue
+        if key == "frozen_design.rehearsal" and not isinstance(value, bool):
+            # v1.2 WP2 §B(ii): `false` は `_is_hollow()` を通過する（意図的な
+            # 記録値）ので、ここで bool 厳密性だけを別途要求する。
+            missing.append(
+                f"{key}: type (must be exactly a bool, got {type(value).__name__})"
+            )
             continue
         if key == "repo.dirty_tree" and value is not False:
             missing.append(f"{key} (must be exactly false, got {value!r})")
@@ -1516,11 +1565,11 @@ def _check_declared_sweep_truth_levels(
 
     `_check_hash_content_match` と同じ「宣言でなく実体を検査する」規約を
     採る: `manifest` の `frozen_design.fixture_spec.<FAMILY>.declared_sweeps`
-    宣言値ではなく、`fixtures.matrix.build_matrix()` が返す実際の凍結
+    宣言値ではなく、`fixtures.matrix.active_matrix()` が返す実際の凍結
     matrix から直接再導出する（`manifest` 引数は他の `_check_*` と呼び出し
     規約を揃えるためだけに受け取り、内容は参照しない — 「matrix 生成ロジック
     自体が §10.4 の前提を構造的に満たせるか」という manifest 非依存の構造
-    検査であり、`declared_sweeps_by_family()` が今後もこの `build_matrix()`
+    検査であり、`declared_sweeps_by_family()` が今後もこの `active_matrix()`
     を唯一の権威として使う限り、manifest の宣言値は定義上ここで数える値と
     一致する）。
 
@@ -1594,7 +1643,7 @@ def _check_declared_sweep_declaration_match(
 ) -> tuple[SweepManifestViolationDetail, ...]:
     """UNDERSPEC-CAL-D77 ruling (1)（#344 round 8 finding #1 ADOPT, 分類②）:
     `frozen_design.fixture_spec.<FAMILY>.declared_sweeps` の**宣言値**が、
-    凍結 matrix (`fixtures.matrix.build_matrix()`) から
+    凍結 matrix (`fixtures.matrix.active_matrix()`) から
     `fixtures.matrix.declared_sweeps_by_family()` で直接導出される
     mapping と **完全一致**（sweep_id 集合・各 sweep の member row_id の
     並び順まで）することを検査する。
@@ -1833,18 +1882,62 @@ _U_GT_U_NUM_ABSENT_ONLY_FAMILIES: frozenset[str] = frozenset(
 #: 従来の後方互換経路（欠落キーは fail-closed にしない）を維持する。
 _V1_1_DESIGN_REVISION: str = "1.1"
 
-#: R22-1 対応（Codex 第 22 巡 finding (1)、2026-09-05）: `_check_required_
-#: blocking()` が `frozen_design.design_revision` を照合する閉語彙。現状は
-#: `_V1_1_DESIGN_REVISION` のみを含む単一要素集合だが、将来 v1.2 等が追加
-#: された際に両バージョンを同時に許容できるよう set として持つ（`"1.0"` を
-#: 含む他の値・欠落はすべて REQUIRED_BLOCKING violation。legacy v1.0 は
-#: `allow_legacy_v1_0=True` opt-in 経由でのみ通す）。
-_ALLOWED_DESIGN_REVISIONS: frozenset[str] = frozenset({_V1_1_DESIGN_REVISION})
+#: 2026-09-07（#349 第 5 巡 P1 採用、PRRT_kwDOSD2OOM6fwr6q）: `c0_freeze.
+#: _DESIGN_REVISION` が v1.2 統治文書切替に合わせて "1.2" を発行するように
+#: なったことに同期する新版マーカー。
+_V1_2_DESIGN_REVISION: str = "1.2"
+
+#: R22-1 対応（Codex 第 22 巡 finding (1)、2026-09-05。2026-09-07 #349 第 5 巡
+#: で v1.2 追加）: `_check_required_blocking()` が `frozen_design.
+#: design_revision` を照合する閉語彙。`"1.0"` を含む他の値・欠落はすべて
+#: REQUIRED_BLOCKING violation（legacy v1.0 は `allow_legacy_v1_0=True`
+#: opt-in 経由でのみ通す）。
+_ALLOWED_DESIGN_REVISIONS: frozenset[str] = frozenset(
+    {_V1_1_DESIGN_REVISION, _V1_2_DESIGN_REVISION}
+)
+
+#: `_design_revision_at_least()` が「N 以上」を判定するための新旧順（辞書順
+#: ではなく設計上の版数順）。新しい revision を追加したらここに追記する。
+_DESIGN_REVISION_ORDER: tuple[str, ...] = (_V1_1_DESIGN_REVISION, _V1_2_DESIGN_REVISION)
 
 
-def _is_v1_1_manifest(manifest: Mapping[str, object]) -> bool:
+def _design_revision(manifest: Mapping[str, object]) -> str | None:
+    """`frozen_design.design_revision` の宣言値を返す。欠落・非文字列・閉語彙
+    `_ALLOWED_DESIGN_REVISIONS` 外（legacy v1.0 formatを含む）は `None`。"""
     found, value = _resolve(manifest, "frozen_design.design_revision")
-    return found and isinstance(value, str) and value.strip() == _V1_1_DESIGN_REVISION
+    if not found or not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped if stripped in _ALLOWED_DESIGN_REVISIONS else None
+
+
+def _design_revision_at_least(manifest: Mapping[str, object], floor: str) -> bool:
+    """manifest の宣言 `design_revision` が `_DESIGN_REVISION_ORDER` の並び順で
+    `floor` 以上なら True。marker 欠落/閉語彙外（legacy v1.0 含む）は False
+    （= 「v1.1 以上」「v1.2 以上」いずれの判定でも legacy は一律 False）。"""
+    revision = _design_revision(manifest)
+    if revision is None:
+        return False
+    return _DESIGN_REVISION_ORDER.index(revision) >= _DESIGN_REVISION_ORDER.index(floor)
+
+
+def _is_v1_1_or_later(manifest: Mapping[str, object]) -> bool:
+    """v1.1 §V2.2/§V3.3 等で新設された検査（bound/unit/holdout_sweeps 必須）が
+    適用対象とする manifest 群。v1.1・v1.2 いずれの manifest にも適用する
+    （2026-09-07 #349 第 5 巡 P1: 旧 `_is_v1_1_manifest()` は "1.1" 完全一致
+    だったため、`_DESIGN_REVISION` が "1.2" を発行するようになった時点で
+    これらの検査が新規 manifest から静かに外れてしまう欠陥があった）。"""
+    return _design_revision_at_least(manifest, _V1_1_DESIGN_REVISION)
+
+
+def _is_v1_2_or_later(manifest: Mapping[str, object]) -> bool:
+    """v1.2 WP2 で新設された検査（`frozen_design.rehearsal` 必須・
+    candidate_space と rehearsal の整合・Gate 承認順序の blocking 化）が
+    適用対象とする manifest 群。v1.1 でマークされた manifest（本 PR 以前に
+    発行された 2 件の aborted campaign `RUN10-CAL-20260905-410b25f2`/
+    `RUN10-CAL-20260906-a4ed65c1` を含む）は対象外のまま——いずれも既に
+    archive 済みで再検証しない（`tests/test_archive_aborted_ledger.py` 参照）。"""
+    return _design_revision_at_least(manifest, _V1_2_DESIGN_REVISION)
 
 
 def _check_u_gt_u_num_bounds(
@@ -1864,10 +1957,10 @@ def _check_u_gt_u_num_bounds(
     `u_num_bound` は `FIXTURE_SPEC_REQUIRED_KEYS` に含まれない任意キーで
     あり続ける（v1.0 §V3.3 実装以前に構築された legacy manifest fixture・
     campaign を壊さないため）。判別は `frozen_design.design_revision`
-    （`_is_v1_1_manifest()` — `c0_freeze._DESIGN_REVISION` と同期する
-    machine-readable marker）で行う:
+    （`_is_v1_1_or_later()` — `c0_freeze._DESIGN_REVISION` と同期する
+    machine-readable marker。"1.1"/"1.2" いずれも対象）で行う:
 
-    - marker が `"1.1"` を宣言する manifest（v1.1 完全 manifest）では、
+    - marker が `"1.1"` 以上を宣言する manifest（v1.1/v1.2 完全 manifest）では、
       `u_gt_bound`/`u_num_bound`/両 `*_formula` の**キー自体の欠落も**
       fail-closed の violation にする（本 finding: 両フィールドを削っても
       検証をすり抜け、C4 で全 real gate が NOT_EVALUABLE/INPUT_MISSING に
@@ -1886,8 +1979,14 @@ def _check_u_gt_u_num_bounds(
     要求する。欠落・改変を素通しすると、候補宣言 unit と偶然一致する
     forged unit が条件 (c) を成立させ偽の `CALIBRATED_DIRECTIONAL` を
     許してしまう。legacy manifest（marker 無し）はこの検査の対象外。
+
+    2026-09-07（#349 第 5 巡）: `is_v1_1` はここでは実質「v1.1 以上
+    （`_is_v1_1_or_later()`）」を意味する——v1.2 manifest にもこの v1.1 由来の
+    検査は引き続き適用する（`_DESIGN_REVISION` が "1.2" を発行するように
+    なったことで、旧来の "1.1" 完全一致判定だと v1.2 manifest がこの検査を
+    静かにすり抜けてしまうため）。
     """
-    is_v1_1 = _is_v1_1_manifest(manifest)
+    is_v1_1 = _is_v1_1_or_later(manifest)
     violations: list[SweepManifestViolationDetail] = []
     for family in fixture_axes.FixtureFamily:
         fam = family.value
@@ -2177,7 +2276,7 @@ def _check_holdout_pin_feasibility(
     ためだけの未使用引数）。456 セル canonical matrix では発生しない。
     """
     del manifest
-    rows = build_matrix()
+    rows = _pin_check_matrix()
     params = holdout_pin_params_by_family(rows)
     violations: list[SweepManifestViolationDetail] = []
     for fam in sorted(params):
@@ -2272,7 +2371,7 @@ def _check_holdout_sweeps_declaration_match(
     `holdout_sweeps` キー自体を manifest から削除すれば `found_holdout=False`
     になり、R11 の必須化もそれ以降の per-family 照合も丸ごと沈黙していた
     （`_check_holdout_sweeps_realized_membership()` も同型で沈黙）。本関数は
-    v1.1 manifest（`_is_v1_1_manifest()`）かつ **`realized_split` も存在する
+    v1.1 以上の manifest（`_is_v1_1_or_later()`）かつ **`realized_split` も存在する
     full/armed-shape manifest**（`c0_freeze._attach_freeze_extras()` が
     `realized_split`/`holdout_sweeps` を同一呼び出しで同時に付与するため、
     両者の有無は常に揃うはずという不変を利用する）に限り、top-level
@@ -2288,7 +2387,11 @@ def _check_holdout_sweeps_declaration_match(
     する（後方互換）。
     """
     found_holdout, holdout_section = _resolve(manifest, "holdout_sweeps")
-    is_v1_1 = _is_v1_1_manifest(manifest)
+    # 2026-09-07（#349 第 5 巡）: v1.1 由来の必須化のため「v1.1 以上」
+    # （`_is_v1_1_or_later()`）で判定する — v1.2 manifest も対象に含める
+    # （`_DESIGN_REVISION` が "1.2" を発行するようになったため、旧来の "1.1"
+    # 完全一致判定だと v1.2 manifest がこの必須化を静かにすり抜けてしまう）。
+    is_v1_1 = _is_v1_1_or_later(manifest)
     found_realized_split, _realized_split_section = _resolve(manifest, "realized_split")
 
     # R23 対応（Codex 第 23 巡 P2 採用, 2026-09-05, PRRT_kwDOSD2OOM6fgdGg）:
@@ -2300,8 +2403,8 @@ def _check_holdout_sweeps_declaration_match(
     # (`campaign/cli.py::_run_c4`) の `expected_sweep_ids` フォールバックが
     # 全宣言 sweep（HOLDOUT 非常駐 sweep を含む）を使って偽の
     # `DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT` terminal を生み得た。
-    # `frozen_design.design_revision` marker（`_is_v1_1_manifest()`）が
-    # `"1.1"` を宣言し、かつ `realized_split`（`holdout_sweeps` と常に同時に
+    # `frozen_design.design_revision` marker（`_is_v1_1_or_later()`）が
+    # `"1.1"` 以上を宣言し、かつ `realized_split`（`holdout_sweeps` と常に同時に
     # 付与される sibling 非-core キー）が存在する full/armed-shape manifest
     # に限り、top-level `holdout_sweeps` キー自体の存在を必須化する——
     # 欠落は他の宣言内容と無関係に単独の `holdout_pin_declaration_mismatch`
@@ -2332,7 +2435,7 @@ def _check_holdout_sweeps_declaration_match(
             ),
         )
 
-    rows = build_matrix()
+    rows = _pin_check_matrix()
     declared = declared_sweeps_by_family(rows)
     params = holdout_pin_params_by_family(rows)
 
@@ -2592,6 +2695,271 @@ def _check_holdout_sweeps_realized_membership(
     return tuple(violations)
 
 
+# ---------------------------------------------------------------------------
+# v1.2 WP2 — rehearsal manifest の設置場所 + Gate 承認時刻の順序（addendum）
+# ---------------------------------------------------------------------------
+
+#: `c0_freeze.default_campaigns_dir()` と同じ canonical campaign registry の
+#: repo 相対 path（`c0_freeze` へは依存しない——本モジュールを `c0_freeze` が
+#: import するため逆方向は循環になる）。
+_CANONICAL_CAMPAIGNS_RELATIVE = "voice_genesis/calibration/campaigns"
+
+#: `c0_freeze._GATE_APPROVAL_CLOCK_SKEW_TOLERANCE_SECONDS`/`campaign.unseal.
+#: _CLOCK_SKEW_TOLERANCE_SECONDS` と同値（60 秒）の独立宣言。
+_GATE_APPROVAL_CLOCK_SKEW_TOLERANCE_SECONDS = 60
+
+#: repo 内の承認記録アーカイブ（`approvals/records/gate{1,2,3}_*.json`）。
+#: manifest の `approvals.gate{1,2}_sha256` に一致する content sha256 の記録が
+#: ここにあれば、その `approved_at_utc` と ledger の `c0_freeze` event 時刻の
+#: 順序を検査できる。無ければ検査不能としてスキップする（v1.2 WP2 §C-9）。
+_APPROVAL_RECORDS_RELATIVE = "voice_genesis/calibration/approvals/records"
+
+
+def _parse_iso8601_utc(value: object) -> datetime | None:
+    """`approvals._is_iso8601_utc_timestamp` と同じ意味論（`Z`/`+00:00` の
+    明示 UTC オフセットのみ許容）で ISO 8601 を解析する。"""
+    if not isinstance(value, str) or not value:
+        return None
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        return None
+    return parsed
+
+
+def _check_rehearsal_location(
+    manifest: Mapping[str, object], manifest_path: Path | str | None
+) -> list[str]:
+    """v1.2 WP2 §B(vi): `frozen_design.rehearsal is True` の manifest が
+    canonical campaign registry（`<repo>/voice_genesis/calibration/campaigns/`）
+    配下に置かれていれば violation。rehearsal は claim を生まない疎通試験で
+    あり、その成果物を本番 campaign registry に同居させてはならない。
+
+    `manifest_path` が渡されない（in-memory 検証）場合は何も言わない——
+    設置場所の制約は producer 側 CLI (`c0_freeze.rehearsal_path_violations()`)
+    が freeze 前に fail-closed で拒否する。
+    """
+    if manifest_path is None:
+        return []
+    frozen_design = manifest.get("frozen_design")
+    rehearsal = (
+        frozen_design.get("rehearsal") if isinstance(frozen_design, Mapping) else None
+    )
+    if rehearsal is not True:
+        return []
+    resolved = Path(manifest_path).expanduser().resolve()
+    canonical = (_REPO_ROOT / _CANONICAL_CAMPAIGNS_RELATIVE).resolve()
+    if canonical in resolved.parents:
+        return [
+            f"frozen_design.rehearsal: a rehearsal manifest must not live under the "
+            f"canonical campaign registry {str(canonical)!r} (found at {str(resolved)!r})"
+        ]
+    return []
+
+
+def _declared_candidate_ids(manifest: Mapping[str, object]) -> set[str] | None:
+    """`frozen_design.meter_specs.<METER>.parameter_grid` の鍵集合
+    = manifest が凍結した候補空間（`candidate_space`）の candidate_id 全集合。
+
+    形状が壊れている場合は `None`（= 判定不能）を返す——形状違反は
+    `_check_meter_spec_nested_keys()` / `_check_mapping_shape_fields()` が
+    別途 violation にする責務であり、本関数は二重報告しない。"""
+    found, meter_specs = _resolve(manifest, "frozen_design.meter_specs")
+    if not found or not isinstance(meter_specs, Mapping) or not meter_specs:
+        return None
+    ids: set[str] = set()
+    for entry in meter_specs.values():
+        if not isinstance(entry, Mapping):
+            return None
+        grid = entry.get("parameter_grid")
+        if not isinstance(grid, Mapping):
+            return None
+        ids.update(k for k in grid.keys() if isinstance(k, str))
+    return ids
+
+
+def _check_candidate_space_pool(manifest: Mapping[str, object]) -> list[str]:
+    """v1.2 WP2b: 凍結された候補空間が `frozen_design.rehearsal` と整合するか。
+
+    - `rehearsal is False`（本番）: `candidate_space` は
+      `candidates.registry.ALL_CANDIDATES` の **全件**でなければならない
+      ——縮小プール（rehearsal 用）で凍結された manifest を本番 claim 経路へ
+      持ち込ませない（縮小プールで測った証拠は候補比較として不完全）。
+    - `rehearsal is True`: `registry.rehearsal_candidate_pool()` と完全一致。
+      rehearsal を名乗りながら全 99 候補を回すのも、規則外の任意の部分集合を
+      使うのも、いずれも「疎通試験の定義」から外れるため violation にする。
+
+    `rehearsal` が bool でない/欠落している場合は `_check_required_blocking()`
+    が既に捕捉しているのでここでは何も言わない。
+
+    v1.2 で新設された検査のため、v1.2 未満の manifest（`rehearsal` フィール
+    ド自体が存在し得ない legacy v1.0/v1.1）には適用しない（2026-09-07 #349
+    第 5 巡 P1 採用、PRRT_kwDOSD2OOM6fwr6q）——実運用では `rehearsal` が
+    そもそも bool でないためこの guard 無しでも同じ結果になるが、判定意図を
+    明示する。
+    """
+    if not _is_v1_2_or_later(manifest):
+        return []
+    frozen_design = manifest.get("frozen_design")
+    rehearsal = frozen_design.get("rehearsal") if isinstance(frozen_design, Mapping) else None
+    if not isinstance(rehearsal, bool):
+        return []
+    declared = _declared_candidate_ids(manifest)
+    if declared is None:
+        return []
+    if rehearsal:
+        expected_ids = {c.candidate_id for c in candidate_registry.rehearsal_candidate_pool()}
+        label = "the rehearsal candidate pool (registry.rehearsal_candidate_pool())"
+    else:
+        expected_ids = {c.candidate_id for c in candidate_registry.ALL_CANDIDATES}
+        label = "the full candidate registry (registry.ALL_CANDIDATES)"
+    missing_ids = sorted(expected_ids - declared)
+    unknown_ids = sorted(declared - expected_ids)
+    violations: list[str] = []
+    violations.extend(
+        f"frozen_design.meter_specs (candidate_space missing candidate_id {cid!r}; "
+        f"with frozen_design.rehearsal={rehearsal} the candidate space must be exactly "
+        f"{label}, {len(expected_ids)} candidates)"
+        for cid in missing_ids
+    )
+    violations.extend(
+        f"frozen_design.meter_specs (candidate_space has candidate_id {cid!r} outside "
+        f"{label}; frozen_design.rehearsal={rehearsal})"
+        for cid in unknown_ids
+    )
+    return violations
+
+
+def _approval_records_by_content_sha(repo_root: Path | None = None) -> dict[str, Mapping[str, object]]:
+    """`approvals/records/*.json` を content sha256 -> payload の写像として
+    読む（読めない/JSON 不正なファイルは黙って飛ばす——本検査は「記録がある
+    ときだけ順序を見る」補助検査であり、記録アーカイブの健全性検査ではない）。"""
+    root = repo_root if repo_root is not None else _REPO_ROOT
+    records_dir = root / _APPROVAL_RECORDS_RELATIVE
+    out: dict[str, Mapping[str, object]] = {}
+    if not records_dir.is_dir():
+        return out
+    for path in sorted(records_dir.glob("*.json")):
+        try:
+            raw = path.read_bytes()
+            payload = json.loads(raw.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, Mapping):
+            out[hashlib.sha256(raw).hexdigest()] = payload
+    return out
+
+
+def _freeze_event_time(manifest_path: Path) -> datetime | None:
+    """`manifest_path` と同じ campaign directory の `ledger.jsonl` 先頭付近に
+    ある `c0_freeze` event の `event_time_utc`。読めない/無い場合は `None`。"""
+    ledger_path = manifest_path.parent / "ledger.jsonl"
+    try:
+        text = ledger_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        payload = entry.get("payload") if isinstance(entry, Mapping) else None
+        if isinstance(payload, Mapping) and payload.get("kind") == "c0_freeze":
+            return _parse_iso8601_utc(payload.get("event_time_utc"))
+    return None
+
+
+@dataclass(frozen=True)
+class GateApprovalOrderingReport:
+    """`_check_gate_approval_ordering()` の結果。`violations` は fail-closed
+    な順序逆転（`missing_required_keys` へ合流する）、`notes` は「検査不能」
+    （承認記録が `approvals/records/` に無い・ledger が読めない等）の理由。"""
+
+    violations: tuple[str, ...]
+    notes: tuple[str, ...]
+
+
+def _check_gate_approval_ordering(
+    manifest: Mapping[str, object],
+    manifest_path: Path | str | None,
+    *,
+    repo_root: Path | None = None,
+) -> GateApprovalOrderingReport:
+    """v1.2 WP2 §C-9（D108 の欠陥）: manifest の `approvals.gate1_sha256` /
+    `gate2_sha256` に一致する承認記録が `approvals/records/` にある場合、その
+    `approved_at_utc` と ledger の `c0_freeze` event 時刻の順序を検査し、
+    逆転（承認が freeze より後 = 事後追認）を violation とする。
+
+    記録が無い場合はスキップし、検査不能の理由を `notes` に残す
+    （`c0_freeze.armed_freeze()` は publish 前に同じ順序を実測の承認ファイル
+    に対して検査するので、こちらは on-disk manifest の事後監査用）。
+    """
+    if manifest_path is None:
+        return GateApprovalOrderingReport(violations=(), notes=())
+    path = Path(manifest_path).expanduser().resolve()
+    approvals_section = manifest.get("approvals")
+    if not isinstance(approvals_section, Mapping):
+        return GateApprovalOrderingReport(
+            violations=(),
+            notes=("gate_approval_ordering: manifest has no approvals section (not checkable)",),
+        )
+    freeze_time = _freeze_event_time(path)
+    if freeze_time is None:
+        return GateApprovalOrderingReport(
+            violations=(),
+            notes=(
+                "gate_approval_ordering: no readable c0_freeze ledger event next to "
+                f"{str(path)!r} (not checkable)",
+            ),
+        )
+    records = _approval_records_by_content_sha(repo_root)
+    violations: list[str] = []
+    notes: list[str] = []
+    for short in ("gate1", "gate2"):
+        declared_sha = approvals_section.get(f"{short}_sha256")
+        if not isinstance(declared_sha, str):
+            notes.append(
+                f"gate_approval_ordering: manifest approvals.{short}_sha256 missing "
+                "(not checkable)"
+            )
+            continue
+        record = records.get(declared_sha)
+        if record is None:
+            notes.append(
+                f"gate_approval_ordering: no approval record with content sha256 "
+                f"{declared_sha!r} under {_APPROVAL_RECORDS_RELATIVE} (not checkable)"
+            )
+            continue
+        approved_at = _parse_iso8601_utc(record.get("approved_at_utc"))
+        if approved_at is None:
+            violations.append(
+                f"{short}_approval_unparsable_timestamp: approved_at_utc="
+                f"{record.get('approved_at_utc')!r}"
+            )
+            continue
+        if approved_at > freeze_time + timedelta(
+            seconds=_GATE_APPROVAL_CLOCK_SKEW_TOLERANCE_SECONDS
+        ):
+            violations.append(
+                f"{short}_approval_future_dated: approved_at_utc={approved_at.isoformat()} "
+                f"is later than the c0_freeze event time {freeze_time.isoformat()} + "
+                f"{_GATE_APPROVAL_CLOCK_SKEW_TOLERANCE_SECONDS}s tolerance"
+            )
+        elif approved_at >= freeze_time:
+            violations.append(
+                f"{short}_approval_not_before_freeze: approved_at_utc="
+                f"{approved_at.isoformat()} is not strictly before the c0_freeze event "
+                f"time {freeze_time.isoformat()} (D108)"
+            )
+    return GateApprovalOrderingReport(violations=tuple(violations), notes=tuple(notes))
+
+
 def _legacy_v1_0_opt_in_verified(
     manifest: Mapping[str, object], manifest_path: Path | str | None
 ) -> bool:
@@ -2781,6 +3149,18 @@ def _legacy_v1_0_opt_in_verified(
     return _freeze_identity_matches(entries)
 
 
+def _manifest_declared_rehearsal(manifest: Mapping[str, object]) -> bool:
+    """manifest 自身が宣言する `frozen_design.rehearsal` を読む（#349 第 3 巡
+    P2 対応）。欠落/非 bool は `False` 扱いに倒す——形状違反そのものは
+    `_check_required_blocking()`（欠落）/`_check_required_blocking()` 内の
+    専用分岐（非 bool）が別途 violation にするので、ここでは判定を複製せず
+    「rehearsal 行列/候補プールへ切り替えるかどうか」の入力としてのみ使う。"""
+    frozen_design = manifest.get("frozen_design")
+    if not isinstance(frozen_design, Mapping):
+        return False
+    return frozen_design.get("rehearsal") is True
+
+
 def validate_c0_manifest(
     manifest: Mapping[str, object],
     *,
@@ -2798,7 +3178,43 @@ def validate_c0_manifest(
     closed/aborted と確認できない場合は `True` を渡しても legacy 扱いに
     ならない（fail-closed）。`c0_freeze.dry_run()`/`armed_freeze()` が呼ぶ
     新規 freeze 経路はこの引数を一切渡さない（常に v1.1 必須のまま）。
-    """
+
+    #349 第 3 巡 P2 対応: `fixtures.matrix.active_matrix()`/`active_candidates()`
+    経由の比較検査（宣言照合系・holdout pin 系）は、プロセス大域の
+    `fixtures.matrix._REHEARSAL_MODE` を唯一の入口として凍結 matrix/候補空間を
+    選ぶ。`c0_freeze.dry_run()`/`armed_freeze()` はその大域フラグを呼び出し元
+    CLI が manifest 生成前に `set_rehearsal_mode()` で明示的に立てるため常に
+    manifest の `frozen_design.rehearsal` と一致するが、standalone CLI
+    （本モジュールの `main()`、on-disk の既存 rehearsal manifest を独立に
+    検証する経路）はその配線を経由しないため大域フラグは常に `False` のまま
+    ——rehearsal manifest を検証すると縮小行列/縮小候補プールに対する宣言が
+    常に本番 456 セル/99 候補と比較され、偽の `BLOCKED_C0_MANIFEST_INCOMPLETE`
+    を発行していた。ここで manifest 自身の宣言から大域フラグを検証中だけ
+    導出し、終了時（成功・例外いずれでも）に呼び出し前の値へ復帰する
+    （`try`/`finally`）——`dry_run()`/`armed_freeze()` の既存呼び出しでは
+    呼び出し前の値と検証中の値が常に一致するため副作用は無い。"""
+    previous_rehearsal_mode = fixture_matrix.rehearsal_mode()
+    fixture_matrix.set_rehearsal_mode(_manifest_declared_rehearsal(manifest))
+    try:
+        return _validate_c0_manifest_impl(
+            manifest,
+            split_secret=split_secret,
+            allow_legacy_v1_0=allow_legacy_v1_0,
+            manifest_path=manifest_path,
+        )
+    finally:
+        fixture_matrix.set_rehearsal_mode(previous_rehearsal_mode)
+
+
+def _validate_c0_manifest_impl(
+    manifest: Mapping[str, object],
+    *,
+    split_secret: bytes | None,
+    allow_legacy_v1_0: bool,
+    manifest_path: Path | str | None,
+) -> C0ValidationResult:
+    """`validate_c0_manifest()` の実体（rehearsal モード切替の外側に置いた
+    薄いラッパから呼ばれる）。"""
     legacy_design_revision_ok = allow_legacy_v1_0 and _legacy_v1_0_opt_in_verified(
         manifest, manifest_path
     )
@@ -2819,6 +3235,18 @@ def validate_c0_manifest(
     missing_required += _check_independence_ledger(manifest)
     missing_required += _check_rng_ledger_shape(manifest)
     missing_required += _check_rng_ledger_closed_set(manifest)
+    # v1.2 WP2 §B(vi)/§C-9: rehearsal manifest の設置場所 + Gate 承認時刻の
+    # 順序（どちらも `manifest_path` が渡された on-disk 検証でのみ有効）。
+    missing_required += _check_rehearsal_location(manifest, manifest_path)
+    # v1.2 WP2b: 候補空間と rehearsal フラグの整合（in-memory 検証でも有効）。
+    missing_required += _check_candidate_space_pool(manifest)
+    gate_ordering = _check_gate_approval_ordering(manifest, manifest_path)
+    # 2026-09-07（#349 第 5 巡 P1 採用、PRRT_kwDOSD2OOM6fwr6q）: Gate 承認
+    # 順序の blocking 化（D108, v1.2 WP2 §C-9）も v1.2 で新設された検査の
+    # ため、v1.2 未満の manifest には適用しない（`notes` の生成自体は
+    # バージョンに依らず維持——「検査不能」の情報項目は無害）。
+    if _is_v1_2_or_later(manifest):
+        missing_required += list(gate_ordering.violations)
 
     missing_recorded, downgrades = _check_recorded_or_absent(manifest)
     all_missing = tuple(missing_required + missing_recorded)
@@ -2874,6 +3302,7 @@ def validate_c0_manifest(
         claim_relevant_field_violations=claim_relevant_violations,
         invariance_axis_violations=invariance_axis_violations,
         u_gt_u_num_bound_violations=u_gt_u_num_violations,
+        gate_approval_ordering_notes=gate_ordering.notes,
         holdout_pin_feasibility_violations=holdout_pin_feasibility_violations,
         holdout_pin_declaration_violations=holdout_pin_declaration_violations,
         holdout_pin_membership_violations=holdout_pin_membership_violations,

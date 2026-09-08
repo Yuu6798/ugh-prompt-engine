@@ -41,6 +41,24 @@ class RevealBeforeCloseError(RuntimeError):
     """`campaign_closed` event が記帳される前に split_secret reveal を試みた。"""
 
 
+class RehearsalRevealRefusedError(RuntimeError):
+    """v1.2 WP2 §B(v): rehearsal campaign での split_secret reveal 試行。
+
+    `RevealBeforeCloseError` と同格の fail-closed 例外。rehearsal は claim を
+    生まない疎通試験であり、その secret を平文で ledger へ書く監査上の意味が
+    無い一方、reveal 済み secret を含む rehearsal 成果物が本番 campaign の
+    成果物と取り違えられるリスクだけが残るため、close 後であっても拒否する。
+    """
+
+
+def campaign_is_rehearsal(campaign: FrozenCampaign) -> bool:
+    """凍結 manifest の `frozen_design.rehearsal is True` か。"""
+    frozen_design = campaign.manifest.get("frozen_design")
+    if not isinstance(frozen_design, Mapping):
+        return False
+    return frozen_design.get("rehearsal") is True
+
+
 def _terminal_status_map(
     per_meter: Mapping[str, Mapping[str, object]],
 ) -> dict[MeterId, TerminalStatus]:
@@ -94,7 +112,13 @@ def close_campaign(
         )
 
     terminal = _terminal_status_map(per_meter)
-    discharged = debt_discharged(terminal)
+    # v1.2 WP2 §B(v): terminal status は通常どおり記帳するが、rehearsal では
+    # `debt_discharged` を常に False へ固定する——縮小行列の疎通試験が
+    # 「債務は返済された」という claim を生むことは決してない。権威ある
+    # 算出（`vocab.debt_discharged()`）自体は改変せず、本 event が記録する
+    # 派生値の写しの側で rehearsal を吸収する。
+    rehearsal = campaign_is_rehearsal(campaign)
+    discharged = False if rehearsal else debt_discharged(terminal)
 
     m6_result: M6Result | None = None
     all_critical_absolute = all(
@@ -113,6 +137,7 @@ def close_campaign(
         "per_meter": {k: dict(v) for k, v in per_meter.items()},
         "derived": {
             "debt_discharged": discharged,
+            "rehearsal": rehearsal,
             "m6_status": m6_result.status.value if m6_result is not None else None,
             "m6_distance": m6_result.distance if m6_result is not None else None,
         },
@@ -142,6 +167,11 @@ def reveal_split_secret(
     平文を ledger へ記録するのは、キャンペーン完了後の監査可能性のための
     最終ステップであり、それ以前に呼ぶと unseal 前の secret 露出と同じ
     リスクプロファイルになる。"""
+    if campaign_is_rehearsal(campaign):
+        raise RehearsalRevealRefusedError(
+            "reveal_split_secret: this is a rehearsal campaign "
+            "(frozen_design.rehearsal=true); refusing to reveal its split_secret"
+        )
     if not _campaign_closed_entry_exists(campaign):
         raise RevealBeforeCloseError(
             "reveal_split_secret: no campaign_closed event found; refusing to reveal before close"
@@ -160,6 +190,8 @@ def reveal_split_secret(
 __all__ = [
     "CampaignNotClosableError",
     "RevealBeforeCloseError",
+    "RehearsalRevealRefusedError",
+    "campaign_is_rehearsal",
     "campaign_closed_ok",
     "CloseResult",
     "close_campaign",

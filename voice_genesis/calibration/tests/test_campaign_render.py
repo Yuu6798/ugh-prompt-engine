@@ -1342,3 +1342,50 @@ def test_c4_render_phase_valid_marker_skips_rehash_on_measure_only_slices(
         if e.payload.get("kind") == render_stage.RENDER_PHASE_VALID_KIND
     ]
     assert len(render_phase_valid_events_after) == 1
+
+
+def test_c4_leakage_error_carries_check_leakage_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#348 第 3 巡 P2: `_refuse_if_pre_unseal_holdout()` が `check_leakage()`
+    の `reason` を捨てず例外へ載せることの回帰テスト。
+
+    実 C4 経路（`run_render_stage(stage="c4")`）に、行入力だけを改変した
+    matrix（`nuisance_tag` を書き換え、`row_id` は凍結時のまま）を渡すと
+    `check_leakage()` は `SPLIT_VERIFICATION_ROW_MISMATCH` を返す。修正前は
+    例外メッセージが `blocked_code=BLOCKED_LEAKAGE (control_excluded_count=0)`
+    だけで、unseal 未実施との区別がつかなかった。
+
+    canonical-row-coverage 検査（§7）を通すため、campaign は v1.2 WP2 の
+    rehearsal 行列 **全体** の上に組み立て、`set_rehearsal_mode(True)` で
+    `provenance.check_leakage()` 側の canonical matrix も同じ行集合に揃える。
+    """
+    from dataclasses import replace as dataclass_replace
+
+    from voice_genesis.calibration.fixtures import matrix as fixture_matrix
+
+    monkeypatch.setattr(fixture_matrix, "_REHEARSAL_MODE", True)
+    rows = fixture_matrix.build_rehearsal_matrix()
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=rows)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    # 単一 CONFOUND 行の nuisance_tag だけを改変する（row_id は据え置き =
+    # 「凍結時と同じ行だと名乗るが行入力が違う」D105 型の不一致）。
+    mutated: list = []
+    mutated_one = False
+    for mr in rows:
+        if not mutated_one and fixture_matrix.single_axis_nuisance_tag_axis(mr.row) is not None:
+            mutated.append(
+                dataclass_replace(mr, row=dataclass_replace(mr.row, nuisance_tag="context=other"))
+            )
+            mutated_one = True
+            continue
+        mutated.append(mr)
+    assert mutated_one
+
+    with pytest.raises(render_stage.RenderLeakageBlockedError) as excinfo:
+        render_stage.run_render_stage(campaign, mutated, stage="c4")
+
+    assert excinfo.value.reason == "SPLIT_VERIFICATION_ROW_MISMATCH"
+    assert "SPLIT_VERIFICATION_ROW_MISMATCH" in str(excinfo.value)
+    assert not campaign.renders_dir.exists() or not any(campaign.renders_dir.iterdir())

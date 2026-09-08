@@ -39,7 +39,9 @@ the `currentDate` from context). If the file already exists for today,
 append a new `## Session N` section instead of overwriting.
 
 Use the conventional section layout (see the Summary layout appendix below):
-**Context / Design Decisions / Artifacts / Handoff**.
+**Context / Design Decisions / Artifacts / Progress / Handoff**. Progress is a
+required line — answered questions / evidence / debt terminal status, never
+"completed" / "all merged" / "rounds exhausted" (RUN10-CAL v1.2 §W0.4).
 
 **Fable 直接実行監査**（CLAUDE.md § Advisor Strategy 運用細則の事後監査）:
 Fable 稼働セッションでは、Artifacts か Handoff に「Fable が直接実行した
@@ -138,6 +140,11 @@ Compose the dated reflection with these sections:
 ### Artifacts
 <マージした PR / 追加したファイル>
 
+### Progress (answered questions / evidence / debt terminal status)
+<答えた問い / その証拠 / 負債の terminal status を 1 行ずつ。
+「完走」「全マージ」「巡数消化」は進捗として記載しない
+（RUN10-CAL v1.2 §W0.4、2026-09-06 制定）>
+
 ### Handoff
 <次のセッションへの引き継ぎ事項>
 ```
@@ -156,3 +163,5 @@ Compose the dated reflection with these sections:
 - **`CLAUDE.md` を 400 行超に肥大させる** (always-loaded policy doc の固定費 +
   指示遵守劣化。 reference detail は `docs/` / skill に逃がしポインタ化する。
   `test_claude_md_line_cap.py` で enforce)。
+- **進捗を「完走」「全マージ」「巡数消化」で記載する** (答えた問い / 証拠 / 負債の
+  terminal status で書く。RUN10-CAL v1.2 §W0.4、2026-09-06 制定)。

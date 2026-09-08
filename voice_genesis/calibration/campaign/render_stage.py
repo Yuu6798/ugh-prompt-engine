@@ -145,10 +145,23 @@ class _FreshRenderWorkerFailure(RuntimeError):
 
 
 class RenderLeakageBlockedError(RuntimeError):
-    """`BLOCKED_LEAKAGE`: unseal 前の holdout 非 control render 要求。"""
+    """`BLOCKED_LEAKAGE`: unseal 前の holdout 非 control render 要求。
 
-    def __init__(self, detail: str) -> None:
-        super().__init__(f"render_stage: BLOCKED_LEAKAGE: {detail}")
+    #348 第 3 巡 P2（v1.2 WP2 で採用）: 旧実装は `check_leakage()` の
+    `reason`（`UNDERSPEC-CAL-D50` で導入された「なぜ blocked か」の判別子——
+    `SPLIT_VERIFICATION_ROW_MISMATCH` / `SPLIT_REDERIVATION_MISMATCH` /
+    `UNSEAL_GATE3_UNVERIFIED`）を捨て、blocked code と control 件数だけを
+    メッセージにしていたため、D105 型の行入力不一致でも `BLOCKED_LEAKAGE
+    (control_excluded_count=0)` という無差別な文言にしかならなかった
+    （unseal 未実施と行入力不一致が現場で区別できない）。`reason` を例外
+    属性（`self.reason`）とメッセージの両方に載せる。
+    """
+
+    def __init__(self, detail: str, *, reason: str | None = None) -> None:
+        self.reason = reason
+        self.detail = detail
+        suffix = f" reason={reason}" if reason else ""
+        super().__init__(f"render_stage: BLOCKED_LEAKAGE: {detail}{suffix}")
 
 
 class RenderResumeIndexIntegrityError(RuntimeError):
@@ -702,7 +715,8 @@ def _refuse_if_pre_unseal_holdout(
     if result.blocked is not None:
         raise RenderLeakageBlockedError(
             f"blocked_code={result.blocked.value} "
-            f"(control_excluded_count={result.control_excluded_count})"
+            f"(control_excluded_count={result.control_excluded_count})",
+            reason=result.reason,
         )
 
 

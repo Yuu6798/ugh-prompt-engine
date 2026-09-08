@@ -774,6 +774,145 @@ def build_matrix() -> list[MatrixRow]:
 
 
 # ---------------------------------------------------------------------------
+# v1.2 WP2 — rehearsal 行列（縮小行列と 1 箇所切替）
+#
+# Design Memo RUN10-CAL-v1.2 WP2 §A: 14 時間の本番実行なしに C0->close の
+# 全経路（C4 実 gate 含む）を十数分で疎通確認するための **決定論的部分集合**。
+# 行の手選びは禁止——`build_matrix()` の列挙順を保存したまま、family ごとに
+# 機械的な 4 規則 (a)-(d) で拾う。rehearsal は §15 の campaign ではなく
+# 「claim を生まない疎通試験」であり、`c0_freeze`/`campaign` CLI の
+# `--rehearsal` が `set_rehearsal_mode(True)` を立てることでのみ有効化される
+# （既定は常に本番 = `build_matrix()`）。
+# ---------------------------------------------------------------------------
+
+#: プロセス大域の rehearsal フラグ。`active_matrix()` の唯一の分岐点であり、
+#: 「凍結 matrix をどこから読むか」を全 call site へ 1 箇所で伝播させる
+#: （旧実装は E2E テストが 4 箇所の `build_matrix` binding を個別に
+#: monkeypatch していた——その置換が本 WP の目的の一つ）。
+_REHEARSAL_MODE: bool = False
+
+#: `gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP`（= 3、§10.4）と同値を、本モジュール
+#: の既存規約（`_SWEEP_TRUTH_FIELDS_BY_FAMILY` docstring:「他 module には
+#: 依存せず本モジュールで独立に宣言する」）に従って独立に宣言する。縮小行列が
+#: 生む declared sweep はこの level 数を下回ってはならない
+#: （`c0_validate._check_declared_sweep_truth_levels()` が構造検査する）。
+_REHEARSAL_MIN_TRUTH_LEVELS_PER_SWEEP: int = 3
+
+
+def set_rehearsal_mode(enabled: bool) -> None:
+    """rehearsal 行列への切替（`--rehearsal` CLI フラグのみが呼ぶ想定）。
+    プロセス大域状態を変えるため、テストは必ず後始末する
+    （`monkeypatch.setattr(matrix, "_REHEARSAL_MODE", ...)` でも可）。"""
+    global _REHEARSAL_MODE
+    _REHEARSAL_MODE = bool(enabled)
+
+
+def rehearsal_mode() -> bool:
+    """現在の rehearsal フラグ。"""
+    return _REHEARSAL_MODE
+
+
+def build_rehearsal_matrix() -> list[MatrixRow]:
+    """`build_matrix()` の決定論的部分集合（列挙順を保存する）。
+
+    family ごとに次の 4 規則で行を拾う（規則間の重複は集合として吸収する）:
+
+    (a) TRUTH_CORE を truth level ごとに **先頭 1 行**。選抜母集団は
+        `_sweep_groups()` が返す family の declared sweep 1 本
+        （anchor 行を含む先頭の sweep、無ければ先頭の sweep）に閉じる
+        ——family 全体から素朴に level 別先頭行を拾うと held-fixed group が
+        割れ、`c0_validate._check_declared_sweep_truth_levels()`（§10.4 の
+        `MIN_RESOLVABLE_PAIRS_PER_SWEEP` = `_REHEARSAL_MIN_TRUTH_LEVELS_
+        PER_SWEEP`）が構造的に必ず BLOCK する 1-level sweep が生まれる。
+    (b) `single_axis_nuisance_tag_axis(row) is not None` の CONFOUND 行を
+        先頭 1 行（§V3.5 の invariance 軸導出が空にならないため）。
+    (c) `control_class is not None` の行を control_class ごとに先頭 1 行
+        （negative control 経路と `check_leakage` の control 除外を残すため）。
+    (d) §V3.5 anchor 行 = `positive_control=True` の family anchor を
+        先頭 1 行（`fixtures.controls.positive_controls_by_family()` が
+        family ごとに anchor を要求するため）。
+
+    手選びの余地は無く、`build_matrix()` が決定論的である限り本関数も
+    決定論的（同一入力 -> 同一出力）。
+    """
+    full = build_matrix()
+    rows_by_family: dict[str, list[tuple[int, MatrixRow]]] = {}
+    for index, mr in enumerate(full):
+        rows_by_family.setdefault(mr.row.family, []).append((index, mr))
+    sweeps_by_family = _sweep_groups(full)
+
+    keep: set[int] = set()
+    for family in axes.FAMILY_ORDER:
+        family_rows = rows_by_family.get(family.value, [])
+
+        # (a) TRUTH_CORE を truth level 別に先頭 1 行。ただし選抜母集団は
+        #     **単一の declared sweep**（nuisance/covariate 固定・truth だけが
+        #     動く行集合）に閉じる: family 全体から level ごとに先頭 1 行を
+        #     素朴に拾うと、拾われた行が複数の held-fixed group へ散り、
+        #     縮小行列側で「1 level しか持たない declared sweep」が生まれる
+        #     （`c0_validate._check_declared_sweep_truth_levels()` の §10.4
+        #     `MIN_RESOLVABLE_PAIRS_PER_SWEEP` を構造的に満たせず必ず BLOCK
+        #     する）。canonical matrix では 1 sweep の member 数と level 数が
+        #     常に一致する（member ごとに truth level が相異なる）ため、
+        #     「1 sweep の全 member」と「その sweep 内で level 別に先頭 1 行」
+        #     は同値。選ぶ sweep は「anchor 行（`positive_control=True`）を
+        #     含む先頭の sweep、無ければ先頭の sweep」——列挙順のみで決まり
+        #     裁量は無い（(d) の anchor 要件もこれで同時に満たされる）。
+        index_by_row_id = {mr.row_id: index for index, mr in family_rows}
+        family_sweeps = sweeps_by_family.get(family.value, {})
+        chosen_members: Sequence[MatrixRow] | None = None
+        for _sweep_id, members in family_sweeps.items():
+            if chosen_members is None:
+                chosen_members = members
+            if any(mr.row.positive_control for mr in members):
+                chosen_members = members
+                break
+        if chosen_members is not None:
+            seen_levels: set[tuple[Any, ...]] = set()
+            for mr in chosen_members:
+                level = truth_identity_for_row(mr.row)
+                if level in seen_levels:
+                    continue
+                seen_levels.add(level)
+                keep.add(index_by_row_id[mr.row_id])
+
+        # (b) 単一軸 nuisance 主効果の CONFOUND 行を先頭 1 行。
+        for index, mr in family_rows:
+            if mr.row.block == "CONFOUND" and single_axis_nuisance_tag_axis(mr.row) is not None:
+                keep.add(index)
+                break
+
+        # (c) control_class ごとに先頭 1 行。
+        seen_control_classes: set[str] = set()
+        for index, mr in family_rows:
+            control_class = mr.row.control_class
+            if control_class is None or control_class in seen_control_classes:
+                continue
+            seen_control_classes.add(control_class)
+            keep.add(index)
+
+        # (d) family anchor（positive control）を先頭 1 行。
+        for index, mr in family_rows:
+            if mr.row.positive_control:
+                keep.add(index)
+                break
+
+    return [full[index] for index in sorted(keep)]
+
+
+def active_matrix() -> list[MatrixRow]:
+    """凍結 matrix の唯一の実行時入口。既定は `build_matrix()`（本番 456 セル）、
+    `set_rehearsal_mode(True)` の下でのみ `build_rehearsal_matrix()`。
+
+    production 側の call site は **すべて** 本関数を経由する
+    （`tests/test_matrix.py::test_no_direct_build_matrix_call_sites_outside_matrix_module`
+    が grep で全数を固定する）。"""
+    if _REHEARSAL_MODE:
+        return build_rehearsal_matrix()
+    return build_matrix()
+
+
+# ---------------------------------------------------------------------------
 # 検証
 # ---------------------------------------------------------------------------
 
@@ -1320,7 +1459,16 @@ def _pin_identity_founder_trait(
     sweep 1 個）の選抜（§V2.2 4th bullet 後段）: founder を
     HMAC-SHA256(secret, founder_id) 昇順、trait を HMAC-SHA256(secret,
     trait) 昇順に並べ、i 番目 (i=0..k_hold-1) の founder に trait
-    `i mod len(traits)` の sweep を割当てる。"""
+    `i mod len(traits)` の sweep を割当てる。
+
+    v1.2 WP2: 割当先 `(founder, trait)` cell に sweep が存在しない場合は
+    その i を **skip** する（旧: `KeyError` で未捕捉クラッシュ）。canonical
+    456 セル matrix は全 cell が埋まっているため本分岐は no-op であり、
+    選抜結果・順序は一切変わらない。縮小行列（`build_rehearsal_matrix()`）
+    のように family の declared sweep が cell 全体を覆わない構成でのみ
+    到達し、その場合は pin 件数が k_hold より少なくなる（pin 免除と同じく
+    `holdout_sweeps` が空/部分集合になるだけで、`c0_validate` 側の再導出も
+    同一関数を通るため宣言一致は保たれる）。"""
     sweep_by_cell: dict[tuple[str, str], str] = {}
     for sid, members in family_sweeps.items():
         row = members[0].row
@@ -1337,7 +1485,10 @@ def _pin_identity_founder_trait(
     for i in range(k_hold):
         founder = founders_sorted[i]
         trait = traits_sorted[i % len(traits_sorted)]
-        selected.append(sweep_by_cell[(founder, trait)])
+        sweep_id = sweep_by_cell.get((founder, trait))
+        if sweep_id is None:
+            continue
+        selected.append(sweep_id)
     return tuple(selected)
 
 

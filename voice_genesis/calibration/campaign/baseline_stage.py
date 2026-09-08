@@ -24,7 +24,7 @@ from voice_genesis.calibration.campaign import measure_stage, workunits
 from voice_genesis.calibration.campaign.caps import CostCapExceededError
 from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.campaign.time_budget import TimeBudget
-from voice_genesis.calibration.candidates.registry import ALL_CANDIDATES, Candidate
+from voice_genesis.calibration.candidates.registry import Candidate, active_candidates
 from voice_genesis.calibration.canonical import manifest_sha
 from voice_genesis.calibration.cost_caps import CapCounters, CostCaps, StopDecision
 from voice_genesis.calibration.fixtures.matrix import MatrixRow
@@ -43,8 +43,13 @@ DEFAULT_TOLERANCE_K = 3.0
 
 def b0_candidates() -> tuple[Candidate, ...]:
     """B0 baseline 候補（`candidate_id` に `"-B0-"` を含む全候補。設計正本
-    §8「`B0_CURRENT` を必ず含める」）。"""
-    return tuple(c for c in ALL_CANDIDATES if "-B0-" in c.candidate_id)
+    §8「`B0_CURRENT` を必ず含める」）。
+
+    v1.2 WP2b: 母集団は `registry.active_candidates()`——`--rehearsal` の
+    縮小プールは family ごとに B0 を必ず 1 件含むため実際の集合は本番と同じ
+    だが、候補列挙の入口を 1 本に揃える（`ALL_CANDIDATES` を直接読む
+    production call site を残さない）。"""
+    return tuple(c for c in active_candidates() if "-B0-" in c.candidate_id)
 
 
 def _primary_value(values: Mapping[str, float]) -> float | None:

@@ -31,7 +31,7 @@
   自身のロード時）に既に完了しているため、「それらの import がこの照合の
   後に来る」ことは本モジュールの現在の構造では実現できない。本照合が
   実際に保証するのは「照合が通らない限り、それらのモジュールが提供する
-  **実行時の測定・生成ロジックを呼び出さない**」こと（`build_matrix()`
+  **実行時の測定・生成ロジックを呼び出さない**」こと（`active_matrix()`
   呼び出し・stage dispatch は本照合の後に置く）である
   （`[UNDERSPEC-CAL-D23]`）。**運用契約**（round 17 finding #4 見送り・境界
   宣言、`[UNDERSPEC-CAL-D40]`）: 本照合が意味を持つのは「stage 呼び出し毎に
@@ -110,7 +110,10 @@ from voice_genesis.calibration.campaign.state import (
     load_frozen_campaign,
 )
 from voice_genesis.calibration.campaign.time_budget import SliceStatus, TimeBudget
-from voice_genesis.calibration.candidates.registry import candidate_by_id, candidates_for_meter
+from voice_genesis.calibration.candidates.registry import (
+    active_candidates_for_meter,
+    candidate_by_id,
+)
 from voice_genesis.calibration.cost_caps import (
     BudgetAccountingUndeclaredError,
     CapCounters,
@@ -118,6 +121,7 @@ from voice_genesis.calibration.cost_caps import (
     StopDecision,
 )
 from voice_genesis.calibration.cost_caps import check as cost_caps_check
+from voice_genesis.calibration.fixtures import matrix as fixture_matrix
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
 from voice_genesis.calibration.fixtures.controls import (
     ControlClass,
@@ -127,7 +131,6 @@ from voice_genesis.calibration.fixtures.controls import (
     positive_detection_instances,
 )
 from voice_genesis.calibration.fixtures.matrix import (
-    build_matrix,
     declared_sweeps_by_family,
     truth_identity_for_row,
 )
@@ -160,22 +163,33 @@ DEFAULT_SECRET_DIR = Path.home() / ".vg_cal" / "secrets"
 
 CAMPAIGN_ARMED_ENV_VAR = "VG_CAL_CAMPAIGN_AUTHORIZED"
 
-#: `c0_validate._V1_1_DESIGN_REVISION`/`_is_v1_1_manifest()` と同一の判定を、
-#: `c0_validate` に依存せず独立に再定義する（モジュール docstring の既存方針、
-#: `_REPO_ROOT`/`SECRET_DIR_ENV_VAR` と同じパターン）。Codex round 23 対応
-#: （P2「Require the top-level holdout sweep section」, ADOPT）: v1.1 manifest
-#: では top-level `holdout_sweeps` を必須化するので、C4 側の
-#: `expected_sweep_ids` フォールバック（下記 `_run_c4`）も v1.1 かどうかで
+#: `c0_validate._ALLOWED_DESIGN_REVISIONS`/`_is_v1_1_or_later()` と同一の
+#: 判定を、`c0_validate` に依存せず独立に再定義する（モジュール docstring の
+#: 既存方針、`_REPO_ROOT`/`SECRET_DIR_ENV_VAR` と同じパターン）。Codex round
+#: 23 対応（P2「Require the top-level holdout sweep section」, ADOPT）: v1.1
+#: manifest では top-level `holdout_sweeps` を必須化するので、C4 側の
+#: `expected_sweep_ids` フォールバック（下記 `_run_c4`）も v1.1 以上かどうかで
 #: 分岐する必要がある。
-_DESIGN_REVISION_V1_1 = "1.1"
+#:
+#: 2026-09-07（#349 第 5 巡 P1、PRRT_kwDOSD2OOM6fwr6q の同型穴の事前是正）:
+#: `c0_freeze._DESIGN_REVISION` が v1.2 統治文書切替に伴い "1.2" を発行する
+#: ようになったため、旧来の "1.1" 完全一致判定のままだと今後の新規 freeze
+#: 全件でこの v1.1 由来の holdout_sweeps 必須化の恩恵（tampered/incomplete
+#: 検出）が静かに外れてしまう。閉語彙を `c0_validate._ALLOWED_DESIGN_
+#: REVISIONS` と同期させ「1.1 以上」で判定する。
+_V1_1_OR_LATER_DESIGN_REVISIONS = frozenset({"1.1", "1.2"})
 
 
 def _manifest_is_v1_1(manifest: Mapping[str, object]) -> bool:
+    """名前は歴史的経緯（round 23 当時は v1.1 のみが対象だった）を残すが、
+    実際の判定は「design_revision が v1.1 以上」（`_V1_1_OR_LATER_DESIGN_
+    REVISIONS`）——呼び出し側のコメントが説明する v1.1 由来の必須化は v1.2
+    manifest にも同様に適用される。"""
     frozen_design = manifest.get("frozen_design")
     if not isinstance(frozen_design, Mapping):
         return False
     value = frozen_design.get("design_revision")
-    return isinstance(value, str) and value.strip() == _DESIGN_REVISION_V1_1
+    return isinstance(value, str) and value.strip() in _V1_1_OR_LATER_DESIGN_REVISIONS
 
 
 def _process_cpu_seconds() -> float:
@@ -221,6 +235,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--armed", action="store_true")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument(
+        "--rehearsal",
+        action="store_true",
+        help="v1.2 WP2: rehearsal 経路（claim を生まない疎通試験）で実行する。"
+        "縮小行列 (`fixtures.matrix.build_rehearsal_matrix()`) へ切替え、"
+        "--campaign-dir/--secret-dir/--approval-dir の明示を必須にし、"
+        "checkout 配下 campaigns/ や ~/.vg_cal/ を指すと BLOCKED_REHEARSAL_PATH で "
+        "拒否する。manifest の frozen_design.rehearsal と食い違えば実行しない。",
+    )
+    parser.add_argument(
         "--reveal-split-secret",
         action="store_true",
         help="close サブコマンド専用（[UNDERSPEC-CAL-D09]）: CAMPAIGN_CLOSED 後に "
@@ -256,6 +279,46 @@ def _print(obj: object) -> None:
     print(json.dumps(obj, indent=2, sort_keys=True, default=str))
 
 
+#: v1.2 WP2 §B(iv): rehearsal の path ガード拒否理由（`vocab.BlockedCode` は
+#: 増やさない）。`c0_freeze.BLOCKED_REHEARSAL_PATH` と同値を、モジュール
+#: docstring の既存方針（`_REPO_ROOT`/`SECRET_DIR_ENV_VAR` と同じく `c0_freeze`
+#: へは依存しない）に従って独立に宣言する。
+BLOCKED_REHEARSAL_PATH = "BLOCKED_REHEARSAL_PATH"
+
+
+def _rehearsal_path_violations(paths: Mapping[str, Path | None]) -> list[str]:
+    """`--rehearsal` の path 制約（明示必須 + canonical campaigns dir /
+    `~/.vg_cal/` 配下の禁止）。`c0_freeze.rehearsal_path_violations()` と
+    同一規約の独立実装。"""
+    forbidden_roots = [
+        (_REPO_ROOT / "voice_genesis" / "calibration" / "campaigns").expanduser().resolve(),
+        (Path.home() / ".vg_cal").expanduser().resolve(),
+    ]
+    violations: list[str] = []
+    for label, path in paths.items():
+        if path is None:
+            violations.append(f"{label} must be given explicitly when --rehearsal is used")
+            continue
+        resolved = Path(path).expanduser().resolve()
+        for root in forbidden_roots:
+            if resolved == root or root in resolved.parents:
+                violations.append(
+                    f"{label}={str(resolved)!r} is under {str(root)!r}; a rehearsal must not "
+                    "touch the canonical campaign registry or the production secret store"
+                )
+                break
+    return violations
+
+
+def _manifest_declares_rehearsal(manifest: Mapping[str, object]) -> bool:
+    """`frozen_design.rehearsal is True` か（`c0_freeze.manifest_declares_
+    rehearsal()` と同一規約の独立実装）。"""
+    frozen_design = manifest.get("frozen_design")
+    if not isinstance(frozen_design, Mapping):
+        return False
+    return frozen_design.get("rehearsal") is True
+
+
 # ---------------------------------------------------------------------------
 # plan
 # ---------------------------------------------------------------------------
@@ -287,7 +350,7 @@ def build_plan_report(
         report["campaign_state"] = "UNAVAILABLE"
         return report
 
-    matrix_rows = build_matrix()
+    matrix_rows = fixture_matrix.active_matrix()
     assignment = campaign.realized_split.assignment
     realized = workunits.realized_plan(matrix_rows, assignment)
     report["campaign_state"] = "OK"
@@ -966,6 +1029,54 @@ def _expected_coverage_instances_for_selection(
     return non_boundary_selection_instances(rows, assignment, Split.SELECTION, family=family)
 
 
+def _measurement_missing_reason_index(
+    campaign: FrozenCampaign,
+) -> dict[str, dict[str, str]]:
+    """v1.2 WP1 配線: ledger の `measurement_missing` event
+    （`kind="measurement_missing"`, `reason`, `cells: [[row_id, probe_index,
+    candidate_id], ...]`）を 1 パスで走査し、`candidate_id -> {row_id: reason}`
+    へ畳む（`selection_stage.candidate_fail_filter_report()` の
+    `missing_reason_by_negative_row_id` の材料）。
+
+    1 呼び出し内で `missing_reason` は全 skip cell に一様なので、row_id 単位で
+    1 つの reason を持てば十分（`selection_stage._sanctioned_abstention_row_ids()`
+    の docstring と同じ前提）。同一 row_id に複数 event が触れた場合は最初に
+    現れた reason を採る（ledger の追記順 = 発生順）。"""
+    index: dict[str, dict[str, str]] = {}
+    for entry in campaign.ledger.entries:
+        payload = entry.payload
+        if not isinstance(payload, Mapping) or payload.get("kind") != "measurement_missing":
+            continue
+        reason = payload.get("reason")
+        if not isinstance(reason, str) or not reason:
+            continue
+        cells = payload.get("cells")
+        if not isinstance(cells, (list, tuple)):
+            continue
+        for cell in cells:
+            if not isinstance(cell, (list, tuple)) or len(cell) != 3:
+                continue
+            row_id, _probe_index, candidate_id = cell
+            if not isinstance(row_id, str) or not isinstance(candidate_id, str):
+                continue
+            index.setdefault(candidate_id, {}).setdefault(row_id, reason)
+    return index
+
+
+def _control_class_by_negative_row_id(
+    matrix_rows: Sequence[Any], negative_control_ids: frozenset[str]
+) -> dict[str, str]:
+    """v1.2 WP1 配線: 宣言された negative control 行の `row_id -> control_class`
+    （`selection_stage.candidate_fail_filter_report()` の
+    `control_class_by_negative_row_id`）。`matrix_rows` は `active_matrix()`
+    由来の凍結 matrix 行（CLI dispatch が渡すもの）。"""
+    return {
+        mr.row_id: mr.row.control_class
+        for mr in matrix_rows
+        if mr.row_id in negative_control_ids and mr.row.control_class is not None
+    }
+
+
 def _criteria_with_fail_filters(
     candidate: Any,
     records: Sequence[Any],
@@ -976,6 +1087,8 @@ def _criteria_with_fail_filters(
     expected_coverage_instances: frozenset[tuple[str, int]] = frozenset(),
     max_claim_scope: frozenset[str],
     noise_only_negative_control_ids: frozenset[str] = frozenset(),
+    control_class_by_negative_row_id: Mapping[str, str] | None = None,
+    missing_reason_by_negative_row_id: Mapping[str, str] | None = None,
 ) -> tuple[Any, dict[str, object], dict[str, object]]:
     """finding #8: `build_candidate_criteria()`（有限値の有無のみ）に加えて
     `candidates.adapter` 共通 5 fail filter を適用し、いずれか 1 つでも
@@ -1021,6 +1134,11 @@ def _criteria_with_fail_filters(
         positive_control_row_ids=positive_control_ids,
         expected_coverage_instances=expected_coverage_instances,
         noise_only_control_row_ids=noise_only_negative_control_ids,
+        # v1.2 WP1 配線: sanctioned abstention（`(SILENCE, "F0_UNUSABLE")`）を
+        # `negative_controls_incomplete`/`negative_control_false_fire` の
+        # fail-closed から除外するための判定材料。
+        control_class_by_negative_row_id=control_class_by_negative_row_id,
+        missing_reason_by_negative_row_id=missing_reason_by_negative_row_id,
     )
     eligible = base.eligible and selection_stage.eligible_after_fail_filters(report)
     capped, scope_report = selection_stage.claim_scope_report(candidate, max_claim_scope)
@@ -1298,7 +1416,7 @@ def _run_c3a(
         if mr.row.family == FixtureFamily.F0_CONTROL.value
         for p in range(_PROBE_REPEATS)
     }
-    candidates = candidates_for_meter(MeterId.F0_CONTROL)
+    candidates = active_candidates_for_meter(MeterId.F0_CONTROL)
 
     if time_budget_seconds is not None:
         records, slice_status = measure_stage.run_measure_stage(
@@ -1368,6 +1486,13 @@ def _run_c3a(
     criteria: list[Any] = []
     fail_filter_reports: dict[str, dict[str, object]] = {}
     claim_scope_reports: dict[str, dict[str, object]] = {}
+    # v1.2 WP1 配線: sanctioned abstention 判定の材料（ledger 1 パス +
+    # 宣言 negative control 行の control_class 表）。
+    missing_reason_index = _measurement_missing_reason_index(campaign)
+    all_declared_neg_ids = zero_tolerance_neg_ids | noise_only_neg_ids
+    control_class_by_neg_row_id = _control_class_by_negative_row_id(
+        matrix_rows, all_declared_neg_ids
+    )
     for c in candidates:
         candidate_criteria, report, scope_report = _criteria_with_fail_filters(
             c,
@@ -1378,6 +1503,8 @@ def _run_c3a(
             expected_coverage_instances=coverage_instances,
             max_claim_scope=max_claim_scope,
             noise_only_negative_control_ids=noise_only_neg_ids,
+            control_class_by_negative_row_id=control_class_by_neg_row_id,
+            missing_reason_by_negative_row_id=missing_reason_index.get(c.candidate_id, {}),
         )
         criteria.append(candidate_criteria)
         fail_filter_reports[c.candidate_id] = report
@@ -1566,6 +1693,9 @@ def _run_c3b(
         family_criteria: list[Any] = []
         family_fail_filter_reports: dict[str, dict[str, bool]] = {}
         family_claim_scope_reports: dict[str, dict[str, object]] = {}
+        # v1.2 WP1 配線（C3a と同型）: sanctioned abstention 判定の材料。
+        missing_reason_index = _measurement_missing_reason_index(campaign)
+        control_class_by_neg_row_id = _control_class_by_negative_row_id(family_rows, neg_ids)
         for c in meter_candidates:
             candidate_criteria, report, scope_report = _criteria_with_fail_filters(
                 c,
@@ -1575,6 +1705,8 @@ def _run_c3b(
                 positive_control_ids=pos_ids,
                 expected_coverage_instances=coverage_instances,
                 max_claim_scope=max_claim_scope,
+                control_class_by_negative_row_id=control_class_by_neg_row_id,
+                missing_reason_by_negative_row_id=missing_reason_index.get(c.candidate_id, {}),
             )
             family_criteria.append(candidate_criteria)
             family_fail_filter_reports[c.candidate_id] = report
@@ -1747,10 +1879,14 @@ _FAMILY_TO_METER: Mapping[FixtureFamily, MeterId] = {
 
 
 def _candidates_for_family(family: FixtureFamily) -> tuple[Any, ...]:
+    """family の候補列挙（c3b / c4 の唯一の入口）。
+
+    v1.2 WP2b: `registry.active_candidates_for_meter()` 経由なので
+    `--rehearsal` では縮小プール（family あたり最大 2 件）になる。"""
     meter = _FAMILY_TO_METER.get(family)
     if meter is None:
         return ()
-    return candidates_for_meter(meter)
+    return active_candidates_for_meter(meter)
 
 
 def _run_unseal(
@@ -2635,6 +2771,18 @@ def _run_c4(
     return {"result": "OK", "holdout_executed_valid_entry_sha": entry.entry_sha}
 
 
+#: Codex round 4 finding P2 (`campaign/close.py:170-171` "Handle rehearsal
+#: reveal refusals in the CLI"): `close --rehearsal --reveal-split-secret`
+#: pre-dispatch refusal code. `close_stage.reveal_split_secret()` always
+#: raises `RehearsalRevealRefusedError` for a rehearsal campaign regardless
+#: of close state (`close.py`'s fail-closed rule is unconditional on
+#: `campaign_is_rehearsal()`, not on when reveal is attempted) — so this
+#: combination is refused unconditionally, not just on some manifest
+#: variant. Not a `vocab.BlockedCode` (same closed-vocabulary rationale as
+#: `BLOCKED_REHEARSAL_PATH`/`ENVIRONMENT_DRIFT_CODE` above).
+REHEARSAL_REVEAL_REFUSED = "REHEARSAL_REVEAL_REFUSED"
+
+
 def _run_close(
     campaign: FrozenCampaign,
     *,
@@ -2644,6 +2792,32 @@ def _run_close(
     parent_cpu_checkpoint: list[float] | None = None,
     invocation_id: str | None = None,
 ) -> dict[str, Any]:
+    # Codex round 4 finding P2 (`campaign/close.py:170-171`): before this
+    # fix, `--rehearsal --reveal-split-secret` reached `close_stage.
+    # close_campaign()` first (appending `campaign_closed`, and later the
+    # `finally` block in `main()` appending `stage_summary`), THEN called
+    # `close_stage.reveal_split_secret()`, which unconditionally raises
+    # `RehearsalRevealRefusedError` for a rehearsal campaign — uncaught here,
+    # propagating past `main()` as an unhandled traceback. Refuse this
+    # combination up front instead, before any close-transition ledger
+    # write: same structured `{"result": ..., "detail": ...}` shape as every
+    # other pre-dispatch refusal in this module (`BLOCKED_REHEARSAL_PATH`/
+    # `AUTHORIZATION_REQUIRED`/`PHASE_ORDER_VIOLATION`/...), so `main()`'s
+    # existing `out.get("result") in ok_results` exit-code logic naturally
+    # yields exit 1 with zero extra plumbing, and the ledger stays exactly
+    # as it was before this call (no `campaign_closed`, no `stage_summary`
+    # for a close transition that never happened).
+    if reveal and close_stage.campaign_is_rehearsal(campaign):
+        return {
+            "result": REHEARSAL_REVEAL_REFUSED,
+            "detail": (
+                "reveal_split_secret: this is a rehearsal campaign "
+                "(frozen_design.rehearsal=true); refusing --reveal-split-secret "
+                "together with --rehearsal before attempting close (rehearsal "
+                "never reveals its split_secret, regardless of close order)"
+            ),
+        }
+
     holdout_payload = None
     for entry in campaign.ledger.entries:
         payload = entry.payload
@@ -2682,7 +2856,25 @@ def _run_close(
         "debt_discharged": result.debt_discharged,
     }
     if reveal:
-        reveal_entry = close_stage.reveal_split_secret(campaign, invocation_id=invocation_id)
+        # Defense in depth (finding P2's second half): the guard above
+        # already refuses `reveal and campaign_is_rehearsal(campaign)`
+        # before `close_campaign()` runs, so this `except` should be
+        # unreachable via `_run_close()` itself (`campaign_is_rehearsal()`
+        # reads the immutable frozen manifest, which cannot change between
+        # the guard check and here within one call) — but
+        # `reveal_split_secret()`'s own fail-closed refusal must never
+        # surface as an unhandled exception from this function either,
+        # regardless of how a future caller reaches this branch. `close_
+        # campaign()` has already appended `campaign_closed` at this point
+        # (append-only ledger; nothing here retracts it), so report the
+        # refusal alongside the otherwise-successful close rather than
+        # raising past it.
+        try:
+            reveal_entry = close_stage.reveal_split_secret(campaign, invocation_id=invocation_id)
+        except close_stage.RehearsalRevealRefusedError as exc:  # pragma: no cover - see above
+            out["result"] = REHEARSAL_REVEAL_REFUSED
+            out["detail"] = str(exc)
+            return out
         out["split_secret_revealed_entry_sha"] = reveal_entry.entry_sha
     return out
 
@@ -2990,6 +3182,47 @@ def _summary_append_cpu_delta(pre_append_cpu_seconds: float) -> float:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
+
+    # v1.2 WP2 §B(i)/(iv): rehearsal は「どこを触るか」を最初に検査してから
+    # 縮小行列へ切り替える（既定解決に落ちる前の生の引数で判定する）。
+    if args.rehearsal:
+        path_violations = _rehearsal_path_violations(
+            {
+                "--campaign-dir": args.campaign_dir,
+                "--secret-dir": args.secret_dir,
+                "--approval-dir": args.approval_dir,
+            }
+        )
+        if path_violations:
+            _print({"result": BLOCKED_REHEARSAL_PATH, "detail": "; ".join(path_violations)})
+            return 1
+        fixture_matrix.set_rehearsal_mode(True)
+
+    # v1.2 WP2 §B(v): manifest の `frozen_design.rehearsal` と `--rehearsal`
+    # フラグの不一致を拒否する（rehearsal campaign を本番実行フラグで進めたり、
+    # 本番 campaign を rehearsal 縮小行列で進めたりさせない）。manifest が
+    # 読めない場合はここでは何も言わず、通常の CAMPAIGN_STATE_ERROR/
+    # PLAN 経路に委ねる。
+    manifest_path = Path(args.campaign_dir) / "c0_manifest.json"
+    try:
+        _manifest_for_rehearsal_check = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        _manifest_for_rehearsal_check = None
+    if isinstance(_manifest_for_rehearsal_check, Mapping):
+        declared = _manifest_declares_rehearsal(_manifest_for_rehearsal_check)
+        if declared != bool(args.rehearsal):
+            _print(
+                {
+                    "result": "REHEARSAL_FLAG_MISMATCH",
+                    "detail": (
+                        f"manifest frozen_design.rehearsal={declared!r} but --rehearsal="
+                        f"{bool(args.rehearsal)!r}; refusing (a rehearsal campaign must be "
+                        "run with --rehearsal and a production campaign without it)"
+                    ),
+                }
+            )
+            return 1
+
     secret_dir = args.secret_dir or default_secret_dir()
     approval_dir = args.approval_dir or default_approval_dir()
 
@@ -3022,7 +3255,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     arming = check_armed(
-        Gate.GATE1_CAMPAIGN_EXECUTION, args.armed, os.environ, approval_dir
+        Gate.GATE1_CAMPAIGN_EXECUTION,
+        args.armed,
+        os.environ,
+        approval_dir,
+        # v1.2 WP2 §B(vii): rehearsal campaign の Gate 1 は construct-id では
+        # ない `["REHEARSAL"]` sentinel を持つ。`--rehearsal` 実行のときだけ
+        # loader へその文脈を伝える（本番実行では従来どおり拒否される）。
+        rehearsal=bool(args.rehearsal),
     )
     if not arming.armed:
         _print(
@@ -3079,7 +3319,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # finding #7: verify the pinned meter/generator/schema/test source bytes
     # match the frozen manifest *before* touching anything that would use
-    # them (build_matrix()/stage dispatch below).
+    # them (active_matrix()/stage dispatch below).
     canonical_violations = _canonical_path_violations(campaign, _REPO_ROOT)
     if canonical_violations:
         campaign.ledger.append(
@@ -3307,7 +3547,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print({"result": "COST_CAP_EXCEEDED", "detail": breach.detail})
         return 1
 
-    matrix_rows = build_matrix() if args.subcommand in _STAGE_DISPATCH_NEEDS_MATRIX else None
+    matrix_rows = (
+        fixture_matrix.active_matrix()
+        if args.subcommand in _STAGE_DISPATCH_NEEDS_MATRIX
+        else None
+    )
 
     # round 15 finding #5 (`[UNDERSPEC-CAL-D31]`): charge this CLI process's
     # own parent-side CPU for the whole stage dispatch to the compute cap —

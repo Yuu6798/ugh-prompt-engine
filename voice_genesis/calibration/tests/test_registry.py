@@ -96,6 +96,34 @@ def test_implementation_ref_has_module_colon_function_shape() -> None:
 
 
 # ---------------------------------------------------------------------------
+# RUN10-CAL-v1.2 WP1 (3): `detection_predicate` — optional, undeclared by
+# every existing candidate in this revision (behaviour-preserving addition).
+# ---------------------------------------------------------------------------
+
+
+def test_detection_predicate_defaults_to_none_for_every_existing_candidate() -> None:
+    """No candidate declares a non-default `detection_predicate` in this
+    revision — the field is registry infrastructure for a future candidate,
+    not a behaviour change for the current 99."""
+    for c in reg.ALL_CANDIDATES:
+        assert c.detection_predicate is None, c.candidate_id
+
+
+def test_detection_predicate_accepts_a_declared_value() -> None:
+    import dataclasses
+
+    from voice_genesis.calibration.fixtures.controls import DetectionPredicate
+
+    base = reg.candidate_by_id("F0-B0-CURRENT")
+    declared = dataclasses.replace(
+        base, detection_predicate=DetectionPredicate(field="f0_hz", min_value=1.0)
+    )
+    assert declared.detection_predicate == DetectionPredicate(field="f0_hz", min_value=1.0)
+    # the base registry entry itself is untouched (dataclasses.replace copies).
+    assert base.detection_predicate is None
+
+
+# ---------------------------------------------------------------------------
 # §2.6 パラメタグリッドの literal 一致（memo §2.6 が凍結する値そのもの）
 # ---------------------------------------------------------------------------
 

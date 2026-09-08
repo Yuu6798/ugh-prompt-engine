@@ -17,6 +17,7 @@ from voice_genesis.calibration.campaign import holdout_stage, measure_stage, sel
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import candidates_for_meter
+from voice_genesis.calibration.fixtures.controls import DetectionPredicate
 from voice_genesis.calibration.fixtures.matrix import FixtureRow, MatrixRow
 from voice_genesis.calibration.gates import DirectionalPair, EUseEvidenceRow, InvariancePair
 from voice_genesis.calibration.vocab import (
@@ -1135,6 +1136,60 @@ def test_control_detection_for_family_counts_false_fire_and_non_fire() -> None:
     assert detection.fnr1 == 1.0
     assert detection.negative_control_failures == 5
     assert detection.positive_control_failures == 5
+
+
+def test_control_detection_for_family_applies_candidate_detection_predicate() -> None:
+    """#349 第2巡 P2 採用: `control_detection_for_family()` は候補の
+    `detection_predicate`（宣言時）をそのまま fire 判定へ渡さなければならない。
+    従来は `fixture_controls.detected(r.output)` を predicate 無しで固定呼び
+    しており、registry が宣言した非既定 predicate が holdout gate5 で無視
+    されていた（`candidate_space_sha()` には記帳されるが判定に反映されない
+    静かな不一致）。
+
+    ここでは `min_value=0.0` の predicate を宣言した合成候補で、閾値未満の
+    有限値（`tilt_db_per_oct=-3.0`）を negative control 行に与える——
+    predicate 無しの既定分岐なら「有限値あり」で fire（false fire）と判定
+    されるところ（`test_control_detection_for_family_counts_false_fire_and_
+    non_fire` が同じ値でそれを固定している）、predicate 有りでは
+    `-3.0 < 0.0` のため non-fire（成功）にならなければならない。positive
+    control 側も対称に、閾値以上の値（`5.0`）で fire（成功）することを
+    固定する。"""
+    candidate = replace(
+        _tilt_candidate(),
+        detection_predicate=DetectionPredicate(field="tilt_db_per_oct", min_value=0.0),
+    )
+    pos1 = _matrix_row("pos-1", family="TILT_GT", block="TRUTH_CORE", positive_control=True)
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = [pos1, neg1]
+    assignment = {"pos-1": Split.HOLDOUT, "neg-1": Split.HOLDOUT}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(5):
+        # below the declared predicate threshold: a finite value that the
+        # predicate-less default policy would treat as "detected" (false
+        # fire), but the declared predicate must treat as non-fire.
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=-3.0
+        )
+        # at/above the declared predicate threshold: must fire (success).
+        records += _within_fresh_record(
+            candidate.candidate_id, "pos-1", probe_index, field="tilt_db_per_oct", value=5.0
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.fdr0 == 0.0
+    assert detection.fnr1 == 0.0
+    assert detection.negative_control_failures == 0
+    assert detection.positive_control_failures == 0
 
 
 def test_control_detection_for_family_negative_control_fully_missing_counts_as_failure() -> None:

@@ -5,9 +5,13 @@ Codex レビュー 2026-09-01 P1: positive control 行を leakage 除外集合�
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 from voice_genesis.calibration import splitter
+from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.fixtures import controls, matrix
-from voice_genesis.calibration.vocab import Domain, Split
+from voice_genesis.calibration.vocab import Domain, MissingReason, Split
 
 _DUMMY_SPLIT_SECRET = b"dummy-secret-for-controls-test-only"
 
@@ -202,4 +206,154 @@ def test_non_boundary_selection_instances_includes_confound_rows_somewhere() -> 
     assert confound_row_ids_seen, (
         "expected at least one CONFOUND row assigned to SELECTION split across all "
         "families under the dummy split secret"
+    )
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.2 WP1: `detected()` — the single fire-判定 that
+# `campaign.selection_stage`/`campaign.holdout_stage` both now call (the two
+# modules previously diverged: `selection_stage._detected()` did not require
+# `values` to be non-empty, `holdout_stage._detected_output()` — the R20-2
+# strict version — did). Default (`predicate=None`) reproduces the R20-2
+# strict version exactly; a `DetectionPredicate` switches to a field-specific
+# threshold test for candidates that declare one via `registry.Candidate.
+# detection_predicate`.
+# ---------------------------------------------------------------------------
+
+
+def test_detected_default_missing_reason_is_false() -> None:
+    output = MeterOutput(values={"f0_hz": 220.0}, missing_reason=MissingReason.OUTPUT_MISSING)
+    assert controls.detected(output) is False
+
+
+def test_detected_default_ineligible_is_false() -> None:
+    output = MeterOutput(values={"f0_hz": 220.0}, ineligible=True, ineligible_reason="no dep")
+    assert controls.detected(output) is False
+
+
+def test_detected_default_empty_values_is_false() -> None:
+    """round 20 finding #2's regression target: `missing_reason=None,
+    ineligible=False, values={}` (a candidate that ran cleanly and found
+    nothing) must not be misread as a detection."""
+    output = MeterOutput(values={})
+    assert controls.detected(output) is False
+
+
+def test_detected_default_nonfinite_value_is_false() -> None:
+    output = MeterOutput(values={"f0_hz": float("nan")})
+    assert controls.detected(output) is False
+
+
+def test_detected_default_finite_nonempty_values_is_true() -> None:
+    output = MeterOutput(values={"f0_hz": 220.0})
+    assert controls.detected(output) is True
+
+
+def test_detected_with_predicate_field_present_above_threshold_is_true() -> None:
+    predicate = controls.DetectionPredicate(field="energy_db", min_value=6.0)
+    output = MeterOutput(values={"energy_db": 12.0})
+    assert controls.detected(output, predicate) is True
+
+
+def test_detected_with_predicate_field_present_below_threshold_is_false() -> None:
+    predicate = controls.DetectionPredicate(field="energy_db", min_value=6.0)
+    output = MeterOutput(values={"energy_db": 3.0})
+    assert controls.detected(output, predicate) is False
+
+
+def test_detected_with_predicate_field_missing_is_false() -> None:
+    predicate = controls.DetectionPredicate(field="energy_db", min_value=6.0)
+    output = MeterOutput(values={"other_field": 100.0})
+    assert controls.detected(output, predicate) is False
+
+
+def test_detected_with_predicate_missing_reason_is_false() -> None:
+    """the `missing_reason`/`ineligible` gate applies uniformly regardless of
+    whether a predicate is supplied."""
+    predicate = controls.DetectionPredicate(field="energy_db", min_value=6.0)
+    output = MeterOutput(
+        values={"energy_db": 12.0}, missing_reason=MissingReason.OUTPUT_MISSING
+    )
+    assert controls.detected(output, predicate) is False
+
+
+def test_detected_with_predicate_nonfinite_value_is_false() -> None:
+    predicate = controls.DetectionPredicate(field="energy_db", min_value=6.0)
+    output = MeterOutput(values={"energy_db": float("inf")})
+    assert controls.detected(output, predicate) is False
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.2 WP1: `SANCTIONED_ABSTENTIONS` closed vocabulary.
+# ---------------------------------------------------------------------------
+
+
+def test_sanctioned_abstentions_is_the_single_preregistered_pair() -> None:
+    """closed vocabulary — additions are preregistration-only for the next
+    revision (module docstring). Locks the current membership so an
+    unreviewed addition shows up as a test diff."""
+    assert controls.SANCTIONED_ABSTENTIONS == frozenset(
+        {(controls.ControlClass.SILENCE, "F0_UNUSABLE")}
+    )
+
+
+# ---------------------------------------------------------------------------
+# #349 第 3 巡 ③ P2 (selection_stage.py:640 `noise_only_false_detection_rate`):
+# `detected()` の omitted `predicate=` を第 2 巡が取りこぼした穴。同型の穴が
+# 他 call site に残っていないかを AST で全数固定し、このファミリーを終端する。
+# ---------------------------------------------------------------------------
+
+
+def _detected_calls_without_predicate_kwarg(source: str) -> list[int]:
+    """`source` 中で `detected(...)` を呼び出しているが `predicate=` キーワード
+    引数を渡していない行番号（`x.detected()` の属性呼び出しも対象）。
+    `def detected(...)` 自体は `ast.Call` に現れないため自動的に除外される。"""
+    lines: list[int] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = (
+            func.id
+            if isinstance(func, ast.Name)
+            else func.attr
+            if isinstance(func, ast.Attribute)
+            else None
+        )
+        if name != "detected":
+            continue
+        has_predicate_kwarg = any(kw.arg == "predicate" for kw in node.keywords)
+        # `detected(output, predicate)` のような位置引数渡しも許容する
+        # （`fixtures.controls.detected` の第 2 位置引数は `predicate`）。
+        has_predicate_positional = len(node.args) >= 2
+        if not (has_predicate_kwarg or has_predicate_positional):
+            lines.append(node.lineno)
+    return lines
+
+
+def test_no_detected_call_sites_omit_predicate_outside_tests() -> None:
+    """`voice_genesis/calibration` 配下の production コードで `detected(`
+    を呼ぶ全 call site が `predicate=`（または第 2 位置引数）で
+    `Candidate.detection_predicate` を伝播していることを固定する
+    （`fixtures/controls.py` 自身の `def detected(...)`/docstring 中の言及は
+    `ast.Call` に現れないため対象外。テストは意図的に既定分岐
+    `predicate=None` を検証するため対象外）。第 2 巡が selection_stage.py の
+    `noise_only_false_detection_rate` 1 箇所を取りこぼした反省から、この
+    全数検査をもって「detected の predicate 伝播ファミリー」を終端する。"""
+    calibration_root = Path(__file__).resolve().parents[1]
+    repo_root = calibration_root.parents[1]
+    offenders: list[str] = []
+    for path in sorted(calibration_root.rglob("*.py")):
+        rel = path.relative_to(repo_root).as_posix()
+        if "/tests/" in f"/{rel}":
+            continue
+        if path.name == "controls.py" and path.parent.name == "fixtures":
+            # `detected()` 自身の定義モジュール — 内部の再帰呼び出しは無い。
+            continue
+        for lineno in _detected_calls_without_predicate_kwarg(path.read_text(encoding="utf-8")):
+            offenders.append(f"{rel}:{lineno}")
+    assert not offenders, (
+        "detected() call site(s) without predicate= found outside tests — "
+        "propagate Candidate.detection_predicate so per-candidate fire "
+        f"thresholds are honored everywhere: {offenders}"
     )
