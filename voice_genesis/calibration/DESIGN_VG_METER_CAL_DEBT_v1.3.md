@@ -219,8 +219,14 @@ cap 先は `DIRECTIONAL`（`capped_ceiling()` は `min(ceiling, DIRECTIONAL)`）
 - FORMANT の検出器をどう作るか（§X2.2 末尾。別 memo）。
 - 本 predicate が実音声で成立するか（合成 fixture 上の分離のみを主張する）。
 
-**負債の terminal status（v1.3 マージ時点）**: 全 `vocab.MeterId` が
-`NOT_EVALUABLE` のまま——**本 revision も本番 campaign を 1 度も完走させておらず、
+**負債の terminal status（v1.3 マージ時点）**: 直近完走した本番 campaign
+`RUN10-CAL-20260904-862dec28`（`.claude/memory/STATUS.md`）の結果のまま据え置き
+——7 meter 中 6 が `NOT_EVALUABLE`（`F0_CONTROL` / `M2_SPECTRAL_TILT` /
+`M3_FORMANTS` / `M5_TRANSITION` = `SELECTION_FAILED_CLOSED`、
+`M2_APERIODICITY` = `DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT`（D77）、
+`M6_IDENTITY` = ABSOLUTE ceiling 未達）、`M4_RESONANCE` は `_run_c4()`
+（`campaign/cli.py`）が selection 結果によらず常時 `DIAGNOSTIC_ONLY` で閉じる
+仕様どおり `DIAGNOSTIC_ONLY`——**本 revision も本番 campaign を 1 度も完走させておらず、
 `debt_discharged` は依然 `false`**。§X1 は TILT の帰属修正であり、§X2 は FORMANT の
 claim 範囲の縮小であって、いずれもそれ自体が負債を返済しない。次に必要な作業は
 (1) rehearsal green の実測、(2) 実 gate 承認時刻を実測した再 freeze（F0 /
