@@ -989,6 +989,7 @@ def _within_fresh_record(
     value: float | None,
     missing: bool = False,
     quiet_valid: bool = False,
+    extra_values: dict[str, float] | None = None,
 ) -> list[measure_stage.MeasurementRecord]:
     """`quiet_valid=True` builds a `MeterOutput(values={})` — a well-formed
     output (`missing_reason=None`, `ineligible=False`) that reports no
@@ -996,11 +997,18 @@ def _within_fresh_record(
     "couldn't produce a value" state (v1.1 §V3.6 round 20 finding #2: the two
     are no longer interchangeable for negative-control detection — only the
     former is a legitimate "valid output exists, and it did not fire").
+
+    `extra_values` merges additional `values` fields alongside `field`
+    (v1.3 §X1: the TILT harmonic candidates carry a `hnr_acf_db` auxiliary
+    field that their declared `detection_predicate` reads).
     """
+    values: dict[str, float | None] = {field: value}
+    if extra_values:
+        values.update(extra_values)
     output = (
         MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
         if missing
-        else MeterOutput(values={}) if quiet_valid else MeterOutput(values={field: value})
+        else MeterOutput(values={}) if quiet_valid else MeterOutput(values=values)
     )
     records = [
         measure_stage.MeasurementRecord(
@@ -1029,8 +1037,22 @@ def _within_fresh_record(
 
 
 def _tilt_candidate():
-    return next(
-        c for c in candidates_for_meter(MeterId.M2_SPECTRAL_TILT) if c.algorithm_family == "HARMONIC_OLS"
+    """HARMONIC_OLS の実 registry 候補を、`detection_predicate` を明示的に外して
+    返す。本ファイルの gate/母集団ロジックのテストは合成 record に
+    `tilt_db_per_oct` のみを載せるため、v1.3 §X1 が宣言した
+    `hnr_acf_db >= -5.0` predicate をそのまま適用すると「HNR 列が無いので
+    全件 non-fire」という別の理由でしか判定できなくなる（検査したいのは
+    fire 定義ではなく gate/母集団の算術）。predicate が実際に伝播することは
+    `test_control_detection_for_family_applies_candidate_detection_predicate`
+    と `test_control_detection_for_family_uses_the_registry_declared_predicate`
+    が別途固定する。"""
+    return replace(
+        next(
+            c
+            for c in candidates_for_meter(MeterId.M2_SPECTRAL_TILT)
+            if c.algorithm_family == "HARMONIC_OLS"
+        ),
+        detection_predicate=None,
     )
 
 
@@ -1136,6 +1158,55 @@ def test_control_detection_for_family_counts_false_fire_and_non_fire() -> None:
     assert detection.fnr1 == 1.0
     assert detection.negative_control_failures == 5
     assert detection.positive_control_failures == 5
+
+
+def test_control_detection_for_family_uses_the_registry_declared_predicate() -> None:
+    """v1.3 §X1: registry が TILT harmonic 候補へ宣言した
+    `hnr_acf_db >= -5.0` が holdout gate5 の fire 判定へ実際に効くこと
+    （`_tilt_candidate()` が predicate を外している分の往復側）。
+
+    `tilt_db_per_oct` は positive/negative とも有限値を載せる——predicate 無し
+    の既定分岐なら両方 fire になる組み合わせで、`hnr_acf_db` の値だけが
+    positive を fire・negative を non-fire に分ける（WP-A 実測レンジの
+    代表値 -1.0 dB / -9.8 dB を使う）。"""
+    candidate = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_SPECTRAL_TILT)
+        if c.algorithm_family == "HARMONIC_OLS"
+    )
+    assert candidate.detection_predicate == DetectionPredicate(
+        field="hnr_acf_db", min_value=-5.0
+    )
+    pos1 = _matrix_row("pos-1", family="TILT_GT", block="TRUTH_CORE", positive_control=True)
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = [pos1, neg1]
+    assignment = {"pos-1": Split.HOLDOUT, "neg-1": Split.HOLDOUT}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "pos-1", probe_index, field="tilt_db_per_oct", value=-6.0,
+            extra_values={"hnr_acf_db": -1.0},
+        )
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=4.5,
+            extra_values={"hnr_acf_db": -9.8},
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.fdr0 == 0.0
+    assert detection.fnr1 == 0.0
+    assert detection.negative_control_failures == 0
+    assert detection.positive_control_failures == 0
 
 
 def test_control_detection_for_family_applies_candidate_detection_predicate() -> None:
@@ -1431,6 +1502,225 @@ def test_control_detection_for_family_negative_control_all_valid_and_quiet_is_su
     assert detection.n_neg == 5
     assert detection.negative_control_failures == 0
     assert detection.fdr0 == 0.0
+
+
+def test_control_detection_for_family_sanctioned_abstention_silence_f0_unusable_not_fired() -> None:
+    """v1.3 (Codex #350 round 3 P1 ADOPT): a SILENCE negative-control instance
+    an F0-dependent candidate was never called on (own group entirely empty
+    -- an `F0_UNUSABLE` skip, not a call that came back silent) is the
+    single sanctioned abstention (`fixtures.controls.SANCTIONED_ABSTENTIONS`
+    == `{(SILENCE, "F0_UNUSABLE")}`) and must be counted as present-but-
+    non-fired (FDR0 denominator only), not as a failure. This is the exact
+    scenario PR #350 round 3 P1 identified: every TILT harmonic ABSOLUTE
+    candidate was structurally unable to reach `CALIBRATED_ABSOLUTE` because
+    `FDR0` could never be `0` for a newly-eligible F0-dependent candidate.
+    probe_index 0 is entirely missing (the sanctioned instance); probes 1-4
+    are padded with genuinely quiet, valid output so `N_neg==5` without
+    themselves being sanctioned or fired -- isolating the count to exactly
+    one sanctioned instance."""
+    candidate = _tilt_candidate()
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="SILENCE",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+    # probe_index 0 has zero own records at all (F0_UNUSABLE skip).
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(1, 5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            quiet_valid=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+        control_class_by_negative_row_id={"neg-1": "SILENCE"},
+        missing_reason_by_negative_row_id={"neg-1": "F0_UNUSABLE"},
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 0
+    assert detection.fdr0 == 0.0
+    assert detection.negative_control_sanctioned_abstentions == 1
+
+
+def test_control_detection_for_family_sanctioned_abstention_closed_vocabulary_excludes_noise_only() -> None:
+    """v1.3 (Codex #350 round 3 P1 ADOPT): the closed vocabulary is not
+    extended by this change -- `(NOISE_ONLY, "F0_UNUSABLE")` is not a member
+    of `fixtures.controls.SANCTIONED_ABSTENTIONS`, so an entirely-missing
+    NOISE_ONLY instance must still be counted as a failure exactly as
+    before, even though the missing_reason string matches the sanctioned
+    reason for SILENCE."""
+    candidate = _tilt_candidate()
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(1, 5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            quiet_valid=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+        control_class_by_negative_row_id={"neg-1": "NOISE_ONLY"},
+        missing_reason_by_negative_row_id={"neg-1": "F0_UNUSABLE"},
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 1
+    assert detection.fdr0 == pytest.approx(1.0 / 5.0)
+    assert detection.negative_control_sanctioned_abstentions == 0
+
+
+def test_control_detection_for_family_sanctioned_abstention_closed_vocabulary_excludes_output_missing() -> None:
+    """v1.3 (Codex #350 round 3 P1 ADOPT): the closed vocabulary is not
+    extended by this change -- `(SILENCE, "OUTPUT_MISSING")` is not a member
+    of `fixtures.controls.SANCTIONED_ABSTENTIONS` either (only `(SILENCE,
+    "F0_UNUSABLE")` is), so an entirely-missing SILENCE instance whose
+    ledger reason is `OUTPUT_MISSING` must still be counted as a failure."""
+    candidate = _tilt_candidate()
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="SILENCE",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(1, 5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            quiet_valid=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+        control_class_by_negative_row_id={"neg-1": "SILENCE"},
+        missing_reason_by_negative_row_id={"neg-1": "OUTPUT_MISSING"},
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 1
+    assert detection.fdr0 == pytest.approx(1.0 / 5.0)
+    assert detection.negative_control_sanctioned_abstentions == 0
+
+
+def test_control_detection_for_family_sanctioned_abstention_kwargs_omitted_keeps_old_behavior() -> None:
+    """v1.3 (Codex #350 round 3 P1 ADOPT): backward compatibility -- when
+    `control_class_by_negative_row_id`/`missing_reason_by_negative_row_id`
+    are omitted (the default `None`), a SILENCE instance that would
+    otherwise qualify as a sanctioned abstention must still be counted as a
+    failure, byte-for-byte the pre-v1.3 behavior (mirrors
+    `..._negative_control_fully_missing_counts_as_failure` above, using a
+    SILENCE control_class specifically to prove the sanctioning logic
+    requires the new kwargs, not merely the control class)."""
+    candidate = _tilt_candidate()
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="SILENCE",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(1, 5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            quiet_valid=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 1
+    assert detection.fdr0 == pytest.approx(1.0 / 5.0)
+    assert detection.negative_control_sanctioned_abstentions == 0
+
+
+def test_control_detection_for_family_sanctioned_abstention_only_applies_to_entirely_missing_group() -> None:
+    """v1.3 (Codex #350 round 3 P1 ADOPT): the design ruling restricts
+    reclassification to the *entirely-missing* branch (`not group`) only --
+    a non-empty group that contains a `missing_reason`-tagged record stays a
+    failure exactly as the round 20 contract requires, even when the
+    sanctioned mapping matches that row_id. This instance has an own record
+    (the candidate *was* called), one of whose repeats is `missing_reason`-
+    tagged -- the round 20 "any missing/invalid repeat fails" rule applies,
+    unaffected by the v1.3 sanctioning (which only ever inspects
+    entirely-empty groups)."""
+    candidate = _tilt_candidate()
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="SILENCE",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+
+    records = [
+        measure_stage.MeasurementRecord(
+            row_id="neg-1",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="within",
+            repeat_index=0,
+            process_id="within-process",
+            output=MeterOutput(values={}),  # valid, quiet
+        ),
+        measure_stage.MeasurementRecord(
+            row_id="neg-1",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="within",
+            repeat_index=1,
+            process_id="within-process",
+            output=MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING),
+        ),
+        measure_stage.MeasurementRecord(
+            row_id="neg-1",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="fresh",
+            repeat_index=0,
+            process_id="fresh-process-0",
+            output=MeterOutput(values={}),  # valid, quiet
+        ),
+    ]
+    for probe_index in range(1, 5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            quiet_valid=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+        control_class_by_negative_row_id={"neg-1": "SILENCE"},
+        missing_reason_by_negative_row_id={"neg-1": "F0_UNUSABLE"},
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 1
+    assert detection.fdr0 == pytest.approx(1.0 / 5.0)
+    assert detection.negative_control_sanctioned_abstentions == 0
 
 
 def test_control_detection_for_family_positive_control_audit_no_analogous_hole() -> None:
@@ -1843,6 +2133,11 @@ def test_build_directional_gate_inputs_uses_per_instance_two_stage_median_not_po
         manifest=manifest,
     )
     assert len(bundle.pairs) == 1
+    # Codex #350 round 4 P2 採用: no NEGATIVE_CONTROL rows in this fixture,
+    # so the sanctioned-abstention accounting field is a plain 0 (the field
+    # is still populated -- not silently dropped -- for a self-describing
+    # bundle).
+    assert bundle.negative_control_sanctioned_abstentions == 0
     pair = bundle.pairs[0]
     assert pair.delta_truth == pytest.approx(1.0)
     # new (fixed) per-instance aggregation: level(truth=1.0) = median of the
@@ -1935,6 +2230,9 @@ def test_evaluate_directional_meter_from_campaign_claim_shrinkage_pass_and_fail(
         expected_sweep_member_row_ids=expected_sweep_member_row_ids,
     )
     assert passing.terminal_status == TerminalStatus.CALIBRATED_DIRECTIONAL.value, passing.gate_detail
+    # Codex #350 round 4 P2 採用: serialized gate_detail always carries the
+    # sanctioned-abstention count (0 here -- no NEGATIVE_CONTROL rows).
+    assert passing.gate_detail["negative_control_sanctioned_abstentions"] == 0
     claim_text = passing.gate_detail["claim_text"]
     contexts = claim_text["evaluated_sweep_contexts"]
     assert [c["sweep_id"] for c in contexts] == ["sweep-a"]
@@ -1959,6 +2257,7 @@ def test_evaluate_directional_meter_from_campaign_claim_shrinkage_pass_and_fail(
     assert failing.gate_detail["passed"] is False
     assert "claim_text" in failing.gate_detail
     assert "prohibited_interpretations" in failing.gate_detail
+    assert failing.gate_detail["negative_control_sanctioned_abstentions"] == 0
 
 
 def test_evaluate_m6_identity_precondition_satisfied_is_honest_not_evaluable() -> None:

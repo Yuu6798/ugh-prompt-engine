@@ -3155,6 +3155,53 @@ def _tilt_row(
     return MatrixRow(row=row, row_id=row_id, domain=domain)
 
 
+def _real_tilt_row(
+    context_label: str,
+    *,
+    block: str,
+    slope: float | None,
+    control_class: str | None = None,
+    positive_control: bool = False,
+    nuisance_tag: str | None = None,
+):
+    """Same shape as `_tilt_row()` above, but for tests that drive a REAL
+    render (`render_stage.run_render_stage()`, not a `render_and_measure_
+    holdout` stub): `fixtures/determinism.py::render_row_pcm_hex()` requires
+    `MatrixRow.row_id` to equal `canonical.row_id(row.to_canonical_dict())`
+    exactly (the real production row_id, computed by `fixtures.matrix.
+    _finalize()` for every canonical matrix row) -- `_tilt_row()`'s
+    human-readable `row_id` (e.g. `"anchor-6"`) is accepted everywhere else
+    only because every other caller stubs `render_and_measure_holdout()`
+    away before any real render worker ever checks it. `context_label` goes
+    into `FixtureRow.context` (part of the canonical dict) purely to keep
+    otherwise-identical rows (e.g. two `SILENCE` negative controls, or the
+    padding rows) from colliding on the same computed row_id. `context`
+    itself cannot carry that label -- `fixtures/generators/common.py::
+    assemble_context()` only accepts its 4 declared enum levels -- so this
+    uses `interaction_tag` instead (an unvalidated free-form field
+    `fixtures/generators/tilt.py`'s generator never reads)."""
+    from voice_genesis.calibration.fixtures import matrix as matrix_module
+    from voice_genesis.calibration.fixtures.matrix import FixtureRow
+
+    row = FixtureRow(
+        family="TILT_GT",
+        block=block,
+        f0_hz=220.0,
+        sr_hz=44100,
+        gain_dbfs=-6.0,
+        duration_s=1.0,
+        noise_clean=True,
+        noise_snr_db=None,
+        context="steady-isolated",
+        control_class=control_class,
+        positive_control=positive_control,
+        interaction_tag=f"underspec-cal-d111-real-path-{context_label}",
+        nuisance_tag=nuisance_tag,
+        slope_db_per_oct=slope,
+    )
+    return matrix_module._finalize(row)
+
+
 def _tilt_records(
     candidate_id: str,
     row_id: str,
@@ -3170,11 +3217,19 @@ def _tilt_records(
     now an unconditional negative-control failure
     (`holdout_stage._negative_fired()`), so a "clean, zero-error" negative
     control fixture must use `quiet_valid` instead to still reach a genuine
-    non-fire (success)."""
+    non-fire (success).
+
+    v1.3 §X1: TILT harmonic 候補は `detection_predicate(field="hnr_acf_db",
+    min_value=-5.0)` を宣言しているため、gate5 の positive control が fire
+    するには `values` に閾値以上の `hnr_acf_db` が要る（実測の正例レンジ
+    [-1.915, +0.747] dB の代表値 -1.0 dB を使う）。負例側は `quiet_valid` の
+    空 `values` のままで、predicate 有無に依らず non-fire（成功）。"""
     output = (
         MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
         if missing
-        else MeterOutput(values={}) if quiet_valid else MeterOutput(values={"tilt_db_per_oct": truth})
+        else MeterOutput(values={})
+        if quiet_valid
+        else MeterOutput(values={"tilt_db_per_oct": truth, "hnr_acf_db": -1.0})
     )
     records: list[measure_stage.MeasurementRecord] = []
     for probe_index in range(n_probes):
@@ -3333,6 +3388,9 @@ def test_c4_absolute_gate_wiring_reaches_calibrated_absolute_on_clean_synthetic_
     assert m2t_result["reason_code"] is None
     assert m2t_result["selected_candidate_id"] == candidate.candidate_id
     assert m2t_result["gate_detail"]["passed"] is True
+    # Codex #350 round 4 P2 採用: clean fixture has no sanctioned
+    # abstentions -- the persisted count must be a plain 0, not absent.
+    assert m2t_result["gate_detail"]["negative_control_sanctioned_abstentions"] == 0
     # AC8 (D17 closure regression lock): the retired placeholder text must
     # never appear on a coverage-complete, capacity-satisfied real-gate path.
     assert "UNDERSPEC-CAL-D17" not in json.dumps(m2t_result)
@@ -3374,6 +3432,404 @@ def test_c4_absolute_gate_wiring_fails_honestly_to_diagnostic_only_with_tiny_e_u
         "gate2" in reason or "gate_max" in reason for reason in gate_detail["failure_reasons"]
     )
     assert "UNDERSPEC-CAL-D17" not in json.dumps(m2t_result)
+
+
+# ---------------------------------------------------------------------------
+# v1.3 (Codex #350 round 3 P1 ADOPT): gate5 sanctioned-abstention wiring. A
+# SILENCE negative-control instance an F0-dependent candidate was never
+# called on (F0_UNUSABLE skip -- zero own records, plus the real
+# `measurement_missing` ledger event `measure_stage.run_measure_stage()`
+# appends for it) is the meter correctly abstaining, not a false fire.
+# Before this fix, `holdout_stage.control_detection_for_family()`'s
+# `_negative_fired()` counted every such entirely-missing instance as a
+# failure unconditionally, so FDR0 could never reach 0 and every v1.3 TILT
+# harmonic ABSOLUTE candidate was structurally unable to reach
+# `CALIBRATED_ABSOLUTE`.
+# ---------------------------------------------------------------------------
+
+
+def _build_absolute_gate_campaign_with_sanctioned_negative_control(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    e_use_value: float,
+    neg_a_control_class: str,
+):
+    """Same shape as `_build_absolute_gate_campaign()` (2 TRUTH_CORE
+    anchors + 1 CONFOUND row + 2 negative controls, all forced HOLDOUT, 15
+    padding TRUTH_CORE rows for split balance) except `neg-a`'s
+    `control_class` is parameterized (`neg_a_control_class`) and `neg-a` is
+    entirely un-measured for the selected F0-dependent HARMONIC_OLS
+    candidate -- zero own `MeasurementRecord`s, plus the real
+    `measurement_missing` ledger event (`reason: "F0_UNUSABLE"`, `cells:
+    [[row_id, probe_index, candidate_id], ...]`) `measure_stage.
+    run_measure_stage()` appends at its skip site (~L1917) for such a
+    candidate x row. `neg-b` stays `NOISE_ONLY` with clean `quiet_valid`
+    records so `N_neg>=10` is met by a real, non-sanctioned population
+    alongside `neg-a`'s (would-be-)sanctioned one."""
+    candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_SPECTRAL_TILT) if c.algorithm_family == "HARMONIC_OLS"
+    )
+    assert candidate.algorithm_family in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+    anchor1 = _tilt_row("anchor-6", block="TRUTH_CORE", slope=-6.0, positive_control=True)
+    anchor2 = _tilt_row("anchor-12", block="TRUTH_CORE", slope=-12.0, positive_control=True)
+    confound = _tilt_row("confound-sr", block="CONFOUND", slope=-6.0, nuisance_tag="sr_hz=8000")
+    neg_a = _tilt_row(
+        "neg-a", block="NEGATIVE_CONTROL", slope=None, control_class=neg_a_control_class
+    )
+    neg_b = _tilt_row("neg-b", block="NEGATIVE_CONTROL", slope=None, control_class="NOISE_ONLY")
+    subset = [anchor1, anchor2, confound, neg_a, neg_b]
+    padding_rows = [
+        _tilt_row(f"padding-{i}", block="TRUTH_CORE", slope=-18.0) for i in range(15)
+    ]
+    padded_subset = subset + padding_rows
+
+    from voice_genesis.calibration import e_use_table as e_use_table_module
+    from voice_genesis.calibration.gates import EUseEvidenceRow
+    from voice_genesis.calibration.vocab import EvidenceClass
+
+    e_use_row = EUseEvidenceRow(
+        construct_id=candidate.construct,
+        unit=candidate.unit,
+        domain=candidate.domain,
+        intended_use="v1.3 #350 round 3 sanctioned-abstention E2E test",
+        maximum_claim="ABSOLUTE",
+        e_use_value=e_use_value,
+        derivation_rule="test fixture",
+        evidence_class=EvidenceClass.USER_ACCEPTED_USE_BOUND,
+        source_id_or_url="test",
+        source_checked_at="2026-09-08",
+        source_hash_or_version="test",
+        applicability_argument="test",
+        review_status="APPROVED_BY_DELEGATION",
+    )
+    serialized = (
+        json.dumps(
+            [e_use_table_module.row_to_dict(e_use_row)], indent=2, ensure_ascii=False, sort_keys=True
+        )
+        + "\n"
+    )
+    e_use_sha = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path,
+        subset=padded_subset,
+        frozen_inputs={"e_use_table_sha256": e_use_sha},
+        force_holdout_row_ids=[mr.row_id for mr in subset],
+        fixture_spec={
+            "TILT_GT": {"u_gt_bound": 0.01, "u_num_bound": 0.01, "confound_axes": ["sr_hz"]},
+        },
+    )
+    (campaign_dir / "e_use_table.json").write_text(serialized, encoding="utf-8")
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": "F0-B0-CURRENT",
+            "outcome": "SELECTED",
+        }
+    )
+    campaign.ledger.append(
+        {"kind": "selection_frozen", "selected_by_family": {"TILT_GT": candidate.candidate_id}}
+    )
+    # neg-a is entirely skipped for this F0-dependent candidate (zero own
+    # MeasurementRecords below) -- record the real skip-path ledger event
+    # (`measure_stage.run_measure_stage()`'s `newly_missing` append site).
+    campaign.ledger.append(
+        {
+            "kind": "measurement_missing",
+            "reason": "F0_UNUSABLE",
+            "cells": [["neg-a", probe_index, candidate.candidate_id] for probe_index in range(5)],
+            "invocation_id": None,
+        }
+    )
+
+    records = (
+        _tilt_records(candidate.candidate_id, "anchor-6", truth=-6.0)
+        + _tilt_records(candidate.candidate_id, "anchor-12", truth=-12.0)
+        + _tilt_records(candidate.candidate_id, "confound-sr", truth=-6.0)
+        # neg-a: no records at all -- the F0_UNUSABLE skip.
+        + _tilt_records(candidate.candidate_id, "neg-b", truth=0.0, quiet_valid=True)
+    )
+    monkeypatch.setattr(
+        cli.holdout_stage, "render_and_measure_holdout", lambda *a, **kw: {"TILT_GT": records}
+    )
+    return campaign, subset, candidate
+
+
+def test_c4_gate5_sanctioned_abstention_silence_f0_unusable_reaches_calibrated_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.3 (Codex #350 round 3 P1 ADOPT): `neg-a` is SILENCE and entirely
+    unmeasured (F0_UNUSABLE skip) -- the sanctioned abstention
+    (`fixtures.controls.SANCTIONED_ABSTENTIONS == {(SILENCE,
+    "F0_UNUSABLE")}`). `_run_c4` must wire `control_class_by_negative_row_id`/
+    `missing_reason_by_negative_row_id` through to gate5 so this instance is
+    counted as present-but-non-fired (FDR0 denominator only), reaching
+    `CALIBRATED_ABSOLUTE` exactly as the clean-data fixture
+    (`test_c4_absolute_gate_wiring_reaches_calibrated_absolute_on_clean_
+    synthetic_data`) does."""
+    campaign, subset, candidate = _build_absolute_gate_campaign_with_sanctioned_negative_control(
+        tmp_path, monkeypatch, e_use_value=2.0, neg_a_control_class="SILENCE"
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2t_result = per_meter[MeterId.M2_SPECTRAL_TILT.value]
+    assert m2t_result["terminal_status"] == "CALIBRATED_ABSOLUTE", m2t_result
+    assert m2t_result["selected_candidate_id"] == candidate.candidate_id
+    gate_detail = m2t_result["gate_detail"]
+    assert gate_detail["passed"] is True, gate_detail
+    assert gate_detail["failure_reasons"] == []
+    # Codex #350 round 4 P2 採用: the sanctioned abstentions (neg-a, SILENCE
+    # x F0_UNUSABLE) that let this CALIBRATED_ABSOLUTE result pass must be
+    # visible on the persisted per-meter record itself. neg-a is entirely
+    # unmeasured across all `fixture_controls.PROBE_REPEATS` (5) probe
+    # instances, so the count is 5 sanctioned instances, not 1 sanctioned
+    # row.
+    assert gate_detail["negative_control_sanctioned_abstentions"] == 5, gate_detail
+
+
+def test_c4_gate5_sanctioned_abstention_closed_vocabulary_excludes_noise_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.3 (Codex #350 round 3 P1 ADOPT): sibling of the test above with
+    the *only* change being `neg-a`'s `control_class` set to `NOISE_ONLY`
+    instead of `SILENCE` (same entirely-missing measurement, same
+    `F0_UNUSABLE` ledger reason). `(NOISE_ONLY, "F0_UNUSABLE")` is not a
+    member of the closed `fixtures.controls.SANCTIONED_ABSTENTIONS`
+    vocabulary, so this instance must NOT be sanctioned -- it stays a gate5
+    failure (`FDR0 != 0`) and the meter must fail honestly, not reach
+    `CALIBRATED_ABSOLUTE`."""
+    campaign, subset, candidate = _build_absolute_gate_campaign_with_sanctioned_negative_control(
+        tmp_path, monkeypatch, e_use_value=2.0, neg_a_control_class="NOISE_ONLY"
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2t_result = per_meter[MeterId.M2_SPECTRAL_TILT.value]
+    assert m2t_result["terminal_status"] != "CALIBRATED_ABSOLUTE", m2t_result
+    assert m2t_result["selected_candidate_id"] == candidate.candidate_id
+    gate_detail = m2t_result["gate_detail"]
+    assert gate_detail["passed"] is False, gate_detail
+    assert any("gate5" in reason for reason in gate_detail["failure_reasons"])
+
+
+# ---------------------------------------------------------------------------
+# UNDERSPEC-CAL-D111 (external review 2026-09-08): the two tests above drive
+# `_run_c4` with `cli.holdout_stage.render_and_measure_holdout` monkeypatched
+# to a `lambda *a, **kw: {"TILT_GT": records}` stub -- so the real render
+# sub-phase, the real `f0_prepass` closure (`cli._build_f0_by_instance`), and
+# the real `measure_stage.run_measure_stage()` skip-to-`measurement_missing`
+# site never run; the `measurement_missing` ledger event is hand-appended by
+# the fixture builder instead. This test drives the REAL path: no
+# `render_and_measure_holdout`/`_build_f0_by_instance`/`run_measure_stage`
+# monkeypatch anywhere, so `neg-a`/`neg-b` are genuinely rendered as SILENCE
+# PCM (`fixtures/generators/common.py`'s `control_class == "SILENCE"`
+# dispatch) and the selected F0 candidate (`F0-B0-CURRENT`, real
+# `candidates/impl/f0_pyin.py`) genuinely measures them -- `librosa.pyin`
+# deterministically finds no voiced frames on true silence (same fact
+# `test_c3a_f0_selection_passes_with_candidate_that_correctly_non_detects_on_
+# silence` above already established for `F0_CONTROL`), so `cli.
+# _build_f0_by_instance()` genuinely places both rows' instances in
+# `f0_unusable_instances`, and `measure_stage.run_measure_stage()`'s real
+# skip site (~L1917) genuinely appends the `measurement_missing` ledger
+# event this fix's gate5 wiring reads. Both negative controls are `SILENCE`
+# (not one `SILENCE` + one `NOISE_ONLY`, unlike the fixture above) precisely
+# to keep this real-audio path deterministic: real noise's own real F0
+# reading is not fixed by this test the way real silence's is, so a
+# `NOISE_ONLY` row here could unpredictably land on either side of the
+# closed `SANCTIONED_ABSTENTIONS` vocabulary boundary depending on whether
+# `pyin` happens to hallucinate a pitch on that specific noise realization --
+# an orthogonal question `test_c4_gate5_sanctioned_abstention_closed_
+# vocabulary_excludes_noise_only` above already covers exactly, without that
+# risk, via its own hand-planted event.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_c4_gate5_sanctioned_abstention_real_f0_prepass_path_reaches_calibrated_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UNDERSPEC-CAL-D111 regression (external review 2026-09-08): reproduces
+    the claimed real-path gap on HEAD 6834ead and confirms the fix. No
+    `render_and_measure_holdout`/`_build_f0_by_instance` monkeypatch: this
+    drives real C4 render (`render_stage.run_render_stage(stage="c4")`), the
+    real `f0_prepass` closure, and real `measure_stage.run_measure_stage()`
+    for both the selected F0 candidate and the selected HARMONIC_OLS
+    candidate. `e_use_value`/`u_gt_bound`/`u_num_bound` are set generously
+    (unlike the tight `0.01`/`2.0` used by the hand-planted-event fixture
+    above, which relies on exact fabricated truth-match records) because
+    real measurement on real audio carries real, nonzero error -- this test
+    is not about gate2'/gate_max' accuracy, only about gate5's FDR0."""
+    candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_SPECTRAL_TILT) if c.algorithm_family == "HARMONIC_OLS"
+    )
+    assert candidate.algorithm_family in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+    anchor1 = _real_tilt_row("anchor-6", block="TRUTH_CORE", slope=-6.0, positive_control=True)
+    anchor2 = _real_tilt_row("anchor-12", block="TRUTH_CORE", slope=-12.0, positive_control=True)
+    confound = _real_tilt_row(
+        "confound-sr", block="CONFOUND", slope=-6.0, nuisance_tag="sr_hz=8000"
+    )
+    # both negative controls are real SILENCE -- see module-level rationale
+    # comment above for why NOISE_ONLY is deliberately avoided here.
+    neg_a = _real_tilt_row(
+        "neg-a", block="NEGATIVE_CONTROL", slope=None, control_class="SILENCE"
+    )
+    neg_b = _real_tilt_row(
+        "neg-b", block="NEGATIVE_CONTROL", slope=None, control_class="SILENCE"
+    )
+    subset = [anchor1, anchor2, confound, neg_a, neg_b]
+    padding_rows = [
+        _real_tilt_row(f"padding-{i}", block="TRUTH_CORE", slope=-18.0) for i in range(15)
+    ]
+    padded_subset = subset + padding_rows
+
+    from voice_genesis.calibration import e_use_table as e_use_table_module
+    from voice_genesis.calibration.gates import EUseEvidenceRow
+    from voice_genesis.calibration.vocab import EvidenceClass
+
+    e_use_row = EUseEvidenceRow(
+        construct_id=candidate.construct,
+        unit=candidate.unit,
+        domain=candidate.domain,
+        intended_use="UNDERSPEC-CAL-D111 real-path E2E test",
+        maximum_claim="ABSOLUTE",
+        e_use_value=100.0,
+        derivation_rule="test fixture",
+        evidence_class=EvidenceClass.USER_ACCEPTED_USE_BOUND,
+        source_id_or_url="test",
+        source_checked_at="2026-09-08",
+        source_hash_or_version="test",
+        applicability_argument="test",
+        review_status="APPROVED_BY_DELEGATION",
+    )
+    serialized = (
+        json.dumps(
+            [e_use_table_module.row_to_dict(e_use_row)], indent=2, ensure_ascii=False, sort_keys=True
+        )
+        + "\n"
+    )
+    e_use_sha = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path,
+        subset=padded_subset,
+        frozen_inputs={"e_use_table_sha256": e_use_sha},
+        force_holdout_row_ids=[mr.row_id for mr in subset],
+        fixture_spec={
+            "TILT_GT": {"u_gt_bound": 0.5, "u_num_bound": 0.5, "confound_axes": ["sr_hz"]},
+        },
+    )
+    (campaign_dir / "e_use_table.json").write_text(serialized, encoding="utf-8")
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    # `render_stage.run_render_stage(stage="c4")`'s leakage pre-check
+    # (`_refuse_if_pre_unseal_holdout` -> `Ledger.check_leakage`) requires the
+    # verification row set to equal the FULL canonical matrix
+    # (`fixtures.matrix.active_matrix()`, ~456 rows) -- a tiny fixture's
+    # `subset`/`padded_subset` never satisfies that by construction, and
+    # `test_campaign_render.py::test_c4_render_refuses_leakage_pre_unseal`
+    # documents this as an intentional, orthogonal fail-closed property of
+    # the leakage guard itself ("tiny subset は全 456 行を被覆しないため
+    # check_leakage は常に fail-closed する"), not something a tiny-campaign
+    # C4 test can satisfy short of driving the full ~456-row matrix through
+    # real C1/C2/C3/unseal first (the `--rehearsal` harness's job, not a
+    # unit test's). This guard is orthogonal to the SILENCE/F0_UNUSABLE
+    # propagation bug under test here, so it alone is bypassed (real
+    # production `cli.py` callers still go through it unmodified) --
+    # everything else in this test (render, F0 prepass, measurement, gate5)
+    # is real.
+    monkeypatch.setattr(render_stage, "_refuse_if_pre_unseal_holdout", lambda *a, **kw: None)
+
+    # `neg-a`/`neg-b` are `NEGATIVE_CONTROL` (`is_control`) rows -- per
+    # `workunits.enumerate_c4_render_units()`'s own docstring ("control は C1
+    # で render 済みの artifact を再利用する。再 render しない"), C4 never
+    # renders control rows itself, it only measures their already-rendered
+    # PCM. `workunits.enumerate_c1_render_units()` renders every control row
+    # regardless of its own split assignment (`is_control or split in (CAL,
+    # SEL)`), so a real C1 render pass -- itself never leakage-gated -- makes
+    # `neg-a`/`neg-b`'s real SILENCE PCM available before `_run_c4` measures
+    # it. `anchor-6`/`anchor-12`/`confound-sr` are HOLDOUT PRIMARY/CONFOUND
+    # rows (not control), so C1 skips them -- C4's own render sub-phase
+    # renders those for real instead, as production does.
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    # Only the upstream C3a/C3b freeze is hand-planted (real C3a/C3b F0
+    # selection is exercised by other tests, e.g.
+    # `test_c3a_f0_selection_passes_with_candidate_that_correctly_non_
+    # detects_on_silence` above) -- everything from C4 entry onward is real:
+    # no `measurement_missing`/`f0_injection_rejected` event is hand-planted
+    # anywhere in this test.
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": "F0-B0-CURRENT",
+            "outcome": "SELECTED",
+        }
+    )
+    campaign.ledger.append(
+        {"kind": "selection_frozen", "selected_by_family": {"TILT_GT": candidate.candidate_id}}
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    # confirm this genuinely exercised the real F0_UNUSABLE skip path (not an
+    # accidental finite F0 reading on either silent row): the selected
+    # candidate has zero own MeasurementRecords for neg-a/neg-b, and the real
+    # `measurement_missing` ledger event names it for both rows with reason
+    # "F0_UNUSABLE".
+    meter_calls = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"]
+    own_neg_calls = [
+        m
+        for m in meter_calls
+        if m["candidate_id"] == candidate.candidate_id
+        and m["row_id"] in (neg_a.row_id, neg_b.row_id)
+    ]
+    assert own_neg_calls == [], own_neg_calls
+    missing_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "measurement_missing"
+    ]
+    missing_cells = {
+        (row_id, cid)
+        for ev in missing_events
+        if ev.get("reason") == "F0_UNUSABLE"
+        for row_id, _probe_index, cid in ev["cells"]
+    }
+    assert (
+        neg_a.row_id,
+        candidate.candidate_id,
+    ) in missing_cells, "neg-a must have a real F0_UNUSABLE measurement_missing event"
+    assert (
+        neg_b.row_id,
+        candidate.candidate_id,
+    ) in missing_cells, "neg-b must have a real F0_UNUSABLE measurement_missing event"
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2t_result = per_meter[MeterId.M2_SPECTRAL_TILT.value]
+    assert m2t_result["terminal_status"] == "CALIBRATED_ABSOLUTE", m2t_result
+    assert m2t_result["selected_candidate_id"] == candidate.candidate_id
+    gate_detail = m2t_result["gate_detail"]
+    assert gate_detail["passed"] is True, gate_detail
+    assert gate_detail["failure_reasons"] == []
+    # 2 SILENCE rows x fixture_controls.PROBE_REPEATS (5) = 10 sanctioned,
+    # entirely-missing negative-control instances.
+    assert gate_detail["negative_control_sanctioned_abstentions"] == 10, gate_detail
 
 
 def test_c4_f0_prepass_covers_shared_control_instances_for_f0_dependent_family(

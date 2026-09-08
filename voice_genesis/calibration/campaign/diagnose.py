@@ -162,7 +162,12 @@ _DIAGNOSE_SPLIT = "DIAGNOSE"
 #: v0.2 (RUN10-CAL-v1.2 WP4b): F0 候補掃引対応で top-level 形状が変わった
 #: （旧 `candidates`/`elapsed_seconds` は `results[]` の各要素へ移動し、
 #: `f0_prepass`/`results[].f0_candidate` が新設）。
-SCHEMA = "diagnose/0.2"
+#: v0.3 (RUN10-CAL-v1.3 段階 2): `--dump-values` 指定時のみ
+#: `results[].candidates[].cell_values` を追加（セルごとの生 `values` 全
+#: フィールド + `missing_reason`/`ineligible`/`detected`）。既定（フラグ
+#: 無し）の出力形状は v0.2 と同一——分離実測のための追加情報であり、
+#: verdict や fire rate の意味論は一切変えない。
+SCHEMA = "diagnose/0.3"
 
 _ROLE_POSITIVE = "positive"
 _ROLE_NEGATIVE = "negative"
@@ -248,12 +253,19 @@ def select_diagnostic_cells(family_value: str, max_cells: int) -> list[tuple[Mat
 class CellOutcome:
     """1 (row, probe_index) × 1 candidate の診断結果。`missing_reason` は
     `output.missing_reason.value` か、F0-unusable skip 由来の合成ラベル
-    (`F0_UNUSABLE_REASON`) のいずれか（両方とも無ければ `None`）。"""
+    (`F0_UNUSABLE_REASON`) のいずれか（両方とも無ければ `None`）。
+
+    `row_id`/`probe_index` は `--dump-values`（schema v0.3）でセルを識別
+    するためだけの注記であり、判定（fire rate・verdict）には一切使わない
+    ——既定 `None` で、合成 `CellOutcome` を使う純関数テストは従来どおり
+    省略できる。"""
 
     role: str
     control_class: str | None
     output: MeterOutput
     missing_reason: str | None
+    row_id: str | None = None
+    probe_index: int | None = None
 
 
 def render_diagnose_signal(row: FixtureRow, row_id: str, probe_index: int) -> tuple[np.ndarray, int]:
@@ -312,7 +324,9 @@ def measure_cell(
     使用不能なら、実経路の skip 挙動（候補を一切呼ばない）を模して呼び出し
     自体を省略し `F0_UNUSABLE_REASON` を合成する。"""
     if needs_f0_injection(candidate) and f0_hz is None:
-        return CellOutcome(role, control_class, MeterOutput(), F0_UNUSABLE_REASON)
+        return CellOutcome(
+            role, control_class, MeterOutput(), F0_UNUSABLE_REASON, row_id, probe_index
+        )
     records = measure_stage.run_within_process_calls(
         candidate,
         signal,
@@ -324,7 +338,7 @@ def measure_cell(
     )
     output = records[0].output
     reason = output.missing_reason.value if output.missing_reason is not None else None
-    return CellOutcome(role, control_class, output, reason)
+    return CellOutcome(role, control_class, output, reason, row_id, probe_index)
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +382,26 @@ def _verdict(
     return "PASS", None
 
 
-def evaluate_candidate(candidate: Candidate, outcomes: Sequence[CellOutcome]) -> dict[str, Any]:
+def _cell_value_entry(candidate: Candidate, outcome: CellOutcome) -> dict[str, Any]:
+    """`--dump-values`（schema v0.3）用の 1 セル分の生記録。`values` は
+    `MeterOutput.values` を丸めずそのまま写す（分離閾値の実測が用途のため。
+    `diagnostics` は主張に使えない補助情報なので含めない）。"""
+    return {
+        "row_id": outcome.row_id,
+        "probe_index": outcome.probe_index,
+        "role": outcome.role,
+        "control_class": outcome.control_class,
+        "values": {k: float(v) for k, v in sorted(outcome.output.values.items())},
+        "missing_reason": outcome.missing_reason,
+        "ineligible": bool(outcome.output.ineligible),
+        "ineligible_reason": outcome.output.ineligible_reason,
+        "detected": detected(outcome.output, predicate=candidate.detection_predicate),
+    }
+
+
+def evaluate_candidate(
+    candidate: Candidate, outcomes: Sequence[CellOutcome], *, dump_values: bool = False
+) -> dict[str, Any]:
     """`outcomes`（`measure_cell()` の結果列、または合成 `CellOutcome`）から
     1 候補分の診断レポートを組み立てる純関数。CONFOUND cell は
     `missing_by_reason` にのみ寄与し、positive/negative fire rate・
@@ -440,7 +473,7 @@ def evaluate_candidate(candidate: Candidate, outcomes: Sequence[CellOutcome]) ->
         candidate.claim_ceiling, positive_rate, negative_rate, all_ineligible, frozenset(incomplete_classes)
     )
 
-    return {
+    report: dict[str, Any] = {
         "candidate_id": candidate.candidate_id,
         "ceiling": candidate.claim_ceiling.value,
         "positive_fire_rate": _round_or_none(positive_rate),
@@ -454,6 +487,9 @@ def evaluate_candidate(candidate: Candidate, outcomes: Sequence[CellOutcome]) ->
         "verdict": verdict,
         "verdict_reason": verdict_reason,
     }
+    if dump_values:
+        report["cell_values"] = [_cell_value_entry(candidate, o) for o in outcomes]
+    return report
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +515,7 @@ def run_diagnosis_for_f0_candidate(
     cells: Sequence[tuple[MatrixRow, str]],
     repeats: int,
     f0_candidate: Candidate | None,
+    dump_values: bool = False,
 ) -> dict[str, Any]:
     """`cells`（`select_diagnostic_cells()` の戻り値、呼び出し側で 1 回だけ
     選抜し F0 候補間で共有する——セル選抜は F0 に依存しないため）を、単一の
@@ -523,7 +560,9 @@ def run_diagnosis_for_f0_candidate(
                 outcomes_by_candidate[candidate.candidate_id].append(outcome)
 
     candidate_reports = [
-        evaluate_candidate(candidate, outcomes_by_candidate[candidate.candidate_id])
+        evaluate_candidate(
+            candidate, outcomes_by_candidate[candidate.candidate_id], dump_values=dump_values
+        )
         for candidate in candidates
     ]
     elapsed = time.monotonic() - started
@@ -541,6 +580,7 @@ def run_diagnosis(
     max_cells: int,
     repeats: int,
     f0_candidate_id: str | None = None,
+    dump_values: bool = False,
 ) -> dict[str, Any]:
     """全体オーケストレーション（CLI のエントリポイント）。`candidates` の
     いずれかが `needs_f0_injection()` なら、F0 prepass 候補を掃引する:
@@ -567,7 +607,9 @@ def run_diagnosis(
         f0_candidates = f0_registry_candidates()
 
     results = [
-        run_diagnosis_for_f0_candidate(family_value, candidates, cells, repeats, f0_candidate)
+        run_diagnosis_for_f0_candidate(
+            family_value, candidates, cells, repeats, f0_candidate, dump_values=dump_values
+        )
         for f0_candidate in f0_candidates
     ]
 
@@ -625,6 +667,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "F0 prepass に固定する registry F0_CONTROL candidate_id（省略時は "
             "f0_registry_candidates() の全件を掃引し候補ごとに結果を出す。F0 依存"
             "候補が対象に無ければ無視される）"
+        ),
+    )
+    parser.add_argument(
+        "--dump-values",
+        action="store_true",
+        help=(
+            "各候補レポートに cell_values（セルごとの生 values 全フィールド + "
+            "missing_reason/ineligible/detected）を含める（schema v0.3。既定は"
+            "従来どおり含めない——判定の意味論は変わらない）"
         ),
     )
     parser.add_argument("--out", type=Path, default=None, help="結果 JSON の出力先（省略時 stdout）")
@@ -685,7 +736,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
     report = run_diagnosis(
-        args.family, candidates, args.max_cells, args.repeats, f0_candidate_id=args.f0_candidate
+        args.family,
+        candidates,
+        args.max_cells,
+        args.repeats,
+        f0_candidate_id=args.f0_candidate,
+        dump_values=args.dump_values,
     )
 
     if args.out is not None:

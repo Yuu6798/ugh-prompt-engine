@@ -36,7 +36,17 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _candidate(candidate_id: str, **overrides: object) -> registry.Candidate:
-    return dataclasses.replace(registry.candidate_by_id(candidate_id), **overrides)
+    """registry 実候補のコピー。**`detection_predicate` は既定で外す** — 本
+    ファイルの verdict 分岐テストは合成 `MeterOutput` に primary output だけを
+    載せるため、v1.3 §X1 が TILT harmonic 候補へ宣言した
+    `hnr_acf_db >= -5.0` をそのまま適用すると「補助フィールドが無いので全件
+    non-fire」という別の理由でしか判定できなくなる（検査対象は fire 定義では
+    なく verdict 分岐の算術）。registry 宣言が diagnose の判定へ実際に伝播する
+    ことは `test_evaluate_candidate_uses_the_registry_declared_predicate` が
+    別途固定する。`overrides` で明示すればそちらが優先される。"""
+    return dataclasses.replace(
+        registry.candidate_by_id(candidate_id), **{"detection_predicate": None, **overrides}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +130,100 @@ def test_evaluate_candidate_pass_when_positive_fires_and_negative_silent() -> No
     assert report["positive_fire_rate"] == 1.0
     assert report["negative_fire_rate"] == 0.0
     assert report["verdict"] == "PASS"
+
+
+def test_evaluate_candidate_uses_the_registry_declared_predicate() -> None:
+    """v1.3 §X1: registry が宣言した `hnr_acf_db >= -5.0` が C-1 診断の
+    fire 判定へそのまま効くこと（`_candidate()` が predicate を外している分の
+    往復側）。`tilt_db_per_oct` は正例・負例とも有限値を載せる——predicate 無し
+    の既定分岐なら両方 fire になる組み合わせで、`hnr_acf_db` の値だけが
+    正例を fire・負例を non-fire に分ける（WP-A 実測レンジの代表値
+    -1.0 dB / -9.8 dB）。"""
+    candidate = registry.candidate_by_id("M2T-HARMONIC-OLS-K4-WINHANN")
+    assert candidate.detection_predicate is not None
+    assert candidate.detection_predicate.field == "hnr_acf_db"
+    assert candidate.detection_predicate.min_value == -5.0
+
+    outcomes = [
+        _outcome(
+            "positive", None,
+            MeterOutput(values={"tilt_db_per_oct": -6.0, "hnr_acf_db": -1.0}),
+        ),
+        _outcome(
+            "negative", "SILENCE",
+            MeterOutput(values={"tilt_db_per_oct": 4.5, "hnr_acf_db": -9.8}),
+        ),
+        _outcome(
+            "negative", "NOISE_ONLY",
+            MeterOutput(values={"tilt_db_per_oct": 1.5, "hnr_acf_db": -9.9}),
+        ),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes)
+    assert report["positive_fire_rate"] == 1.0
+    assert report["negative_fire_rate"] == 0.0
+    assert report["verdict"] == "PASS"
+
+    # 補助フィールドが欠けた出力は（primary output があっても）非発火。
+    missing_hnr = [
+        _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
+        _outcome("negative", "SILENCE", MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)),
+        _outcome(
+            "negative", "NOISE_ONLY", MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
+        ),
+    ]
+    degraded = diagnose.evaluate_candidate(candidate, missing_hnr)
+    assert degraded["positive_fire_rate"] == 0.0
+    assert degraded["verdict"] == "FAIL_POSITIVE"
+
+
+def test_evaluate_candidate_dump_values_records_raw_cells_without_changing_verdict() -> None:
+    """`--dump-values`（schema v0.3）: セルごとの生 `values` 全フィールドと
+    `missing_reason`/`ineligible` が記録され、既定（フラグ無し）は従来どおり
+    `cell_values` を持たない。判定（fire rate・verdict）は両者で同一。"""
+    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    outcomes = [
+        diagnose.CellOutcome(
+            role="positive",
+            control_class=None,
+            output=MeterOutput(values={"tilt_db_per_oct": -6.0}),
+            missing_reason=None,
+            row_id="ROW-P1",
+            probe_index=0,
+        ),
+        diagnose.CellOutcome(
+            role="negative",
+            control_class="SILENCE",
+            output=MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING),
+            missing_reason=MissingReason.OUTPUT_MISSING.value,
+            row_id="ROW-N1",
+            probe_index=0,
+        ),
+    ]
+
+    baseline = diagnose.evaluate_candidate(candidate, outcomes)
+    dumped = diagnose.evaluate_candidate(candidate, outcomes, dump_values=True)
+
+    assert "cell_values" not in baseline
+    assert {k: v for k, v in dumped.items() if k != "cell_values"} == baseline
+
+    entries = dumped["cell_values"]
+    assert [e["row_id"] for e in entries] == ["ROW-P1", "ROW-N1"]
+    assert entries[0] == {
+        "row_id": "ROW-P1",
+        "probe_index": 0,
+        "role": "positive",
+        "control_class": None,
+        "values": {"tilt_db_per_oct": -6.0},
+        "missing_reason": None,
+        "ineligible": False,
+        "ineligible_reason": None,
+        "detected": True,
+    }
+    assert entries[1]["values"] == {}
+    assert entries[1]["missing_reason"] == MissingReason.OUTPUT_MISSING.value
+    assert entries[1]["detected"] is False
+    # JSON 直列化可能（CLI が json.dumps する経路と同じ制約）。
+    json.dumps(dumped, sort_keys=True)
 
 
 def test_evaluate_candidate_fail_positive_when_a_positive_does_not_fire() -> None:
@@ -334,7 +438,7 @@ def test_run_diagnosis_writes_nothing_under_campaigns_or_vg_cal(
 
     assert before == after
     assert not (fake_home / ".vg_cal").exists()
-    assert report["schema"] == "diagnose/0.2"
+    assert report["schema"] == "diagnose/0.3"
     assert report["claimable"] is False
     # M2T-B0-CURRENT-HYBRID does not need F0 injection: no prepass sweep.
     assert report["f0_prepass"] == "not_applicable"
@@ -411,7 +515,7 @@ def test_cli_out_writes_only_the_requested_file(
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     assert payload["family"] == _TILT_FAMILY
     assert payload["claimable"] is False
-    assert payload["schema"] == "diagnose/0.2"
+    assert payload["schema"] == "diagnose/0.3"
     assert payload["f0_prepass"] == "not_applicable"
     assert not (fake_home / ".vg_cal").exists()
 
@@ -481,7 +585,7 @@ def test_cli_real_render_measure_f0_control(
     out = capsys.readouterr().out
     assert exit_code == 0
     report = json.loads(out)
-    assert report["schema"] == "diagnose/0.2"
+    assert report["schema"] == "diagnose/0.3"
     assert report["family"] == _F0_FAMILY
     assert report["claimable"] is False
     assert len(report["cells"]) <= 6

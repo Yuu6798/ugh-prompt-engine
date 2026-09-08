@@ -1244,6 +1244,10 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
 | | `campaign/holdout_stage.py` | `_detected()`/`_detected_output()` を削除し `fixture_controls.detected()` へ置換（`control_detection_for_family()` の positive/negative 両呼び出しへ `candidate.detection_predicate` を伝播 — #349 第2巡） | |
 | | `candidates/registry.py` | `Candidate.detection_predicate: DetectionPredicate \| None = None`（既存 99 候補は全て未宣言 = 挙動不変） | FORMANT 候補への宣言は次 revision |
 | | `campaign/cli.py` | `_criteria_with_fail_filters()`（新 2 引数を c3a/c3b 双方から配線）, `_measurement_missing_reason_index()`, `_control_class_by_negative_row_id()` | |
+| §W1 追補（v1.3, Codex #350 第 3 巡 P1 採用）: holdout gate5 も同じ sanctioned abstention を消費 | `campaign/selection_stage.py` | `sanctioned_abstention_row_ids()`（旧 private `_sanctioned_abstention_row_ids` を公開改名、旧名はエイリアス） | selection 側と同一関数を再利用（複製なし） |
+| | `campaign/holdout_stage.py` | `control_detection_for_family()`（kwonly `control_class_by_negative_row_id`/`missing_reason_by_negative_row_id`。`ControlDetection.negative_control_sanctioned_abstentions` で会計）, `build_absolute_gate_inputs()`/`evaluate_absolute_meter_from_campaign()`/`build_directional_gate_inputs()`/`evaluate_directional_meter_from_campaign()`（同 2 引数を素通し） | entirely-missing instance のみ対象。非空 group の missing/invalid は round 20 契約のまま失敗。**round 4 P2 追補**: 両 bundle が `negative_control_sanctioned_abstentions` を保持し、`evaluate_*_meter_from_campaign()` が返す `MeterHoldoutResult.gate_detail["negative_control_sanctioned_abstentions"]`（0 件でも常に書く）として永続化される |
+| | `campaign/cli.py` | `_run_c4()` が family 単位で `negative_control_row_ids()`/`_control_class_by_negative_row_id()`/`_measurement_missing_reason_index()` から導出し gate5 呼び出しへ配線 | |
+| §W1 追補 2（`UNDERSPEC-CAL-D111`, 外部レビュー 2026-09-08）: 上記配線を monkeypatch なしの real render/F0-prepass/measure 経路で確認 | `tests/test_campaign_cli.py` | `test_c4_gate5_sanctioned_abstention_real_f0_prepass_path_reaches_calibrated_absolute`（新設）, `_real_tilt_row()`（新設ヘルパー） | 実経路で再現不能・コード修正なし。leakage pre-check のみ tiny-fixture 構造的限界として monkeypatch |
 | §W2(a)（C-1 診断ステージ） | `campaign/diagnose.py`（新設） | `run_diagnosis()`, `select_diagnostic_cells()`, `evaluate_candidate()`, `resolve_f0_prepass()`, `f0_registry_candidates()`, CLI `--family`/`--candidate`/`--max-cells`/`--repeats`/`--f0-candidate`/`--out` | freeze/封印/ledger なし・claim 不可（`claimable` 常に `False`）。`build_matrix()` 直呼びは rehearsal 対象外の allowlist 1 件として `test_matrix.py` に登録 |
 | §W2(c)（rehearsal 経路） | `fixtures/matrix.py` | `build_rehearsal_matrix()`, `active_matrix()`, `active_candidates()`, `set_rehearsal_mode()` | 456→58 行（決定論・順序保存・部分集合） |
 | | `c0_freeze.py` | `--rehearsal`（`frozen_design.rehearsal` を core payload へ常時記録）, `manifest_declares_rehearsal()`, `rehearsal_campaign_id_prefix()`, `_check_max_claim_scope(rehearsal=...)` | rehearsal 承認は本番 freeze へ流用不可（core sha が変わる） |
@@ -1273,3 +1277,29 @@ freeze）を実行しない:
 4. **承認時刻の実測**: Gate 1/Gate 2 の `approved_at_utc` が
    `date -u +%Y-%m-%dT%H:%M:%SZ` の実測値であり、freeze event 時刻より前
    であることを `_check_gate_approval_ordering()` が確認すること。
+
+## 9. v1.3 改訂の実装マップ
+
+設計正本 `DESIGN_VG_METER_CAL_DEBT_v1.3.md`（§X1–§X4）の各節を実装した
+モジュール・関数の対応表。実装の詳細な逸脱・境界宣言・採否根拠は
+`README.md` 逸脱台帳 `UNDERSPEC-CAL-D109` が正（本表は経路の索引のみ）。
+
+| v1.3 節 | 実装モジュール | 関数名 / 定数 | 備考 |
+|---|---|---|---|
+| §X1（TILT detection_predicate の preregistration） | `candidates/impl/tilt_harmonic.py` | `HNR_DETECTION_FRAME_MS=25.0` / `HNR_DETECTION_HOP_MS=10.0` / `HNR_DETECTION_WINDOW="hann"`, `detection_hnr_acf_db()`, `_measure()`（`values` へ `hnr_acf_db` を同梱。非有限はキー省略） | WP-A probe と同一パラメータ。primary output `tilt_db_per_oct` は不変 |
+| | `candidates/registry.py` | `M2T_HNR_DETECTION_FIELD` / `M2T_HNR_DETECTION_MIN_DB=-5.0` / `_M2T_HARMONIC_DETECTION_PREDICATE`（OLS 6 + THEILSEN 6 の 12 候補へ宣言） | `M2T-B0-CURRENT-HYBRID`（ceiling=NONE）は宣言しない。`candidate_space_sha` は変わる |
+| | （消費側は無改変） | `fixtures/controls.py::detected()`, `campaign/selection_stage.py`, `campaign/holdout_stage.py`, `campaign/diagnose.py` | v1.2 §W1.2 で判定経路が一本化済みのため配線追加は不要 |
+| §X2（FORMANT を claim scope から外す） | `c0_freeze.py`, `c0_validate.py`, `approvals.py` | `approvals.RETIRED_CLAIM_SCOPE_CONSTRUCTS`（現状 `formant_frequency` のみ）。`c0_freeze._check_max_claim_scope()` は design_revision >= 1.3 の本番（非 rehearsal）freeze で `max_claim_scope` に `formant_frequency` を含む承認を fail-closed で拒否（`claim_scope_contains_retired_construct:formant_frequency`、Codex #350 第 1 巡 P2 採用）。`c0_validate._check_retired_claim_scope_constructs()` が on-disk manifest 側にも同一検査を独立に持つ（producer 経由しない検証経路の縦深防御） | 効果は拒否そのもの（`VALIDATION_BLOCKED`）に加え、万一 v1.3 未満の manifest で scope に残っていた場合の capping = `selection_stage.claim_scope_report()`/`capped_ceiling()` により ABSOLUTE 到達が構造的に不可能（cap 先は `DIRECTIONAL`。`M3-B0-CURRENT-CENTROID` は元から `DIAGNOSTIC_ONLY`） |
+| §X3（答えた問い / 証拠 / 負債） | （docs） | `DESIGN_VG_METER_CAL_DEBT_v1.3.md` §X3, `README.md` D109 | 直近本番 campaign `RUN10-CAL-20260904-862dec28` の結果のまま据え置き: 6 meter `NOT_EVALUABLE`（F0/M2 tilt/M3/M5/M2 aperiodicity/M6）+ M4 `DIAGNOSTIC_ONLY`・`debt_discharged=false` のまま |
+| §X4（統治文書連鎖の一般化） | `approvals.py` | `DESIGN_DOC_CHAIN`（v1.3→v1.2→v1.1→v1.0 のタプル）, `DESIGN_DOC_RELATIVE_PATH = DESIGN_DOC_CHAIN[0]`, `_verify_base_document_pin()`（全リンクを各段 1 回読取で検証）。`BASE_DESIGN_DOC_RELATIVE_PATH`/`BASE_BASE_DESIGN_DOC_RELATIVE_PATH` は削除（後方互換別名なし） | 新 revision の追加は連鎖の先頭へ 1 行 |
+| | `c0_validate.py` | `scan_calibration_tree_inventory()`（連鎖全文書を union）, `_V1_3_DESIGN_REVISION="1.3"`, `_ALLOWED_DESIGN_REVISIONS={"1.1","1.2","1.3"}`, `_DESIGN_REVISION_ORDER` | v1.2 固有検査の floor は `_is_v1_2_or_later()` のまま（版数順で v1.3 も含む） |
+| | `c0_freeze.py` | `_DESIGN_REVISION = "1.3"` | `frozen_design.design_revision` の発行値 |
+| | `c0_path_inventory.json` | （再生成。114 entry） | v1.3 統治文書を追加 |
+
+### C-1 診断の実測（v1.3 マージ前、`--repeats 5 --max-cells 30 --f0-candidate F0-PYIN-FRAME2048-HOP512`）
+
+| family | verdict の内訳 |
+|---|---|
+| TILT_GT（13） | **12 PASS**（harmonic 12 候補、positive 1.0 / negative 0.0）+ **1 NO_CEILING**（`M2T-B0-CURRENT-HYBRID`） |
+| FORMANT_GT（43） | 43 FAIL_NEGATIVE（v1.3 では未修正・claim scope 外。変化なし） |
+| APERIODICITY_GT（24） | 選定成立実績のある `M2A-B0-AUTOCORR-PERIODICITY` は PASS（変化なし） |

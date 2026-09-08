@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -769,66 +770,44 @@ def test_repo_gate1_record_copies_consumed_pins_or_tree_at_head() -> None:
 
 # ---------------------------------------------------------------------------
 # §V6「統治文書の切替 + 基底文書の実行時 pin」(DESIGN_VG_METER_CAL_DEBT_v1.1.md,
-# v1.2 で 2 段連鎖へ拡張): `load_approval()` は承認ファイル自体の
-# design_doc_sha256（= v1.2 の実測 sha256）照合に加え、(1) v1.2 front matter の
-# `base_document_sha256` と checkout 上の v1.1 の実測 sha256 が一致すること、
-# (2) v1.1 front matter 自身の `base_document_sha256` と checkout 上の v1.0 の
-# 実測 sha256 が一致すること、の 2 リンクを検証する（信頼の連鎖: 承認 →
-# v1.2 バイト列 → v1.1 バイト列 → v1.0 バイト列）。実リポジトリの
-# v1.0/v1.1/v1.2 を書き換えずに検証するため、各テストは独立した tmp repo_root
-# へ 3 ドキュメント（+ memo）を複製し、そこだけを改変する。
+# v1.3 §X4 で任意段数の連鎖 `approvals.DESIGN_DOC_CHAIN` へ一般化):
+# `load_approval()` は承認ファイル自体の design_doc_sha256（= 統治正本の実測
+# sha256）照合に加え、連鎖の各リンク（要素 `i` の front matter が宣言する
+# `base_document_sha256` と checkout 上の要素 `i+1` の実測 sha256 の一致）を
+# すべて検証する（信頼の連鎖: 承認 → v1.3 → v1.2 → v1.1 → v1.0）。実リポジトリ
+# の統治文書を書き換えずに検証するため、各テストは独立した tmp repo_root へ
+# 連鎖の全ドキュメント（+ memo）を複製し、そこだけを改変する。
 # ---------------------------------------------------------------------------
 
 
 def _write_base_pin_fixture_repo(
     tmp_path: Path,
     *,
-    corrupt_base_doc: bool = False,
-    corrupt_base_base_doc: bool = False,
+    corrupt_chain_index: int | None = None,
     corrupt_front_matter: bool = False,
 ) -> Path:
-    """`tmp_path` 配下に `DESIGN_DOC_RELATIVE_PATH`(v1.2)/
-    `BASE_DESIGN_DOC_RELATIVE_PATH`(v1.1)/`BASE_BASE_DESIGN_DOC_RELATIVE_PATH`
-    (v1.0)/`MEMO_RELATIVE_PATH` と同じ相対 path で実ドキュメントのコピーを
-    作り、そのルート（= 使うべき `repo_root`）を返す。`corrupt_base_doc=True`
-    は v1.1 コピーを 1 バイト改変（v1.2 front matter が pin する
-    base_document_sha256 と実測が食い違う状態 = 第 1 リンク破壊）。
-    `corrupt_base_base_doc=True` は v1.0 コピーを 1 バイト改変（v1.1 front
-    matter が pin する base_document_sha256 と実測が食い違う状態 = 第 2
-    リンク破壊）。`corrupt_front_matter=True` は v1.2 コピーの front matter
+    """`tmp_path` 配下に `approvals.DESIGN_DOC_CHAIN` の全文書 +
+    `MEMO_RELATIVE_PATH` と同じ相対 path で実ドキュメントのコピーを作り、その
+    ルート（= 使うべき `repo_root`）を返す。`corrupt_chain_index=i`（i>=1）は
+    連鎖の i 番目のコピーを 1 バイト改変する（= 要素 i-1 の front matter が
+    pin する base_document_sha256 と実測が食い違う状態 = 第 i リンク破壊）。
+    `corrupt_front_matter=True` は統治正本（連鎖の先頭）コピーの front matter
     を壊れた形式に置換する（パース不能ケース）。"""
-    real_top = _REPO_ROOT / approvals.DESIGN_DOC_RELATIVE_PATH  # v1.2
-    real_base = _REPO_ROOT / approvals.BASE_DESIGN_DOC_RELATIVE_PATH  # v1.1
-    real_base_base = _REPO_ROOT / approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH  # v1.0
-    real_memo = _REPO_ROOT / approvals.MEMO_RELATIVE_PATH
-
-    top_dst = tmp_path / approvals.DESIGN_DOC_RELATIVE_PATH
-    base_dst = tmp_path / approvals.BASE_DESIGN_DOC_RELATIVE_PATH
-    base_base_dst = tmp_path / approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH
     memo_dst = tmp_path / approvals.MEMO_RELATIVE_PATH
-    top_dst.parent.mkdir(parents=True, exist_ok=True)
-    base_dst.parent.mkdir(parents=True, exist_ok=True)
-    base_base_dst.parent.mkdir(parents=True, exist_ok=True)
     memo_dst.parent.mkdir(parents=True, exist_ok=True)
+    memo_dst.write_bytes((_REPO_ROOT / approvals.MEMO_RELATIVE_PATH).read_bytes())
 
-    top_text = real_top.read_text(encoding="utf-8")
-    if corrupt_front_matter:
-        # 先頭の `---` を落として front matter 自体を消す — `yaml.safe_load`
-        # 云々ではなく、そもそも `_FRONT_MATTER_RE` にマッチしなくなるケース。
-        top_text = top_text.replace("---\n", "***\n", 1)
-    top_dst.write_text(top_text, encoding="utf-8")
-
-    base_bytes = real_base.read_bytes()
-    if corrupt_base_doc:
-        base_bytes = base_bytes + b"\n<!-- tampered for test -->\n"
-    base_dst.write_bytes(base_bytes)
-
-    base_base_bytes = real_base_base.read_bytes()
-    if corrupt_base_base_doc:
-        base_base_bytes = base_base_bytes + b"\n<!-- tampered for test -->\n"
-    base_base_dst.write_bytes(base_base_bytes)
-
-    memo_dst.write_bytes(real_memo.read_bytes())
+    for index, relative in enumerate(approvals.DESIGN_DOC_CHAIN):
+        dst = tmp_path / relative
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        data = (_REPO_ROOT / relative).read_bytes()
+        if index == 0 and corrupt_front_matter:
+            # 先頭の `---` を落として front matter 自体を消す — `yaml.safe_load`
+            # 云々ではなく、そもそも `_FRONT_MATTER_RE` にマッチしなくなるケース。
+            data = data.decode("utf-8").replace("---\n", "***\n", 1).encode("utf-8")
+        if corrupt_chain_index is not None and index == corrupt_chain_index:
+            data = data + b"\n<!-- tampered for test -->\n"
+        dst.write_bytes(data)
     return tmp_path
 
 
@@ -862,9 +841,9 @@ def _write_gate1_for_repo_root(approval_dir: Path, repo_root: Path, **overrides:
 
 
 def test_base_document_pin_holds_with_unmodified_chain(tmp_path: Path) -> None:
-    """(a) 正しい v1.2 front matter（実物そのまま）+ 無改変 v1.1/v1.0 コピー ->
-    2 段連鎖の base_document_sha256 検証はいずれも pin 成立し、通常どおり
-    approved になる。"""
+    """(a) 正しい統治正本 front matter（実物そのまま）+ 無改変の全基底文書
+    コピー -> `DESIGN_DOC_CHAIN` の全リンクで base_document_sha256 検証が
+    pin 成立し、通常どおり approved になる。"""
     repo_root = _write_base_pin_fixture_repo(tmp_path / "repo")
     approval_dir = tmp_path / "approvals"
     approval_dir.mkdir()
@@ -878,11 +857,11 @@ def test_base_document_pin_holds_with_unmodified_chain(tmp_path: Path) -> None:
 
 
 def test_base_document_pin_rejects_modified_base_doc(tmp_path: Path) -> None:
-    """(b) 第 1 リンク: v1.1（v1.2 front matter が pin する相手）を 1 バイト
-    改変すると、pin する base_document_sha256 と実測 sha256 が食い違い、
-    未承認 + 理由列挙になる（承認ファイル自体は正しくても、というのが要点:
-    base pin は承認ファイルの内容と独立に検証される）。"""
-    repo_root = _write_base_pin_fixture_repo(tmp_path / "repo", corrupt_base_doc=True)
+    """(b) 第 1 リンク: 統治正本の直下の基底文書（front matter が pin する
+    相手）を 1 バイト改変すると、pin する base_document_sha256 と実測 sha256 が
+    食い違い、未承認 + 理由列挙になる（承認ファイル自体は正しくても、という
+    のが要点: base pin は承認ファイルの内容と独立に検証される）。"""
+    repo_root = _write_base_pin_fixture_repo(tmp_path / "repo", corrupt_chain_index=1)
     approval_dir = tmp_path / "approvals"
     approval_dir.mkdir()
     _write_gate1_for_repo_root(approval_dir, repo_root)
@@ -897,12 +876,14 @@ def test_base_document_pin_rejects_modified_base_doc(tmp_path: Path) -> None:
 
 
 def test_base_document_pin_rejects_modified_base_base_doc(tmp_path: Path) -> None:
-    """(b') 第 2 リンク: v1.0（v1.1 front matter が pin する相手）を 1 バイト
-    改変すると、第 1 リンク（v1.2->v1.1）は無傷でも第 2 リンク（v1.1->v1.0）が
-    食い違い、未承認 + 理由列挙になる。2 段連鎖のどちらのリンクが壊れても
-    fail-closed になることの直接確認（v1.2 で連鎖が 1 段から 2 段になった
-    ことの回帰ガード）。"""
-    repo_root = _write_base_pin_fixture_repo(tmp_path / "repo", corrupt_base_base_doc=True)
+    """(b') 最終リンク: 連鎖の末尾文書（その 1 つ手前の front matter が pin
+    する相手）を 1 バイト改変すると、手前のリンクは無傷でも最終リンクが
+    食い違い、未承認 + 理由列挙になる。連鎖のどのリンクが壊れても fail-closed
+    になることの直接確認（v1.3 §X4 で連鎖が任意段数へ一般化されたことの
+    回帰ガード）。"""
+    repo_root = _write_base_pin_fixture_repo(
+        tmp_path / "repo", corrupt_chain_index=len(approvals.DESIGN_DOC_CHAIN) - 1
+    )
     approval_dir = tmp_path / "approvals"
     approval_dir.mkdir()
     _write_gate1_for_repo_root(approval_dir, repo_root)
@@ -917,9 +898,9 @@ def test_base_document_pin_rejects_modified_base_base_doc(tmp_path: Path) -> Non
 
 
 def test_base_document_pin_rejects_missing_front_matter(tmp_path: Path) -> None:
-    """(c) v1.2 の front matter が読めない（先頭の `---` 区切りが壊れている）
-    場合は第 1 リンクの base_document_sha256 自体を検証できず、fail-closed
-    で未承認になる。"""
+    """(c) 統治正本の front matter が読めない（先頭の `---` 区切りが壊れて
+    いる）場合は第 1 リンクの base_document_sha256 自体を検証できず、
+    fail-closed で未承認になる。"""
     repo_root = _write_base_pin_fixture_repo(tmp_path / "repo", corrupt_front_matter=True)
     approval_dir = tmp_path / "approvals"
     approval_dir.mkdir()
@@ -937,24 +918,13 @@ def test_base_document_pin_rejects_missing_front_matter(tmp_path: Path) -> None:
 
 def test_base_document_pin_rejects_missing_base_document_sha_field(tmp_path: Path) -> None:
     """front matter は存在するが `base_document_sha256` フィールド自体が
-    欠落/不正な形式（sha256 hex でない）ケース（第 1 リンク = v1.2 側）。"""
-    repo_root = tmp_path / "repo"
+    欠落/不正な形式（sha256 hex でない）ケース（第 1 リンク = 統治正本側）。"""
+    repo_root = _write_base_pin_fixture_repo(tmp_path / "repo")
     top_dst = repo_root / approvals.DESIGN_DOC_RELATIVE_PATH
-    base_dst = repo_root / approvals.BASE_DESIGN_DOC_RELATIVE_PATH
-    base_base_dst = repo_root / approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH
-    memo_dst = repo_root / approvals.MEMO_RELATIVE_PATH
-    top_dst.parent.mkdir(parents=True, exist_ok=True)
-    memo_dst.parent.mkdir(parents=True, exist_ok=True)
-
     top_dst.write_text(
         "---\ndocument_id: TEST\nbase_document_path: irrelevant.md\n---\n# body\n",
         encoding="utf-8",
     )
-    base_dst.write_bytes((_REPO_ROOT / approvals.BASE_DESIGN_DOC_RELATIVE_PATH).read_bytes())
-    base_base_dst.write_bytes(
-        (_REPO_ROOT / approvals.BASE_BASE_DESIGN_DOC_RELATIVE_PATH).read_bytes()
-    )
-    memo_dst.write_bytes((_REPO_ROOT / approvals.MEMO_RELATIVE_PATH).read_bytes())
 
     approval_dir = tmp_path / "approvals"
     approval_dir.mkdir()
@@ -970,9 +940,9 @@ def test_base_document_pin_rejects_missing_base_document_sha_field(tmp_path: Pat
 
 
 def test_verify_base_document_pin_directly_ok(tmp_path: Path) -> None:
-    """`_verify_base_document_pin()` 単体呼び出しでも、無改変コピー（2 段連鎖
-    とも pin 成立）なら空 reasons を返す。R16 対応で v1.2 バイト列は呼び出し
-    側が渡す（第 2 リンクの v1.1 バイト列は本関数自身が読む）。"""
+    """`_verify_base_document_pin()` 単体呼び出しでも、無改変コピー（連鎖の
+    全リンクで pin 成立）なら空 reasons を返す。R16 対応で統治正本のバイト列は
+    呼び出し側が渡す（以降の段のバイト列は本関数自身が 1 回ずつ読む）。"""
     repo_root = _write_base_pin_fixture_repo(tmp_path / "repo")
     design_doc_bytes = (repo_root / approvals.DESIGN_DOC_RELATIVE_PATH).read_bytes()
     assert approvals._verify_base_document_pin(repo_root, design_doc_bytes) == []
@@ -1013,6 +983,151 @@ def test_load_approval_reads_design_doc_exactly_once(
 
     design_doc_reads = [p for p in read_bytes_calls if p == design_doc_path]
     assert len(design_doc_reads) == 1, read_bytes_calls
+
+
+def test_design_doc_chain_shape_and_governing_head() -> None:
+    """v1.3 §X4: 統治文書連鎖はリストであり、先頭が統治正本
+    (`DESIGN_DOC_RELATIVE_PATH`)、以降が承継元。重複が無く、全要素が
+    checkout 上に実在すること。"""
+    chain = approvals.DESIGN_DOC_CHAIN
+    assert len(chain) >= 3, chain
+    assert len(set(chain)) == len(chain), chain
+    assert approvals.DESIGN_DOC_RELATIVE_PATH == chain[0]
+    for relative in chain:
+        assert (_REPO_ROOT / relative).is_file(), relative
+    assert not hasattr(approvals, "BASE_DESIGN_DOC_RELATIVE_PATH")
+    assert not hasattr(approvals, "BASE_BASE_DESIGN_DOC_RELATIVE_PATH")
+
+
+def test_base_document_pin_verifies_every_link_of_the_chain(tmp_path: Path) -> None:
+    """連鎖の **どの中間リンクを壊しても** fail-closed になること（3 段以上の
+    連鎖で「先頭 2 段しか見ていない」実装退行を検出する回帰ガード）。"""
+    for index in range(1, len(approvals.DESIGN_DOC_CHAIN)):
+        repo_root = _write_base_pin_fixture_repo(
+            tmp_path / f"repo{index}", corrupt_chain_index=index
+        )
+        approval_dir = tmp_path / f"approvals{index}"
+        approval_dir.mkdir()
+        _write_gate1_for_repo_root(approval_dir, repo_root)
+
+        result = approvals.load_approval(
+            approvals.Gate.GATE1_CAMPAIGN_EXECUTION, approval_dir, repo_root=repo_root
+        )
+        assert result.approved is False, index
+        assert any(
+            "base_document_sha256 mismatch" in r for r in result.reasons
+        ), (index, result.reasons)
+
+
+# ---------------------------------------------------------------------------
+# 外部レビュー 2026-09-08 (2) [`UNDERSPEC-CAL-D112`]: 統治文書の読取間差し替え
+# (TOCTOU) — 連鎖検証が中間文書を「hash 照合用」と「front matter 解析用（次
+# リンクの pin 元）」の 2 回読む実装だと、その間隔で文書が差し替わった場合に
+# どちらの版も単独では一貫検証されない組み合わせで承認が通り得る。Codex #350
+# 第 1 巡「Read each intermediate design document only once」を境界宣言から
+# 昇格し、本 PR で単一読取化して閉塞する。
+# ---------------------------------------------------------------------------
+
+
+def _replace_base_document_sha256(text: str, new_sha256_hex: str) -> str:
+    """front matter の `base_document_sha256:` 行の値だけを置換する（他の
+    フィールド・本文は不変。差し替え後も `yaml.safe_load` で再パース可能）。"""
+    replaced, count = re.subn(
+        r"(base_document_sha256:\s*)[0-9a-f]{64}",
+        r"\g<1>" + new_sha256_hex,
+        text,
+        count=1,
+    )
+    assert count == 1, "fixture design doc must declare a base_document_sha256 hex value"
+    return replaced
+
+
+def test_toctou_intermediate_doc_reread_swap_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """中間文書（連鎖の v1.2 相当）を「hash 照合」と「front matter 解析」で
+    2 回読む実装だと、2 回の読取に別内容を差し込む攻撃で、v1.2 自身の
+    base_document_sha256 が壊れている（v1.1 の実測 sha と食い違う）状態でも
+    承認が通ってしまっていた（fail-before の実測: 単体スクリプトで
+    `approved=True` かつ v1.2 の `read_bytes` 呼び出し回数 2 を確認 —
+    `/tmp/.../scratchpad/v13/repro_before_final_output.txt`）。単一読取化した
+    修正後は、同じ fixture で REJECT になることを固定する（pass-after）。
+
+    fixture 構成:
+      - `variant_pinned`: 実物 v1.2 の front matter の `base_document_sha256`
+        だけを「v1.1 の実測 sha と一致しない」値へ改変したもの。v1.3 の
+        front matter はこの `variant_pinned` の実測 sha を pin するよう
+        あわせて改変する（= これが v1.3 から見た「正しい v1.2」）。
+      - `variant_swapped`: 実物 v1.2 をそのまま使う（`base_document_sha256`
+        は v1.1 の実測 sha と正しく一致する）。
+
+    修正前の実装は v1.2 を 2 回読んでいた: 1 回目（hash 照合。
+    `_sha256_file()` 経由）に `variant_pinned` を返し、2 回目（次リンクの
+    pin 元として使う front matter 解析用）に `variant_swapped` を返す
+    monkeypatch を当てると、v1.3 の pin は 1 回目の読取の実測 sha と一致する
+    ためリンク 0 が成立し、2 回目の読取は v1.1 の実測 sha を正しく pin して
+    いるためリンク 1 も成立してしまう —— v1.3 が実際に pin した
+    `variant_pinned` 自身の `base_document_sha256` は一度も検証されないまま
+    承認が通っていた。単一読取化した修正後は v1.2 が 1 回しか読まれず
+    （= `variant_pinned` のみが使われ）、その壊れた `base_document_sha256`
+    が検出されて fail-closed に REJECT される。
+    """
+    repo_root = _write_base_pin_fixture_repo(tmp_path / "repo")
+    v1_3_path = repo_root / approvals.DESIGN_DOC_CHAIN[0]
+    v1_2_path = repo_root / approvals.DESIGN_DOC_CHAIN[1]
+    v1_1_path = repo_root / approvals.DESIGN_DOC_CHAIN[2]
+
+    variant_swapped = v1_2_path.read_bytes()  # 実物 v1.2（v1.1 への正しい pin）
+    real_v1_1_sha = hashlib.sha256(v1_1_path.read_bytes()).hexdigest()
+
+    # variant_pinned: v1.2 自身の base_document_sha256 を v1.1 の実測 sha と
+    # 食い違う値へ改変する（「v1.2 自身の連鎖が壊れている」ケース）。全桁数字
+    # だと YAML が int と解釈してしまう (isinstance(str) 検査に落ちて
+    # "missing/invalid" になり、狙った "mismatch" 経路を通らない) ため、
+    # 文字を含む hex 文字列にする。
+    bogus_base_sha = "deadbeef" * 8
+    assert bogus_base_sha != real_v1_1_sha
+    variant_pinned = _replace_base_document_sha256(
+        variant_swapped.decode("utf-8"), bogus_base_sha
+    ).encode("utf-8")
+    assert variant_pinned != variant_swapped
+
+    # v1.3 の pin を variant_pinned の実測 sha へ差し替える（v1.3 視点では
+    # variant_pinned こそが「正しい v1.2」である、という fixture 前提）。
+    variant_pinned_sha = hashlib.sha256(variant_pinned).hexdigest()
+    v1_3_text = v1_3_path.read_text(encoding="utf-8")
+    v1_3_path.write_text(
+        _replace_base_document_sha256(v1_3_text, variant_pinned_sha), encoding="utf-8"
+    )
+
+    approval_dir = tmp_path / "approvals"
+    approval_dir.mkdir()
+    _write_gate1_for_repo_root(approval_dir, repo_root)
+
+    call_count = {"n": 0}
+    original_read_bytes = Path.read_bytes
+
+    def swapping_read_bytes(self: Path) -> bytes:
+        if self == v1_2_path:
+            call_count["n"] += 1
+            return variant_pinned if call_count["n"] == 1 else variant_swapped
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", swapping_read_bytes)
+
+    result = approvals.load_approval(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, approval_dir, repo_root=repo_root
+    )
+
+    assert result.approved is False, (
+        "TOCTOU: intermediate design doc re-read with different content between "
+        f"hash-check and chain-verification should be rejected, reasons={result.reasons}"
+    )
+    assert any("base_document_sha256 mismatch" in r for r in result.reasons), result.reasons
+    assert call_count["n"] == 1, (
+        "v1.2 should be read exactly once per load_approval() call after the fix "
+        f"(observed {call_count['n']} reads)"
+    )
 
 
 # ---------------------------------------------------------------------------

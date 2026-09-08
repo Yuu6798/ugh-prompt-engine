@@ -84,7 +84,12 @@ class Candidate:
     """RUN10-CAL-v1.2 WP1: `fixtures.controls.detected()` へ渡す非既定 fire
     判定（任意）。既定 `None` は `detected()` の既定分岐（missing_reason/
     ineligible のいずれでも説明されず values が非空かつ全値有限）を使うことを
-    意味し、既存の全候補は本 revision では宣言しない（挙動不変）。"""
+    意味する。v1.2 では全候補が未宣言だった。**v1.3 §X1 preregistration**:
+    M2_SPECTRAL_TILT の harmonic 12 候補（OLS 6 + THEILSEN 6）のみが
+    `DetectionPredicate(field="hnr_acf_db", min_value=-5.0)` を宣言する
+    （`_M2T_HARMONIC_DETECTION_PREDICATE`）。宣言により
+    `candidate_space_sha()` の payload が変わる（v1.2 の「未宣言候補では
+    sha 不変」は、未宣言候補にのみ成り立つ主張として引き続き有効）。"""
 
     def params_dict(self) -> dict[str, object]:
         return dict(self.parameters)
@@ -246,6 +251,23 @@ def _build_m3_formants() -> list[Candidate]:
 M2T_K = (4, 6, 8)
 M2T_WINDOW = ("hann", "blackman_harris")
 
+#: RUN10-CAL v1.3 §X1 preregistration: TILT harmonic 12 候補（OLS 6 + THEILSEN 6）
+#: の fire 判定を primary output `tilt_db_per_oct` の present/finite ではなく
+#: harmonicity 補助値 `hnr_acf_db` の閾値で行う。閾値 -5.0 dB は段階 2 実測
+#: （WP-A、`scratchpad/v13/wpa_report.md` §3 H-T1）の
+#: 正例 [-1.915, +0.747] dB / NOISE_ONLY [-9.878, -9.758] dB の中間（余裕
+#: 7.8 dB）に置いた。**既知の限界**: TILT_GT の負例集合は SILENCE / NOISE_ONLY
+#: のみ（`fixtures.matrix._tilt_rows()` の `negative_n=2`）であり、本 predicate は
+#: PURE_SINE（完全 harmonic、FORMANT_GT 行の実測 `hnr_acf_db` = 0.762）に対して
+#: 非発火を保証しない。これは「測定器を通すための対照変更」ではなく、既に凍結
+#: された対照集合に対する測定器の棄権条件の宣言である（v1.2 §W0 ルール 7）。
+#: B0-HYBRID（ceiling=NONE）は宣言しない。
+M2T_HNR_DETECTION_FIELD = "hnr_acf_db"
+M2T_HNR_DETECTION_MIN_DB = -5.0
+_M2T_HARMONIC_DETECTION_PREDICATE = DetectionPredicate(
+    field=M2T_HNR_DETECTION_FIELD, min_value=M2T_HNR_DETECTION_MIN_DB
+)
+
 
 def _build_m2_tilt() -> list[Candidate]:
     out: list[Candidate] = []
@@ -282,6 +304,7 @@ def _build_m2_tilt() -> list[Candidate]:
                 claim_ceiling=vocab.ClaimCeiling.ABSOLUTE,
                 complexity_rank=rank,
                 implementation_ref="candidates.impl.tilt_harmonic:measure_ols",
+                detection_predicate=_M2T_HARMONIC_DETECTION_PREDICATE,
             )
         )
         rank += 1
@@ -300,6 +323,7 @@ def _build_m2_tilt() -> list[Candidate]:
                 claim_ceiling=vocab.ClaimCeiling.ABSOLUTE,
                 complexity_rank=rank,
                 implementation_ref="candidates.impl.tilt_harmonic:measure_theilsen",
+                detection_predicate=_M2T_HARMONIC_DETECTION_PREDICATE,
             )
         )
         rank += 1
