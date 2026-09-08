@@ -40,7 +40,10 @@ from typing import Any
 
 from voice_genesis.calibration.campaign import measure_stage, workunits
 from voice_genesis.calibration.campaign.render_stage import run_render_stage
-from voice_genesis.calibration.campaign.selection_stage import truth_value_for_row
+from voice_genesis.calibration.campaign.selection_stage import (
+    sanctioned_abstention_row_ids,
+    truth_value_for_row,
+)
 from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.campaign.time_budget import SliceStatus, TimeBudget
 from voice_genesis.calibration.candidates.registry import Candidate, candidate_by_id
@@ -317,6 +320,7 @@ class ControlDetection:
     min_count_met: bool
     negative_control_failures: int
     positive_control_failures: int
+    negative_control_sanctioned_abstentions: int = 0
 
 
 def control_detection_for_family(
@@ -326,6 +330,8 @@ def control_detection_for_family(
     family: str,
     candidate: Candidate,
     records: Sequence[measure_stage.MeasurementRecord],
+    control_class_by_negative_row_id: Mapping[str, str] | None = None,
+    missing_reason_by_negative_row_id: Mapping[str, str] | None = None,
 ) -> ControlDetection:
     """gate5（§10.1 detection、§10.3 gate5）の `FDR0`/`FNR1` を、negative/
     positive control instance の実測から組み立てる。
@@ -382,7 +388,36 @@ def control_detection_for_family(
       missing_reason はいずれかの record に立った時点で（他の record が
       たとえ非検出の有効出力でも）instance 全体を失敗へ倒す（下記 (b) 参照。
       §V3.6 の「missing/invalid が 1 つでもあれば分子算入」を repeat 単位で
-      厳密に適用する）。"""
+      厳密に適用する）。
+
+    v1.3 (Codex #350 round 3 P1 採用, 2026-09-08): F0 依存候補
+    (`measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES`) が SILENCE negative
+    control 行で `F0_UNUSABLE` により一切呼ばれない場合、当該 instance の
+    own record が **1 件も無い**（`by_instance` の group 自体が空）ため
+    `_negative_fired()` は無条件に `True`（発火=失敗）を返していた——
+    selection 側 (`selection_stage._sanctioned_abstention_row_ids`、現
+    `sanctioned_abstention_row_ids`) が既に是正済みの「計器が正しく棄権した」
+    ケースと同型の穴が holdout gate5 に残っていた（ABSOLUTE gate は
+    `FDR0 == 0` を要求するため、v1.3 が解禁した TILT harmonic ABSOLUTE 候補
+    全 12 件が構造的に `CALIBRATED_ABSOLUTE` へ到達不能になっていた）。
+
+    `control_class_by_negative_row_id`/`missing_reason_by_negative_row_id`
+    （selection 側と同じ形の row_id -> 値マップ、いずれも既定 `None`）を
+    渡すと、**group が完全に空の** instance に限り、その row_id が
+    `sanctioned_abstention_row_ids()`（selection と同一の閉語彙
+    `fixtures.controls.SANCTIONED_ABSTENTIONS`、現行 `(SILENCE,
+    "F0_UNUSABLE")` のみ）に一致すれば「present かつ non-fired」（`False`）
+    として扱う——`FDR0` の分母（`n_neg`）には算入し分子には算入しない
+    （sanctioned 件数は `ControlDetection.negative_control_sanctioned_
+    abstentions` として別途会計する）。**group が非空**（何らかの own
+    record が存在し、その中に missing_reason/ineligible な repeat が
+    混じっている）場合はこの再分類の対象外のまま——round 20 の
+    「非空 group 内の missing/invalid は無条件に失敗」契約は変更しない
+    （全欠落 instance のみが対象、round 20 契約そのままの安全側）。
+    閉語彙は selection と同一のまま拡張しない（例: NOISE_ONLY×F0_UNUSABLE
+    や SILENCE×OUTPUT_MISSING は従来どおり失敗のまま）。両 kwargs が
+    省略/`None`（後方互換の既定）なら `sanctioned_abstention_row_ids()`
+    自身が空集合を返すため、本関数は本 revision 前と完全に同じ挙動を保つ。"""
     neg_instances = fixture_controls.negative_control_instances(matrix_rows, family=family)
     pos_instances = fixture_controls.positive_detection_instances(
         matrix_rows, assignment, Split.HOLDOUT, family=family
@@ -391,6 +426,19 @@ def control_detection_for_family(
     by_instance: dict[tuple[str, int], list[measure_stage.MeasurementRecord]] = {}
     for r in own_records:
         by_instance.setdefault((r.row_id, r.probe_index), []).append(r)
+
+    # v1.3 (Codex #350 round 3 P1): sanctioned-abstention row set, computed
+    # once over the *entirely-missing* negative instances only (own group
+    # empty) — see the docstring's v1.3 paragraph above.
+    entirely_missing_neg_row_ids = {
+        row_id for row_id, probe_index in neg_instances if not by_instance.get((row_id, probe_index))
+    }
+    sanctioned_row_ids = sanctioned_abstention_row_ids(
+        entirely_missing_neg_row_ids,
+        control_class_by_negative_row_id,
+        missing_reason_by_negative_row_id,
+    )
+    sanctioned_abstained_instances: set[tuple[str, int]] = set()
 
     def _positive_detected(instance: tuple[str, int]) -> bool:
         # round 20 finding #2 audit (positive side, no analogous hole found):
@@ -413,6 +461,15 @@ def control_detection_for_family(
     def _negative_fired(instance: tuple[str, int]) -> bool:
         group = by_instance.get(instance)
         if not group:
+            # v1.3 (Codex #350 round 3 P1): a sanctioned abstention (e.g. a
+            # SILENCE row an F0-dependent candidate was never called on,
+            # missing_reason "F0_UNUSABLE") is the meter correctly
+            # abstaining, not a false fire — present (counted in n_neg) and
+            # non-fired. Only this entirely-missing branch is eligible; a
+            # non-empty group is never reclassified here (see docstring).
+            if instance[0] in sanctioned_row_ids:
+                sanctioned_abstained_instances.add(instance)
+                return False
             return True  # missing entirely -> count as failure (v1.1 §V3.6)
         if any(r.output.missing_reason is not None or r.output.ineligible for r in group):
             # round 20 finding #2: any missing/invalid repeat enters the
@@ -443,6 +500,7 @@ def control_detection_for_family(
         min_count_met=result.min_count_met,
         negative_control_failures=sum(1 for v in neg_outcomes.values() if v),
         positive_control_failures=sum(1 for v in pos_outcomes.values() if not v),
+        negative_control_sanctioned_abstentions=len(sanctioned_abstained_instances),
     )
 
 
@@ -574,6 +632,8 @@ def build_absolute_gate_inputs(
     records: Sequence[measure_stage.MeasurementRecord],
     expected_primary_instances: Collection[tuple[str, int]],
     e_use_rows: Sequence[EUseEvidenceRow],
+    control_class_by_negative_row_id: Mapping[str, str] | None = None,
+    missing_reason_by_negative_row_id: Mapping[str, str] | None = None,
 ) -> AbsoluteGateInputBundle:
     """v1.1 §V3.2: §10.3 ABSOLUTE holdout gate の実入力を campaign 実測から
     組み立てる。入力の出所:
@@ -677,6 +737,8 @@ def build_absolute_gate_inputs(
         family=family,
         candidate=candidate,
         records=own_records,
+        control_class_by_negative_row_id=control_class_by_negative_row_id,
+        missing_reason_by_negative_row_id=missing_reason_by_negative_row_id,
     )
 
     return AbsoluteGateInputBundle(
@@ -703,12 +765,20 @@ def evaluate_absolute_meter_from_campaign(
     records: Sequence[measure_stage.MeasurementRecord],
     expected_primary_instances: Collection[tuple[str, int]],
     e_use_rows: Sequence[EUseEvidenceRow],
+    control_class_by_negative_row_id: Mapping[str, str] | None = None,
+    missing_reason_by_negative_row_id: Mapping[str, str] | None = None,
 ) -> MeterHoldoutResult:
     """v1.1 §V3.2 (D17 close): `evaluate_absolute_meter()` の入力を campaign
     実測から組み立て、実 gate を評価する。入力組み立て不能は正直に
     `NOT_EVALUABLE/INPUT_MISSING` として終端する（§11: C0 入力側 critical
     missing。gate が正直に fail するのとは異なる終端——ここでは gate 自体を
-    評価する前に入力が組み立てられない）。"""
+    評価する前に入力が組み立てられない）。
+
+    v1.3 (Codex #350 round 3 P1): `control_class_by_negative_row_id`/
+    `missing_reason_by_negative_row_id`（既定 `None`）は
+    `control_detection_for_family()` の同名引数へそのまま渡す
+    （sanctioned abstention 判定材料——`control_detection_for_family`
+    docstring 参照）。"""
     try:
         bundle = build_absolute_gate_inputs(
             manifest=manifest,
@@ -720,6 +790,8 @@ def evaluate_absolute_meter_from_campaign(
             records=records,
             expected_primary_instances=expected_primary_instances,
             e_use_rows=e_use_rows,
+            control_class_by_negative_row_id=control_class_by_negative_row_id,
+            missing_reason_by_negative_row_id=missing_reason_by_negative_row_id,
         )
     except GateInputError as exc:
         return MeterHoldoutResult(
@@ -804,6 +876,8 @@ def build_directional_gate_inputs(
     usable_primary_instances: Collection[tuple[str, int]],
     expected_sweep_member_row_ids: Mapping[str, Sequence[str]],
     manifest: Mapping[str, object],
+    control_class_by_negative_row_id: Mapping[str, str] | None = None,
+    missing_reason_by_negative_row_id: Mapping[str, str] | None = None,
 ) -> DirectionalGateInputBundle:
     """v1.1 §V3.2/§V2.3: §10.4 DIRECTIONAL holdout gate の実入力。sweep 単位
     = V2.3 の holdout 常駐 declared sweep（`expected_sweep_member_row_ids`
@@ -930,6 +1004,8 @@ def build_directional_gate_inputs(
         family=family,
         candidate=candidate,
         records=records,
+        control_class_by_negative_row_id=control_class_by_negative_row_id,
+        missing_reason_by_negative_row_id=missing_reason_by_negative_row_id,
     )
 
     return DirectionalGateInputBundle(
@@ -956,6 +1032,8 @@ def evaluate_directional_meter_from_campaign(
     usable_primary_instances: Collection[tuple[str, int]],
     expected_sweep_member_row_ids: Mapping[str, Sequence[str]],
     units_commensurate: bool | None = None,
+    control_class_by_negative_row_id: Mapping[str, str] | None = None,
+    missing_reason_by_negative_row_id: Mapping[str, str] | None = None,
 ) -> MeterHoldoutResult:
     """v1.1 §V3.2 (D17 close): `evaluate_directional_meter()` の入力を
     campaign 実測から組み立て、実 gate を評価する。終端 status がいずれで
@@ -971,7 +1049,13 @@ def evaluate_directional_meter_from_campaign(
     で `candidate.unit` と凍結 fixture truth unit から機械導出する——旧実装は
     既定値 `False` を `_run_c4` が一度も上書きせず、本番で §10.4 条件 (c)
     が常に無効だった。明示的に `True`/`False` を渡した呼び出し側（テスト等）
-    はその値をそのまま使う（後方互換）。"""
+    はその値をそのまま使う（後方互換）。
+
+    v1.3 (Codex #350 round 3 P1): `control_class_by_negative_row_id`/
+    `missing_reason_by_negative_row_id`（既定 `None`）は
+    `control_detection_for_family()` の同名引数へそのまま渡す
+    （sanctioned abstention 判定材料——`control_detection_for_family`
+    docstring 参照）。"""
     resolved_units_commensurate = (
         units_commensurate
         if units_commensurate is not None
@@ -988,6 +1072,8 @@ def evaluate_directional_meter_from_campaign(
             usable_primary_instances=usable_primary_instances,
             expected_sweep_member_row_ids=expected_sweep_member_row_ids,
             manifest=manifest,
+            control_class_by_negative_row_id=control_class_by_negative_row_id,
+            missing_reason_by_negative_row_id=missing_reason_by_negative_row_id,
         )
     except GateInputError as exc:
         return MeterHoldoutResult(

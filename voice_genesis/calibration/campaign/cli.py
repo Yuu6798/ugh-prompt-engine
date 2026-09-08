@@ -2167,6 +2167,12 @@ def _run_c4(
     # own stop_event + reraises on failure — memoizing here only avoids
     # repeating that ledger write once per ABSOLUTE meter in this loop.
     e_use_rows_holder: dict[str, object] = {"rows": None, "error": None}
+    # v1.3 (Codex #350 round 3 P1): sanctioned-abstention 判定材料（ledger 1
+    # パス、C3a/C3b と同じ入口 `_measurement_missing_reason_index()`）。
+    # `control_class_by_negative_row_id` は family ごとに下のループ内で
+    # 導出する（C3b の `_compute_family_criteria` と同型 — 導出ロジックの
+    # 複製ではなく同じヘルパーの再利用）。
+    missing_reason_index = _measurement_missing_reason_index(campaign)
     for family, meter in _FAMILY_TO_METER.items():
         if meter is MeterId.M4_RESONANCE:
             # M4 always closes DIAGNOSTIC_ONLY regardless of selection
@@ -2526,6 +2532,17 @@ def _run_c4(
         # capped-ceiling arbitration D74/D76/D77 already gate on) — the
         # branch below only decides which real gate family applies; it does
         # not re-derive the ceiling itself.
+        #
+        # v1.3 (Codex #350 round 3 P1): sanctioned-abstention 判定材料を
+        # gate5 (`control_detection_for_family`) へ渡すため、C3b の
+        # `_compute_family_criteria` と同型に family 単位で導出する
+        # （`negative_control_row_ids`/`_control_class_by_negative_row_id`
+        # を再利用する——導出ロジックの複製ではない）。
+        family_rows_for_controls = [mr for mr in matrix_rows if mr.row.family == family.value]
+        neg_ids_for_family = negative_control_row_ids(family_rows_for_controls)
+        control_class_by_neg_row_id_for_family = _control_class_by_negative_row_id(
+            family_rows_for_controls, neg_ids_for_family
+        )
         if selected_candidate_obj is None:
             # stale/unresolvable selected_id (e.g. a candidate_id that no
             # longer exists in the registry) — mirrors the record-presence
@@ -2585,6 +2602,10 @@ def _run_c4(
                     records=records_by_family[family.value],
                     expected_primary_instances=expected_holdout_instances,
                     e_use_rows=e_use_rows_holder["rows"],
+                    control_class_by_negative_row_id=control_class_by_neg_row_id_for_family,
+                    missing_reason_by_negative_row_id=missing_reason_index.get(
+                        selected_candidate_obj.candidate_id, {}
+                    ),
                 )
                 results.append(
                     dataclasses.replace(
@@ -2644,6 +2665,10 @@ def _run_c4(
                 records=records_by_family[family.value],
                 usable_primary_instances=usable_primary_instances,
                 expected_sweep_member_row_ids=expected_sweep_member_row_ids,
+                control_class_by_negative_row_id=control_class_by_neg_row_id_for_family,
+                missing_reason_by_negative_row_id=missing_reason_index.get(
+                    selected_candidate_obj.candidate_id, {}
+                ),
             )
             results.append(
                 dataclasses.replace(

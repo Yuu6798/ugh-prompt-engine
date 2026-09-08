@@ -338,7 +338,7 @@ FAIL_FILTER_NAMES: tuple[str, ...] = (
 )
 
 
-def _sanctioned_abstention_row_ids(
+def sanctioned_abstention_row_ids(
     missing_row_ids: Iterable[str],
     control_class_by_row_id: Mapping[str, str] | None,
     missing_reason_by_row_id: Mapping[str, str] | None,
@@ -375,6 +375,13 @@ def _sanctioned_abstention_row_ids(
         if (control_class, reason) in fixture_controls.SANCTIONED_ABSTENTIONS:
             out.add(row_id)
     return frozenset(out)
+
+
+#: v1.3 (Codex #350 round 3 P1 採用, 2026-09-08): `holdout_stage.
+#: control_detection_for_family()` が本関数を呼ぶための公開エイリアス
+#: （導出ロジックの複製禁止 — selection 側が既に持つ閉語彙判定をそのまま
+#: 再利用する）。旧 private 名は既存呼び出し/テストの後方互換のために残す。
+_sanctioned_abstention_row_ids = sanctioned_abstention_row_ids
 
 
 def candidate_fail_filter_report(
@@ -922,6 +929,7 @@ __all__ = [
     "SelectionFreezeResult",
     "run_c3b_selection",
     "truth_value_for_row",
+    "sanctioned_abstention_row_ids",
     "FAIL_FILTER_NAMES",
     "candidate_fail_filter_report",
     "eligible_after_fail_filters",

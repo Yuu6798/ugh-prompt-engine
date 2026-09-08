@@ -3384,6 +3384,191 @@ def test_c4_absolute_gate_wiring_fails_honestly_to_diagnostic_only_with_tiny_e_u
     assert "UNDERSPEC-CAL-D17" not in json.dumps(m2t_result)
 
 
+# ---------------------------------------------------------------------------
+# v1.3 (Codex #350 round 3 P1 ADOPT): gate5 sanctioned-abstention wiring. A
+# SILENCE negative-control instance an F0-dependent candidate was never
+# called on (F0_UNUSABLE skip -- zero own records, plus the real
+# `measurement_missing` ledger event `measure_stage.run_measure_stage()`
+# appends for it) is the meter correctly abstaining, not a false fire.
+# Before this fix, `holdout_stage.control_detection_for_family()`'s
+# `_negative_fired()` counted every such entirely-missing instance as a
+# failure unconditionally, so FDR0 could never reach 0 and every v1.3 TILT
+# harmonic ABSOLUTE candidate was structurally unable to reach
+# `CALIBRATED_ABSOLUTE`.
+# ---------------------------------------------------------------------------
+
+
+def _build_absolute_gate_campaign_with_sanctioned_negative_control(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    e_use_value: float,
+    neg_a_control_class: str,
+):
+    """Same shape as `_build_absolute_gate_campaign()` (2 TRUTH_CORE
+    anchors + 1 CONFOUND row + 2 negative controls, all forced HOLDOUT, 15
+    padding TRUTH_CORE rows for split balance) except `neg-a`'s
+    `control_class` is parameterized (`neg_a_control_class`) and `neg-a` is
+    entirely un-measured for the selected F0-dependent HARMONIC_OLS
+    candidate -- zero own `MeasurementRecord`s, plus the real
+    `measurement_missing` ledger event (`reason: "F0_UNUSABLE"`, `cells:
+    [[row_id, probe_index, candidate_id], ...]`) `measure_stage.
+    run_measure_stage()` appends at its skip site (~L1917) for such a
+    candidate x row. `neg-b` stays `NOISE_ONLY` with clean `quiet_valid`
+    records so `N_neg>=10` is met by a real, non-sanctioned population
+    alongside `neg-a`'s (would-be-)sanctioned one."""
+    candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_SPECTRAL_TILT) if c.algorithm_family == "HARMONIC_OLS"
+    )
+    assert candidate.algorithm_family in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+    anchor1 = _tilt_row("anchor-6", block="TRUTH_CORE", slope=-6.0, positive_control=True)
+    anchor2 = _tilt_row("anchor-12", block="TRUTH_CORE", slope=-12.0, positive_control=True)
+    confound = _tilt_row("confound-sr", block="CONFOUND", slope=-6.0, nuisance_tag="sr_hz=8000")
+    neg_a = _tilt_row(
+        "neg-a", block="NEGATIVE_CONTROL", slope=None, control_class=neg_a_control_class
+    )
+    neg_b = _tilt_row("neg-b", block="NEGATIVE_CONTROL", slope=None, control_class="NOISE_ONLY")
+    subset = [anchor1, anchor2, confound, neg_a, neg_b]
+    padding_rows = [
+        _tilt_row(f"padding-{i}", block="TRUTH_CORE", slope=-18.0) for i in range(15)
+    ]
+    padded_subset = subset + padding_rows
+
+    from voice_genesis.calibration import e_use_table as e_use_table_module
+    from voice_genesis.calibration.gates import EUseEvidenceRow
+    from voice_genesis.calibration.vocab import EvidenceClass
+
+    e_use_row = EUseEvidenceRow(
+        construct_id=candidate.construct,
+        unit=candidate.unit,
+        domain=candidate.domain,
+        intended_use="v1.3 #350 round 3 sanctioned-abstention E2E test",
+        maximum_claim="ABSOLUTE",
+        e_use_value=e_use_value,
+        derivation_rule="test fixture",
+        evidence_class=EvidenceClass.USER_ACCEPTED_USE_BOUND,
+        source_id_or_url="test",
+        source_checked_at="2026-09-08",
+        source_hash_or_version="test",
+        applicability_argument="test",
+        review_status="APPROVED_BY_DELEGATION",
+    )
+    serialized = (
+        json.dumps(
+            [e_use_table_module.row_to_dict(e_use_row)], indent=2, ensure_ascii=False, sort_keys=True
+        )
+        + "\n"
+    )
+    e_use_sha = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path,
+        subset=padded_subset,
+        frozen_inputs={"e_use_table_sha256": e_use_sha},
+        force_holdout_row_ids=[mr.row_id for mr in subset],
+        fixture_spec={
+            "TILT_GT": {"u_gt_bound": 0.01, "u_num_bound": 0.01, "confound_axes": ["sr_hz"]},
+        },
+    )
+    (campaign_dir / "e_use_table.json").write_text(serialized, encoding="utf-8")
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": "F0-B0-CURRENT",
+            "outcome": "SELECTED",
+        }
+    )
+    campaign.ledger.append(
+        {"kind": "selection_frozen", "selected_by_family": {"TILT_GT": candidate.candidate_id}}
+    )
+    # neg-a is entirely skipped for this F0-dependent candidate (zero own
+    # MeasurementRecords below) -- record the real skip-path ledger event
+    # (`measure_stage.run_measure_stage()`'s `newly_missing` append site).
+    campaign.ledger.append(
+        {
+            "kind": "measurement_missing",
+            "reason": "F0_UNUSABLE",
+            "cells": [["neg-a", probe_index, candidate.candidate_id] for probe_index in range(5)],
+            "invocation_id": None,
+        }
+    )
+
+    records = (
+        _tilt_records(candidate.candidate_id, "anchor-6", truth=-6.0)
+        + _tilt_records(candidate.candidate_id, "anchor-12", truth=-12.0)
+        + _tilt_records(candidate.candidate_id, "confound-sr", truth=-6.0)
+        # neg-a: no records at all -- the F0_UNUSABLE skip.
+        + _tilt_records(candidate.candidate_id, "neg-b", truth=0.0, quiet_valid=True)
+    )
+    monkeypatch.setattr(
+        cli.holdout_stage, "render_and_measure_holdout", lambda *a, **kw: {"TILT_GT": records}
+    )
+    return campaign, subset, candidate
+
+
+def test_c4_gate5_sanctioned_abstention_silence_f0_unusable_reaches_calibrated_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.3 (Codex #350 round 3 P1 ADOPT): `neg-a` is SILENCE and entirely
+    unmeasured (F0_UNUSABLE skip) -- the sanctioned abstention
+    (`fixtures.controls.SANCTIONED_ABSTENTIONS == {(SILENCE,
+    "F0_UNUSABLE")}`). `_run_c4` must wire `control_class_by_negative_row_id`/
+    `missing_reason_by_negative_row_id` through to gate5 so this instance is
+    counted as present-but-non-fired (FDR0 denominator only), reaching
+    `CALIBRATED_ABSOLUTE` exactly as the clean-data fixture
+    (`test_c4_absolute_gate_wiring_reaches_calibrated_absolute_on_clean_
+    synthetic_data`) does."""
+    campaign, subset, candidate = _build_absolute_gate_campaign_with_sanctioned_negative_control(
+        tmp_path, monkeypatch, e_use_value=2.0, neg_a_control_class="SILENCE"
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2t_result = per_meter[MeterId.M2_SPECTRAL_TILT.value]
+    assert m2t_result["terminal_status"] == "CALIBRATED_ABSOLUTE", m2t_result
+    assert m2t_result["selected_candidate_id"] == candidate.candidate_id
+    gate_detail = m2t_result["gate_detail"]
+    assert gate_detail["passed"] is True, gate_detail
+    assert gate_detail["failure_reasons"] == []
+
+
+def test_c4_gate5_sanctioned_abstention_closed_vocabulary_excludes_noise_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.3 (Codex #350 round 3 P1 ADOPT): sibling of the test above with
+    the *only* change being `neg-a`'s `control_class` set to `NOISE_ONLY`
+    instead of `SILENCE` (same entirely-missing measurement, same
+    `F0_UNUSABLE` ledger reason). `(NOISE_ONLY, "F0_UNUSABLE")` is not a
+    member of the closed `fixtures.controls.SANCTIONED_ABSTENTIONS`
+    vocabulary, so this instance must NOT be sanctioned -- it stays a gate5
+    failure (`FDR0 != 0`) and the meter must fail honestly, not reach
+    `CALIBRATED_ABSOLUTE`."""
+    campaign, subset, candidate = _build_absolute_gate_campaign_with_sanctioned_negative_control(
+        tmp_path, monkeypatch, e_use_value=2.0, neg_a_control_class="NOISE_ONLY"
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2t_result = per_meter[MeterId.M2_SPECTRAL_TILT.value]
+    assert m2t_result["terminal_status"] != "CALIBRATED_ABSOLUTE", m2t_result
+    assert m2t_result["selected_candidate_id"] == candidate.candidate_id
+    gate_detail = m2t_result["gate_detail"]
+    assert gate_detail["passed"] is False, gate_detail
+    assert any("gate5" in reason for reason in gate_detail["failure_reasons"])
+
+
 def test_c4_f0_prepass_covers_shared_control_instances_for_f0_dependent_family(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
