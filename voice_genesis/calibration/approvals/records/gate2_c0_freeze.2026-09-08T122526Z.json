@@ -1,0 +1,9 @@
+{
+  "approved_at_utc": "2026-09-08T12:25:26Z",
+  "approver": "Yuu6798 (delegated to Claude Code session 01TCUb3k1qePkUkG23a9MTYn — renewed approval 2026-09-05 (explicit: 承認事項を承認する。そのまま進めて); original delegation 2026-09-02T01:46:11Z; v1.3 claim contraction per User 裁定 2026-09-07 A)",
+  "authorization_nonce": "4ab3d7df7ac8d4f40e6b3a2370dcec49",
+  "design_doc_sha256": "68b4d80330582d2b85728670fbff5d03884ace21ff6ae5fd62ddf571cf041c74",
+  "gate": "GATE2_C0_FREEZE",
+  "manifest_core_sha": "2dde40144441b189903130e923a8319b4b7b8fdf20ebc921f17cbe8362d83e05",
+  "memo_sha256": "1cf7a02231d2293e2e4f623416cd80794940304f2746487fcf07ecc6dba555de"
+}
