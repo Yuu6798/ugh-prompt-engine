@@ -73,7 +73,12 @@ working tree の現行版と突き合わせることではなく、pin してい
 **実ファイルの実測 hash と照合**する（不一致 → 未承認、理由を列挙）。
 `campaign_id` は含まない — campaign_id は manifest 側の派生値であり、承認
 ファイルより先に存在しなければならない循環関係を持ち込まないため
-（PR レビュー第 2 巡）。
+（PR レビュー第 2 巡）。統治文書の連鎖検証（`DESIGN_DOC_CHAIN` の
+`base_document_sha256` pin。`approvals._verify_base_document_pin()`）も、
+連鎖の各文書を検証 1 回あたり **1 回だけ** 読み、その同一バイト列から
+hash 照合と次リンクの pin 判定の両方を導出する（読取を分けると、その間隔
+での差し替えで不整合な連鎖が通り得る TOCTOU になるため。
+`[UNDERSPEC-CAL-D112]`）。
 
 Gate 固有の追加フィールドと、記入例・厳密なスキーマ + 具体的な JSON 例は
 [`GATE_REVIEW_BRIEF_v1.md`](../GATE_REVIEW_BRIEF_v1.md) §6 を参照。

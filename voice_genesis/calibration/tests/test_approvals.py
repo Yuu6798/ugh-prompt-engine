@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -1016,6 +1017,117 @@ def test_base_document_pin_verifies_every_link_of_the_chain(tmp_path: Path) -> N
         assert any(
             "base_document_sha256 mismatch" in r for r in result.reasons
         ), (index, result.reasons)
+
+
+# ---------------------------------------------------------------------------
+# 外部レビュー 2026-09-08 (2) [`UNDERSPEC-CAL-D112`]: 統治文書の読取間差し替え
+# (TOCTOU) — 連鎖検証が中間文書を「hash 照合用」と「front matter 解析用（次
+# リンクの pin 元）」の 2 回読む実装だと、その間隔で文書が差し替わった場合に
+# どちらの版も単独では一貫検証されない組み合わせで承認が通り得る。Codex #350
+# 第 1 巡「Read each intermediate design document only once」を境界宣言から
+# 昇格し、本 PR で単一読取化して閉塞する。
+# ---------------------------------------------------------------------------
+
+
+def _replace_base_document_sha256(text: str, new_sha256_hex: str) -> str:
+    """front matter の `base_document_sha256:` 行の値だけを置換する（他の
+    フィールド・本文は不変。差し替え後も `yaml.safe_load` で再パース可能）。"""
+    replaced, count = re.subn(
+        r"(base_document_sha256:\s*)[0-9a-f]{64}",
+        r"\g<1>" + new_sha256_hex,
+        text,
+        count=1,
+    )
+    assert count == 1, "fixture design doc must declare a base_document_sha256 hex value"
+    return replaced
+
+
+def test_toctou_intermediate_doc_reread_swap_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """中間文書（連鎖の v1.2 相当）を「hash 照合」と「front matter 解析」で
+    2 回読む実装だと、2 回の読取に別内容を差し込む攻撃で、v1.2 自身の
+    base_document_sha256 が壊れている（v1.1 の実測 sha と食い違う）状態でも
+    承認が通ってしまっていた（fail-before の実測: 単体スクリプトで
+    `approved=True` かつ v1.2 の `read_bytes` 呼び出し回数 2 を確認 —
+    `/tmp/.../scratchpad/v13/repro_before_final_output.txt`）。単一読取化した
+    修正後は、同じ fixture で REJECT になることを固定する（pass-after）。
+
+    fixture 構成:
+      - `variant_pinned`: 実物 v1.2 の front matter の `base_document_sha256`
+        だけを「v1.1 の実測 sha と一致しない」値へ改変したもの。v1.3 の
+        front matter はこの `variant_pinned` の実測 sha を pin するよう
+        あわせて改変する（= これが v1.3 から見た「正しい v1.2」）。
+      - `variant_swapped`: 実物 v1.2 をそのまま使う（`base_document_sha256`
+        は v1.1 の実測 sha と正しく一致する）。
+
+    修正前の実装は v1.2 を 2 回読んでいた: 1 回目（hash 照合。
+    `_sha256_file()` 経由）に `variant_pinned` を返し、2 回目（次リンクの
+    pin 元として使う front matter 解析用）に `variant_swapped` を返す
+    monkeypatch を当てると、v1.3 の pin は 1 回目の読取の実測 sha と一致する
+    ためリンク 0 が成立し、2 回目の読取は v1.1 の実測 sha を正しく pin して
+    いるためリンク 1 も成立してしまう —— v1.3 が実際に pin した
+    `variant_pinned` 自身の `base_document_sha256` は一度も検証されないまま
+    承認が通っていた。単一読取化した修正後は v1.2 が 1 回しか読まれず
+    （= `variant_pinned` のみが使われ）、その壊れた `base_document_sha256`
+    が検出されて fail-closed に REJECT される。
+    """
+    repo_root = _write_base_pin_fixture_repo(tmp_path / "repo")
+    v1_3_path = repo_root / approvals.DESIGN_DOC_CHAIN[0]
+    v1_2_path = repo_root / approvals.DESIGN_DOC_CHAIN[1]
+    v1_1_path = repo_root / approvals.DESIGN_DOC_CHAIN[2]
+
+    variant_swapped = v1_2_path.read_bytes()  # 実物 v1.2（v1.1 への正しい pin）
+    real_v1_1_sha = hashlib.sha256(v1_1_path.read_bytes()).hexdigest()
+
+    # variant_pinned: v1.2 自身の base_document_sha256 を v1.1 の実測 sha と
+    # 食い違う値へ改変する（「v1.2 自身の連鎖が壊れている」ケース）。全桁数字
+    # だと YAML が int と解釈してしまう (isinstance(str) 検査に落ちて
+    # "missing/invalid" になり、狙った "mismatch" 経路を通らない) ため、
+    # 文字を含む hex 文字列にする。
+    bogus_base_sha = "deadbeef" * 8
+    assert bogus_base_sha != real_v1_1_sha
+    variant_pinned = _replace_base_document_sha256(
+        variant_swapped.decode("utf-8"), bogus_base_sha
+    ).encode("utf-8")
+    assert variant_pinned != variant_swapped
+
+    # v1.3 の pin を variant_pinned の実測 sha へ差し替える（v1.3 視点では
+    # variant_pinned こそが「正しい v1.2」である、という fixture 前提）。
+    variant_pinned_sha = hashlib.sha256(variant_pinned).hexdigest()
+    v1_3_text = v1_3_path.read_text(encoding="utf-8")
+    v1_3_path.write_text(
+        _replace_base_document_sha256(v1_3_text, variant_pinned_sha), encoding="utf-8"
+    )
+
+    approval_dir = tmp_path / "approvals"
+    approval_dir.mkdir()
+    _write_gate1_for_repo_root(approval_dir, repo_root)
+
+    call_count = {"n": 0}
+    original_read_bytes = Path.read_bytes
+
+    def swapping_read_bytes(self: Path) -> bytes:
+        if self == v1_2_path:
+            call_count["n"] += 1
+            return variant_pinned if call_count["n"] == 1 else variant_swapped
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", swapping_read_bytes)
+
+    result = approvals.load_approval(
+        approvals.Gate.GATE1_CAMPAIGN_EXECUTION, approval_dir, repo_root=repo_root
+    )
+
+    assert result.approved is False, (
+        "TOCTOU: intermediate design doc re-read with different content between "
+        f"hash-check and chain-verification should be rejected, reasons={result.reasons}"
+    )
+    assert any("base_document_sha256 mismatch" in r for r in result.reasons), result.reasons
+    assert call_count["n"] == 1, (
+        "v1.2 should be read exactly once per load_approval() call after the fix "
+        f"(observed {call_count['n']} reads)"
+    )
 
 
 # ---------------------------------------------------------------------------

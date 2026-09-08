@@ -120,20 +120,42 @@ def _parse_front_matter(text: str) -> Mapping[str, Any] | None:
     return data
 
 
-def _verify_single_base_pin(
-    pinning_doc_path: Path, pinning_doc_bytes: bytes, pinned_doc_path: Path
-) -> list[str]:
-    """1 リンク分の base pin 検証: `pinning_doc_path`（バイト列
-    `pinning_doc_bytes`）の front matter が宣言する `base_document_sha256` と、
-    `pinned_doc_path` の実測 sha256 の一致を検証する。不一致・欠落・パース
-    不能はすべて fail-closed の reason 文字列として返す（空リストはこの
-    リンクの pin が成立していることを意味する）。`_verify_base_document_pin()`
-    が `DESIGN_DOC_CHAIN` の全リンクを組み立てる際の共通実装。"""
+@dataclass(frozen=True)
+class _DesignDocSnapshot:
+    """統治文書連鎖 1 段分の**単一読取**結果（外部レビュー 2026-09-08 (2) 対応:
+    `UNDERSPEC-CAL-D112`）。`path` のバイト列を 1 回だけ `read_bytes()` した
+    その場で `sha256` を導出して束ねる — 以降このスナップショットの `data`/
+    `sha256` から hash 照合と front matter 解析の両方を行い、同じ文書を
+    2 回目に読み直すことは一切しない。読取を「hash 照合用」と「front matter
+    解析（次リンクの pin 元）用」に分けると、その間隔で文書が差し替わった
+    場合に「hash は版 A の内容で pin 成立・base pin は版 B の内容で pin
+    成立」という、どちらの版も単独では一貫検証されていない組み合わせで承認
+    が通り得る（TOCTOU。Codex #350 第 1 巡で境界宣言、本 PR で修正）。"""
+
+    path: Path
+    data: bytes
+    sha256: str
+
+
+def _read_design_doc_snapshot(path: Path) -> _DesignDocSnapshot:
+    data = path.read_bytes()
+    return _DesignDocSnapshot(path=path, data=data, sha256=hashlib.sha256(data).hexdigest())
+
+
+def _verify_single_base_pin(pinning: _DesignDocSnapshot, pinned: _DesignDocSnapshot) -> list[str]:
+    """1 リンク分の base pin 検証: `pinning`（統治文書連鎖の上位側。単一読取
+    済みスナップショット）の front matter が宣言する `base_document_sha256`
+    と、`pinned`（承継元側。同じく単一読取済み）の `sha256` の一致を検証する。
+    不一致・欠落・パース不能はすべて fail-closed の reason 文字列として返す
+    （空リストはこのリンクの pin が成立していることを意味する）。
+    `_verify_base_document_pin()` が `DESIGN_DOC_CHAIN` の全リンクを組み立てる
+    際の共通実装。呼び出し側が両スナップショットを 1 回の読取から作る責務を
+    負う — 本関数自身はディスクから何も読まない。"""
     try:
-        pinning_doc_text = pinning_doc_bytes.decode("utf-8")
+        pinning_doc_text = pinning.data.decode("utf-8")
     except UnicodeDecodeError as exc:
         return [
-            f"base_document_sha256: cannot decode design doc {pinning_doc_path} "
+            f"base_document_sha256: cannot decode design doc {pinning.path} "
             f"as utf-8: {exc}"
         ]
 
@@ -141,7 +163,7 @@ def _verify_single_base_pin(
     if front_matter is None:
         return [
             "base_document_sha256: design doc front matter is missing or unparsable "
-            f"({pinning_doc_path})"
+            f"({pinning.path})"
         ]
 
     declared_base_sha = front_matter.get("base_document_sha256")
@@ -149,19 +171,14 @@ def _verify_single_base_pin(
         return [
             "base_document_sha256: design doc front matter missing/invalid "
             f"base_document_sha256 (must be a 64-char lowercase hex sha256 string) "
-            f"({pinning_doc_path})"
+            f"({pinning.path})"
         ]
 
-    try:
-        actual_base_sha = _sha256_file(pinned_doc_path)
-    except OSError as exc:
-        return [f"base_document_sha256: cannot read base document {pinned_doc_path}: {exc}"]
-
-    if declared_base_sha != actual_base_sha:
+    if declared_base_sha != pinned.sha256:
         return [
             "base_document_sha256 mismatch: design doc front matter pins "
-            f"{declared_base_sha!r}, current base document ({pinned_doc_path}) is "
-            f"{actual_base_sha!r} ({pinning_doc_path})"
+            f"{declared_base_sha!r}, current base document ({pinned.path}) is "
+            f"{pinned.sha256!r} ({pinning.path})"
         ]
     return []
 
@@ -182,32 +199,35 @@ def _verify_base_document_pin(repo_root: Path, design_doc_bytes: bytes) -> list[
 
     `design_doc_bytes` は呼び出し側（`load_approval()`）が統治正本
     （`DESIGN_DOC_CHAIN[0]`）を **1 回だけ** 読み取ったバイト列をそのまま
-    受け取る（第 1 段のピン元）。以降の各段では対象文書を新たに 1 回だけ読み、
-    そのバイト列を hash 算出（前段の相手側）と front matter 解析（次段の
-    ピン元）の両方に使う——hash 算出用の読取と front matter 解析用の読取を
-    分けると、その間隔で文書が差し替わった場合に「hash は版 A・base pin は
-    版 B」の組み合わせで承認が成立し得る（Codex PR #346 第 16 巡指摘。承認
-    provenance の汚染）。この単一読取の原則を全段へ適用する。
+    受け取る（第 1 段のピン元）。以降の各段は `_read_design_doc_snapshot()`
+    で対象文書を新たに **1 回だけ** 読み、そのスナップショット（同一
+    `data`/`sha256`）を「前段の相手として hash 照合される側」と「次段の pin
+    元として front matter 解析される側」の両方に使い回す —— 同じ文書を 2 回
+    読んで別の読取結果を使い分ける実装だと、その間隔で文書が差し替わった
+    場合に「hash は版 A・base pin は版 B」の組み合わせで承認が成立し得る
+    （TOCTOU。外部レビュー 2026-09-08 (2) 対応: `UNDERSPEC-CAL-D112`。
+    Codex PR #346 第 16 巡指摘は統治正本 [連鎖の先頭] の 2 回読みを閉じたが、
+    連鎖の中間要素は本関数内でなお 2 回読まれていた）。この単一読取の原則を
+    連鎖の全段（先頭・中間・末尾）へ適用する。
     """
     reasons: list[str] = []
-    pinning_bytes = design_doc_bytes
+    pinning = _DesignDocSnapshot(
+        path=repo_root / DESIGN_DOC_CHAIN[0],
+        data=design_doc_bytes,
+        sha256=hashlib.sha256(design_doc_bytes).hexdigest(),
+    )
     for index in range(len(DESIGN_DOC_CHAIN) - 1):
-        pinning_path = repo_root / DESIGN_DOC_CHAIN[index]
         pinned_path = repo_root / DESIGN_DOC_CHAIN[index + 1]
-        reasons.extend(_verify_single_base_pin(pinning_path, pinning_bytes, pinned_path))
-
-        if index + 1 == len(DESIGN_DOC_CHAIN) - 1:
-            # 末尾（最古）の文書は基底を持たないため、そのバイト列を読む
-            # 必要はない（読んだところで次のリンクが無い）。
-            break
         try:
-            pinning_bytes = pinned_path.read_bytes()
+            pinned = _read_design_doc_snapshot(pinned_path)
         except OSError as exc:
-            reasons.append(
-                f"base_document_sha256: cannot read base document {pinned_path} "
-                f"for chained pin verification: {exc}"
-            )
+            reasons.append(f"base_document_sha256: cannot read base document {pinned_path}: {exc}")
             break
+        reasons.extend(_verify_single_base_pin(pinning, pinned))
+        # `pinned` を次リンクの `pinning` として使い回す（同じ読取から得た
+        # 同一スナップショット — 末尾に達すればループが終わるだけで、追加の
+        # 読取は発生しない）。
+        pinning = pinned
     return reasons
 
 #: `VG_CAL_APPROVAL_DIR` の既定値（checkout 外。IMPLEMENTATION_MAP §6.1）。
