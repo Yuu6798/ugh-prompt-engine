@@ -3170,11 +3170,19 @@ def _tilt_records(
     now an unconditional negative-control failure
     (`holdout_stage._negative_fired()`), so a "clean, zero-error" negative
     control fixture must use `quiet_valid` instead to still reach a genuine
-    non-fire (success)."""
+    non-fire (success).
+
+    v1.3 §X1: TILT harmonic 候補は `detection_predicate(field="hnr_acf_db",
+    min_value=-5.0)` を宣言しているため、gate5 の positive control が fire
+    するには `values` に閾値以上の `hnr_acf_db` が要る（実測の正例レンジ
+    [-1.915, +0.747] dB の代表値 -1.0 dB を使う）。負例側は `quiet_valid` の
+    空 `values` のままで、predicate 有無に依らず non-fire（成功）。"""
     output = (
         MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
         if missing
-        else MeterOutput(values={}) if quiet_valid else MeterOutput(values={"tilt_db_per_oct": truth})
+        else MeterOutput(values={})
+        if quiet_valid
+        else MeterOutput(values={"tilt_db_per_oct": truth, "hnr_acf_db": -1.0})
     )
     records: list[measure_stage.MeasurementRecord] = []
     for probe_index in range(n_probes):

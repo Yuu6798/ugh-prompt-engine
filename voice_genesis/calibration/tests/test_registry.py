@@ -96,17 +96,61 @@ def test_implementation_ref_has_module_colon_function_shape() -> None:
 
 
 # ---------------------------------------------------------------------------
-# RUN10-CAL-v1.2 WP1 (3): `detection_predicate` — optional, undeclared by
-# every existing candidate in this revision (behaviour-preserving addition).
+# RUN10-CAL-v1.2 WP1 (3) / v1.3 §X1: `detection_predicate` — optional; declared
+# by exactly the 12 TILT harmonic candidates as of v1.3 (preregistration).
 # ---------------------------------------------------------------------------
 
+_V1_3_DECLARED_PREDICATE_IDS = frozenset(
+    f"M2T-HARMONIC-{estimator}-K{k}-WIN{window}"
+    for estimator in ("OLS", "THEILSEN")
+    for k in (4, 6, 8)
+    for window in ("HANN", "BLACKMAN_HARRIS")
+)
 
-def test_detection_predicate_defaults_to_none_for_every_existing_candidate() -> None:
-    """No candidate declares a non-default `detection_predicate` in this
-    revision — the field is registry infrastructure for a future candidate,
-    not a behaviour change for the current 99."""
-    for c in reg.ALL_CANDIDATES:
-        assert c.detection_predicate is None, c.candidate_id
+
+def test_detection_predicate_declared_exactly_by_the_tilt_harmonic_twelve() -> None:
+    """v1.3 §X1 preregistration: TILT harmonic 12 候補（OLS 6 + THEILSEN 6）
+    だけが `hnr_acf_db >= -5.0` を宣言し、他の 87 候補（`M2T-B0-CURRENT-HYBRID`
+    = ceiling NONE を含む）は未宣言のまま。"""
+    declared = {c.candidate_id for c in reg.ALL_CANDIDATES if c.detection_predicate is not None}
+    assert declared == set(_V1_3_DECLARED_PREDICATE_IDS)
+    assert len(declared) == 12
+    assert "M2T-B0-CURRENT-HYBRID" not in declared
+
+
+def test_declared_detection_predicate_field_and_threshold() -> None:
+    """閾値と field は v1.3 §X1.2 が凍結した値（WP-A 実測: 正例
+    [-1.915, +0.747] dB / NOISE_ONLY [-9.878, -9.758] dB の中間）。"""
+    for candidate_id in sorted(_V1_3_DECLARED_PREDICATE_IDS):
+        predicate = reg.candidate_by_id(candidate_id).detection_predicate
+        assert predicate is not None, candidate_id
+        assert predicate.field == "hnr_acf_db", candidate_id
+        assert predicate.min_value == -5.0, candidate_id
+
+
+def test_declared_predicate_field_is_produced_by_the_wired_implementation() -> None:
+    """宣言した `field` は当該候補の `measure()` が実際に `values` へ出す
+    キーであること（宣言と実装の乖離＝恒久非発火を防ぐ）。"""
+    import numpy as np
+
+    from voice_genesis.calibration.candidates.impl import tilt_harmonic
+
+    sr = 48000
+    t_axis = np.arange(int(0.5 * sr)) / sr
+    signal = sum(np.sin(2 * np.pi * 130.813 * h * t_axis) / h for h in range(1, 9))
+    for candidate_id in sorted(_V1_3_DECLARED_PREDICATE_IDS):
+        candidate = reg.candidate_by_id(candidate_id)
+        params = dict(candidate.params_dict())
+        params["f0_hz"] = 130.813
+        measure = (
+            tilt_harmonic.measure_ols
+            if candidate.algorithm_family == "HARMONIC_OLS"
+            else tilt_harmonic.measure_theilsen
+        )
+        output = measure(signal, sr, params)
+        assert output.missing_reason is None, candidate_id
+        assert candidate.detection_predicate is not None
+        assert candidate.detection_predicate.field in output.values, candidate_id
 
 
 def test_detection_predicate_accepts_a_declared_value() -> None:

@@ -11,6 +11,22 @@ construct として selection 競争から除外」）。
 
 回帰は OLS（最小二乗、`np.polyfit`）と Theil-Sen（`scipy.stats.theilslopes`、
 外れ値に頑健な中央値ベース勾配）の 2 系列を提供する。
+
+## RUN10-CAL v1.3 §X1: `hnr_acf_db` 補助フィールド
+
+`values` には primary output `tilt_db_per_oct` に加えて harmonicity 補助値
+`hnr_acf_db`（`aperiodicity.hnr_acf_db`、frame 25 ms / hop 10 ms / hann、
+F0 非依存）を同梱する。これは `registry` 側で宣言する
+`DetectionPredicate(field="hnr_acf_db", min_value=-5.0)` の入力であり、
+**primary output（`measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY`
+= `tilt_db_per_oct`）と selection の意味論は一切変わらない** — 変わるのは
+`fixtures.controls.detected()` の fire 判定だけである。
+
+パラメータ（frame/hop/window）は候補グリッドの軸ではなく v1.3 §X1 が凍結
+した定数であり、段階 2 実測（WP-A、`scratchpad/v13/wpa_report.md` §3 H-T1）
+の probe と同一値である（正例 [-1.92, +0.75] dB vs NOISE_ONLY
+[-9.88, -9.76] dB、余裕 7.8 dB）。非有限値（例: SILENCE）はキー自体を
+省略する — `detected()` は field 欠落を非発火へ一様に写像する。
 """
 
 from __future__ import annotations
@@ -23,8 +39,30 @@ from scipy.stats import theilslopes
 
 from ... import vocab
 from ..adapter import MeterOutput
+from .aperiodicity import hnr_acf_db
 
 _WINDOWS = {"hann": hann, "blackman_harris": blackmanharris}
+
+#: v1.3 §X1 が凍結する `hnr_acf_db` 補助フィールドの計測パラメータ
+#: （WP-A probe と同一 = `scratchpad/v13/hnr_probe.py` の `PARAMS`）。
+#: 候補パラメータグリッドの軸ではない（`registry` の `parameters` には
+#: 現れない）ため、`candidate_space_sha` はこの定数を含まない — 変更は
+#: 次 revision の preregistration 経由。
+HNR_DETECTION_FRAME_MS: float = 25.0
+HNR_DETECTION_HOP_MS: float = 10.0
+HNR_DETECTION_WINDOW: str = "hann"
+
+
+def detection_hnr_acf_db(signal: np.ndarray, sr: int) -> float:
+    """v1.3 §X1 の凍結パラメータで `hnr_acf_db()` を評価する（`measure()` と
+    テスト・診断 probe が同じ入口を使うための薄い wrapper）。"""
+    return hnr_acf_db(
+        signal,
+        sr,
+        frame_ms=HNR_DETECTION_FRAME_MS,
+        hop_ms=HNR_DETECTION_HOP_MS,
+        window=HNR_DETECTION_WINDOW,
+    )
 
 
 def _analysis_window(signal: np.ndarray, start_frac: float = 0.15, end_frac: float = 0.9) -> np.ndarray:
@@ -116,7 +154,13 @@ def _measure(
     slope = estimator(signal, sr, f0_hz, k=k, window=window)
     if slope is None:
         return MeterOutput(missing_reason=vocab.MissingReason.OUTPUT_MISSING)
-    return MeterOutput(values={"tilt_db_per_oct": slope})
+    values: dict[str, float] = {"tilt_db_per_oct": slope}
+    # v1.3 §X1: 検出判定用の harmonicity 補助値。非有限（SILENCE 等）は
+    # キーを出さない = `detected()` の「field 欠落は非発火」へ落とす。
+    hnr = detection_hnr_acf_db(signal, sr)
+    if np.isfinite(hnr):
+        values["hnr_acf_db"] = float(hnr)
+    return MeterOutput(values=values)
 
 
 def measure_ols(signal: np.ndarray, sr: int, params: Mapping[str, object]) -> MeterOutput:

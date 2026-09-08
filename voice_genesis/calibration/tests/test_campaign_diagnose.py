@@ -36,7 +36,17 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _candidate(candidate_id: str, **overrides: object) -> registry.Candidate:
-    return dataclasses.replace(registry.candidate_by_id(candidate_id), **overrides)
+    """registry 実候補のコピー。**`detection_predicate` は既定で外す** — 本
+    ファイルの verdict 分岐テストは合成 `MeterOutput` に primary output だけを
+    載せるため、v1.3 §X1 が TILT harmonic 候補へ宣言した
+    `hnr_acf_db >= -5.0` をそのまま適用すると「補助フィールドが無いので全件
+    non-fire」という別の理由でしか判定できなくなる（検査対象は fire 定義では
+    なく verdict 分岐の算術）。registry 宣言が diagnose の判定へ実際に伝播する
+    ことは `test_evaluate_candidate_uses_the_registry_declared_predicate` が
+    別途固定する。`overrides` で明示すればそちらが優先される。"""
+    return dataclasses.replace(
+        registry.candidate_by_id(candidate_id), **{"detection_predicate": None, **overrides}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +130,50 @@ def test_evaluate_candidate_pass_when_positive_fires_and_negative_silent() -> No
     assert report["positive_fire_rate"] == 1.0
     assert report["negative_fire_rate"] == 0.0
     assert report["verdict"] == "PASS"
+
+
+def test_evaluate_candidate_uses_the_registry_declared_predicate() -> None:
+    """v1.3 §X1: registry が宣言した `hnr_acf_db >= -5.0` が C-1 診断の
+    fire 判定へそのまま効くこと（`_candidate()` が predicate を外している分の
+    往復側）。`tilt_db_per_oct` は正例・負例とも有限値を載せる——predicate 無し
+    の既定分岐なら両方 fire になる組み合わせで、`hnr_acf_db` の値だけが
+    正例を fire・負例を non-fire に分ける（WP-A 実測レンジの代表値
+    -1.0 dB / -9.8 dB）。"""
+    candidate = registry.candidate_by_id("M2T-HARMONIC-OLS-K4-WINHANN")
+    assert candidate.detection_predicate is not None
+    assert candidate.detection_predicate.field == "hnr_acf_db"
+    assert candidate.detection_predicate.min_value == -5.0
+
+    outcomes = [
+        _outcome(
+            "positive", None,
+            MeterOutput(values={"tilt_db_per_oct": -6.0, "hnr_acf_db": -1.0}),
+        ),
+        _outcome(
+            "negative", "SILENCE",
+            MeterOutput(values={"tilt_db_per_oct": 4.5, "hnr_acf_db": -9.8}),
+        ),
+        _outcome(
+            "negative", "NOISE_ONLY",
+            MeterOutput(values={"tilt_db_per_oct": 1.5, "hnr_acf_db": -9.9}),
+        ),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes)
+    assert report["positive_fire_rate"] == 1.0
+    assert report["negative_fire_rate"] == 0.0
+    assert report["verdict"] == "PASS"
+
+    # 補助フィールドが欠けた出力は（primary output があっても）非発火。
+    missing_hnr = [
+        _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
+        _outcome("negative", "SILENCE", MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)),
+        _outcome(
+            "negative", "NOISE_ONLY", MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
+        ),
+    ]
+    degraded = diagnose.evaluate_candidate(candidate, missing_hnr)
+    assert degraded["positive_fire_rate"] == 0.0
+    assert degraded["verdict"] == "FAIL_POSITIVE"
 
 
 def test_evaluate_candidate_dump_values_records_raw_cells_without_changing_verdict() -> None:

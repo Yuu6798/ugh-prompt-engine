@@ -1586,19 +1586,32 @@ def test_candidate_space_sha_changes_when_a_candidate_declares_a_detection_predi
     assert sha_without != sha_with
 
 
-def test_candidate_space_sha_unchanged_for_existing_undeclared_candidates() -> None:
-    """All 99 registered candidates leave `detection_predicate` at its
-    default `None` in this revision — `candidate_space_sha()` over the real
-    `ALL_CANDIDATES` pool must equal the sha of a pool built by explicitly
-    setting every candidate's `detection_predicate` to `None` (i.e. declaring
-    the field changes nothing for candidates that don't use it)."""
+def test_candidate_space_sha_changes_because_v1_3_declares_predicates() -> None:
+    """v1.3 §X1: registry の TILT harmonic 12 候補が
+    `detection_predicate` を宣言したため、`candidate_space_sha()` は「全候補の
+    predicate を `None` に落とした pool」の sha と **一致しない**（= 宣言が
+    candidate space の凍結ハッシュへ確かに算入されている）。v1.2 の
+    「未宣言候補では sha 不変」という主張は、未宣言候補にのみ成り立つ主張として
+    引き続き有効（`test_candidate_space_sha_payload_omits_detection_predicate_key_when_undeclared`
+    が payload 形状で固定している）。"""
     from voice_genesis.calibration.candidates.registry import ALL_CANDIDATES
 
-    explicit_none_pool = tuple(
+    declared = [c for c in ALL_CANDIDATES if c.detection_predicate is not None]
+    assert len(declared) == 12, [c.candidate_id for c in declared]
+
+    stripped_pool = tuple(
         dataclasses.replace(c, detection_predicate=None) for c in ALL_CANDIDATES
     )
-    assert selection_stage.candidate_space_sha() == selection_stage.candidate_space_sha(
-        explicit_none_pool
+    assert selection_stage.candidate_space_sha() != selection_stage.candidate_space_sha(
+        stripped_pool
+    )
+
+    # 未宣言候補だけを取り出した部分 pool では、明示 `None` 化しても sha は不変。
+    undeclared_pool = tuple(c for c in ALL_CANDIDATES if c.detection_predicate is None)
+    assert selection_stage.candidate_space_sha(
+        undeclared_pool
+    ) == selection_stage.candidate_space_sha(
+        tuple(dataclasses.replace(c, detection_predicate=None) for c in undeclared_pool)
     )
 
 

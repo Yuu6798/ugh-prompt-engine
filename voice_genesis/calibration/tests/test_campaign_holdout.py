@@ -989,6 +989,7 @@ def _within_fresh_record(
     value: float | None,
     missing: bool = False,
     quiet_valid: bool = False,
+    extra_values: dict[str, float] | None = None,
 ) -> list[measure_stage.MeasurementRecord]:
     """`quiet_valid=True` builds a `MeterOutput(values={})` — a well-formed
     output (`missing_reason=None`, `ineligible=False`) that reports no
@@ -996,11 +997,18 @@ def _within_fresh_record(
     "couldn't produce a value" state (v1.1 §V3.6 round 20 finding #2: the two
     are no longer interchangeable for negative-control detection — only the
     former is a legitimate "valid output exists, and it did not fire").
+
+    `extra_values` merges additional `values` fields alongside `field`
+    (v1.3 §X1: the TILT harmonic candidates carry a `hnr_acf_db` auxiliary
+    field that their declared `detection_predicate` reads).
     """
+    values: dict[str, float | None] = {field: value}
+    if extra_values:
+        values.update(extra_values)
     output = (
         MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
         if missing
-        else MeterOutput(values={}) if quiet_valid else MeterOutput(values={field: value})
+        else MeterOutput(values={}) if quiet_valid else MeterOutput(values=values)
     )
     records = [
         measure_stage.MeasurementRecord(
@@ -1029,8 +1037,22 @@ def _within_fresh_record(
 
 
 def _tilt_candidate():
-    return next(
-        c for c in candidates_for_meter(MeterId.M2_SPECTRAL_TILT) if c.algorithm_family == "HARMONIC_OLS"
+    """HARMONIC_OLS の実 registry 候補を、`detection_predicate` を明示的に外して
+    返す。本ファイルの gate/母集団ロジックのテストは合成 record に
+    `tilt_db_per_oct` のみを載せるため、v1.3 §X1 が宣言した
+    `hnr_acf_db >= -5.0` predicate をそのまま適用すると「HNR 列が無いので
+    全件 non-fire」という別の理由でしか判定できなくなる（検査したいのは
+    fire 定義ではなく gate/母集団の算術）。predicate が実際に伝播することは
+    `test_control_detection_for_family_applies_candidate_detection_predicate`
+    と `test_control_detection_for_family_uses_the_registry_declared_predicate`
+    が別途固定する。"""
+    return replace(
+        next(
+            c
+            for c in candidates_for_meter(MeterId.M2_SPECTRAL_TILT)
+            if c.algorithm_family == "HARMONIC_OLS"
+        ),
+        detection_predicate=None,
     )
 
 
@@ -1136,6 +1158,55 @@ def test_control_detection_for_family_counts_false_fire_and_non_fire() -> None:
     assert detection.fnr1 == 1.0
     assert detection.negative_control_failures == 5
     assert detection.positive_control_failures == 5
+
+
+def test_control_detection_for_family_uses_the_registry_declared_predicate() -> None:
+    """v1.3 §X1: registry が TILT harmonic 候補へ宣言した
+    `hnr_acf_db >= -5.0` が holdout gate5 の fire 判定へ実際に効くこと
+    （`_tilt_candidate()` が predicate を外している分の往復側）。
+
+    `tilt_db_per_oct` は positive/negative とも有限値を載せる——predicate 無し
+    の既定分岐なら両方 fire になる組み合わせで、`hnr_acf_db` の値だけが
+    positive を fire・negative を non-fire に分ける（WP-A 実測レンジの
+    代表値 -1.0 dB / -9.8 dB を使う）。"""
+    candidate = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_SPECTRAL_TILT)
+        if c.algorithm_family == "HARMONIC_OLS"
+    )
+    assert candidate.detection_predicate == DetectionPredicate(
+        field="hnr_acf_db", min_value=-5.0
+    )
+    pos1 = _matrix_row("pos-1", family="TILT_GT", block="TRUTH_CORE", positive_control=True)
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = [pos1, neg1]
+    assignment = {"pos-1": Split.HOLDOUT, "neg-1": Split.HOLDOUT}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "pos-1", probe_index, field="tilt_db_per_oct", value=-6.0,
+            extra_values={"hnr_acf_db": -1.0},
+        )
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=4.5,
+            extra_values={"hnr_acf_db": -9.8},
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.fdr0 == 0.0
+    assert detection.fnr1 == 0.0
+    assert detection.negative_control_failures == 0
+    assert detection.positive_control_failures == 0
 
 
 def test_control_detection_for_family_applies_candidate_detection_predicate() -> None:

@@ -128,6 +128,61 @@ def test_tilt_missing_when_fewer_than_k_harmonics_available() -> None:
 
 
 # ---------------------------------------------------------------------------
+# v1.3 §X1: TILT harmonic の `hnr_acf_db` 補助フィールド（detection_predicate
+# の入力）。WP-A probe と同一パラメータであることを値の一致で固定する。
+# ---------------------------------------------------------------------------
+
+
+def test_tilt_values_carry_hnr_acf_db_matching_the_wpa_probe_parameters() -> None:
+    """`measure_ols`/`measure_theilsen` が `values["hnr_acf_db"]` に入れる値は、
+    WP-A の段階 2 probe と同一パラメータ（frame 25 ms / hop 10 ms / hann）で
+    `aperiodicity.hnr_acf_db()` を直接呼んだ値と厳密に一致すること。パラメータ
+    が動けば分離余裕（実測 7.8 dB）の前提が崩れるため、値そのもので固定する。"""
+    f0 = 180.0
+    sig = _harmonics_with_tilt(f0, SR, 0.5, slope_db_per_oct=-12.0, k_max=8)
+    expected = aperiodicity.hnr_acf_db(sig, SR, frame_ms=25.0, hop_ms=10.0, window="hann")
+    assert np.isfinite(expected)
+
+    for measure, window in (
+        (tilt_harmonic.measure_ols, "hann"),
+        (tilt_harmonic.measure_theilsen, "blackman_harris"),
+    ):
+        out = measure(sig, SR, {"f0_hz": f0, "k": 8, "window": window})
+        assert out.missing_reason is None
+        # primary output は不変（v1.3 §X1.2）。
+        assert out.values["tilt_db_per_oct"] == pytest.approx(-12.0, abs=0.5)
+        # 補助値は probe と厳密一致（`window` 引数は tilt 回帰の窓であって
+        # HNR の窓ではない — HNR 側は常に hann に凍結されている）。
+        assert out.values["hnr_acf_db"] == expected
+
+    assert tilt_harmonic.detection_hnr_acf_db(sig, SR) == expected
+    assert (
+        tilt_harmonic.HNR_DETECTION_FRAME_MS,
+        tilt_harmonic.HNR_DETECTION_HOP_MS,
+        tilt_harmonic.HNR_DETECTION_WINDOW,
+    ) == (25.0, 10.0, "hann")
+
+
+def test_tilt_omits_hnr_field_when_not_finite() -> None:
+    """非有限 HNR（無音など）ではキー自体を出さない = `detected()` の
+    「field 欠落は非発火」へ落ちる（v1.3 §X1.2）。"""
+    f0 = 180.0
+    sig = _harmonics_with_tilt(f0, SR, 0.5, slope_db_per_oct=-12.0, k_max=8)
+
+    import voice_genesis.calibration.candidates.impl.tilt_harmonic as th
+
+    original = th.hnr_acf_db
+    try:
+        th.hnr_acf_db = lambda *a, **kw: float("nan")  # type: ignore[assignment]
+        out = th.measure_ols(sig, SR, {"f0_hz": f0, "k": 8, "window": "hann"})
+    finally:
+        th.hnr_acf_db = original  # type: ignore[assignment]
+    assert out.missing_reason is None
+    assert "hnr_acf_db" not in out.values
+    assert "tilt_db_per_oct" in out.values
+
+
+# ---------------------------------------------------------------------------
 # M2A-HNR-ACF: directional oracle（clean > noisy）
 # ---------------------------------------------------------------------------
 
