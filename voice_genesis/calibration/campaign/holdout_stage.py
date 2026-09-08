@@ -619,6 +619,15 @@ class AbsoluteGateInputBundle:
     fdr0: float
     fnr1: float
     min_count_met: bool
+    #: Codex #350 round 4 P2 採用: gate5 の non-firing 分子から除外された
+    #: sanctioned abstention（`ControlDetection.negative_control_sanctioned_
+    #: abstentions`）件数。gate 判定自体には使わず、`evaluate_absolute_meter_
+    #: from_campaign()` が返す `MeterHoldoutResult.gate_detail` へそのまま
+    #: 転記するための素通し会計フィールド（棄権依存の CALIBRATED 結果を
+    #: 記録上区別可能にする——本 revision 以前は `ControlDetection` の一時値
+    #: のまま捨てられ、serialized 結果からは実測 non-firing による通過か
+    #: 棄権による通過かが区別不能だった）。
+    negative_control_sanctioned_abstentions: int = 0
 
 
 def build_absolute_gate_inputs(
@@ -750,6 +759,7 @@ def build_absolute_gate_inputs(
         fdr0=detection.fdr0,
         fnr1=detection.fnr1,
         min_count_met=detection.min_count_met,
+        negative_control_sanctioned_abstentions=detection.negative_control_sanctioned_abstentions,
     )
 
 
@@ -804,7 +814,7 @@ def evaluate_absolute_meter_from_campaign(
                 "reason": f"[v1.1 §V3.2] ABSOLUTE gate input assembly failed: {exc}",
             },
         )
-    return evaluate_absolute_meter(
+    result = evaluate_absolute_meter(
         meter_id,
         ClaimCeiling.ABSOLUTE,
         selected_candidate_id=candidate.candidate_id,
@@ -819,6 +829,18 @@ def evaluate_absolute_meter_from_campaign(
         fdr0=bundle.fdr0,
         fnr1=bundle.fnr1,
         min_count_met=bundle.min_count_met,
+    )
+    # Codex #350 round 4 P2 採用: sanctioned abstention 件数を serialized
+    # 結果へ常に転記する（0 件でも書き、記録を自己記述にする——gate 論理は
+    # 不変のまま、会計フィールドのみを persist する）。
+    return dataclass_replace(
+        result,
+        gate_detail={
+            **dict(result.gate_detail),
+            "negative_control_sanctioned_abstentions": (
+                bundle.negative_control_sanctioned_abstentions
+            ),
+        },
     )
 
 
@@ -863,6 +885,9 @@ class DirectionalGateInputBundle:
     u_proc: float
     negative_control_failures: int
     positive_control_failures: int
+    #: Codex #350 round 4 P2 採用: `AbsoluteGateInputBundle` と同義の素通し
+    #: 会計フィールド（詳細はそちら側の docstring 参照）。
+    negative_control_sanctioned_abstentions: int = 0
 
 
 def build_directional_gate_inputs(
@@ -1016,6 +1041,7 @@ def build_directional_gate_inputs(
         u_proc=u_proc_value,
         negative_control_failures=detection.negative_control_failures,
         positive_control_failures=detection.positive_control_failures,
+        negative_control_sanctioned_abstentions=detection.negative_control_sanctioned_abstentions,
     )
 
 
@@ -1109,6 +1135,12 @@ def evaluate_directional_meter_from_campaign(
             **dict(result.gate_detail),
             "claim_text": {"evaluated_sweep_contexts": claim_detail["evaluated_sweep_contexts"]},
             "prohibited_interpretations": claim_detail["prohibited_interpretations"],
+            # Codex #350 round 4 P2 採用: sanctioned abstention 件数を
+            # serialized 結果へ常に転記する（0 件でも書き、記録を
+            # 自己記述にする——gate 論理は不変）。
+            "negative_control_sanctioned_abstentions": (
+                bundle.negative_control_sanctioned_abstentions
+            ),
         },
     )
 

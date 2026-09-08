@@ -2133,6 +2133,11 @@ def test_build_directional_gate_inputs_uses_per_instance_two_stage_median_not_po
         manifest=manifest,
     )
     assert len(bundle.pairs) == 1
+    # Codex #350 round 4 P2 採用: no NEGATIVE_CONTROL rows in this fixture,
+    # so the sanctioned-abstention accounting field is a plain 0 (the field
+    # is still populated -- not silently dropped -- for a self-describing
+    # bundle).
+    assert bundle.negative_control_sanctioned_abstentions == 0
     pair = bundle.pairs[0]
     assert pair.delta_truth == pytest.approx(1.0)
     # new (fixed) per-instance aggregation: level(truth=1.0) = median of the
@@ -2225,6 +2230,9 @@ def test_evaluate_directional_meter_from_campaign_claim_shrinkage_pass_and_fail(
         expected_sweep_member_row_ids=expected_sweep_member_row_ids,
     )
     assert passing.terminal_status == TerminalStatus.CALIBRATED_DIRECTIONAL.value, passing.gate_detail
+    # Codex #350 round 4 P2 採用: serialized gate_detail always carries the
+    # sanctioned-abstention count (0 here -- no NEGATIVE_CONTROL rows).
+    assert passing.gate_detail["negative_control_sanctioned_abstentions"] == 0
     claim_text = passing.gate_detail["claim_text"]
     contexts = claim_text["evaluated_sweep_contexts"]
     assert [c["sweep_id"] for c in contexts] == ["sweep-a"]
@@ -2249,6 +2257,7 @@ def test_evaluate_directional_meter_from_campaign_claim_shrinkage_pass_and_fail(
     assert failing.gate_detail["passed"] is False
     assert "claim_text" in failing.gate_detail
     assert "prohibited_interpretations" in failing.gate_detail
+    assert failing.gate_detail["negative_control_sanctioned_abstentions"] == 0
 
 
 def test_evaluate_m6_identity_precondition_satisfied_is_honest_not_evaluable() -> None:

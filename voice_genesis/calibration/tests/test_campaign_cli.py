@@ -3341,6 +3341,9 @@ def test_c4_absolute_gate_wiring_reaches_calibrated_absolute_on_clean_synthetic_
     assert m2t_result["reason_code"] is None
     assert m2t_result["selected_candidate_id"] == candidate.candidate_id
     assert m2t_result["gate_detail"]["passed"] is True
+    # Codex #350 round 4 P2 採用: clean fixture has no sanctioned
+    # abstentions -- the persisted count must be a plain 0, not absent.
+    assert m2t_result["gate_detail"]["negative_control_sanctioned_abstentions"] == 0
     # AC8 (D17 closure regression lock): the retired placeholder text must
     # never appear on a coverage-complete, capacity-satisfied real-gate path.
     assert "UNDERSPEC-CAL-D17" not in json.dumps(m2t_result)
@@ -3537,6 +3540,13 @@ def test_c4_gate5_sanctioned_abstention_silence_f0_unusable_reaches_calibrated_a
     gate_detail = m2t_result["gate_detail"]
     assert gate_detail["passed"] is True, gate_detail
     assert gate_detail["failure_reasons"] == []
+    # Codex #350 round 4 P2 採用: the sanctioned abstentions (neg-a, SILENCE
+    # x F0_UNUSABLE) that let this CALIBRATED_ABSOLUTE result pass must be
+    # visible on the persisted per-meter record itself. neg-a is entirely
+    # unmeasured across all `fixture_controls.PROBE_REPEATS` (5) probe
+    # instances, so the count is 5 sanctioned instances, not 1 sanctioned
+    # row.
+    assert gate_detail["negative_control_sanctioned_abstentions"] == 5, gate_detail
 
 
 def test_c4_gate5_sanctioned_abstention_closed_vocabulary_excludes_noise_only(
