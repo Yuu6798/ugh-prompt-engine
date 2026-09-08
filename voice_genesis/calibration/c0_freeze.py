@@ -46,6 +46,7 @@ from voice_genesis.calibration.approvals import (
     DESIGN_DOC_RELATIVE_PATH,
     GATE_SHORT_NAME,
     REHEARSAL_CLAIM_SCOPE_SENTINEL,
+    RETIRED_CLAIM_SCOPE_CONSTRUCTS,
     ArmingDecision,
     ApprovalLoadResult,
     Gate,
@@ -877,7 +878,9 @@ def _merge_e_use_table_violations(
     )
 
 
-def _check_max_claim_scope(scope: object, *, rehearsal: bool = False) -> list[str]:
+def _check_max_claim_scope(
+    scope: object, *, rehearsal: bool = False, manifest: Mapping[str, object] | None = None
+) -> list[str]:
     """Gate 1 `max_claim_scope`（設計正本 §18: このキャンペーンで claim して
     よい construct の上限範囲）の凍結時検証（第 11 巡採用）。`build_manifest()`
     は Gate 1 record の値をそのまま `frozen_design.max_claim_scope` へ転記
@@ -904,6 +907,20 @@ def _check_max_claim_scope(scope: object, *, rehearsal: bool = False) -> list[st
       通常 construct-id を含む形や sentinel との混在は、rehearsal が
       実質的な claim を伴って武装される抜け道になるため単一 violation で
       即時 BLOCK する。
+    - `manifest` が渡され、かつ `c0_validate._is_v1_3_or_later(manifest)`
+      （v1.3 §X2 ruling、Codex #350 第 1 巡 P2 discussion_r3954034871
+      ADOPT）: 本番（`rehearsal=False` — rehearsal 経路は上記 sentinel
+      完全一致検査が既に retired construct の混入を排除済みのため対象外）で
+      `approvals.RETIRED_CLAIM_SCOPE_CONSTRUCTS`（現状 `formant_frequency`
+      のみ。FORMANT の現行 3 推定器はいずれも検出器ではないと実測確定した
+      — §X2.2）に含まれる construct-id が scope に残っていれば、id ごとに
+      `claim_scope_contains_retired_construct:<construct_id>` 理由で BLOCK
+      する。§X2.2 は「除外は Gate 1 承認ファイル側の運用に委ね、本関数は
+      拒否しない」としていたが、運用だけでは承認 JSON の編集漏れを機械的に
+      検出できないため、本節が preregistration の縮小を実装で強制する
+      （§X2.2 の当該記述はこの実装に合わせて古い）。`manifest` を渡さない
+      呼び出し（design_revision 不明の後方互換経路）はこの追加検査を行わ
+      ない。
 
     違反は `e_use_table` と同じ prefix 慣例で `"max_claim_scope: <理由>"`
     形式で返す（`_merge_e_use_table_violations()` で
@@ -941,6 +958,15 @@ def _check_max_claim_scope(scope: object, *, rehearsal: bool = False) -> list[st
             f"max_claim_scope: {construct_id!r} is not a construct declared by any "
             "candidate in the registry"
         )
+    #: v1.3 §X2 ruling ADOPT（Codex #350 第 1 巡 P2, discussion_r3954034871）:
+    #: design_revision >= 1.3 の本番 freeze は retired construct
+    #: （`formant_frequency`）を含む承認を fail-closed で拒否する。
+    if manifest is not None and c0_validate._is_v1_3_or_later(manifest):
+        normalized_scope = {str(c) for c in scope}
+        for construct_id in sorted(RETIRED_CLAIM_SCOPE_CONSTRUCTS & normalized_scope):
+            violations.append(
+                f"max_claim_scope: claim_scope_contains_retired_construct:{construct_id}"
+            )
     return violations
 
 
@@ -1096,7 +1122,8 @@ def dry_run(
         frozen_design.get("max_claim_scope") if isinstance(frozen_design, Mapping) else None
     )
     validation = _merge_e_use_table_violations(
-        validation, _check_max_claim_scope(max_claim_scope_value, rehearsal=rehearsal)
+        validation,
+        _check_max_claim_scope(max_claim_scope_value, rehearsal=rehearsal, manifest=manifest),
     )
 
     gate2_arming = check_armed(
@@ -1719,7 +1746,10 @@ def armed_freeze(
         frozen_design.get("max_claim_scope") if isinstance(frozen_design, Mapping) else None
     )
     validation = _merge_e_use_table_violations(
-        validation, _check_max_claim_scope(max_claim_scope_value, rehearsal=rehearsal)
+        validation,
+        _check_max_claim_scope(
+            max_claim_scope_value, rehearsal=rehearsal, manifest=core_manifest
+        ),
     )
     if validation.is_blocked:
         return ArmedFreezeResult(

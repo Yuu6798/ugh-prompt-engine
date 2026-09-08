@@ -178,10 +178,16 @@ FORMANT_GT の 43 候補 × 全 `values` フィールドを同じ手続きで走
 max_claim_scope = ["source_spectral_tilt", "injected_noise_fraction", "fundamental_frequency"]
 ```
 
-（v1.0 §18 の Gate 1 承認 JSON からも `formant_frequency` を除く運用とする。除外は
-**承認ファイル側で行う**ものであり、`c0_freeze._check_max_claim_scope()` は
-`formant_frequency` を含む承認を拒否しない — 同関数の責務は registry 突合であって
-claim 方針の強制ではないため。scope から外れた結果として
+（v1.0 §18 の Gate 1 承認 JSON からも `formant_frequency` を除く運用とする。
+2026-09-08（Codex #350 第 1 巡 P2, discussion_r3954034871 ADOPT）: 運用のみに
+委ねると承認 JSON の編集漏れ（`formant_frequency` を含めたまま v1.3 で本番 freeze）を
+機械的に検出できないため、**`c0_freeze._check_max_claim_scope()` は
+design_revision >= 1.3 かつ本番（`rehearsal=False`）で `formant_frequency` を
+含む `max_claim_scope` を `VALIDATION_BLOCKED`（理由
+`claim_scope_contains_retired_construct:formant_frequency`）として拒否する**
+（`c0_validate._check_retired_claim_scope_constructs()` が on-disk manifest の
+独立検証側にも同じ検査を持つ。`approvals.RETIRED_CLAIM_SCOPE_CONSTRUCTS` が
+単一正本）。scope から外れた結果として
 `selection_stage.claim_scope_report()` / `capped_ceiling()` が FORMANT 候補の
 effective ceiling を capping し、**ABSOLUTE 到達が構造的に不可能**になる。実装上の
 cap 先は `DIRECTIONAL`（`capped_ceiling()` は `min(ceiling, DIRECTIONAL)`）であり、

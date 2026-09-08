@@ -1949,6 +1949,13 @@ def _is_v1_2_or_later(manifest: Mapping[str, object]) -> bool:
     return _design_revision_at_least(manifest, _V1_2_DESIGN_REVISION)
 
 
+def _is_v1_3_or_later(manifest: Mapping[str, object]) -> bool:
+    """v1.3 §X2 ruling で新設された検査（`max_claim_scope` の retired
+    construct `formant_frequency` を含む本番宣言の fail-closed 拒否）が
+    適用対象とする manifest 群。v1.1/v1.2 でマークされた manifest は対象外。"""
+    return _design_revision_at_least(manifest, _V1_3_DESIGN_REVISION)
+
+
 def _check_u_gt_u_num_bounds(
     manifest: Mapping[str, object],
 ) -> tuple[SweepManifestViolationDetail, ...]:
@@ -2842,6 +2849,41 @@ def _check_candidate_space_pool(manifest: Mapping[str, object]) -> list[str]:
     return violations
 
 
+def _check_retired_claim_scope_constructs(manifest: Mapping[str, object]) -> list[str]:
+    """v1.3 §X2 ruling ADOPT（Codex #350 第 1 巡 P2, discussion_r3954034871）:
+    design_revision >= 1.3 の manifest が `frozen_design.max_claim_scope` に
+    `approvals.RETIRED_CLAIM_SCOPE_CONSTRUCTS`（現状 `formant_frequency`
+    のみ）を含んでいれば violation。
+
+    `c0_freeze._check_max_claim_scope()` が freeze 時点（producer 側）で同じ
+    検査を fail-closed に行うが、`c0_freeze.dry_run()`/`armed_freeze()` を
+    経由しない on-disk manifest の独立検証（本モジュールの CLI、
+    `validate_c0_manifest(..., manifest_path=...)`）には producer 側ゲートが
+    介在しないため、本検査を validator 側にも独立に持つ（縦深防御 — 二重
+    実装ではなく、同じ `RETIRED_CLAIM_SCOPE_CONSTRUCTS` を単一正本として
+    共有する）。
+
+    v1.3 未満の manifest には適用しない（scope から formant_frequency を
+    外す preregistration は v1.3 で新設されたため）。rehearsal manifest は
+    `max_claim_scope` が sentinel `["REHEARSAL"]` 単独のみ許容される
+    （`approvals.load_approval()`/`c0_freeze._check_max_claim_scope()` が
+    別途 fail-closed で強制済み）ため、ここで rehearsal を明示的に除外し
+    なくても衝突しない。"""
+    if not _is_v1_3_or_later(manifest):
+        return []
+    frozen_design = manifest.get("frozen_design")
+    scope = (
+        frozen_design.get("max_claim_scope") if isinstance(frozen_design, Mapping) else None
+    )
+    if not isinstance(scope, (list, tuple)):
+        return []
+    hits = sorted(approvals.RETIRED_CLAIM_SCOPE_CONSTRUCTS & {str(c) for c in scope})
+    return [
+        f"frozen_design.max_claim_scope: claim_scope_contains_retired_construct:{cid}"
+        for cid in hits
+    ]
+
+
 def _approval_records_by_content_sha(repo_root: Path | None = None) -> dict[str, Mapping[str, object]]:
     """`approvals/records/*.json` を content sha256 -> payload の写像として
     読む（読めない/JSON 不正なファイルは黙って飛ばす——本検査は「記録がある
@@ -3249,6 +3291,10 @@ def _validate_c0_manifest_impl(
     missing_required += _check_rehearsal_location(manifest, manifest_path)
     # v1.2 WP2b: 候補空間と rehearsal フラグの整合（in-memory 検証でも有効）。
     missing_required += _check_candidate_space_pool(manifest)
+    # v1.3 §X2 ruling: retired construct (formant_frequency) の max_claim_scope
+    # 混入を拒否する（in-memory 検証でも有効。producer 側
+    # `c0_freeze._check_max_claim_scope()` と同じ縦深防御）。
+    missing_required += _check_retired_claim_scope_constructs(manifest)
     gate_ordering = _check_gate_approval_ordering(manifest, manifest_path)
     # 2026-09-07（#349 第 5 巡 P1 採用、PRRT_kwDOSD2OOM6fwr6q）: Gate 承認
     # 順序の blocking 化（D108, v1.2 WP2 §C-9）も v1.2 で新設された検査の

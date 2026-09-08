@@ -52,6 +52,22 @@ AUTHORIZATION_REQUIRED = "AUTHORIZATION_REQUIRED"
 #: 期待形）。`c0_freeze._check_max_claim_scope()` 側の許容も同じ定数を読む。
 REHEARSAL_CLAIM_SCOPE_SENTINEL = "REHEARSAL"
 
+#: v1.3 §X2 ruling: FORMANT の現行 3 推定器（BURG_LPC/CEPSTRAL_POLES/
+#: B0_CURRENT_CEPSTRAL_CENTROID）はいずれも検出器ではないと実測確定した
+#: （§X2.2, WP-A）ため、`formant_frequency` を claim scope から retire する。
+#: §X2.2 本文は「除外は Gate 1 承認ファイル側の運用に委ねる（
+#: `c0_freeze._check_max_claim_scope()` は拒否しない）」としていたが、運用
+#: だけでは承認 JSON の編集漏れ（`formant_frequency` を含めたまま v1.3 で
+#: 本番 freeze）を機械的に検出できない。Codex #350 第 1 巡 P2
+#: (discussion_r3954034871) ADOPT により、v1.3 以上 (`design_revision`) の
+#: 本番 (rehearsal でない) freeze/validate はこの construct を含む
+#: `max_claim_scope` を fail-closed で拒否する
+#: （`c0_freeze._check_max_claim_scope()` / `c0_validate.
+#: _check_retired_claim_scope_constructs()` の双方が本定数を読む単一正本）。
+#: §X2.2 の「拒否しない」という記述はこの実装強制に合わせて古い —
+#: 実装がこの定数を導入した時点から本文の記述は無効。
+RETIRED_CLAIM_SCOPE_CONSTRUCTS: frozenset[str] = frozenset({"formant_frequency"})
+
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 #: `c0_freeze.py` 同様、本ファイルから 2 階層上が repo root。

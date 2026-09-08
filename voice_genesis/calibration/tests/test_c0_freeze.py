@@ -86,7 +86,12 @@ def _write_gate1(
             "budget_accounting_mode": "local_zero_cost",
         },
         "e_use_bound_accepted": True,
-        "max_claim_scope": ["formant_frequency"] if scope is None else scope,
+        #: v1.3 §X2 ruling ADOPT（Codex #350 第 1 巡 P2）: `formant_frequency`
+        #: は本番 freeze で fail-closed 拒否される retired construct
+        #: なので、既定 scope には使わない（既定を使う大半のテストは
+        #: max_claim_scope の中身自体を検証対象にしていないため、任意の
+        #: 非-retired construct であればよい）。
+        "max_claim_scope": ["harmonic_to_noise_ratio"] if scope is None else scope,
     }
     (approval_dir / "gate1_campaign_execution.json").write_text(
         json.dumps(payload), encoding="utf-8"
@@ -2028,14 +2033,14 @@ def test_dry_run_valid_max_claim_scope_is_recorded_in_manifest(
 ) -> None:
     approval_dir = tmp_path / "approvals"
     approval_dir.mkdir()
-    _write_gate1(approval_dir, scope=["formant_frequency", "harmonic_to_noise_ratio"])
+    _write_gate1(approval_dir, scope=["harmonic_to_noise_ratio", "world_d4c_aperiodicity"])
     report = c0_freeze.dry_run(_REPO_ROOT, approval_dir, os.environ)
     assert not any(
         r.startswith("max_claim_scope:") for r in report.validation.missing_required_keys
     ), report.validation.missing_required_keys
     frozen_design = report.manifest["frozen_design"]
     assert isinstance(frozen_design, dict)
-    assert frozen_design["max_claim_scope"] == ["formant_frequency", "harmonic_to_noise_ratio"]
+    assert frozen_design["max_claim_scope"] == ["harmonic_to_noise_ratio", "world_d4c_aperiodicity"]
     # Part of the CORE payload -- Gate 2's manifest_core_sha binds it, unlike
     # e_use_table's frozen_inputs (deliberately non-core).
     core_frozen_design = c0_freeze.core_payload(report.manifest)["frozen_design"]
@@ -2044,9 +2049,11 @@ def test_dry_run_valid_max_claim_scope_is_recorded_in_manifest(
 
 
 # ---------------------------------------------------------------------------
-# v1.3 §X2 — FORMANT を claim scope から外す。除外は **承認ファイル側の運用**
-# であり、`_check_max_claim_scope()` は `formant_frequency` を含む承認を
-# 拒否しない（同関数の責務は registry 突合であって claim 方針の強制ではない）。
+# v1.3 §X2 — FORMANT を claim scope から外す。2026-09-08（Codex #350 第 1 巡
+# P2, discussion_r3954034871 ADOPT）以降、この除外は承認ファイル側の運用だけ
+# に委ねられておらず、`c0_freeze._check_max_claim_scope()` が design_revision
+# >= 1.3 の本番（`rehearsal=False`）承認から `formant_frequency` を
+# fail-closed で拒否する（producer 側の preregistration 機械強制）。
 # scope から外れた効果は `selection_stage.claim_scope_report()` の capping。
 # ---------------------------------------------------------------------------
 
@@ -2073,11 +2080,48 @@ def test_v1_3_three_element_claim_scope_is_accepted(
     assert frozen_design["max_claim_scope"] == _V1_3_MAX_CLAIM_SCOPE
 
 
-def test_v1_3_does_not_reject_a_scope_that_still_names_formant_frequency() -> None:
-    """v1.3 は `formant_frequency` を含む承認を **拒否しない**（除外は承認
-    ファイル側の運用。Gate 1 検査は registry 突合のみを行う）。"""
+def test_v1_3_production_freeze_rejects_a_scope_that_still_names_formant_frequency(
+    tmp_path: Path, clean_checkout: None
+) -> None:
+    """v1.3 の本番（`rehearsal=False`）freeze は `formant_frequency` を含む
+    `max_claim_scope` を fail-closed で拒否する（Codex #350 第 1 巡 P2,
+    discussion_r3954034871 ADOPT）。"""
+    approval_dir = tmp_path / "approvals"
+    approval_dir.mkdir()
+    _write_gate1(approval_dir, scope=[*_V1_3_MAX_CLAIM_SCOPE, "formant_frequency"])
+    report = c0_freeze.dry_run(_REPO_ROOT, approval_dir, os.environ)
+    assert report.validation.is_blocked
+    reasons = [
+        r for r in report.validation.missing_required_keys if r.startswith("max_claim_scope:")
+    ]
     assert (
-        c0_freeze._check_max_claim_scope([*_V1_3_MAX_CLAIM_SCOPE, "formant_frequency"]) == []
+        "max_claim_scope: claim_scope_contains_retired_construct:formant_frequency" in reasons
+    ), reasons
+
+
+def test_check_max_claim_scope_unit_rejects_formant_frequency_for_v1_3_production() -> None:
+    """`_check_max_claim_scope()` 単体: design_revision=1.3・非 rehearsal で
+    `formant_frequency` を含む scope が単一 violation で BLOCK されること。"""
+    manifest = {"frozen_design": {"design_revision": "1.3"}}
+    violations = c0_freeze._check_max_claim_scope(
+        [*_V1_3_MAX_CLAIM_SCOPE, "formant_frequency"], rehearsal=False, manifest=manifest
+    )
+    assert violations == [
+        "max_claim_scope: claim_scope_contains_retired_construct:formant_frequency"
+    ]
+
+
+def test_check_max_claim_scope_rehearsal_is_unaffected_by_retired_construct_check() -> None:
+    """rehearsal 経路（`[REHEARSAL_CLAIM_SCOPE_SENTINEL]` 単独）は v1.3 の
+    retired-construct 検査追加後も無傷で通過する——sentinel 完全一致検査が
+    先に評価され、registry 突合/retired-construct 検査のいずれにも到達
+    しない。"""
+    manifest = {"frozen_design": {"design_revision": "1.3"}}
+    assert (
+        c0_freeze._check_max_claim_scope(
+            [approvals.REHEARSAL_CLAIM_SCOPE_SENTINEL], rehearsal=True, manifest=manifest
+        )
+        == []
     )
 
 
@@ -2118,7 +2162,7 @@ def test_max_claim_scope_is_part_of_manifest_core_sha(tmp_path: Path, clean_chec
     `e_use_table`'s `frozen_inputs` section which is deliberately excluded."""
     approval_dir_1 = tmp_path / "approvals-1"
     approval_dir_1.mkdir()
-    _write_gate1(approval_dir_1, scope=["formant_frequency"])
+    _write_gate1(approval_dir_1, scope=["source_spectral_tilt"])
     report_1 = c0_freeze.dry_run(_REPO_ROOT, approval_dir_1, os.environ)
 
     approval_dir_2 = tmp_path / "approvals-2"
@@ -2143,7 +2187,7 @@ def test_armed_freeze_published_manifest_records_max_claim_scope(
     )
     assert result.outcome == c0_freeze.FreezeOutcome.PUBLISHED, result.detail
     manifest = json.loads((result.campaign_dir / "c0_manifest.json").read_text(encoding="utf-8"))
-    assert manifest["frozen_design"]["max_claim_scope"] == ["formant_frequency"]
+    assert manifest["frozen_design"]["max_claim_scope"] == ["harmonic_to_noise_ratio"]
 
 
 def test_cli_dry_run_prints_max_claim_scope(
@@ -2527,8 +2571,8 @@ def test_armed_freeze_through_full_campaign_cli_never_hits_blocked_leakage(
     campaigns_dir = tmp_path / "campaigns"
     approval_dir.mkdir()
     # F0_CONTROL candidates claim construct "fundamental_frequency", not the
-    # module default scope ("formant_frequency") — freeze against the scope
-    # this campaign actually needs.
+    # module default scope ("harmonic_to_noise_ratio") — freeze against the
+    # scope this campaign actually needs.
     _write_gate1(approval_dir, scope=["fundamental_frequency"])
     dry_report = c0_freeze.dry_run(_REPO_ROOT, approval_dir, os.environ)
     assert not dry_report.validation.is_blocked, dry_report.validation.missing_required_keys
