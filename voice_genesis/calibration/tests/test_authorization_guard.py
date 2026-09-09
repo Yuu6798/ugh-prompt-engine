@@ -254,6 +254,45 @@ def test_gate3_scoped_reference_accepts_post_seal_evidence(tmp_path: Path) -> No
     assert result.mode == "DIRECT_REFERENCE"
 
 
+def test_base_post_seal_evidence_still_requires_gate3_after_ledger_deletion(
+    tmp_path: Path,
+) -> None:
+    base_campaign = _campaign(tmp_path / "base")
+    _append_ledger_payload(base_campaign, {"kind": "holdout_unseal"})
+    head_campaign = tmp_path / "head" / base_campaign.name
+    shutil.copytree(base_campaign, head_campaign)
+    (head_campaign / "ledger.jsonl").unlink()
+    _write_direct_reference(
+        head_campaign,
+        ["C0_FREEZE", "CAMPAIGN_EXECUTION"],
+    )
+
+    result = validate_campaign(head_campaign, base_campaign_dir=base_campaign)
+
+    assert result.ok is False
+    assert result.reasons == (
+        "approved_operations missing required operations: GATE3_SEAL_ACCEPTANCE",
+    )
+
+
+def test_base_and_candidate_gate3_reference_accepts_post_seal_evidence(
+    tmp_path: Path,
+) -> None:
+    base_campaign = _campaign(tmp_path / "base")
+    _append_ledger_payload(base_campaign, {"kind": "holdout_executed_valid"})
+    head_campaign = tmp_path / "head" / base_campaign.name
+    shutil.copytree(base_campaign, head_campaign)
+    _write_direct_reference(
+        head_campaign,
+        ["C0_FREEZE", "CAMPAIGN_EXECUTION", "GATE3_SEAL_ACCEPTANCE"],
+    )
+
+    result = validate_campaign(head_campaign, base_campaign_dir=base_campaign)
+
+    assert result.ok is True
+    assert result.mode == "DIRECT_REFERENCE"
+
+
 def test_c4_stage_requires_gate3_even_without_unseal_event(tmp_path: Path) -> None:
     campaign = _campaign(tmp_path)
     _append_ledger_payload(campaign, {"kind": "stage_summary", "stage": "c4-holdout"})

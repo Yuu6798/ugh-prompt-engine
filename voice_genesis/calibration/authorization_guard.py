@@ -199,7 +199,12 @@ def _required_operations(campaign_dir: Path) -> tuple[frozenset[str], tuple[str,
     return frozenset(required), ()
 
 
-def _validate_direct_reference(campaign_id: str, path: Path, campaign_dir: Path) -> GuardResult:
+def _validate_direct_reference(
+    campaign_id: str,
+    path: Path,
+    campaign_dir: Path,
+    base_campaign_dir: Path | None,
+) -> GuardResult:
     reasons: list[str] = []
     try:
         data = _load_json(path)
@@ -244,6 +249,14 @@ def _validate_direct_reference(campaign_id: str, path: Path, campaign_dir: Path)
 
     required_operations, ledger_reasons = _required_operations(campaign_dir)
     reasons.extend(ledger_reasons)
+    if base_campaign_dir is not None:
+        base_required_operations, base_ledger_reasons = _required_operations(
+            base_campaign_dir
+        )
+        required_operations = required_operations.union(base_required_operations)
+        reasons.extend(
+            "trusted-base " + reason for reason in base_ledger_reasons
+        )
     operations = data.get("approved_operations")
     if not isinstance(operations, list) or any(not _nonblank_string(x) for x in operations):
         reasons.append("approved_operations must be a list of non-blank strings")
@@ -354,7 +367,12 @@ def validate_campaign(
                 f"{AUTH_REF_FILENAME} is required unless the campaign has a valid {QUARANTINE_FILENAME}",
             ),
         )
-    return _validate_direct_reference(campaign_id, auth_ref, campaign_dir)
+    return _validate_direct_reference(
+        campaign_id,
+        auth_ref,
+        campaign_dir,
+        base_campaign_dir,
+    )
 
 
 def _campaign_dir(repo_root: Path, campaign_id: str) -> Path:
