@@ -1239,7 +1239,7 @@ never-discarded な meter_call group の within CPU 未回収——第 8 巡の
 
 | v1.2 節 | 実装モジュール | 関数名 | 備考 |
 |---|---|---|---|
-| §W1（対照意味論の是正: fire 判定一本化・sanctioned abstention） | `fixtures/controls.py` | `detected()`（既定分岐は旧 `holdout_stage._detected_output()` と同一挙動）, `DetectionPredicate`, `SANCTIONED_ABSTENTIONS = {(ControlClass.SILENCE, "F0_UNUSABLE")}` | 閉語彙。追加は次 revision の preregistration 経由 |
+| §W1（対照意味論の是正: fire 判定一本化・sanctioned abstention） | `fixtures/controls.py` | `detected()`（既定分岐は旧 `holdout_stage._detected_output()` と同一挙動）, `DetectionPredicate`, `SANCTIONED_ABSTENTIONS = {(ControlClass.SILENCE, "F0_UNUSABLE")}`（v1.2 時点。**v1.4 で `(NOISE_ONLY, "F0_UNUSABLE")` を追加し 2 組へ拡張済み——§10 参照**） | v1.2 時点は閉語彙 1 組。追加は preregistration 経由のみ（v1.4 で実施） |
 | | `campaign/selection_stage.py` | `candidate_fail_filter_report()`（kwonly `control_class_by_negative_row_id`/`missing_reason_by_negative_row_id`。neg/pos detection の両呼び出しへ `candidate.detection_predicate` を伝播 — #349 第2巡）, `candidate_space_sha()`（payload に `detection_predicate` 追加。`None` はキー自体を省略するため既存候補の sha 値は不変 — #349 第2巡で全候補一律出力の誤りを是正） | |
 | | `campaign/holdout_stage.py` | `_detected()`/`_detected_output()` を削除し `fixture_controls.detected()` へ置換（`control_detection_for_family()` の positive/negative 両呼び出しへ `candidate.detection_predicate` を伝播 — #349 第2巡） | |
 | | `candidates/registry.py` | `Candidate.detection_predicate: DetectionPredicate \| None = None`（既存 99 候補は全て未宣言 = 挙動不変） | FORMANT 候補への宣言は次 revision |
@@ -1303,3 +1303,33 @@ freeze）を実行しない:
 | TILT_GT（13） | **12 PASS**（harmonic 12 候補、positive 1.0 / negative 0.0）+ **1 NO_CEILING**（`M2T-B0-CURRENT-HYBRID`） |
 | FORMANT_GT（43） | 43 FAIL_NEGATIVE（v1.3 では未修正・claim scope 外。変化なし） |
 | APERIODICITY_GT（24） | 選定成立実績のある `M2A-B0-AUTOCORR-PERIODICITY` は PASS（変化なし） |
+
+## 10. v1.4 改訂の実装マップ
+
+設計正本 `DESIGN_VG_METER_CAL_DEBT_v1.4.md`（§Y0–§Y4）の各節を実装した
+モジュール・関数の対応表。実装の詳細な逸脱・境界宣言・採否根拠は
+`README.md` 逸脱台帳 `UNDERSPEC-CAL-D113`〜`D117` が正（本表は経路の索引
+のみ）。WP-A はコード + テストのみ（ブランチ `claude/run10-cal-v1-4`、
+7 コミット: 93a7227/616d404/44ef62a/32db2b9/88bc9b5/a332629/cb30a96）。
+
+| v1.4 節 | 実装モジュール | 関数名 / 定数 | 備考（= 台帳 tag） |
+|---|---|---|---|
+| §Y2（棄権 2 経路の統一） | `fixtures/controls.py` | `SANCTIONED_ABSTENTIONS`（2 組に拡張）, `abstained(output, candidate) -> bool`（正本 1 箇所） | `D113`。閉語彙、追加は次 revision の preregistration 経由 |
+| | `candidates/registry.py` | `Candidate.abstention_reasons: frozenset[vocab.MissingReason] = frozenset()`（`M2A-B0-AUTOCORR-PERIODICITY` のみ `{OUTPUT_MISSING}` を宣言） | `D113`。`candidate_space_sha` 変化 |
+| | `campaign/selection_stage.py` | `candidate_fail_filter_report()`（`negative_control_declared_abstentions`、audit-only。fire/non-fire 判定は無改変） | `D113`。WP-A block 3 deviation（selection 側は round-20 型契約を持たないため memo の文字どおりの適用は既存 6 テストを割る——`abstained()` 呼出しのみ literal に満たす） |
+| | `campaign/holdout_stage.py` | `control_detection_for_family._negative_fired()`（entirely-missing instance のみ `abstained()` で非発火扱い） | `D113`。非空 group の missing/invalid は round 20 契約のまま失敗 |
+| §Y2（DIRECTIONAL 極性の preregistration） | `candidates/registry.py` | `Candidate.truth_polarity: int \| None = None`（APERIODICITY_GT の 3 algorithm family へ宣言。他は `None`） | `D114` |
+| | `observables.py` | `apply_polarity(delta_output, polarity)`（正本 1 箇所） | `D114` |
+| | `campaign/selection_stage.py` | `build_candidate_criteria()`（tau/adjacent-reversal を極性適用後の値で計算）, `claim_scope_report()`（`truth_polarity is None` の DIRECTIONAL 候補を `NO_POLARITY` で `DIAGNOSTIC_ONLY` へ cap） | `D114`。M5_TRANSITION 7 候補・M6_IDENTITY 2 候補が本 revision から cap される（副作用、§Y4 参照） |
+| | `campaign/holdout_stage.py` | `build_directional_gate_inputs()`（`delta_output`/`correct_sign` を極性適用後の値で `DirectionalPair` に渡す。`gates.py` 自体は無改変） | `D114` |
+| §Y3（`gate_detail` 3 ブロックの永続化） | `campaign/holdout_stage.py` | `control_detection_summary()`, `margins_summary()`, `pairs_summary()`。`evaluate_absolute_meter_from_campaign()`/`evaluate_directional_meter_from_campaign()` が `MeterHoldoutResult.gate_detail` へ常時書き込み | `D115`。`AbsoluteGateInputBundle`/`DirectionalGateInputBundle` を `ControlDetection` の残りフィールドで拡張 |
+| §Y3（正規化 MAE `truth_floor`） | `observables.py` | `error_terms(m, truth, zero_guard, *, truth_floor=None)`（既定 `None` は旧挙動 bit-for-bit不変） | `D116` |
+| | `campaign/selection_stage.py` | `truth_floor_for_candidate(candidate, e_use_rows)`（construct の E_use・absolute mode・有限値のみを floor へ変換する正本） | `D116`。`selection_rule_sha()` は `selection.py` のみをハッシュするため本変更では変化しない——変更検知は manifest `candidates.*_paths_sha256` 側が担う（memo からの文字どおりの逸脱として文書化） |
+| | `campaign/cli.py` | `_try_load_e_use_rows_for_selection()`（`load_e_use_rows()` の fail-closed 経路を避けるベストエフォート読取）。C3a/C3b 双方から配線 | `D116` |
+| §Y3（diagnose census 内製化・schema 0.4） | `campaign/diagnose.py` | `SCHEMA = "diagnose/0.4"`, `_census_block()`（control class × outcome 件数表）, `_kendall_tau_sign()`（DIRECTIONAL 候補の tau 符号）, `CellOutcome.truth` | （台帳なし。§Y3 本文が正） |
+| §Y3（統治文書連鎖 / design_revision） | `approvals.py` | `DESIGN_DOC_CHAIN`（v1.4→v1.3→v1.2→v1.1→v1.0 の 5 段。先頭が本書） | （§X4 の一般化をそのまま適用。追加は先頭へ 1 行） |
+| | `c0_freeze.py` | `_DESIGN_REVISION = "1.4"` | |
+| | `c0_validate.py` | `_ALLOWED_DESIGN_REVISIONS`/`_DESIGN_REVISION_ORDER` に `"1.4"` を追加, `_is_v1_4_or_later()`, `_check_sanctioned_abstentions_vocabulary()`（design_revision >= 1.4 かつ非 rehearsal で実行時 `SANCTIONED_ABSTENTIONS` が §Y2 の 2 組と厳密一致することを要求。不一致は `VALIDATION_BLOCKED`） | |
+| | `c0_path_inventory.json` | （再生成。115 entry） | v1.4 設計文書パスを追加（WP-A block 7 で実施済み） |
+| §Y1（WP-P probe。本番コード変更なし） | （docs のみ） | `DESIGN_VG_METER_CAL_DEBT_v1.4.md` §Y1.1（P1: TILT=`METER_OFF`）/§Y1.2（P2 census）/§Y1.3（P3 census） | `D117`（P1）。生データ = `scratchpad/v14/p1/`・`v14/p23/` |
+| §Y4（答えた問い / 答えていない問い / terminal status） | （docs） | `DESIGN_VG_METER_CAL_DEBT_v1.4.md` §Y4, `README.md` D113–D117 | `debt_discharged=false` のまま据え置き。v1.4 は本番 campaign を回していない |
