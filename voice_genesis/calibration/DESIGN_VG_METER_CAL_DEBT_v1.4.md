@@ -56,7 +56,7 @@ Design Memo（RUN10-CAL-v1.4）「前提となる設計判断」節の verbatim 
 4. (B) の語彙は **候補ごと**に `Candidate.abstention_reasons: frozenset[MissingReason]`（既定 空）。v1.4 で宣言するのは `M2A-B0-AUTOCORR-PERIODICITY: {OUTPUT_MISSING}` のみ（`hnr_db_approx` が非有限 = 周期成分なし = 棄権）。他候補は P2 census の結果を見て **宣言しない**（census で正例に棄権があれば宣言不可）。
 5. **DIRECTIONAL 極性は宣言する**: `Candidate.truth_polarity: Literal[+1, -1]`（construct の変化方向 / truth の変化方向）。`gates._same_nonzero_sign` と `selection_stage.build_candidate_criteria` の tau / reversal は `polarity * delta_output` を使う。既存 `DirectionalPair.correct_sign` は holdout 側で同じ式から再計算する（正本は 1 箇所 = `observables` に `apply_polarity()` を置き両者が呼ぶ。複製禁止）。v1.4 で宣言: `M2A-B0-AUTOCORR-PERIODICITY = -1`（HNR は noise fraction と逆相関）、他の APERIODICITY 候補は construct から機械的に決める（`injected_noise_fraction` 系 = +1、`harmonic_to_noise_ratio` 系 = −1、`world_d4c_aperiodicity` = +1）。宣言と P3 census の tau 符号が矛盾する候補は **宣言せず** `NO_POLARITY` として DIRECTIONAL 不適格（ceiling を DIAGNOSTIC_ONLY に cap）。
 6. **記録の観測性**: `MeterHoldoutResult.gate_detail` に gate 5 の `control_detection`（fdr0 / fnr1 / n_neg / n_pos / min_count_met / negative_control_failures / positive_control_failures / negative_control_sanctioned_abstentions）と `margins_summary`（n, |e| q50/q95/max, |BIAS|, U_GT+U_num, U_rep, U_proc, median E_use, G q95/max）、DIRECTIONAL には `pairs_summary`（resolvable_count, correct_count, reversal_count, kendall_tau, polarity）を **常に**書く。
-7. **正規化 MAE の分母**: `observables.error_terms` の `re = ae / max(|truth|, zero_guard)` は真値 0 行で発散（2dde4014: TILT 第 1 順位要素 2e8〜7e9、順位が真値 0 行の絶対誤差だけで決まる縮退）。v1.4 は分母の floor を **construct の E_use（absolute mode）** に置換（`re = ae / max(|truth|, E_use)`）。relative mode（F0 の 20 cent）は従来の |truth|（真値 0 なし）。`selection_rule_sha` は変わる（v1.4 preregistration）。
+7. **正規化 MAE の分母**: `observables.error_terms` の `re = ae / max(|truth|, zero_guard)` は真値 0 行で発散（2dde4014: TILT 第 1 順位要素 2e8〜7e9、順位が真値 0 行の絶対誤差だけで決まる縮退）。v1.4 は分母の floor を **construct の E_use（absolute mode）** に置換（`re = ae / max(|truth|, E_use)`）。relative mode（F0 の 20 cent）は従来の |truth|（真値 0 なし）。`selection_rule_sha` は変わる（v1.4 preregistration）（訂正 2026-09-09: `selection_rule_sha` は `selection.py` のみを hash するため不変。criteria 構築（`campaign/selection_stage.py`）の変更は manifest `candidates.*_paths_sha256` で pin される — §Y3 / D116 参照）。
 8. **APERIODICITY の微小段** 0→0.01→0.03→0.1 は Δtruth < 2(U_GT+U_num)=0.128 で構造的に解像不能。fixture 水準は凍結行列の一部であり v1.4 では変更しない（文書化のみ。v1.4 doc §Y4「答えていない問い」に登録）。
 9. **TILT 精度**（|e| が真値 0/−6 で 0.28、−12/−18/−24 で 14.5〜14.9 の段差）は **測定器を触る前に P1 で生成器/測定器を切り分ける**。P1 の結果が「測定器」なら測定器の再設計は v1.5（段階 1 へ戻る）、「生成器」なら fixture 修正 = 新 revision の行列。いずれも v1.4 では実装しない。
 
@@ -333,17 +333,34 @@ selection.py` のみをハッシュする別モジュールであり、本変更
 `campaign/selection_stage.py` を独立に被覆しており、変更検知の欠落は
 ない。
 
-**selection 側の deviation（audit-only key）**: memo は holdout 側の
-round 20 相当の「非宣言理由は無条件失敗」契約を selection 側にも
-適用するよう読めたが、`selection_stage` はそもそも round-20 型の契約を
-持たず（`neg_detections` は常に `fixtures.controls.detected()` ベースで
+**selection 側の deviation（audit-only key）— PR #354 round 3 finding #1
+採用（2026-09-09）で上書き**: memo は holdout 側の round 20 相当の
+「非宣言理由は無条件失敗」契約を selection 側にも適用するよう読めたが、
+WP-A 時点の `selection_stage` はそもそも round-20 型の契約を持たず
+（`neg_detections` は常に `fixtures.controls.detected()` ベースで
 missing/invalid を無条件に非発火とみなす——holdout 固有の契約とは別物）、
-文字どおり適用すると 6 件の既存テストが割れた（WP-A block 3
-deviation）。代わりに `candidate_fail_filter_report()` へ **audit-only**
-の `negative_control_declared_abstentions`（`FAIL_FILTER_NAMES` に非含有、
-eligibility に無影響）を追加し、「両 call site が `fixtures.controls.
-abstained()` を直接呼ぶ」という文字どおりの要件（call-site AST テストで
-固定）だけを満たした——fire/non-fire の判定ロジックは byte-for-byte 不変。
+文字どおり適用すると当時の既存テストが割れたため（WP-A block 3
+deviation）、`candidate_fail_filter_report()` へ **audit-only** の
+`negative_control_declared_abstentions`（`FAIL_FILTER_NAMES` に非含有、
+eligibility に無影響）を追加するに留めていた——fire/non-fire の判定
+ロジックは byte-for-byte 不変のままだった。
+
+round 3 是正: この deviation はホールドアウトとの不整合（同じ「宣言
+されていない missing/ineligible な負例 record」が holdout では
+`_negative_fired()` 経由で失敗、selection では eligible のまま）を
+放置する結果になっていたため、独立 fail filter
+`negative_control_undeclared_missing`（`FAIL_FILTER_NAMES` に追加、
+`negative_control_false_fire` へは fold しない）を新設し、holdout の
+`_negative_fired()` v1.4 経路 (B) と同一の述語（`fixtures.controls.
+abstained()`、正本 1 箇所）を `(row_id, probe_index)` instance 単位で
+selection 側にも適用する形で本 deviation を解消した（実装は
+`campaign/selection_stage.candidate_fail_filter_report()` docstring
+「round 3 是正」パラグラフが正）。既存の 6 テストのうち、この deviation
+を前提にしていたものは新しい fire/non-fire 判定に合わせて更新済み
+（詳細はコミット本文）。`negative_control_declared_abstentions`
+（audit-only）自体は新 filter の入力の可視化として引き続き残す
+（削除しない——冗長ではなく、新 filter が「宣言済みなら non-failure」と
+判定した record 件数の内訳を示す）。
 
 **diagnose schema 0.4 census**: `campaign/diagnose.py::SCHEMA =
 "diagnose/0.4"`。`--dump-values` は候補ごとに `census`

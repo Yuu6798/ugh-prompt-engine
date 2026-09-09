@@ -243,17 +243,31 @@ def test_c1_fixtures_armed_end_to_end_via_cli(
 # `MeasurementRecord`/`MeterOutput`) on a genuine F0_CONTROL SILENCE negative
 # control row, run through the real `cli._run_c3a` orchestration
 # (`selection_stage.run_c3a_f0_selection` inside it, not a hand-built
-# `CandidateCriteria`). Before the fix, pyin's real (deterministic, all-6-
-# repeats) `OUTPUT_MISSING` on silence tripped `within_fresh_process_mismatch`
-# and made F0-B0-CURRENT the only candidate ineligible, so
+# `CandidateCriteria`). Before the D67 fix, pyin's real (deterministic,
+# all-6-repeats) `OUTPUT_MISSING` on silence tripped `within_fresh_process_
+# mismatch` and made F0-B0-CURRENT the only candidate ineligible, so
 # `select_across_ceilings` had zero eligible candidates and C3a recorded
 # `SELECTION_FAILED_CLOSED` — i.e. no candidate could ever pass a negative
-# control.
+# control via that filter.
+#
+# PR #354 round 3 finding #1 (2026-09-09): D67 fixed the `within_fresh_
+# process_mismatch` false positive, but this same consistent `OUTPUT_MISSING`
+# is *also* an undeclared missing negative-control record — `F0-B0-CURRENT`
+# declares no `abstention_reasons` (`candidates/registry.py`). Round 3's
+# independent `negative_control_undeclared_missing` filter (holdout-
+# consistent, not folded into `negative_control_false_fire`) now fires on
+# it, so `_run_c3a` reverts to `SELECTION_FAILED_CLOSED` here too — for a
+# *different* reason than before D67 (this filter, not the mismatch one).
+# This is the expected, holdout-consistent v1.4 preregistration outcome: a
+# candidate must *declare* a matching `abstention_reasons` entry to be
+# recognized as correctly abstaining on an unsanctioned (non-`F0_UNUSABLE`)
+# negative-control miss — `F0-B0-CURRENT` does not, so it is no longer
+# selectable via this fixture alone.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_c3a_f0_selection_passes_with_candidate_that_correctly_non_detects_on_silence(
+def test_c3a_f0_selection_fails_closed_on_undeclared_silence_non_detection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """3 F0_CONTROL TRUTH_CORE rows (n=3 lands exactly 1 in the SELECTION
@@ -263,7 +277,16 @@ def test_c3a_f0_selection_passes_with_candidate_that_correctly_non_detects_on_si
     `librosa.pyin` genuinely finds no voiced frames on true silence and
     returns `OUTPUT_MISSING` for every within- and fresh-process repeat
     (`candidates/impl/f0_pyin.py::measure`) — deterministically, so this is
-    not flaky."""
+    not flaky.
+
+    Renamed from `..._passes_with_candidate_that_correctly_non_detects_on_
+    silence` (PR #354 round 3 finding #1, 2026-09-09): `F0-B0-CURRENT`
+    declares no `abstention_reasons`, so this real, consistent `OUTPUT_
+    MISSING` is now an *undeclared* missing negative-control record and
+    fails via the new `negative_control_undeclared_missing` filter — the
+    candidate is no longer selected. `within_fresh_process_mismatch`/
+    `negative_control_false_fire` stay non-firing (D67's ruling is
+    unaffected); only overall eligibility/outcome changes."""
     from voice_genesis.calibration.fixtures.matrix import build_matrix
 
     all_rows = build_matrix()
@@ -298,8 +321,11 @@ def test_c3a_f0_selection_passes_with_candidate_that_correctly_non_detects_on_si
 
     result = cli._run_c3a(campaign, subset, 1)
     assert result["result"] == "OK", result
-    assert result["outcome"] == "SELECTED", result
-    assert result["selected_candidate_id"] == "F0-B0-CURRENT"
+    # PR #354 round 3 finding #1 (2026-09-09): pre-round-3 this asserted
+    # `outcome == "SELECTED"`/`selected_candidate_id == "F0-B0-CURRENT"` — see
+    # the module note above for why `SELECTION_FAILED_CLOSED` is now correct.
+    assert result["outcome"] == "SELECTION_FAILED_CLOSED", result
+    assert result["selected_candidate_id"] is None
 
     # confirm this really exercised the consistent-missing shape (not an
     # accidental finite reading on the silent row): every meter_call for the
@@ -317,8 +343,12 @@ def test_c3a_f0_selection_passes_with_candidate_that_correctly_non_detects_on_si
     ]
     assert f0_events
     fail_filters = f0_events[-1]["fail_filters_by_candidate"]["F0-B0-CURRENT"]
+    # D67's ruling is unaffected — the mismatch/any-fire filters stay clean.
     assert fail_filters["within_fresh_process_mismatch"] is False
     assert fail_filters["negative_control_false_fire"] is False
+    # ... but the new, independent filter now fires on the undeclared
+    # OUTPUT_MISSING, which is why the candidate is ineligible overall.
+    assert fail_filters["negative_control_undeclared_missing"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -397,14 +427,24 @@ def _fabricate_f0_v11_records(subset, instances, candidates_arg, *, silence_and_
     return records
 
 
-def test_v11_c3a_noise_only_false_fire_stays_eligible_and_rate_is_recorded(
+def test_v11_c3a_noise_only_false_fire_is_exempt_but_undeclared_missing_still_rejects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC5(b)/(e): a candidate that false-fires on 2/5 NOISE_ONLY instances
-    but never fires on SILENCE/TOO_SHORT must still be `SELECTED` (NOISE_ONLY
-    is excluded from `negative_control_false_fire`'s any-fire population),
-    and the `f0_selection_frozen` ledger payload must record the exact
-    NOISE_ONLY breakdown."""
+    but never fires on SILENCE/TOO_SHORT is exempt from `negative_control_
+    false_fire`'s any-fire population for that reason, and the
+    `f0_selection_frozen` ledger payload must record the exact NOISE_ONLY
+    breakdown and wire it into the ranking vector regardless of overall
+    eligibility.
+
+    Renamed from `..._stays_eligible_and_rate_is_recorded` (PR #354 round 3
+    finding #1, 2026-09-09): `F0-B0-CURRENT` declares no `abstention_
+    reasons`, so the fabricated SILENCE/TOO_SHORT non-detections (and the
+    3/5 non-detected NOISE_ONLY probes) are undeclared missing
+    negative-control records — the new `negative_control_undeclared_missing`
+    filter now rejects the candidate (`SELECTION_FAILED_CLOSED`), even
+    though the NOISE_ONLY-specific any-fire exemption and rate/vector
+    reporting this test exists for are unaffected and still hold."""
     from voice_genesis.calibration.candidates.registry import candidate_by_id
 
     campaign, subset = _f0_v11_campaign(tmp_path)
@@ -427,8 +467,10 @@ def test_v11_c3a_noise_only_false_fire_stays_eligible_and_rate_is_recorded(
 
     result = cli._run_c3a(campaign, subset, 1)
     assert result["result"] == "OK", result
-    assert result["outcome"] == "SELECTED", result
-    assert result["selected_candidate_id"] == "F0-B0-CURRENT"
+    # PR #354 round 3 finding #1: was `"SELECTED"`/`"F0-B0-CURRENT"` — see
+    # docstring above for why the new filter now rejects this candidate.
+    assert result["outcome"] == "SELECTION_FAILED_CLOSED", result
+    assert result["selected_candidate_id"] is None
 
     f0_events = [
         e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "f0_selection_frozen"
@@ -439,11 +481,14 @@ def test_v11_c3a_noise_only_false_fire_stays_eligible_and_rate_is_recorded(
     assert fail_filters["noise_only_instances_total"] == 5
     assert fail_filters["noise_only_instances_detected"] == 2
     assert fail_filters["noise_only_false_detection_rate"] == pytest.approx(0.4)
+    assert fail_filters["negative_control_undeclared_missing"] is True
 
     # the rate feeds `nuisance_sensitivity_max`, the existing ranking-vector
     # slot immediately after the error terms (v1.0 §8's declared "voiced
     # false detection rate" position) — confirm it is actually wired into
-    # the frozen rounded ranking vector, not just recorded as an audit key.
+    # the frozen rounded ranking vector, not just recorded as an audit key
+    # (vectors are recorded for every candidate with criteria, eligible or
+    # not — `selection.select_across_ceilings()`).
     rounded_vector = f0_events[-1]["rounded_vectors"]["F0-B0-CURRENT"]
     assert rounded_vector[3] == pytest.approx(0.4)
 

@@ -337,11 +337,15 @@ def truth_value_for_row(row: FixtureRow) -> float | None:
 
 #: fail filter 名の閉集合（`candidates.adapter` の 5 種、設計正本 §8、+
 #: `candidate_fail_filter_report()` 自身が定義する `positive_rows_absent`/
-#: `negative_controls_incomplete`/`coverage_incomplete` の計 8 種。round 17
-#: finding #1 採用で `negative_controls_incomplete` を追加、round 28 ADOPT (2)
+#: `negative_controls_incomplete`/`coverage_incomplete`/
+#: `negative_control_undeclared_missing` の計 9 種。round 17 finding #1
+#: 採用で `negative_controls_incomplete` を追加、round 28 ADOPT (2)
 #: (`[UNDERSPEC-CAL-D64]`) で `coverage_incomplete` を追加、round 30
 #: self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`) で `coverage_incomplete` の
-#: 母集団・判定を拡張（filter 名自体は増えない）。
+#: 母集団・判定を拡張（filter 名自体は増えない）、PR #354 round 3 finding #1
+#: 採用（2026-09-09）で `negative_control_undeclared_missing` を追加
+#: （holdout `_negative_fired()` v1.4 経路 (B) と同一述語を selection 側にも
+#: 適用——`negative_control_false_fire` へは fold しない別 filter）。
 #: `candidate_fail_filter_report()` が返す dict のキーと 1:1 対応する。
 FAIL_FILTER_NAMES: tuple[str, ...] = (
     "schema_violation",
@@ -352,6 +356,7 @@ FAIL_FILTER_NAMES: tuple[str, ...] = (
     "positive_rows_absent",
     "negative_controls_incomplete",
     "coverage_incomplete",
+    "negative_control_undeclared_missing",
 )
 
 
@@ -416,7 +421,7 @@ def candidate_fail_filter_report(
     """finding #8: `candidates.adapter` の共通 5 fail filter（schema 違反 /
     無説明非有限 / within-process と fresh-process の不一致 / negative
     control 偽検出 / positive control 不発火）を `candidate` の全 record へ
-    適用し、`{filter_name: 発火したか}` を返す（`FAIL_FILTER_NAMES` の 7 キー
+    適用し、`{filter_name: 発火したか}` を返す（`FAIL_FILTER_NAMES` の 9 キー
     すべてを必ず持つ）。`eligible_after_fail_filters()` と組み合わせて使う。
 
     `negative_control_row_ids`/`positive_control_row_ids` が空（対象 family
@@ -556,7 +561,38 @@ def candidate_fail_filter_report(
     既定 `None`）。sanctioned 行以外の欠測（例: `OUTPUT_MISSING` による
     行欠落や NOISE_ONLY の control_class）は従来どおり incomplete のまま。
     粒度混在（本 filter は row_id 単位、`coverage_incomplete` は instance
-    単位）は v1.2 では変更しない（境界宣言）。"""
+    単位）は v1.2 では変更しない（境界宣言）。
+
+    PR #354 round 3 finding #1 採用（2026-09-09、`negative_control_
+    undeclared_missing`）: round 1–2 まで selection 側は「非空 group 内の
+    宣言されていない missing_reason/ineligible」を無条件に non-fire として
+    扱っており（`fixtures.controls.detected()` が record 単位でそう写像
+    するため）、`holdout_stage.control_detection_for_family._negative_fired()`
+    の v1.4 経路 (B)（同じ record 形状を無条件失敗と判定する）と乖離して
+    いた——selection は該当 record を数えても `negative_control_false_fire`
+    （any-fire ゼロ許容）が「非発火」側に倒すため、行 completeness
+    （`negative_controls_incomplete`）も満たしたまま候補が誤って
+    eligible に残る経路があった。新設した独立 filter
+    `negative_control_undeclared_missing` がこれを閉じる: `declared_
+    negative_row_ids`（`negative_control_row_ids` ∪ `noise_only_control_
+    row_ids`、completeness 判定と同じ母集団）に属する own record のうち
+    いずれか 1 件でも `missing_reason is not None or ineligible` かつ
+    `fixtures.controls.abstained(output, candidate)` が `False`（＝宣言
+    されていない）であれば filter 全体を `True` にする——holdout の
+    `_negative_fired()` 経路 (B) が per-instance（`(row_id, probe_index)`
+    group）に適用する述語と同一であり、「いずれかの instance の いずれかの
+    repeat が該当すれば filter 発火」という判定は record 全体への flat な
+    any-reduction と数学的に同値なため、instance 単位のグルーピングは
+    行わない（実装コメント参照）。record が丸ごと皆無の instance（group
+    空）はこの filter の対象外のまま（経路 (A)、`negative_controls_
+    incomplete`/`sanctioned_abstention_row_ids` の管轄）。
+    `negative_control_false_fire`（record 単位の
+    any-fire ゼロ許容）へは fold しない——別の観点（any-fire vs
+    宣言されていない欠落）を record clarity のため独立 filter として
+    残す。v1.4 前提 2/§Y3 の「selection 側は audit-only の
+    `negative_control_declared_abstentions` に留める」という WP-A block 3
+    deviation はこの round 3 是正で上書きされる（`DESIGN_VG_METER_CAL_
+    DEBT_v1.4.md` §Y3 該当パラグラフを参照/更新済み）。"""
     own_records = [r for r in records if r.candidate_id == candidate.candidate_id]
 
     required_field = measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY.get(
@@ -603,25 +639,25 @@ def candidate_fail_filter_report(
         missing_reason_by_negative_row_id,
     )
 
-    # RUN10-CAL-v1.4 §前提 2 経路 (B): `fixtures.controls.detected()` already
-    # maps every missing_reason/ineligible record to `False` (non-fire)
-    # regardless of whether the reason is declared (`selection_stage` has no
-    # holdout-style round 20 "non-empty group's missing/invalid is an
-    # unconditional failure" contract — that contract is `holdout_stage.
-    # control_detection_for_family._negative_fired()`-specific; selection's
-    # only "missing = failure" behavior is row-level, via
-    # `negative_controls_incomplete` below). v1.4 does not change
-    # `neg_detections`'s fire/non-fire outcome; it adds a parallel,
-    # audit-only accounting of *declared* abstentions (`abstained()`, the
-    # single source of truth also called by `holdout_stage`) so a
-    # `M2A-B0-AUTOCORR-PERIODICITY`-shaped candidate's negative-control
-    # non-fire is visibly a *sanctioned* abstention rather than a
-    # coincidental one — mirrors `holdout_stage.ControlDetection.
-    # negative_control_sanctioned_abstentions`. See docstring paragraph
-    # above `own_records` for why a stricter (fire-flipping) reading of the
-    # memo would regress this function's pre-existing, non-round-20 "missing
-    # negative record stays non-fire" contract (`test_missing_negative_
-    # control_record_is_reported_as_incomplete` et al.).
+    # RUN10-CAL-v1.4 §前提 2 経路 (B), round 3 是正（PR #354 round 3 finding
+    # #1 採用、2026-09-09）: `fixtures.controls.detected()` は
+    # missing_reason/ineligible の record を宣言の有無に関わらず `False`
+    # （非発火）へ写像するため、`neg_detections`（any-fire 判定の入力）
+    # 自体はこの record を無条件に非発火として数える——これは
+    # `negative_control_false_fire`（any-fire ゼロ許容）の入力としては
+    # 本 revision 前と不変のまま維持する（fire/non-fire の record 単位の
+    # 意味論に手を入れると `negative_control_false_fire` 自体の判定が
+    # 変わってしまうため）。**しかし** round 1–2 時点はこの record 単位の
+    # 非発火写像を「selection 側には holdout 型の round 20 契約
+    # （`holdout_stage.control_detection_for_family._negative_fired()`
+    # の「非空 group 内の宣言されていない missing/ineligible は無条件
+    # 失敗」）が存在しない」と誤って結論していた（旧 WP-A block 3
+    # deviation、`negative_control_declared_abstentions` を audit-only の
+    # ままに留めていた）。round 3 で是正: 下記
+    # `negative_control_undeclared_missing`（新設の独立 fail filter、
+    # `negative_control_false_fire` へは folding しない）が holdout と
+    # 同一の述語（`fixtures.controls.abstained()`、正本 1 箇所）で
+    # この穴を閉じる——`abstained()` は `holdout_stage` と共用のまま。
     neg_detections = [
         fixture_controls.detected(r.output, predicate=candidate.detection_predicate)
         for r in own_records
@@ -633,6 +669,33 @@ def candidate_fail_filter_report(
         if r.row_id in negative_control_row_ids
         and (r.output.missing_reason is not None or r.output.ineligible)
         and fixture_controls.abstained(r.output, candidate)
+    )
+    # round 3 是正（PR #354 round 3 finding #1）: `negative_control_
+    # undeclared_missing` — holdout の `_negative_fired()` v1.4 経路 (B)
+    # と同一の述語を per-instance（`(row_id, probe_index)`）で適用する。
+    # 母集団は `negative_controls_incomplete` の completeness 母集団と
+    # 同じ和集合 `declared_negative_row_ids`（`negative_control_row_ids`
+    # ∪ `noise_only_control_row_ids`）——v1.1 §V1 の NOISE_ONLY 分離は
+    # `negative_control_false_fire`（any-fire ゼロ許容）専用の carve-out
+    # であり、この filter（宣言されていない missing/ineligible の失敗
+    # 算入）まで NOISE_ONLY を免除する根拠にはならない。record が丸ごと
+    # 皆無の instance（group 空）はここでは対象外——それは
+    # `negative_controls_incomplete`（経路 (A)、行単位、sanctioned
+    # abstention 済み）の管轄のまま。record が宣言（`Candidate.
+    # abstention_reasons`、`abstained()`）で説明されれば non-failure
+    # （holdout の `any_declared_abstention` と同じ免責）。「per-instance で
+    # 判定し、いずれかの instance が失敗すれば filter 全体が True」は
+    # 「宣言された母集団の中に、宣言されていない missing/ineligible な
+    # record が 1 件でもあるか」という flat な any-reduction と数学的に
+    # 同値なため、holdout のような per-instance group 化（`any_declared_
+    # abstention` の instance 単位 bookkeeping が別途必要な holdout とは
+    # 異なり、selection 側はそれを必要としない——`negative_control_
+    # declared_abstentions` で record 単位に別途会計済み）は行わない。
+    negative_control_undeclared_missing = any(
+        (r.output.missing_reason is not None or r.output.ineligible)
+        and not fixture_controls.abstained(r.output, candidate)
+        for r in own_records
+        if r.row_id in declared_negative_row_ids
     )
     # v1.2 WP1: a sanctioned-abstention row has zero own records because the
     # F0-dependent candidate was never called on it (a skip, not a call that
@@ -750,6 +813,11 @@ def candidate_fail_filter_report(
         "positive_rows_absent": positive_rows_absent,
         "negative_controls_incomplete": negative_controls_incomplete,
         "coverage_incomplete": coverage_incomplete,
+        # PR #354 round 3 finding #1 採用（2026-09-09）: 独立 fail filter
+        # （`negative_control_false_fire` へは fold しない——record 単位の
+        # any-fire 判定とは別の、per-instance の「宣言されていない
+        # missing/ineligible」判定であることを台帳上も区別する）。
+        "negative_control_undeclared_missing": negative_control_undeclared_missing,
         # v1.1 §V1: audit-only keys, not in `FAIL_FILTER_NAMES` — never
         # consulted by `eligible_after_fail_filters()`. Non-empty only when
         # the caller (F0_CONTROL's C3a) passes `noise_only_control_row_ids`.
@@ -760,17 +828,22 @@ def candidate_fail_filter_report(
         # `FAIL_FILTER_NAMES` — count of *present* negative-control records
         # whose missing_reason/ineligible is explained by the candidate's
         # declared `abstention_reasons` (`fixtures.controls.abstained()`).
-        # Does not change `negative_control_false_fire`/
-        # `negative_controls_incomplete` (both already treat these records
-        # as non-fire/present via `fixtures.controls.detected()`); this key
-        # only makes the sanctioned-vs-coincidental distinction visible.
+        # PR #354 round 3 是正: この record 単位の内訳は
+        # `negative_control_false_fire`/`negative_controls_incomplete` を
+        # 変えないままだが（両者は record 単位ではなく any-fire/行単位の
+        # 判定であり不変）、round 3 で新設した
+        # `negative_control_undeclared_missing`（per-instance、上記）の
+        # 「宣言済みなら non-failure」の免責根拠そのものである——この
+        # audit-only キーは新 filter の判定結果の要約ではなく、その入力
+        # となる宣言済み record 件数の可視化として引き続き残す。
         "negative_control_declared_abstentions": negative_control_declared_abstentions,
     }
 
 
 def eligible_after_fail_filters(report: Mapping[str, object]) -> bool:
     """`candidate_fail_filter_report()` の戻り値から eligibility を導出する:
-    7 filter のいずれか 1 つでも発火（True）していれば ineligible。"""
+    `FAIL_FILTER_NAMES`（9 filter）のいずれか 1 つでも発火（True）していれば
+    ineligible。"""
     return not any(report.get(name, False) for name in FAIL_FILTER_NAMES)
 
 

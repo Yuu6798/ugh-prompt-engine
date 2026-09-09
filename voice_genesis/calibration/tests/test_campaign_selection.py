@@ -490,10 +490,21 @@ def test_v11_zero_tolerance_class_any_fire_still_rejects_with_noise_only_split()
 
 def test_v11_noise_only_false_fire_does_not_reject_but_reports_rate() -> None:
     """AC5(b): a candidate that false-fires only on the NOISE_ONLY row(s)
-    must remain eligible (NOISE_ONLY is excluded from the any-fire
-    `negative_control_false_fire` population) while the detection rate is
-    exposed via the new audit-only keys for the caller to wire into the
-    ranking criteria."""
+    is exempt from the any-fire `negative_control_false_fire` population
+    for that reason (`negative_control_false_fire` stays False), and the
+    detection rate is exposed via the audit-only keys for the caller to wire
+    into the ranking criteria.
+
+    PR #354 round 3 finding #1 (2026-09-09): this fixture's SILENCE row
+    (`missing=True`, undeclared — `candidate_by_id("F0-B0-CURRENT")` declares
+    no `abstention_reasons`) and 3/5 NOISE_ONLY probes are also present,
+    undeclared-missing negative-control records — round 3's independent
+    `negative_control_undeclared_missing` filter (holdout-consistent, not
+    folded into `negative_control_false_fire`) now fires on them, so the
+    candidate is no longer eligible overall (superseding the pre-round-3
+    assertion below that it stayed eligible). The NOISE_ONLY-specific
+    assertions this test exists for — the any-fire exemption and the exact
+    rate/count reporting — are unaffected and still hold."""
     candidate = candidate_by_id("F0-B0-CURRENT")
     field = measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY[candidate.algorithm_family]
     # `_instance_records` gives each instance a matched within+fresh pair
@@ -521,7 +532,10 @@ def test_v11_noise_only_false_fire_does_not_reject_but_reports_rate() -> None:
     assert report["noise_only_instances_total"] == 5
     assert report["noise_only_instances_detected"] == 2
     assert report["noise_only_false_detection_rate"] == pytest.approx(0.4)
-    assert selection_stage.eligible_after_fail_filters(report) is True
+    # PR #354 round 3 finding #1: undeclared missing on SILENCE/NOISE_ONLY
+    # now fails the candidate via the new filter, not via the any-fire one.
+    assert report["negative_control_undeclared_missing"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
 
 
 def test_v11_noise_only_missing_records_still_reported_as_incomplete() -> None:
@@ -1111,12 +1125,26 @@ def _within_fresh_records(
     return records
 
 
-def test_negative_control_consistent_missing_stays_eligible() -> None:
+def test_negative_control_consistent_missing_is_not_a_mismatch_but_undeclared_missing_fails() -> (
+    None
+):
     """A candidate that correctly returns `OUTPUT_MISSING` on every within
     call and every fresh call for a negative control instance (e.g. silence)
     must not be penalized by `within_fresh_process_mismatch` — a consistent
-    non-detection is the CORRECT negative-control outcome, not a mismatch,
-    and must not trip `negative_control_false_fire` either."""
+    non-detection is not a within/fresh *mismatch* (`[UNDERSPEC-CAL-D67]`,
+    unaffected by this change) — and must not trip `negative_control_false_
+    fire` either (record-level any-fire semantics unchanged).
+
+    PR #354 round 3 finding #1 (2026-09-09, renamed from `..._stays_
+    eligible`): `candidate_by_id("F0-B0-CURRENT")` declares no `abstention_
+    reasons`, so this consistent `OUTPUT_MISSING` is an *undeclared* missing
+    negative-control record — the new, independent `negative_control_
+    undeclared_missing` filter (holdout-consistent, mirrors `holdout_stage.
+    control_detection_for_family._negative_fired()`'s v1.4 path (B)) now
+    fires on it, making the candidate ineligible overall. This supersedes
+    the pre-round-3 `eligible_after_fail_filters(...) is True` assertion —
+    D67's within/fresh-mismatch ruling itself is untouched; only overall
+    eligibility changes, via the new filter."""
     candidate = candidate_by_id("F0-B0-CURRENT")
     records = _within_fresh_records(
         "row-negctl-silence",
@@ -1132,7 +1160,8 @@ def test_negative_control_consistent_missing_stays_eligible() -> None:
     )
     assert report["within_fresh_process_mismatch"] is False
     assert report["negative_control_false_fire"] is False
-    assert selection_stage.eligible_after_fail_filters(report) is True
+    assert report["negative_control_undeclared_missing"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
 
 
 def test_negative_control_one_process_reporting_value_is_a_mismatch() -> None:
@@ -1479,17 +1508,23 @@ def test_v12_sanctioned_abstention_does_not_mask_false_fire_on_other_row() -> No
 
 # ---------------------------------------------------------------------------
 # RUN10-CAL-v1.4 §前提 2 経路 (B) (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`):
-# `fixtures.controls.abstained()` in `selection_stage` — audit-only
-# accounting (`negative_control_declared_abstentions`), NOT a fire/non-fire
-# semantics change. `fixtures.controls.detected()` already maps every
-# missing_reason/ineligible negative-control record to non-fire regardless
-# of declaration (selection_stage has no holdout-style round 20 "non-empty
-# group's missing/invalid is an unconditional failure" contract — see
-# `build_candidate_criteria`'s docstring paragraph in the production module),
-# so a declared vs. undeclared reason produces the *same*
-# `negative_control_false_fire`/`negative_controls_incomplete` outcome here;
-# only the new audit-only key distinguishes "sanctioned" from "coincidental"
-# non-fire. Positive-control semantics are untouched either way.
+# `fixtures.controls.abstained()` in `selection_stage`.
+#
+# PR #354 round 3 finding #1 是正（2026-09-09）— supersedes the original
+# comment below: round 1–2 treated `abstained()` in `selection_stage` as
+# audit-only accounting (`negative_control_declared_abstentions`) with no
+# fire/non-fire semantics change, on the premise that `selection_stage` had
+# no holdout-style round 20 "non-empty group's missing/invalid is an
+# unconditional failure" contract. That premise was the bug: it left
+# selection inconsistent with `holdout_stage.control_detection_for_family.
+# _negative_fired()`'s v1.4 path (B), which DOES treat the same undeclared
+# missing/ineligible record as a failure. Round 3 adds the independent fail
+# filter `negative_control_undeclared_missing` (NOT folded into
+# `negative_control_false_fire`) so a declared vs. undeclared reason now
+# produces *different* eligibility outcomes, matching holdout exactly.
+# `negative_control_declared_abstentions` (audit-only, unchanged) still
+# reports the declared-record count — now visibly the input the new filter's
+# exemption relies on. Positive-control semantics remain untouched.
 # ---------------------------------------------------------------------------
 
 
@@ -1516,6 +1551,10 @@ def test_v14_declared_output_missing_on_negative_record_is_counted_as_declared_a
     assert report["negative_control_false_fire"] is False
     assert report["within_fresh_process_mismatch"] is False
     assert report["negative_control_declared_abstentions"] == 2
+    # PR #354 round 3 finding #1: the declared reason exempts this instance
+    # from the new per-instance filter too (holdout-consistent — a declared
+    # abstention is a non-failure on both sides).
+    assert report["negative_control_undeclared_missing"] is False
     assert selection_stage.eligible_after_fail_filters(report) is True
 
 
@@ -1524,11 +1563,12 @@ def test_v14_undeclared_reason_on_negative_record_not_counted_as_declared_absten
     (`INPUT_MISSING`) than the one actually observed (`OUTPUT_MISSING`) —
     `abstained()` requires an exact match, so this record is not counted as
     a declared abstention. It still resolves to non-fire via `detected()`
-    (unchanged pre-v1.4 behavior — selection_stage's `negative_control_
-    false_fire` was never a "missing = failure" filter; see module note
-    above), so both declared and undeclared reasons produce the same
-    `negative_control_false_fire`/eligibility outcome here — only the audit
-    key differs."""
+    (`negative_control_false_fire` stays False — that any-fire filter's
+    record-level semantics are unchanged by round 3), but PR #354 round 3
+    finding #1 makes this an *undeclared* missing/ineligible instance, which
+    now fires the new `negative_control_undeclared_missing` filter
+    (holdout-consistent — supersedes the pre-round-3 assertion that declared
+    vs. undeclared reasons produced the same eligibility outcome here)."""
     candidate = dataclasses.replace(
         candidate_by_id(_D71_APERIODICITY_HARMONIC_RESIDUAL_ID),
         abstention_reasons=frozenset({MissingReason.INPUT_MISSING}),
@@ -1547,7 +1587,8 @@ def test_v14_undeclared_reason_on_negative_record_not_counted_as_declared_absten
     )
     assert report["negative_control_false_fire"] is False
     assert report["negative_control_declared_abstentions"] == 0
-    assert selection_stage.eligible_after_fail_filters(report) is True
+    assert report["negative_control_undeclared_missing"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
 
 
 def test_v14_declared_reason_on_positive_record_stays_failure() -> None:
@@ -1568,6 +1609,119 @@ def test_v14_declared_reason_on_positive_record_stays_failure() -> None:
     )
     assert report["positive_control_non_fire"] is True
     assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+# ---------------------------------------------------------------------------
+# PR #354 round 3 finding #1 (2026-09-09): `negative_control_undeclared_
+# missing` — dedicated regression tests for the new, independent fail filter
+# (holdout-consistent, not folded into `negative_control_false_fire`).
+# ---------------------------------------------------------------------------
+
+
+def test_v14r3_undeclared_output_missing_on_negative_fires_new_filter() -> None:
+    """A present negative-control record with an undeclared `OUTPUT_MISSING`
+    fires `negative_control_undeclared_missing`, even though it still
+    resolves to non-fire via `fixtures.controls.detected()` (`negative_
+    control_false_fire` stays False — record-level any-fire semantics are
+    unchanged by round 3)."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [_record("row-negctl", 0, detected=False)]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-negctl"}),
+    )
+    assert report["negative_control_false_fire"] is False
+    assert report["negative_control_undeclared_missing"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+def test_v14r3_ineligible_negative_record_fires_new_filter() -> None:
+    """`ineligible=True` (e.g. a missing optional dependency) is never a
+    declared abstention (`fixtures.controls.abstained()` always returns
+    `False` for `ineligible=True`, `test_abstained_declared_reason_but_
+    ineligible_is_false`), so a present `ineligible` negative-control record
+    also fires `negative_control_undeclared_missing` unconditionally —
+    matching `holdout_stage.control_detection_for_family._negative_fired()`
+    exactly."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    output = MeterOutput(ineligible=True, ineligible_reason="INELIGIBLE_DEPENDENCY_ABSENT")
+    records = [
+        measure_stage.MeasurementRecord(
+            row_id="row-negctl",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="within",
+            repeat_index=0,
+            process_id="p0",
+            output=output,
+        )
+    ]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-negctl"}),
+    )
+    assert report["negative_control_undeclared_missing"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+def test_v14r3_declared_autocorr_periodicity_missing_does_not_fire_new_filter() -> None:
+    """The real production candidate that declares `abstention_reasons`
+    (`M2A-B0-AUTOCORR-PERIODICITY: {OUTPUT_MISSING}`, `candidates/
+    registry.py`) must NOT fire `negative_control_undeclared_missing` on the
+    exact reason it declares — this is the declared-abstention exemption the
+    new filter is built around."""
+    candidate = candidate_by_id("M2A-B0-AUTOCORR-PERIODICITY")
+    assert candidate.abstention_reasons == frozenset({MissingReason.OUTPUT_MISSING})
+    records = [
+        _record("row-negctl", 0, candidate_id=candidate.candidate_id, detected=False),
+        _record(
+            "row-negctl", 0, candidate_id=candidate.candidate_id, detected=False,
+            repeat_kind="fresh", process_id="fresh-process-0",
+        ),
+    ]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-negctl"}),
+    )
+    assert report["negative_control_undeclared_missing"] is False
+    assert selection_stage.eligible_after_fail_filters(report) is True
+
+
+def test_v14r3_positive_side_unaffected_by_new_filter() -> None:
+    """The new filter is scoped to `negative_control_row_ids`/
+    `noise_only_control_row_ids` only — an undeclared missing record on a
+    *positive*-control row must not fire it (positive-control non-fire is
+    still policed exclusively by the pre-existing `positive_control_non_
+    fire` filter)."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [_record("row-pos", 0, detected=False)]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        positive_control_row_ids=frozenset({"row-pos"}),
+    )
+    assert report["negative_control_undeclared_missing"] is False
+    assert report["positive_control_non_fire"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+def test_v14r3_no_negative_population_declared_does_not_fire_new_filter() -> None:
+    """Omitting `negative_control_row_ids`/`noise_only_control_row_ids`
+    (both default empty) is a legitimate no-op, mirroring every other filter
+    in this module — `negative_control_undeclared_missing` must stay
+    `False`, not fail-closed, when no negative-control population is
+    declared at all."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [_record("row-a", 0, detected=True)]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset(),
+    )
+    assert report["negative_control_undeclared_missing"] is False
 
 
 def test_v12_omitted_sanctioned_abstention_args_preserve_prior_behaviour() -> None:
