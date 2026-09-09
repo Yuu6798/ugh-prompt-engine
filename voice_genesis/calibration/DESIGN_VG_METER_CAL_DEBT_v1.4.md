@@ -223,10 +223,19 @@ SANCTIONED_ABSTENTIONS = {
 
 **棄権語彙（経路 B、`Candidate.abstention_reasons`、候補ごと）**:
 v1.4 で宣言するのは `M2A-B0-AUTOCORR-PERIODICITY: {OUTPUT_MISSING}` の
-**1 候補のみ**（根拠 = §Y1.2 前提 4 PASS）。他の APERIODICITY_GT 候補
-（HNR_ACF 8 件・HARMONIC_RESIDUAL 12 件・D4C_WORLD 3 件）は census が
-「正例で同一理由の棄権 0 件」を満たさない、または測定不能
-（D4C=ineligible）ため **宣言しない**（§Y1.2 参照情報）。
+**1 候補のみ**（根拠 = §Y1.2 前提 4 PASS）。**PR #354 round 2 finding #3
+是正**: 他の APERIODICITY_GT 候補（HNR_ACF 8 件・HARMONIC_RESIDUAL 12 件）
+は「正例で同一理由の棄権 0 件」の条件自体は満たす（§Y1.2: 両系列とも
+正例 18/18 measured・`OUTPUT_MISSING` 0 件）——**宣言しない理由はそこでは
+なく**、負例側が経路 B の棄権では説明できない実発火を持つため:
+HNR_ACF は NOISE_ONLY 3/3 が `measured_detected`（`hnr_db` ≈
+−9.18〜−10.72 dB）、HARMONIC_RESIDUAL は NOISE_ONLY 1/3 が
+`measured_detected`（`residual_fraction` ≈ 0.990〜0.998。残り 2/3 は
+経路 A `(NOISE_ONLY, F0_UNUSABLE)` で説明できる F0-prepass skip）。
+どちらも棄権宣言が記述すべき「候補レベルの棄権事象」自体が発生して
+いない実測（診断 verdict は `FAIL_NEGATIVE`）であり、宣言しても
+救われない（§Y1.2 参照）。D4C_WORLD（3 件）は測定不能
+（`ineligible=INELIGIBLE_DEPENDENCY_ABSENT`）のため対象外。
 
 **規則文（`fixtures.controls.abstained(output, candidate)`が正本）**:
 `output.missing_reason in candidate.abstention_reasons and not
@@ -259,6 +268,17 @@ freeze 前に preregistration（registry → `candidate_space`/`selection_rule`
 `holdout_stage.build_directional_gate_inputs` の `delta_output`/
 `correct_sign` が両方これを呼ぶ。`gates.py` 自体は無改変——極性は入力側で
 適用する）。
+
+**pin 箇所の注記**（`abstention_reasons`/`truth_polarity` 共通）: 両宣言は
+`selection_stage.candidate_space_sha()` の payload に含まれ、
+`kind="candidate_space"`/`artifact_sha=candidate_space_sha()` の ledger
+event として記帳される（`selection_frozen.candidate_space_sha` フィールドは
+この event の `entry_sha` を参照——unseal 5-sha 契約は `artifact_sha` ではなく
+`entry_sha` を使う、`selection_stage.py` モジュール docstring 参照）。**凍結
+manifest の `candidates` セクション**（`c0_freeze._path_hash_maps()`）は
+path+hash のみを保持し宣言値そのものは含まない別軸の pin（コード改変検知用、
+§Y3「正規化 MAE `truth_floor`」の `candidates.*_paths_sha256` と同じ仕組み）
+——両者を混同しないこと。
 
 **`NO_POLARITY` cap とその波及**: `truth_polarity is None` の DIRECTIONAL
 候補は `claim_scope_report()` で `DIAGNOSTIC_ONLY` へ cap される
@@ -293,10 +313,18 @@ DIRECTIONAL とも常に書く。値は `campaign/holdout_stage.py` の
 **正規化 MAE の `truth_floor`**: `observables.error_terms(m, truth,
 zero_guard, *, truth_floor=None)` の `RE = AE / max(|truth|, truth_floor
 if truth_floor is not None else zero_guard)`。`truth_floor` は construct
-の **E_use（absolute mode）** を渡す（`selection_stage.
+の **E_use（absolute mode・有限正値）** を渡す（`selection_stage.
 truth_floor_for_candidate()` が正本。relative mode の construct・
-E_use 未定義の construct は `None` = 従来の `zero_guard` 挙動、bit-for-bit
-不変）。**`selection_rule_sha()` は `voice_genesis/calibration/
+E_use 未定義の construct・一致行なしは `None` = 従来の `zero_guard` 挙動、
+bit-for-bit 不変。**PR #354 round 2 finding #1 是正**: 一致行が
+`e_use_mode == "absolute"` かつ値が宣言されている（`e_use_value is not
+None`）のにその値が非有限/非正の場合は、もはや `None`→`zero_guard` へ
+静かにフォールバックしない——`ZeroDivisionError` を招く縮退経路だった
+ため、`e_use_table.finite_positive_or_none()` で判定し `StaleEUseTable
+Error` を送出して fail-closed する（round 1 finding #1 の stale/mutated
+pin と同じ「宣言されたが使えない値」扱い）。「値が一致行に存在しない/
+relative/UNJUSTIFIED」は本節の対象外のまま `None` を返す）。
+**`selection_rule_sha()` は `voice_genesis/calibration/
 selection.py` のみをハッシュする別モジュールであり、本変更が実際に
 生きる `campaign/selection_stage.py`（criteria builder）はここに含まれ
 ない**（WP-A block 6 deviation 2）。この面は manifest の

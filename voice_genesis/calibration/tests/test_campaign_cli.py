@@ -2024,6 +2024,26 @@ def _aperiodicity_family_subset() -> list[Any]:
     return sweep_truth_core + non_truth_core
 
 
+#: PR #354 round 2 finding #2 (P2, ADOPT): the 3 observability blocks
+#: (`control_detection`/`margins_summary`/`pairs_summary`) and
+#: `negative_control_sanctioned_abstentions` must be present (possibly
+#: `None`) in every per-meter `gate_detail`, regardless of whether the
+#: result came from a real gate wrapper or one of `_run_c4`'s
+#: early-terminal `MeterHoldoutResult` branches — see
+#: `holdout_stage.with_observability_blocks()`.
+_OBSERVABILITY_BLOCK_KEYS = (
+    "control_detection",
+    "margins_summary",
+    "pairs_summary",
+    "negative_control_sanctioned_abstentions",
+)
+
+
+def _assert_observability_block_keys(gate_detail: dict[str, Any]) -> None:
+    for key in _OBSERVABILITY_BLOCK_KEYS:
+        assert key in gate_detail, (key, gate_detail)
+
+
 def _force_rows_into_holdout(campaign: Any, row_ids: list[str]) -> Any:
     """Override `campaign.realized_split.assignment` so each of `row_ids` is
     unconditionally `Split.HOLDOUT`, leaving every other row's assignment as
@@ -2185,6 +2205,10 @@ def test_c4_selected_candidate_fully_skipped_closes_not_evaluable(
     # finding #4: claim_scope must be recorded even on the NOT_EVALUABLE
     # early-close branch (previously dropped by the early `continue`).
     assert "claim_scope" in m2a_result["gate_detail"]
+    # PR #354 round 2 finding #2: the 3 observability blocks +
+    # negative_control_sanctioned_abstentions must be present (as `None`)
+    # even on this early-terminal NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE branch.
+    _assert_observability_block_keys(m2a_result["gate_detail"])
 
     # the authoritative close report must carry the same terminal status
     # (close.close_campaign() copies `per_meter` from this event verbatim).
@@ -2300,6 +2324,9 @@ def test_c4_selected_candidate_partially_covered_closes_diagnostic_only(
     assert gate_detail["expected_instance_count"] == len(expected_instances)
     assert gate_detail["seen_instance_count"] == len(partial_instances)
     assert "claim_scope" in gate_detail
+    # PR #354 round 2 finding #2: same guarantee on this DIAGNOSTIC_ONLY cap
+    # (gate-1 partial coverage) early-terminal branch.
+    _assert_observability_block_keys(gate_detail)
 
     # the authoritative close report must carry the same terminal status.
     close_result = cli.close_stage.close_campaign(campaign, holdout_events[-1])
@@ -2769,6 +2796,9 @@ def test_c4_directional_v1_1_manifest_missing_holdout_sweeps_fails_closed_as_inp
     # v1.1 manifest (the sibling non-v1.1 test above locks in that this
     # fallback still applies for legacy manifests).
     assert gate_detail["gate_detail_reason_code"] == "HOLDOUT_SWEEPS_DECLARATION_MISSING"
+    # PR #354 round 2 finding #2: same guarantee on this
+    # HOLDOUT_SWEEPS_DECLARATION_MISSING early-terminal branch.
+    _assert_observability_block_keys(gate_detail)
 
 
 def test_c4_directional_partial_coverage_at_minimum_count_closes_diagnostic_only(
@@ -3400,6 +3430,21 @@ def test_c4_absolute_gate_wiring_reaches_calibrated_absolute_on_clean_synthetic_
     # AC8 (D17 closure regression lock): the retired placeholder text must
     # never appear on a coverage-complete, capacity-satisfied real-gate path.
     assert "UNDERSPEC-CAL-D17" not in json.dumps(m2t_result)
+
+    # PR #354 round 2 finding #2 (P2, ADOPT) schema-shape lock:
+    # `holdout_stage.with_observability_blocks()` must give every meter
+    # written to `holdout_executed_valid` the same 3 observability-block
+    # keys + `negative_control_sanctioned_abstentions`, whether the result
+    # came from a real gate wrapper (M2_SPECTRAL_TILT above) or one of the
+    # placeholder/early-terminal closers (`diagnostic_only_close()` for
+    # M4_RESONANCE/F0_CONTROL here, since this fixture only wires TILT_GT).
+    for meter_result in per_meter.values():
+        _assert_observability_block_keys(meter_result["gate_detail"])
+    m4_result = per_meter[MeterId.M4_RESONANCE.value]
+    assert m4_result["gate_detail"]["control_detection"] is None
+    assert m4_result["gate_detail"]["margins_summary"] is None
+    assert m4_result["gate_detail"]["pairs_summary"] is None
+    assert m4_result["gate_detail"]["negative_control_sanctioned_abstentions"] is None
 
 
 @pytest.mark.slow

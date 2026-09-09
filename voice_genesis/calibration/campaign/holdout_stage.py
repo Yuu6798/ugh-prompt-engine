@@ -1886,6 +1886,45 @@ def selection_failed_closed_meter(meter_id: str) -> MeterHoldoutResult:
     )
 
 
+#: PR #354 round 2 finding #2 (P2, ADOPT): §Y3 の 3 観測性ブロック
+#: (`control_detection`/`margins_summary`/`pairs_summary`) と
+#: `negative_control_sanctioned_abstentions` は、real gate wrapper
+#: （`evaluate_absolute_meter_from_campaign()`/
+#: `evaluate_directional_meter_from_campaign()`）を通った `MeterHoldoutResult`
+#: にしか書かれていなかった。`_run_c4`（`campaign/cli.py`）が early-terminal
+#: 分岐（holdout coverage 欠落・E_use 表利用不能・
+#: `HOLDOUT_SWEEPS_DECLARATION_MISSING`・DIRECTIONAL sweep unresolvable・
+#: `NO_POLARITY`/`DIAGNOSTIC_ONLY` cap・M4・stale selected id 等）で
+#: `MeterHoldoutResult` を直接組み立てる経路はこれらのキーを持たず、記録の
+#: 読み手が「キー欠落」と「計算不能で値が `None`」を区別できない縮退だった。
+_OBSERVABILITY_BLOCK_KEYS: tuple[str, ...] = (
+    "control_detection",
+    "margins_summary",
+    "pairs_summary",
+)
+
+
+def with_observability_blocks(result: MeterHoldoutResult) -> MeterHoldoutResult:
+    """`result.gate_detail` に §Y3 の 3 観測性ブロックと
+    `negative_control_sanctioned_abstentions` が欠けていれば `None` を補う
+    正規化点。
+
+    生成元（real gate wrapper 経由か `_run_c4` の early-terminal 直接構築か）
+    を問わず、`run_holdout_stage()` へ渡す直前に必ずここを通す——キーの
+    有無を分岐ごとに個別実装しない単一箇所（重複禁止）。既にキーが存在
+    すればその値（`None` を含む）をそのまま透過し、欠けているキーにのみ
+    `None` を書く。gate 判定ロジックには一切触れない記録専用の素通し会計。"""
+    detail = dict(result.gate_detail)
+    missing_keys = [key for key in _OBSERVABILITY_BLOCK_KEYS if key not in detail]
+    if "negative_control_sanctioned_abstentions" not in detail:
+        missing_keys.append("negative_control_sanctioned_abstentions")
+    if not missing_keys:
+        return result
+    for key in missing_keys:
+        detail[key] = None
+    return dataclass_replace(result, gate_detail=detail)
+
+
 # ---------------------------------------------------------------------------
 # orchestration: real render + measure on the holdout split
 # ---------------------------------------------------------------------------
@@ -2259,8 +2298,15 @@ def run_holdout_stage(
     検証する（`per_meter` は `meter_id` キーの dict comprehension のため、
     検証なしでは重複が黙って上書きされ欠落を検出できない — fail-closed で
     `HoldoutCoverageError` を送出する）。
+
+    PR #354 round 2 finding #2 (P2, ADOPT): 記帳直前に `with_observability_
+    blocks()` を全 `results` へ適用し、生成元（real gate wrapper / `_run_c4`
+    の early-terminal 直接構築のいずれか）を問わず `gate_detail` が §Y3 の
+    3 観測性ブロックと `negative_control_sanctioned_abstentions` を必ず
+    持つことを、`holdout_executed_valid` へ書く単一箇所で保証する。
     """
     _validate_meter_coverage(results)
+    normalized_results = [with_observability_blocks(r) for r in results]
     per_meter = {
         r.meter_id: {
             "terminal_status": r.terminal_status,
@@ -2269,7 +2315,7 @@ def run_holdout_stage(
             "selected_candidate_id": r.selected_candidate_id,
             "gate_detail": dict(r.gate_detail),
         }
-        for r in results
+        for r in normalized_results
     }
     return campaign.ledger.append(
         {
@@ -2306,6 +2352,7 @@ __all__ = [
     "RawDirectionalObservation",
     "build_directional_pairs",
     "MeterHoldoutResult",
+    "with_observability_blocks",
     "evaluate_absolute_meter",
     "evaluate_directional_meter",
     "diagnostic_only_close",
