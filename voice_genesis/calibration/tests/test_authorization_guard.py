@@ -220,3 +220,45 @@ def test_quarantine_rejects_modified_base_evidence(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert result.reasons == ("base evidence file modified: ledger.jsonl",)
+
+
+def test_existing_quarantine_cannot_be_replaced_by_direct_reference(tmp_path: Path) -> None:
+    base_campaign = _campaign(tmp_path / "base")
+    (base_campaign / "ledger.jsonl").write_text("original\n", encoding="utf-8")
+    (base_campaign / "authorization_quarantine.json").write_text(
+        json.dumps(
+            {
+                "schema": "vgcal-quarantine/1",
+                "campaign_id": base_campaign.name,
+                "status": "QUARANTINED",
+                "claimable": False,
+                "debt_discharge_eligible": False,
+                "run11_eligible": False,
+                "reason_codes": ["AUTHORIZATION_BOUNDARY_NOT_VERIFIED"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    head_campaign = tmp_path / "head" / base_campaign.name
+    shutil.copytree(base_campaign, head_campaign)
+    (head_campaign / "authorization_quarantine.json").unlink()
+    (head_campaign / "ledger.jsonl").write_text("rewritten\n", encoding="utf-8")
+    (head_campaign / "direct_authorization_ref.json").write_text(
+        json.dumps(
+            {
+                "schema": "vgcal-direct-authorization-ref/1",
+                "campaign_id": head_campaign.name,
+                "authority_type": "DIRECT_USER_APPROVAL",
+                "direct_approval_ref": "USER-DIRECT-RUN10-CAL-TEST-20260909",
+                "approved_operations": ["C0_FREEZE", "CAMPAIGN_EXECUTION"],
+                "reference_is_not_authentication": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = validate_campaign(head_campaign, base_campaign_dir=base_campaign)
+
+    assert result.ok is False
+    assert result.mode == "QUARANTINE"
+    assert result.reasons == ("an existing quarantine marker must be preserved",)
