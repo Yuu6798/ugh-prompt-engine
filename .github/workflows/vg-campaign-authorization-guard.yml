@@ -1,0 +1,77 @@
+name: VoiceGenesis Campaign Authorization Guard
+
+on:
+  # This must run from the base branch. A pull_request workflow can execute the
+  # candidate's modified guard and would therefore let a PR authorize itself.
+  # The PR that first introduces this workflow is a bootstrap exception: it
+  # cannot prove its own trust and still requires independent review.
+  pull_request_target:
+    paths:
+      - "voice_genesis/calibration/campaigns/**"
+      - "voice_genesis/calibration/authorization_guard.py"
+      - "voice_genesis/calibration/tests/test_authorization_guard.py"
+      - ".github/workflows/vg-campaign-authorization-guard.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  authorization-reference-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out trusted base revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          path: trusted-base
+          persist-credentials: false
+
+      - name: Check out candidate revision as data
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          path: candidate
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate changed campaign directories
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A fork clone need not contain the upstream base object. Fetch that
+          # exact public commit as data before computing the path set.
+          git -C candidate fetch --no-tags \
+            "https://github.com/${BASE_REPOSITORY}.git" "$BASE_SHA"
+          mapfile -t campaigns < <(
+            # --no-renames makes a directory rename visible as both the old
+            # deletion and the new addition, so neither campaign ID is skipped.
+            git -C candidate diff --no-renames --name-only "$BASE_SHA" "$HEAD_SHA" -- \
+              voice_genesis/calibration/campaigns/ \
+              | awk -F/ 'NF >= 4 {print $4}' \
+              | sort -u
+          )
+
+          if [[ ${#campaigns[@]} -eq 0 ]]; then
+            echo "No campaign directories changed; nothing to validate."
+            exit 0
+          fi
+
+          args=()
+          for campaign_id in "${campaigns[@]}"; do
+            args+=(--campaign-id "$campaign_id")
+          done
+
+          python trusted-base/voice_genesis/calibration/authorization_guard.py \
+            --repo-root candidate \
+            --base-repo-root trusted-base \
+            "${args[@]}"
