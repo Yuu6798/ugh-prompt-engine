@@ -1,0 +1,43 @@
+{
+  "schema": "vgcal-quarantine/1",
+  "campaign_id": "RUN10-CAL-20260908-2dde4014",
+  "status": "QUARANTINED",
+  "claimable": false,
+  "debt_discharge_eligible": false,
+  "run11_eligible": false,
+  "reason_codes": [
+    "AUTHORIZATION_BOUNDARY_NOT_VERIFIED",
+    "SEALED_HOLDOUT_CONSUMED"
+  ],
+  "evidence_preservation": "APPEND_ONLY_NO_HISTORY_REWRITE",
+  "source_pr": 352,
+  "source_merge_commit": "515e40c4e9daa3a34c19aa067c0451b693aaa818",
+  "campaign_close_debt_discharged": false,
+  "correction_authority": {
+    "authority_type": "DIRECT_USER_APPROVAL",
+    "approved_date_jst": "2026-09-09",
+    "scope": [
+      "CREATE_AND_PUBLISH_NON_DESTRUCTIVE_CORRECTIVE_PR",
+      "QUARANTINE_CAMPAIGN_FROM_SCIENTIFIC_CLAIMS",
+      "QUARANTINE_CAMPAIGN_FROM_DEBT_DISCHARGE"
+    ],
+    "reference_is_not_authentication": true,
+    "note": "The direct user approval exists in the task conversation. This repository marker is a tracking record, not an authentication or authorization source."
+  },
+  "future_production_requirements": {
+    "new_campaign_id": true,
+    "fresh_split_secret": true,
+    "fresh_render_secret": true,
+    "separate_gate_approvals_required": true
+  },
+  "not_authorized_by_this_marker": [
+    "CORRECTIVE_PR_MERGE",
+    "REHEARSAL",
+    "C0_FREEZE",
+    "PRODUCTION_CAMPAIGN",
+    "SEALED_HOLDOUT_ACCESS",
+    "RUN11_RESUME",
+    "PAID_COMPUTE",
+    "DESTRUCTIVE_CLEANUP"
+  ]
+}
