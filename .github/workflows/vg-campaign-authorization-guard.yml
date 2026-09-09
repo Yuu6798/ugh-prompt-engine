@@ -52,14 +52,35 @@ jobs:
           # exact public commit as data before computing the path set.
           git -C candidate fetch --no-tags \
             "https://github.com/${BASE_REPOSITORY}.git" "$BASE_SHA"
-          mapfile -t campaigns < <(
-            # --no-renames makes a directory rename visible as both the old
-            # deletion and the new addition, so neither campaign ID is skipped.
-            git -C candidate diff --no-renames --name-only "$BASE_SHA" "$HEAD_SHA" -- \
-              voice_genesis/calibration/campaigns/ \
-              | awk -F/ 'NF >= 4 {print $4}' \
-              | sort -u
-          )
+          declare -A campaign_ids=()
+          prefix="voice_genesis/calibration/campaigns/"
+          # --no-renames makes a directory rename visible as both the old
+          # deletion and the new addition, so neither campaign ID is skipped.
+          # -z is required because Git C-quotes unusual pathnames by default;
+          # line parsing could otherwise validate a different directory.
+          changed_paths_file="$(mktemp)"
+          trap 'rm -f "$changed_paths_file"' EXIT
+          git -C candidate diff --no-renames --name-only -z \
+            "$BASE_SHA" "$HEAD_SHA" -- \
+            voice_genesis/calibration/campaigns/ > "$changed_paths_file"
+          while IFS= read -r -d '' changed_path; do
+            relative_path="${changed_path#"$prefix"}"
+            if [[ "$relative_path" == "$changed_path" || "$relative_path" != */* ]]; then
+              echo "::error::Unsafe campaign path shape in Git diff"
+              exit 1
+            fi
+            campaign_id="${relative_path%%/*}"
+            if [[ ! "$campaign_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+              echo "::error::Unsafe campaign ID in Git diff"
+              exit 1
+            fi
+            campaign_ids["$campaign_id"]=1
+          done < "$changed_paths_file"
+
+          campaigns=()
+          for campaign_id in "${!campaign_ids[@]}"; do
+            campaigns+=("$campaign_id")
+          done
 
           if [[ ${#campaigns[@]} -eq 0 ]]; then
             echo "No campaign directories changed; nothing to validate."
