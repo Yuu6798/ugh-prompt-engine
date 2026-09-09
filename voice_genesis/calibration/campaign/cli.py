@@ -1194,7 +1194,8 @@ def _criteria_with_fail_filters(
         positive_control_row_ids=positive_control_ids,
         expected_coverage_instances=expected_coverage_instances,
         noise_only_control_row_ids=noise_only_negative_control_ids,
-        # v1.2 WP1 配線: sanctioned abstention（`(SILENCE, "F0_UNUSABLE")`）を
+        # v1.2 WP1 配線: sanctioned abstention（v1.4 §前提 3 の 2 組
+        # `{(SILENCE, "F0_UNUSABLE"), (NOISE_ONLY, "F0_UNUSABLE")}`）を
         # `negative_controls_incomplete`/`negative_control_false_fire` の
         # fail-closed から除外するための判定材料。
         control_class_by_negative_row_id=control_class_by_negative_row_id,

@@ -88,10 +88,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 #:
 #: v1.4 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, 2026-09-09 統治文書切替):
 #: 棄権語彙拡張 (§前提3) / 極性 preregistration (§前提5) / gate_detail
-#: 永続化 (§前提6) / 正規化 MAE floor (§前提7)。v1.4 doc は WP-A 時点では
-#: §Y0（Design Memo の前提 1–9 の verbatim 転記）のみを持つ起草中文書であり、
-#: §Y1–§Y4（P1–P3 実測表・preregistration まとめ・負債の terminal status）
-#: は後続の docs コミットで append する。
+#: 永続化 (§前提6) / 正規化 MAE floor (§前提7)。v1.4 doc は
+#: `status: APPROVED_DESIGN_REVISION / NOT_PREREGISTERED /
+#: EXECUTION_NOT_AUTHORIZED` の**確定した統治文書**であり、§Y0（Design Memo
+#: の前提 1–9 の verbatim 転記）に加えて §Y1（P1–P3 実測表）/ §Y2（棄権と
+#: 極性の preregistration まとめ）/ §Y3（記録欠陥の是正まとめ）/ §Y4
+#: （答えた問い・答えていない問い・負債の terminal status）を既に含む。
+#: （PR #354 round 4 P2 是正: 旧注記は WP-A 時点の「§Y0 のみを持つ起草中
+#: 文書、§Y1–§Y4 は後続コミットで append する」という予告のまま陳腐化して
+#: いた——§Y1–§Y4 は round 1 finding #4 是正で既に append 済み。）
 DESIGN_DOC_CHAIN: tuple[str, ...] = (
     "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.4.md",
     "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.3.md",

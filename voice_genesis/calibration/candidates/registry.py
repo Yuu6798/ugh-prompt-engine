@@ -100,9 +100,13 @@ class Candidate:
     経路 (A): F0 prepass skip で record 自体が皆無になるケース）とは別の
     閉語彙で、こちらは経路 (B): record は存在し `MeterOutput.missing_reason`
     が立つケースを対象とする。v1.4 で宣言するのは
-    `M2A-B0-AUTOCORR-PERIODICITY: {OUTPUT_MISSING}` のみ（P2 census
+    `M2A-B0-AUTOCORR-PERIODICITY: {OUTPUT_MISSING}`（P2 census
     `scratchpad/v14/p23/p23_report.txt` §5.2 PASS: 正例 18/18 で
-    `OUTPUT_MISSING` 0 件）。宣言は `candidate_space_sha()` の payload へ
+    `OUTPUT_MISSING` 0 件）と、**F0_CONTROL 全 5 候補**（`F0-B0-CURRENT`
+    + `F0-PYIN-*` 4 件、いずれも `{OUTPUT_MISSING}`。PR #354 round 3 追補の
+    F0 census `scratchpad/v14/p2f0/p2f0_report.txt`: 正例 12/12
+    measured&detected・`OUTPUT_MISSING` 0 件、SILENCE 3/3 が
+    `OUTPUT_MISSING`）の計 6 候補。宣言は `candidate_space_sha()` の payload へ
     含まれる（空集合の候補では従来どおりキー自体を出力しない）。"""
     truth_polarity: int | None = None
     """RUN10-CAL-v1.4 §前提 5 preregistration
@@ -142,6 +146,24 @@ def _params(**kwargs: object) -> tuple[tuple[str, object], ...]:
 
 _F0_MISSING_RULE = "全フレーム無声/推定失敗 → OUTPUT_MISSING（縮退代入なし）。"
 
+#: RUN10-CAL-v1.4 §前提 4 preregistration（PR #354 round 3 追補、2026-09-09）:
+#: F0_CONTROL 全候補が `OUTPUT_MISSING` を「正しい棄権」として宣言する。
+#: **物理的根拠**: 無声対照（SILENCE / NOISE_ONLY / TOO_SHORT）に基本周波数は
+#: 存在しない——F0 推定器が有声フレームを 1 本も見つけずに `OUTPUT_MISSING` を
+#: 返すのは、誤検出でも実装欠陥でもなく構成概念どおりの正しい非検出である
+#: （`_F0_MISSING_RULE`「全フレーム無声/推定失敗 → OUTPUT_MISSING」の負例側の
+#: 現れ方そのもの）。
+#: **census 根拠**（`scratchpad/v14/p2f0/p2f0_report.txt`、`--repeats 3
+#: --max-cells 30 --dump-values`、schema diagnose/0.4 の `census` block）:
+#: 5 候補すべてで正例 12/12 が measured&detected（`OUTPUT_MISSING` 0 件、
+#: confound 54/54 も同様に 0 件）、SILENCE は 5 候補すべてで 3/3 が
+#: `OUTPUT_MISSING`。すなわち「正例では同一理由の棄権が 1 件も無い」という
+#: v1.4 の宣言条件を 5 候補全件が満たす。
+#: **宣言が救わないもの**: `negative_control_false_fire`（実発火）は本宣言と
+#: 無関係のまま——F0-B0-CURRENT の TOO_SHORT 3/3 発火、pyin 3 候補の
+#: NOISE_ONLY 1〜2/3 発火は引き続き失敗として算入される。
+_F0_ABSTENTION_REASONS = frozenset({vocab.MissingReason.OUTPUT_MISSING})
+
 F0_PYIN_FRAME = (2048, 4096)
 F0_PYIN_HOP = (256, 512)
 
@@ -163,6 +185,10 @@ def _build_f0_control() -> list[Candidate]:
             claim_ceiling=vocab.ClaimCeiling.ABSOLUTE,
             complexity_rank=rank,
             implementation_ref="candidates.impl.b0_wrappers:measure_f0_b0",
+            # v1.4 §前提 4 preregistration（PR #354 round 3 追補）:
+            # 無声対照に F0 は存在しない → unvoiced な `OUTPUT_MISSING` は
+            # 正しい棄権（`_F0_ABSTENTION_REASONS` の census 根拠を参照）。
+            abstention_reasons=_F0_ABSTENTION_REASONS,
         )
     )
     rank += 1
@@ -181,6 +207,11 @@ def _build_f0_control() -> list[Candidate]:
                 claim_ceiling=vocab.ClaimCeiling.ABSOLUTE,
                 complexity_rank=rank,
                 implementation_ref="candidates.impl.f0_pyin:measure",
+                # v1.4 §前提 4 preregistration（PR #354 round 3 追補）:
+                # 無声対照に F0 は存在しない → `librosa.pyin` が有声フレーム
+                # 0 本で返す `OUTPUT_MISSING`（`candidates/impl/f0_pyin.py`
+                # L40-41 → L49-50）は正しい棄権。
+                abstention_reasons=_F0_ABSTENTION_REASONS,
             )
         )
         rank += 1

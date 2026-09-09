@@ -190,6 +190,57 @@ pYIN の 10 cent グリッドのいずれよりも 1 桁厳しい。
 - **前提 4（`M2A-B0-AUTOCORR-PERIODICITY: {OUTPUT_MISSING}` の宣言条件）
   = PASS**（正例 18/18 で `OUTPUT_MISSING` 0 件）。
 
+#### §Y1.2b F0_CONTROL 棄権 census（追補、`scratchpad/v14/p2f0/p2f0_report.txt`、2026-09-09）
+
+第 1 稿の P2 census は TILT_GT と APERIODICITY_GT のみを対象とし、
+**F0_CONTROL family を一度も census していなかった**（→ §Y4「答えた問い」
+の記録欠陥 3）。そのため F0 候補は 1 件も `abstention_reasons` を宣言せず、
+PR #354 round 3 で新設した selection fail filter
+`negative_control_undeclared_missing` が本番 C3a で F0 family 全件を
+偽失敗させる経路が開いていた。本追補はその census を実施したものである。
+
+実行: `python3 -m voice_genesis.calibration.campaign.diagnose --family
+F0_CONTROL --dump-values --repeats 3 --max-cells 30`（1 invocation・91.3 s。
+F0_CONTROL は F0 依存候補を含まないため `f0_prepass: "not_applicable"`、
+掃引は起きない）。cell = 1 row × 1 probe × 1 候補。正例（TRUTH_CORE）4 行
+× 3 probe = 12 cell/候補、confound 18 行 × 3 = 54 cell/候補、負例は
+SILENCE / NOISE_ONLY / TOO_SHORT 各 1 行 × 3 probe = 3 cell/候補。
+
+| candidate | 正例 12 | confound 54 | SILENCE 3 | NOISE_ONLY 3 | TOO_SHORT 3 | verdict | 宣言 |
+|---|---|---|---|---|---|---|---|
+| `F0-B0-CURRENT` | det 12 / OM 0 / other 0 | det 54 / OM 0 | OM 3 | OM 3 | **det 3** | FAIL_NEGATIVE | **宣言** |
+| `F0-PYIN-FRAME2048-HOP256` | det 12 / OM 0 / other 0 | det 54 / OM 0 | OM 3 | OM 3 | OM 3 | PASS | **宣言** |
+| `F0-PYIN-FRAME2048-HOP512` | det 12 / OM 0 / other 0 | det 54 / OM 0 | OM 3 | **det 2** / OM 1 | OM 3 | FAIL_NEGATIVE | **宣言** |
+| `F0-PYIN-FRAME4096-HOP256` | det 12 / OM 0 / other 0 | det 54 / OM 0 | OM 3 | **det 2** / OM 1 | OM 3 | FAIL_NEGATIVE | **宣言** |
+| `F0-PYIN-FRAME4096-HOP512` | det 12 / OM 0 / other 0 | det 54 / OM 0 | OM 3 | **det 1** / OM 2 | OM 3 | FAIL_NEGATIVE | **宣言** |
+
+（det = `measured_detected`、OM = `missing_reason=OUTPUT_MISSING`。
+`ineligible` と `f0_unusable_prepass_skip` は全候補・全 class で 0 件。）
+
+**判定 = 前提 4 の宣言条件を 5 候補全件が満たす（PASS）**: 正例
+12/12 が measured&detected で `OUTPUT_MISSING` 0 件（confound 54/54 も
+同様に 0 件）、かつ SILENCE は 5 候補すべて 3/3 が `OUTPUT_MISSING`。
+非宣言に留める候補は **0 件**。
+
+物理的根拠: 無声対照（SILENCE / NOISE_ONLY / TOO_SHORT）に基本周波数は
+存在しない。F0 推定器が有声フレームを 1 本も見つけずに `OUTPUT_MISSING`
+を返すのは、誤検出でも実装欠陥でもなく構成概念どおりの正しい非検出である
+（registry の `missing_rule` =「全フレーム無声/推定失敗 → OUTPUT_MISSING
+（縮退代入なし）」の負例側の現れ方そのもの）。実装位置:
+`candidates/impl/f0_pyin.py` L40-41（`voiced.size == 0` → `NaN`）→
+L49-50（`not np.isfinite(f0)` → `MeterOutput(missing_reason=
+OUTPUT_MISSING)`）、および L28-30（`len(y) < frame_length` → `NaN`。
+TOO_SHORT 行の 3/3 `OUTPUT_MISSING` はこの経路）。B0 側は
+`candidates/impl/b0_wrappers.py` L62-64（`estimate_f0_hps` の非有限 →
+同じ `OUTPUT_MISSING`）。
+
+**宣言が救わないもの（境界の明示）**: 本宣言は経路 (B)（棄権）にのみ効き、
+`negative_control_false_fire`（実発火）とは無関係である。上表の太字
+——`F0-B0-CURRENT` の TOO_SHORT 3/3 発火、pyin 3 候補の NOISE_ONLY
+1〜2/3 発火——は宣言後も失敗として算入されたままであり、diagnose verdict
+`FAIL_NEGATIVE` も変わらない（唯一 `F0-PYIN-FRAME2048-HOP256` のみ
+PASS）。本追補は「正しい非検出を偽失敗にしない」ことだけを行う。
+
 ### §Y1.3 P3 — 極性 census（APERIODICITY_GT、正例/TRUTH_CORE セル）
 
 | candidate（代表） | construct | declared | tau | n | consistent |
@@ -222,8 +273,24 @@ SANCTIONED_ABSTENTIONS = {
 次 revision の preregistration 経由のみ。)
 
 **棄権語彙（経路 B、`Candidate.abstention_reasons`、候補ごと）**:
-v1.4 で宣言するのは `M2A-B0-AUTOCORR-PERIODICITY: {OUTPUT_MISSING}` の
-**1 候補のみ**（根拠 = §Y1.2 前提 4 PASS）。**PR #354 round 2 finding #3
+v1.4 で宣言するのは以下の **6 候補**（`{OUTPUT_MISSING}`、いずれも census
+根拠つき）:
+
+| candidate | meter | 根拠 | 正例の同一理由棄権 |
+|---|---|---|---:|
+| `M2A-B0-AUTOCORR-PERIODICITY` | M2_APERIODICITY | §Y1.2 前提 4 PASS | 0/18 |
+| `F0-B0-CURRENT` | F0_CONTROL | §Y1.2b（round 3 追補） | 0/12 |
+| `F0-PYIN-FRAME2048-HOP256` | F0_CONTROL | §Y1.2b（round 3 追補） | 0/12 |
+| `F0-PYIN-FRAME2048-HOP512` | F0_CONTROL | §Y1.2b（round 3 追補） | 0/12 |
+| `F0-PYIN-FRAME4096-HOP256` | F0_CONTROL | §Y1.2b（round 3 追補） | 0/12 |
+| `F0-PYIN-FRAME4096-HOP512` | F0_CONTROL | §Y1.2b（round 3 追補） | 0/12 |
+
+F0_CONTROL 5 件は **PR #354 round 3 追補**（2026-09-09）で追加した。
+第 1 稿は F0 family を census しておらず、round 3 で新設した selection
+fail filter `negative_control_undeclared_missing` が「宣言のない負例欠落」
+を無条件失敗とするため、本番 C3a が F0 family 全件を偽失敗させる経路が
+開いていた（§Y1.2b / §Y4 記録欠陥 3）。census 上 **非宣言に留める F0 候補は
+0 件**。**PR #354 round 2 finding #3
 是正**: 他の APERIODICITY_GT 候補（HNR_ACF 8 件・HARMONIC_RESIDUAL 12 件）
 は「正例で同一理由の棄権 0 件」の条件自体は満たす（§Y1.2: 両系列とも
 正例 18/18 measured・`OUTPUT_MISSING` 0 件）——**宣言しない理由はそこでは
@@ -383,7 +450,7 @@ design_revision >= 1.4 かつ非 rehearsal の manifest に対し、実行時
 
 ## §Y4. 答えた問い / 答えていない問い / 負債の terminal status
 
-**答えた問い（3 件）**:
+**答えた問い（4 件）**:
 
 1. **TILT 段差（|e| が 0.28 と 14.5〜14.9 に分かれる段差）の原因は生成器か
    測定器か** — **測定器**（証拠: §Y1.1 P1、`VERDICT=METER_OFF`）。
@@ -397,6 +464,26 @@ design_revision >= 1.4 かつ非 rehearsal の manifest に対し、実行時
 3. **APERIODICITY_GT 候補の宣言極性は実測 tau の符号と一致するか** —
    **一致する**（証拠: §Y1.3 P3 census。矛盾 0 件。D4C 3 件のみ pyworld
    不在で NA）。
+4. **F0_CONTROL 候補は `OUTPUT_MISSING` を棄権として宣言できるか**
+   （PR #354 round 3 追補で追加した問い） — **5 候補全件できる**（証拠:
+   §Y1.2b F0 census。正例 12/12 measured&detected・`OUTPUT_MISSING`
+   0 件、SILENCE 3/3 `OUTPUT_MISSING`）。
+
+**記録欠陥 3（第 1 稿の census 漏れ、2026-09-09 追補で是正）**:
+第 1 稿の P2 census（§Y1.2、`scratchpad/v14/p23/p23_report.txt`）は
+**TILT_GT と APERIODICITY_GT の 2 family のみを対象とし、F0_CONTROL
+family を一度も census していなかった**。当時は経路 (B) の棄権が
+holdout 側でしか失敗算入されず、F0 の C3a は selection 側だけを通るため
+実害が出ていなかったが、PR #354 round 3 finding #1 で selection 側にも
+holdout と同一述語の fail filter
+（`negative_control_undeclared_missing`）を入れた時点で、**未 census =
+未宣言の F0 候補全 5 件が本番 C3a で偽失敗する**経路が開いた（実 pyin を
+回す E2E テスト 2 件が SELECTED → SELECTION_FAILED_CLOSED に反転したのが
+その顕在化）。v1.4 の規則「census してから、census が支持する分だけ宣言
+する」に従い、round 3 追補で F0 census を実施し（§Y1.2b）5 候補全件を
+宣言した。**教訓**: 棄権の宣言軸を新設したら、その軸を消費する filter が
+届く **全 family** を census 対象に含める（family を 1 つ落とすと、その
+family は「宣言なし = 常に失敗」に倒れる）。
 
 **答えていない問い（明示）**:
 

@@ -367,9 +367,10 @@ def sanctioned_abstention_row_ids(
 ) -> frozenset[str]:
     """RUN10-CAL-v1.2 WP1: `missing_row_ids`（宣言された negative control 行の
     うち own record が皆無だった行）のうち、`fixtures.controls.
-    SANCTIONED_ABSTENTIONS`（現行は `(SILENCE, "F0_UNUSABLE")` 1 組のみの
-    閉語彙）に列挙された (control_class, missing_reason) の組と一致する行
-    だけを返す。
+    SANCTIONED_ABSTENTIONS`（閉語彙。v1.4 §前提 3 で 2 組
+    `{(SILENCE, "F0_UNUSABLE"), (NOISE_ONLY, "F0_UNUSABLE")}`——v1.2/v1.3 の
+    1 組から拡張済み）に列挙された (control_class, missing_reason) の組と
+    一致する行だけを返す。
 
     `control_class_by_row_id`（row_id -> `fixtures.controls.ControlClass`
     の値文字列。宣言された negative control 行のみを対象とする）と
@@ -550,7 +551,8 @@ def candidate_fail_filter_report(
     宣言された negative control 行のみ）と `missing_reason_by_negative_row_id`
     （row_id -> 当該候補への ledger `measurement_missing` の `reason`）を
     渡すと、両方が非 `None` の行のうち組が `fixtures.controls.
-    SANCTIONED_ABSTENTIONS`（閉語彙、現行 `(SILENCE, "F0_UNUSABLE")` のみ）
+    SANCTIONED_ABSTENTIONS`（閉語彙。v1.4 §前提 3 で 2 組
+    `{(SILENCE, "F0_UNUSABLE"), (NOISE_ONLY, "F0_UNUSABLE")}`）
     に含まれる行を「present かつ non-fired」として扱う——
     `negative_controls_incomplete` の completeness 判定からは除外し（fail-
     closed のまま維持されるのは非 sanctioned な欠測のみ）、

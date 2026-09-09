@@ -252,22 +252,26 @@ def test_c1_fixtures_armed_end_to_end_via_cli(
 #
 # PR #354 round 3 finding #1 (2026-09-09): D67 fixed the `within_fresh_
 # process_mismatch` false positive, but this same consistent `OUTPUT_MISSING`
-# is *also* an undeclared missing negative-control record — `F0-B0-CURRENT`
-# declares no `abstention_reasons` (`candidates/registry.py`). Round 3's
-# independent `negative_control_undeclared_missing` filter (holdout-
-# consistent, not folded into `negative_control_false_fire`) now fires on
-# it, so `_run_c3a` reverts to `SELECTION_FAILED_CLOSED` here too — for a
-# *different* reason than before D67 (this filter, not the mismatch one).
-# This is the expected, holdout-consistent v1.4 preregistration outcome: a
-# candidate must *declare* a matching `abstention_reasons` entry to be
-# recognized as correctly abstaining on an unsanctioned (non-`F0_UNUSABLE`)
-# negative-control miss — `F0-B0-CURRENT` does not, so it is no longer
-# selectable via this fixture alone.
+# is *also* a missing negative-control record, and round 3's independent
+# `negative_control_undeclared_missing` filter (holdout-consistent, not
+# folded into `negative_control_false_fire`) fails any *undeclared* one.
+# Round 3 追補 (same day): the F0_CONTROL abstention census was missing from
+# the v1.4 first draft (`scratchpad/v14/p23/p23_report.txt` covered TILT_GT
+# and APERIODICITY_GT only), so no F0 candidate declared `abstention_
+# reasons` and the whole F0 family would have failed closed in production
+# C3a. The F0 census (`scratchpad/v14/p2f0/p2f0_report.txt`: positives 12/12
+# measured&detected with 0 `OUTPUT_MISSING`, SILENCE 3/3 `OUTPUT_MISSING`,
+# all 5 candidates) backs a `{OUTPUT_MISSING}` declaration on every
+# F0_CONTROL candidate, so a correct non-detection on silence is again a
+# *declared* abstention and this test's original `SELECTED` semantics are
+# restored. The undeclared half of the contract stays pinned by the sibling
+# `test_c3a_f0_selection_fails_closed_when_the_candidate_does_not_declare_
+# abstention` below.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_c3a_f0_selection_fails_closed_on_undeclared_silence_non_detection(
+def test_c3a_f0_selection_passes_with_candidate_that_correctly_non_detects_on_silence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """3 F0_CONTROL TRUTH_CORE rows (n=3 lands exactly 1 in the SELECTION
@@ -279,14 +283,12 @@ def test_c3a_f0_selection_fails_closed_on_undeclared_silence_non_detection(
     (`candidates/impl/f0_pyin.py::measure`) — deterministically, so this is
     not flaky.
 
-    Renamed from `..._passes_with_candidate_that_correctly_non_detects_on_
-    silence` (PR #354 round 3 finding #1, 2026-09-09): `F0-B0-CURRENT`
-    declares no `abstention_reasons`, so this real, consistent `OUTPUT_
-    MISSING` is now an *undeclared* missing negative-control record and
-    fails via the new `negative_control_undeclared_missing` filter — the
-    candidate is no longer selected. `within_fresh_process_mismatch`/
-    `negative_control_false_fire` stay non-firing (D67's ruling is
-    unaffected); only overall eligibility/outcome changes."""
+    `F0-B0-CURRENT` declares `abstention_reasons={OUTPUT_MISSING}` (PR #354
+    round 3 追補, F0 census `scratchpad/v14/p2f0/p2f0_report.txt`), so this
+    correct non-detection is a *declared* abstention: neither
+    `within_fresh_process_mismatch` (D67) nor `negative_control_false_fire`
+    nor the round-3 `negative_control_undeclared_missing` filter fires, and
+    the candidate is selected."""
     from voice_genesis.calibration.fixtures.matrix import build_matrix
 
     all_rows = build_matrix()
@@ -321,11 +323,8 @@ def test_c3a_f0_selection_fails_closed_on_undeclared_silence_non_detection(
 
     result = cli._run_c3a(campaign, subset, 1)
     assert result["result"] == "OK", result
-    # PR #354 round 3 finding #1 (2026-09-09): pre-round-3 this asserted
-    # `outcome == "SELECTED"`/`selected_candidate_id == "F0-B0-CURRENT"` — see
-    # the module note above for why `SELECTION_FAILED_CLOSED` is now correct.
-    assert result["outcome"] == "SELECTION_FAILED_CLOSED", result
-    assert result["selected_candidate_id"] is None
+    assert result["outcome"] == "SELECTED", result
+    assert result["selected_candidate_id"] == "F0-B0-CURRENT"
 
     # confirm this really exercised the consistent-missing shape (not an
     # accidental finite reading on the silent row): every meter_call for the
@@ -346,8 +345,76 @@ def test_c3a_f0_selection_fails_closed_on_undeclared_silence_non_detection(
     # D67's ruling is unaffected — the mismatch/any-fire filters stay clean.
     assert fail_filters["within_fresh_process_mismatch"] is False
     assert fail_filters["negative_control_false_fire"] is False
-    # ... but the new, independent filter now fires on the undeclared
-    # OUTPUT_MISSING, which is why the candidate is ineligible overall.
+    # ... and the round-3 filter does not fire either, because the candidate
+    # *declares* OUTPUT_MISSING as a correct abstention (round 3 追補).
+    assert fail_filters["negative_control_undeclared_missing"] is False
+
+
+@pytest.mark.slow
+def test_c3a_f0_selection_fails_closed_when_the_candidate_does_not_declare_abstention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sibling of the test above and the fail-closed half of PR #354 round 3
+    finding #1: the exact same real fixture/real-`librosa.pyin` run, but with
+    the `abstention_reasons` declaration stripped off the candidate
+    (`dataclasses.replace(..., abstention_reasons=frozenset())`). The
+    consistent `OUTPUT_MISSING` on the SILENCE row is then an *undeclared*
+    missing negative-control record and `negative_control_undeclared_missing`
+    fails the candidate, ending C3a in `SELECTION_FAILED_CLOSED` —
+    holdout-consistent (`holdout_stage.control_detection_for_family.
+    _negative_fired()` path (B)). Keeping this next to the passing case pins
+    that the declaration, not the filter's removal, is what restores
+    selection."""
+    import dataclasses
+
+    from voice_genesis.calibration.fixtures.matrix import build_matrix
+
+    all_rows = build_matrix()
+    truth_rows = [
+        mr
+        for mr in all_rows
+        if mr.row.family == "F0_CONTROL" and mr.row.block == "TRUTH_CORE"
+    ][:3]
+    silence_rows = [
+        mr
+        for mr in all_rows
+        if mr.row.family == "F0_CONTROL" and mr.row.control_class == "SILENCE"
+    ]
+    assert silence_rows, "test setup requires a real F0_CONTROL SILENCE fixture row"
+    subset = truth_rows + silence_rows
+
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+
+    undeclared_b0 = dataclasses.replace(
+        candidate_by_id("F0-B0-CURRENT"), abstention_reasons=frozenset()
+    )
+    assert undeclared_b0.abstention_reasons == frozenset()
+    only_b0 = (undeclared_b0,)
+    orig_candidates_for_meter = cli.active_candidates_for_meter
+
+    def _trimmed_candidates_for_meter(meter):
+        if meter is MeterId.F0_CONTROL:
+            return only_b0
+        return orig_candidates_for_meter(meter)
+
+    monkeypatch.setattr(cli, "active_candidates_for_meter", _trimmed_candidates_for_meter)
+
+    result = cli._run_c3a(campaign, subset, 1)
+    assert result["result"] == "OK", result
+    assert result["outcome"] == "SELECTION_FAILED_CLOSED", result
+    assert result["selected_candidate_id"] is None
+
+    f0_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "f0_selection_frozen"
+    ]
+    assert f0_events
+    fail_filters = f0_events[-1]["fail_filters_by_candidate"]["F0-B0-CURRENT"]
+    assert fail_filters["within_fresh_process_mismatch"] is False
+    assert fail_filters["negative_control_false_fire"] is False
     assert fail_filters["negative_control_undeclared_missing"] is True
 
 
@@ -427,24 +494,23 @@ def _fabricate_f0_v11_records(subset, instances, candidates_arg, *, silence_and_
     return records
 
 
-def test_v11_c3a_noise_only_false_fire_is_exempt_but_undeclared_missing_still_rejects(
+def test_v11_c3a_noise_only_false_fire_stays_eligible_and_rate_is_recorded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC5(b)/(e): a candidate that false-fires on 2/5 NOISE_ONLY instances
     but never fires on SILENCE/TOO_SHORT is exempt from `negative_control_
-    false_fire`'s any-fire population for that reason, and the
-    `f0_selection_frozen` ledger payload must record the exact NOISE_ONLY
-    breakdown and wire it into the ranking vector regardless of overall
-    eligibility.
+    false_fire`'s any-fire population for that reason, stays eligible, and
+    the `f0_selection_frozen` ledger payload must record the exact NOISE_ONLY
+    breakdown and wire it into the ranking vector.
 
-    Renamed from `..._stays_eligible_and_rate_is_recorded` (PR #354 round 3
-    finding #1, 2026-09-09): `F0-B0-CURRENT` declares no `abstention_
-    reasons`, so the fabricated SILENCE/TOO_SHORT non-detections (and the
-    3/5 non-detected NOISE_ONLY probes) are undeclared missing
-    negative-control records — the new `negative_control_undeclared_missing`
-    filter now rejects the candidate (`SELECTION_FAILED_CLOSED`), even
-    though the NOISE_ONLY-specific any-fire exemption and rate/vector
-    reporting this test exists for are unaffected and still hold."""
+    PR #354 round 3 finding #1 briefly flipped this to
+    `SELECTION_FAILED_CLOSED` because `F0-B0-CURRENT` declared no
+    `abstention_reasons`, making the fabricated SILENCE/TOO_SHORT
+    non-detections (and the 3/5 non-detected NOISE_ONLY probes) undeclared
+    missing negative-control records. The round 3 追補 F0 census
+    (`scratchpad/v14/p2f0/p2f0_report.txt`) backs `{OUTPUT_MISSING}` on all
+    5 F0_CONTROL candidates, so those records are declared abstentions and
+    the original `SELECTED` semantics are restored."""
     from voice_genesis.calibration.candidates.registry import candidate_by_id
 
     campaign, subset = _f0_v11_campaign(tmp_path)
@@ -467,10 +533,8 @@ def test_v11_c3a_noise_only_false_fire_is_exempt_but_undeclared_missing_still_re
 
     result = cli._run_c3a(campaign, subset, 1)
     assert result["result"] == "OK", result
-    # PR #354 round 3 finding #1: was `"SELECTED"`/`"F0-B0-CURRENT"` — see
-    # docstring above for why the new filter now rejects this candidate.
-    assert result["outcome"] == "SELECTION_FAILED_CLOSED", result
-    assert result["selected_candidate_id"] is None
+    assert result["outcome"] == "SELECTED", result
+    assert result["selected_candidate_id"] == "F0-B0-CURRENT"
 
     f0_events = [
         e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "f0_selection_frozen"
@@ -481,7 +545,8 @@ def test_v11_c3a_noise_only_false_fire_is_exempt_but_undeclared_missing_still_re
     assert fail_filters["noise_only_instances_total"] == 5
     assert fail_filters["noise_only_instances_detected"] == 2
     assert fail_filters["noise_only_false_detection_rate"] == pytest.approx(0.4)
-    assert fail_filters["negative_control_undeclared_missing"] is True
+    # round 3 追補: declared abstention -> the round-3 filter stays clean.
+    assert fail_filters["negative_control_undeclared_missing"] is False
 
     # the rate feeds `nuisance_sensitivity_max`, the existing ranking-vector
     # slot immediately after the error terms (v1.0 §8's declared "voiced

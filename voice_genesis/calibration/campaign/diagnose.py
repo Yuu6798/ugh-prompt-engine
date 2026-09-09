@@ -50,8 +50,9 @@ determinism 検査・`FrozenCampaign` 前提）を呼ばない。代わりに:
    再現は C3a selection stage の責務のまま）。F0 が使用不能（欠測 or
    非有限 or 非正）な instance では、実経路の「候補を一切呼ばない」skip
    挙動を模して候補呼び出し自体を省略し、`missing_reason="F0_UNUSABLE"`
-   を合成する（`fixtures.controls.SANCTIONED_ABSTENTIONS` の
-   `(SILENCE, "F0_UNUSABLE")` 判定を意味のあるものにするため。実経路では
+   を合成する（`fixtures.controls.SANCTIONED_ABSTENTIONS` の判定——v1.4
+   §前提 3 の 2 組 `{(SILENCE, "F0_UNUSABLE"),
+   (NOISE_ONLY, "F0_UNUSABLE")}`——を意味のあるものにするため。実経路では
    これは `MeterOutput.missing_reason` ではなく `measurement_missing`
    ledger event の `reason` フィールドだが、ledger を持たない本モジュール
    では `CellOutcome.missing_reason` という別軸のラベルとして同じ役割を
@@ -67,10 +68,16 @@ determinism 検査・`FrozenCampaign` 前提）を呼ばない。代わりに:
 モジュールの初版（WP4）にもあった: negative control 行が F0_UNUSABLE で
 丸ごとスキップされた（=候補が一度も呼ばれず record が皆無になった）とき、
 `detected()` は欠落を一様に「非発火（False）」へ写像するため、
-`(NOISE_ONLY, "F0_UNUSABLE")` のような **非 sanctioned** な行欠測が
+`(TOO_SHORT, "F0_UNUSABLE")` のような **非 sanctioned** な行欠測が
 「negative fire rate 0.0 = clean」という偽の PASS を作れてしまっていた
-（`fixtures.controls.SANCTIONED_ABSTENTIONS` の閉語彙に無いのは
-`(SILENCE, "F0_UNUSABLE")` のみが登録されているため）。
+（`fixtures.controls.SANCTIONED_ABSTENTIONS` は閉語彙であり、そこに無い
+組は sanctioned にならない）。**v1.4 での更新**（PR #354 round 4 P2 是正）:
+`SANCTIONED_ABSTENTIONS` は v1.4 §前提 3 で 2 組
+`{(SILENCE, "F0_UNUSABLE"), (NOISE_ONLY, "F0_UNUSABLE")}` へ拡張された
+ため、旧文が非 sanctioned の例に挙げていた `(NOISE_ONLY, "F0_UNUSABLE")`
+は現在は **sanctioned** である（無声対照に F0 は存在しない）。本改訂が
+閉じた穴の構造そのものは変わらない——閉語彙に無い組は依然として偽 PASS を
+作らせない。
 
 本改訂は `campaign.selection_stage.candidate_fail_filter_report()` の
 `negative_controls_incomplete` filter と同じ意味論をとる: ある negative
@@ -525,7 +532,8 @@ def evaluate_candidate(
     `NOT_EVALUABLE(negative_controls_incomplete)` にする
     （`campaign.selection_stage.candidate_fail_filter_report()` の
     `negative_controls_incomplete` filter と同じ意味論）。sanctioned な行
-    （現行 `(SILENCE, "F0_UNUSABLE")` のみ）はここでの `sanctioned_
+    （v1.4 §前提 3 の 2 組 `{(SILENCE, "F0_UNUSABLE"),
+    (NOISE_ONLY, "F0_UNUSABLE")}`）はここでの `sanctioned_
     abstentions` に数え、not-fired（False）として fire rate に算入する
     （従来どおり）。"""
     positive_flags: list[bool] = []

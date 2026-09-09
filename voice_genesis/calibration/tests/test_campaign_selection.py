@@ -495,16 +495,15 @@ def test_v11_noise_only_false_fire_does_not_reject_but_reports_rate() -> None:
     detection rate is exposed via the audit-only keys for the caller to wire
     into the ranking criteria.
 
-    PR #354 round 3 finding #1 (2026-09-09): this fixture's SILENCE row
-    (`missing=True`, undeclared — `candidate_by_id("F0-B0-CURRENT")` declares
-    no `abstention_reasons`) and 3/5 NOISE_ONLY probes are also present,
-    undeclared-missing negative-control records — round 3's independent
-    `negative_control_undeclared_missing` filter (holdout-consistent, not
-    folded into `negative_control_false_fire`) now fires on them, so the
-    candidate is no longer eligible overall (superseding the pre-round-3
-    assertion below that it stayed eligible). The NOISE_ONLY-specific
-    assertions this test exists for — the any-fire exemption and the exact
-    rate/count reporting — are unaffected and still hold."""
+    PR #354 round 3 追補 (2026-09-09): round 3 briefly flipped this to
+    ineligible because `F0-B0-CURRENT` declared no `abstention_reasons`, so
+    the SILENCE row (`missing=True`) and the 3/5 non-detected NOISE_ONLY
+    probes counted as undeclared missing negative-control records. The F0
+    census (`scratchpad/v14/p2f0/p2f0_report.txt`: positives 12/12
+    measured&detected, 0 `OUTPUT_MISSING`) now backs a
+    `{OUTPUT_MISSING}` declaration on all 5 F0_CONTROL candidates, so the
+    original semantics are restored: the candidate stays eligible and only
+    the NOISE_ONLY rate is reported."""
     candidate = candidate_by_id("F0-B0-CURRENT")
     field = measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY[candidate.algorithm_family]
     # `_instance_records` gives each instance a matched within+fresh pair
@@ -532,10 +531,11 @@ def test_v11_noise_only_false_fire_does_not_reject_but_reports_rate() -> None:
     assert report["noise_only_instances_total"] == 5
     assert report["noise_only_instances_detected"] == 2
     assert report["noise_only_false_detection_rate"] == pytest.approx(0.4)
-    # PR #354 round 3 finding #1: undeclared missing on SILENCE/NOISE_ONLY
-    # now fails the candidate via the new filter, not via the any-fire one.
-    assert report["negative_control_undeclared_missing"] is True
-    assert selection_stage.eligible_after_fail_filters(report) is False
+    # PR #354 round 3 追補: the F0 candidate now *declares* `OUTPUT_MISSING`
+    # as a correct abstention, so the new filter does not fire and the
+    # candidate is eligible again (pre-round-3 semantics).
+    assert report["negative_control_undeclared_missing"] is False
+    assert selection_stage.eligible_after_fail_filters(report) is True
 
 
 def test_v11_noise_only_missing_records_still_reported_as_incomplete() -> None:
@@ -1135,17 +1135,19 @@ def test_negative_control_consistent_missing_is_not_a_mismatch_but_undeclared_mi
     unaffected by this change) — and must not trip `negative_control_false_
     fire` either (record-level any-fire semantics unchanged).
 
-    PR #354 round 3 finding #1 (2026-09-09, renamed from `..._stays_
-    eligible`): `candidate_by_id("F0-B0-CURRENT")` declares no `abstention_
-    reasons`, so this consistent `OUTPUT_MISSING` is an *undeclared* missing
-    negative-control record — the new, independent `negative_control_
-    undeclared_missing` filter (holdout-consistent, mirrors `holdout_stage.
-    control_detection_for_family._negative_fired()`'s v1.4 path (B)) now
-    fires on it, making the candidate ineligible overall. This supersedes
-    the pre-round-3 `eligible_after_fail_filters(...) is True` assertion —
-    D67's within/fresh-mismatch ruling itself is untouched; only overall
-    eligibility changes, via the new filter."""
-    candidate = candidate_by_id("F0-B0-CURRENT")
+    PR #354 round 3 finding #1 (2026-09-09) + round 3 追補: an *undeclared*
+    consistent `OUTPUT_MISSING` on a negative control is a failure via the
+    new, independent `negative_control_undeclared_missing` filter
+    (holdout-consistent, mirrors `holdout_stage.control_detection_for_
+    family._negative_fired()`'s v1.4 path (B)). The real F0 candidates all
+    declare `{OUTPUT_MISSING}` since the F0 census 追補, so this test pins
+    the *undeclared* half of the contract explicitly with a stripped copy
+    (`dataclasses.replace(..., abstention_reasons=frozenset())`); the
+    declared half is `test_v14r3_declared_f0_missing_does_not_fire_new_
+    filter`. D67's within/fresh-mismatch ruling itself is untouched."""
+    candidate = dataclasses.replace(
+        candidate_by_id("F0-B0-CURRENT"), abstention_reasons=frozenset()
+    )
     records = _within_fresh_records(
         "row-negctl-silence",
         0,
@@ -1401,7 +1403,8 @@ def test_selection_winner_flips_between_raw_and_relative_bias() -> None:
 
 # ---------------------------------------------------------------------------
 # RUN10-CAL-v1.2 WP1: fire 判定の一本化 (`fixtures.controls.detected()`) +
-# sanctioned abstention ((SILENCE, "F0_UNUSABLE") のみ) — c3b_failclosed_
+# sanctioned abstention (v1.2 時点は (SILENCE, "F0_UNUSABLE") のみ。v1.4
+# §前提 3 で (NOISE_ONLY, "F0_UNUSABLE") を加えた 2 組) — c3b_failclosed_
 # analysis.md §5.1「実装バグ疑い」の是正。`coverage_incomplete` が BOUNDARY
 # -domain 行（negative control 行を含む）を design-sanctioned な欠測として
 # 除外しているのに、`negative_controls_incomplete` は同じ SILENCE 行への
@@ -1623,8 +1626,16 @@ def test_v14r3_undeclared_output_missing_on_negative_fires_new_filter() -> None:
     fires `negative_control_undeclared_missing`, even though it still
     resolves to non-fire via `fixtures.controls.detected()` (`negative_
     control_false_fire` stays False — record-level any-fire semantics are
-    unchanged by round 3)."""
-    candidate = candidate_by_id("F0-B0-CURRENT")
+    unchanged by round 3).
+
+    round 3 追補: the real F0_CONTROL candidates now declare
+    `{OUTPUT_MISSING}`, so the undeclared shape is built explicitly by
+    stripping the declaration off a copy — this keeps the "undeclared still
+    fails closed" half of the contract pinned independently of which
+    production candidates happen to declare."""
+    candidate = dataclasses.replace(
+        candidate_by_id("F0-B0-CURRENT"), abstention_reasons=frozenset()
+    )
     records = [_record("row-negctl", 0, detected=False)]
     report = selection_stage.candidate_fail_filter_report(
         candidate,
@@ -1634,6 +1645,32 @@ def test_v14r3_undeclared_output_missing_on_negative_fires_new_filter() -> None:
     assert report["negative_control_false_fire"] is False
     assert report["negative_control_undeclared_missing"] is True
     assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+def test_v14r3_declared_f0_missing_does_not_fire_new_filter() -> None:
+    """PR #354 round 3 追補: the sibling of the test above — the *real*
+    production F0 candidate (which declares `{OUTPUT_MISSING}` per the F0
+    census, `scratchpad/v14/p2f0/p2f0_report.txt`) must NOT fire the new
+    filter on the exact reason it declares, so a correct non-detection on a
+    silent negative control leaves it eligible. This is the pair that closes
+    the C3a false-failure path round 3 opened for the whole F0 family."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    assert candidate.abstention_reasons == frozenset({MissingReason.OUTPUT_MISSING})
+    field = measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY[candidate.algorithm_family]
+    # matched within+fresh pair so `within_fresh_process_mismatch` stays
+    # clean (`[UNDERSPEC-CAL-D67]`) and only the new filter is exercised.
+    records = _instance_records(
+        "row-negctl", 0, candidate.candidate_id, field=field, missing=True
+    )
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-negctl"}),
+    )
+    assert report["within_fresh_process_mismatch"] is False
+    assert report["negative_control_false_fire"] is False
+    assert report["negative_control_undeclared_missing"] is False
+    assert selection_stage.eligible_after_fail_filters(report) is True
 
 
 def test_v14r3_ineligible_negative_record_fires_new_filter() -> None:
@@ -1898,10 +1935,18 @@ def test_candidate_space_sha_payload_omits_detection_predicate_key_when_undeclar
     IMPLEMENTATION_MAP_v1.md が主張する「未宣言候補では sha 不変」を偽に
     していた（sha が等しいことは別テストで固定済みだが、それだけでは
     「キーが存在しない」ことまでは保証しない——本テストは payload の形状
-    そのものを直接検査する）。"""
+    そのものを直接検査する）。
+
+    base は「v1.3/v1.4 のどの任意フィールドも宣言していない」候補である
+    必要がある（PR #354 round 3 追補で `F0-B0-CURRENT` が
+    `abstention_reasons` を宣言したため `M3-B0-CURRENT-CENTROID` へ差し替え
+    ——`_entry()` は `detection_predicate` しか組み立てないため、base が他の
+    任意フィールドを宣言していると payload が実装側とずれる）。"""
     from voice_genesis.calibration.canonical import manifest_sha
 
-    base_candidate = candidate_by_id("F0-B0-CURRENT")
+    base_candidate = candidate_by_id("M3-B0-CURRENT-CENTROID")
+    assert base_candidate.abstention_reasons == frozenset()
+    assert base_candidate.truth_polarity is None
     declared = dataclasses.replace(
         base_candidate,
         detection_predicate=controls_module.DetectionPredicate(field="f0_hz", min_value=1.0),
@@ -1955,7 +2000,9 @@ def test_candidate_space_sha_payload_omits_detection_predicate_key_when_undeclar
 
 def test_candidate_space_sha_changes_because_v1_4_declares_abstention_and_polarity() -> None:
     """v1.4 §前提 2/§前提 5 preregistration: registry now declares
-    `abstention_reasons` (1 candidate) and `truth_polarity` (24 candidates,
+    `abstention_reasons` (6 candidates — `M2A-B0-AUTOCORR-PERIODICITY` +
+    all 5 F0_CONTROL candidates, the latter added by the PR #354 round 3
+    追補 F0 census) and `truth_polarity` (24 candidates,
     all APERIODICITY_GT), so `candidate_space_sha()` no longer equals the
     sha of a pool with both fields stripped back to their v1.3 defaults —
     the v1.3 pinned-value assumption (implicit in
@@ -1964,7 +2011,7 @@ def test_candidate_space_sha_changes_because_v1_4_declares_abstention_and_polari
     from voice_genesis.calibration.candidates.registry import ALL_CANDIDATES
 
     declared_abstention = [c for c in ALL_CANDIDATES if c.abstention_reasons]
-    assert len(declared_abstention) == 1, [c.candidate_id for c in declared_abstention]
+    assert len(declared_abstention) == 6, [c.candidate_id for c in declared_abstention]
     declared_polarity = [c for c in ALL_CANDIDATES if c.truth_polarity is not None]
     assert len(declared_polarity) == 24, [c.candidate_id for c in declared_polarity]
 
@@ -1996,10 +2043,14 @@ def test_candidate_space_sha_payload_omits_v1_4_keys_when_undeclared() -> None:
     canonical payload must not carry `abstention_reasons`/`truth_polarity`
     keys for a candidate that declares neither (empty frozenset / `None`,
     the v1.3 default shape) — only a genuinely-declaring candidate's entry
-    carries the key(s)."""
+    carries the key(s).
+
+    base は round 3 追補で `M3-B0-CURRENT-CENTROID` へ差し替え
+    （`F0-B0-CURRENT` は F0 census を受けて `abstention_reasons` を宣言側へ
+    移った）。"""
     from voice_genesis.calibration.canonical import manifest_sha
 
-    base_candidate = candidate_by_id("F0-B0-CURRENT")
+    base_candidate = candidate_by_id("M3-B0-CURRENT-CENTROID")
     declared = dataclasses.replace(
         base_candidate,
         abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
