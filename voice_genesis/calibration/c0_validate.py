@@ -160,6 +160,7 @@ from . import approvals, streams, vocab
 from .candidates import registry as candidate_registry
 from .canonical import manifest_sha as _canonical_manifest_sha
 from .fixtures import axes as fixture_axes
+from .fixtures import controls as fixture_controls
 from .fixtures import uncertainty as fixture_uncertainty
 #: R24-2 対応（Codex 第 24 巡 P2 採用, 2026-09-05）: `_legacy_v1_0_opt_in_
 #: verified()` が aborted/closed 判定の実検証（gz+sidecar pair 検証・
@@ -1890,13 +1891,24 @@ _V1_2_DESIGN_REVISION: str = "1.2"
 #: 版数順で自動的に v1.3 も含む）。
 _V1_3_DESIGN_REVISION: str = "1.3"
 
+#: RUN10-CAL-v1.4 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`): `c0_freeze.
+#: _DESIGN_REVISION` が "1.4" を発行するようになったことに同期する新版
+#: マーカー。v1.4 は棄権語彙拡張 (§前提3)・極性 preregistration (§前提5)・
+#: gate_detail 永続化 (§前提6)・正規化 MAE floor (§前提7) を新設する。
+_V1_4_DESIGN_REVISION: str = "1.4"
+
 #: R22-1 対応（Codex 第 22 巡 finding (1)、2026-09-05。2026-09-07 #349 第 5 巡
-#: で v1.2 追加、同日 v1.3 追加）: `_check_required_blocking()` が
+#: で v1.2 追加、同日 v1.3 追加。v1.4 追加）: `_check_required_blocking()` が
 #: `frozen_design.design_revision` を照合する閉語彙。`"1.0"` を含む他の値・
 #: 欠落はすべて REQUIRED_BLOCKING violation（legacy v1.0 は
 #: `allow_legacy_v1_0=True` opt-in 経由でのみ通す）。
 _ALLOWED_DESIGN_REVISIONS: frozenset[str] = frozenset(
-    {_V1_1_DESIGN_REVISION, _V1_2_DESIGN_REVISION, _V1_3_DESIGN_REVISION}
+    {
+        _V1_1_DESIGN_REVISION,
+        _V1_2_DESIGN_REVISION,
+        _V1_3_DESIGN_REVISION,
+        _V1_4_DESIGN_REVISION,
+    }
 )
 
 #: `_design_revision_at_least()` が「N 以上」を判定するための新旧順（辞書順
@@ -1905,6 +1917,7 @@ _DESIGN_REVISION_ORDER: tuple[str, ...] = (
     _V1_1_DESIGN_REVISION,
     _V1_2_DESIGN_REVISION,
     _V1_3_DESIGN_REVISION,
+    _V1_4_DESIGN_REVISION,
 )
 
 
@@ -1954,6 +1967,57 @@ def _is_v1_3_or_later(manifest: Mapping[str, object]) -> bool:
     construct `formant_frequency` を含む本番宣言の fail-closed 拒否）が
     適用対象とする manifest 群。v1.1/v1.2 でマークされた manifest は対象外。"""
     return _design_revision_at_least(manifest, _V1_3_DESIGN_REVISION)
+
+
+def _is_v1_4_or_later(manifest: Mapping[str, object]) -> bool:
+    """v1.4 §前提 3 preregistration で新設された検査
+    （`fixtures.controls.SANCTIONED_ABSTENTIONS` の閉語彙一致）が適用対象と
+    する manifest 群。v1.1/v1.2/v1.3 でマークされた manifest は対象外。"""
+    return _design_revision_at_least(manifest, _V1_4_DESIGN_REVISION)
+
+
+#: RUN10-CAL-v1.4 §前提 3 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`): production
+#: (`rehearsal=False`) freeze/validate で `design_revision >= 1.4` の
+#: manifest が要求する `fixtures.controls.SANCTIONED_ABSTENTIONS` の凍結値。
+#: `SANCTIONED_ABSTENTIONS` 自体は manifest フィールドではない（Python コード
+#: 上の閉語彙定数）ため、本検査は「manifest の宣言 design_revision が 1.4
+#: 以上を主張するなら、現在ロードされているコードの語彙がその主張と一致する
+#: こと」を確認する——将来のコード変更が design_revision を上げないまま
+#: 語彙を静かに広げる/狭めるドリフトを防ぐ縦深防御。
+_V1_4_EXPECTED_SANCTIONED_ABSTENTIONS: frozenset[tuple[str, str]] = frozenset(
+    {
+        (fixture_controls.ControlClass.SILENCE.value, "F0_UNUSABLE"),
+        (fixture_controls.ControlClass.NOISE_ONLY.value, "F0_UNUSABLE"),
+    }
+)
+
+
+def _check_sanctioned_abstentions_vocabulary(manifest: Mapping[str, object]) -> list[str]:
+    """v1.4 §前提 3 ruling: design_revision >= 1.4 の本番
+    （`rehearsal=False`）freeze/validate は `fixtures.controls.
+    SANCTIONED_ABSTENTIONS` が `_V1_4_EXPECTED_SANCTIONED_ABSTENTIONS`
+    （`{(SILENCE, "F0_UNUSABLE"), (NOISE_ONLY, "F0_UNUSABLE")}`）と厳密一致
+    することを要求する（不一致は `VALIDATION_BLOCKED`）。`_check_candidate_
+    space_pool()`/`_check_retired_claim_scope_constructs()` と同じ版数
+    ゲート + rehearsal 免除パターンを踏襲する（rehearsal は claim を生まない
+    疎通試験のため対象外）。v1.4 未満の manifest には適用しない。"""
+    if not _is_v1_4_or_later(manifest):
+        return []
+    frozen_design = manifest.get("frozen_design")
+    rehearsal = frozen_design.get("rehearsal") if isinstance(frozen_design, Mapping) else None
+    if rehearsal is True:
+        return []
+    actual = frozenset(
+        (control_class.value, reason)
+        for control_class, reason in fixture_controls.SANCTIONED_ABSTENTIONS
+    )
+    if actual != _V1_4_EXPECTED_SANCTIONED_ABSTENTIONS:
+        return [
+            "fixtures.controls.SANCTIONED_ABSTENTIONS (design_revision >= 1.4 production "
+            f"freeze requires exactly {sorted(_V1_4_EXPECTED_SANCTIONED_ABSTENTIONS)!r}, "
+            f"got {sorted(actual)!r})"
+        ]
+    return []
 
 
 def _check_u_gt_u_num_bounds(
@@ -3295,6 +3359,10 @@ def _validate_c0_manifest_impl(
     # 混入を拒否する（in-memory 検証でも有効。producer 側
     # `c0_freeze._check_max_claim_scope()` と同じ縦深防御）。
     missing_required += _check_retired_claim_scope_constructs(manifest)
+    # v1.4 §前提 3 ruling: SANCTIONED_ABSTENTIONS の閉語彙一致（in-memory
+    # 検証でも有効。SANCTIONED_ABSTENTIONS 自体は manifest フィールドでは
+    # ないため、design_revision の自己申告とコードの現在値の整合を守る）。
+    missing_required += _check_sanctioned_abstentions_vocabulary(manifest)
     gate_ordering = _check_gate_approval_ordering(manifest, manifest_path)
     # 2026-09-07（#349 第 5 巡 P1 採用、PRRT_kwDOSD2OOM6fwr6q）: Gate 承認
     # 順序の blocking 化（D108, v1.2 WP2 §C-9）も v1.2 で新設された検査の

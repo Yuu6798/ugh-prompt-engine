@@ -119,7 +119,15 @@ def _outcome(role: str, control_class: str | None, output: MeterOutput, reason: 
 
 
 def test_evaluate_candidate_pass_when_positive_fires_and_negative_silent() -> None:
-    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    # PR #354 round 5 finding #2: the negative rows' `OUTPUT_MISSING` must be
+    # a *declared* abstention (`abstention_reasons`) for this to stay PASS —
+    # this fixture is exercising "candidate declares it may abstain and did",
+    # not the undeclared-miss shape covered separately below.
+    candidate = _candidate(
+        "M2T-HARMONIC-OLS-K4-WINHANN",
+        claim_ceiling=ClaimCeiling.ABSOLUTE,
+        abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
+    )
     outcomes = [
         _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
         _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -8.0})),
@@ -204,7 +212,13 @@ def test_evaluate_candidate_dump_values_records_raw_cells_without_changing_verdi
     dumped = diagnose.evaluate_candidate(candidate, outcomes, dump_values=True)
 
     assert "cell_values" not in baseline
-    assert {k: v for k, v in dumped.items() if k != "cell_values"} == baseline
+    assert "census" not in baseline
+    assert "kendall_tau_sign" not in baseline
+    # v1.4 §前提6: census/kendall_tau_sign are additive dump_values-only
+    # keys (schema v0.4) -- excluded here the same way cell_values is,
+    # confirming they never touch verdict/fire-rate semantics.
+    dump_only_keys = {"cell_values", "census", "kendall_tau_sign"}
+    assert {k: v for k, v in dumped.items() if k not in dump_only_keys} == baseline
 
     entries = dumped["cell_values"]
     assert [e["row_id"] for e in entries] == ["ROW-P1", "ROW-N1"]
@@ -224,6 +238,127 @@ def test_evaluate_candidate_dump_values_records_raw_cells_without_changing_verdi
     assert entries[1]["detected"] is False
     # JSON 直列化可能（CLI が json.dumps する経路と同じ制約）。
     json.dumps(dumped, sort_keys=True)
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 6: `census` block + DIRECTIONAL `kendall_tau_sign`
+# (schema v0.4, `--dump-values` 専用).
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_candidate_census_block_counts_by_group_and_outcome() -> None:
+    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    outcomes = [
+        _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
+        _outcome("positive", None, MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)),
+        _outcome("negative", "SILENCE", MeterOutput(), reason=diagnose.F0_UNUSABLE_REASON),
+        _outcome("negative", "NOISE_ONLY", MeterOutput(values={"tilt_db_per_oct": 1.5})),
+        _outcome("negative", "NOISE_ONLY", MeterOutput(values={})),
+        _outcome(
+            "negative", "NOISE_ONLY",
+            MeterOutput(ineligible=True, ineligible_reason="no dep"),
+        ),
+        _outcome("confound", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes, dump_values=True)
+    census = report["census"]
+
+    assert census["positive"] == {
+        "n_cells": 2,
+        "measured_detected": 1,
+        "measured_not_detected": 0,
+        "f0_unusable_prepass_skip": 0,
+        "missing_reason": {"OUTPUT_MISSING": 1},
+        "ineligible": 0,
+    }
+    assert census["SILENCE"] == {
+        "n_cells": 1,
+        "measured_detected": 0,
+        "measured_not_detected": 0,
+        "f0_unusable_prepass_skip": 1,
+        "missing_reason": {},
+        "ineligible": 0,
+    }
+    assert census["NOISE_ONLY"] == {
+        "n_cells": 3,
+        "measured_detected": 1,
+        "measured_not_detected": 1,
+        "f0_unusable_prepass_skip": 0,
+        "missing_reason": {},
+        "ineligible": 1,
+    }
+    assert census["confound"] == {
+        "n_cells": 1,
+        "measured_detected": 1,
+        "measured_not_detected": 0,
+        "f0_unusable_prepass_skip": 0,
+        "missing_reason": {},
+        "ineligible": 0,
+    }
+    json.dumps(report, sort_keys=True)
+
+
+def test_evaluate_candidate_kendall_tau_sign_none_for_non_directional_candidate() -> None:
+    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    outcomes = [
+        diagnose.CellOutcome(
+            role="positive", control_class=None,
+            output=MeterOutput(values={"tilt_db_per_oct": -6.0}), missing_reason=None, truth=0.0,
+        ),
+        diagnose.CellOutcome(
+            role="positive", control_class=None,
+            output=MeterOutput(values={"tilt_db_per_oct": -12.0}), missing_reason=None, truth=1.0,
+        ),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes, dump_values=True)
+    assert report["kendall_tau_sign"] is None
+
+
+def test_evaluate_candidate_kendall_tau_sign_positive_and_negative() -> None:
+    """M2A-B0-AUTOCORR-PERIODICITY (DIRECTIONAL, `harmonic_to_noise_ratio`)
+    positive cells with the physically-correct inverse relationship
+    (hnr_db decreases as truth/injected_noise_fraction increases) must
+    yield `kendall_tau_sign == -1` (raw tau, not polarity-adjusted -- this
+    is the P3 census sign, independent of `Candidate.truth_polarity`)."""
+    candidate = registry.candidate_by_id("M2A-B0-AUTOCORR-PERIODICITY")
+    assert candidate.claim_ceiling == ClaimCeiling.DIRECTIONAL
+
+    decreasing = [
+        diagnose.CellOutcome(
+            role="positive", control_class=None,
+            output=MeterOutput(values={"hnr_db": hnr}), missing_reason=None, truth=truth,
+        )
+        for truth, hnr in [(0.0, 12.0), (0.01, 12.4), (0.03, 11.3), (0.1, 9.1), (0.3, 2.7), (0.6, -15.0)]
+    ]
+    report = diagnose.evaluate_candidate(candidate, decreasing, dump_values=True)
+    assert report["kendall_tau_sign"] == -1
+
+    increasing = [
+        diagnose.CellOutcome(
+            role="positive", control_class=None,
+            output=MeterOutput(values={"hnr_db": hnr}), missing_reason=None, truth=truth,
+        )
+        for truth, hnr in [(0.0, -15.0), (0.01, 2.7), (0.03, 9.1), (0.1, 11.3), (0.3, 12.4), (0.6, 12.0)]
+    ]
+    report = diagnose.evaluate_candidate(candidate, increasing, dump_values=True)
+    assert report["kendall_tau_sign"] == 1
+
+
+def test_evaluate_candidate_kendall_tau_sign_none_when_insufficient_distinct_values() -> None:
+    candidate = registry.candidate_by_id("M2A-B0-AUTOCORR-PERIODICITY")
+    outcomes = [
+        diagnose.CellOutcome(
+            role="positive", control_class=None,
+            output=MeterOutput(values={"hnr_db": 12.0}), missing_reason=None, truth=0.0,
+        ),
+        # truth missing (e.g. non-positive-role or unresolvable row) is excluded.
+        diagnose.CellOutcome(
+            role="positive", control_class=None,
+            output=MeterOutput(values={"hnr_db": 9.0}), missing_reason=None, truth=None,
+        ),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes, dump_values=True)
+    assert report["kendall_tau_sign"] is None
 
 
 def test_evaluate_candidate_fail_positive_when_a_positive_does_not_fire() -> None:
@@ -254,7 +389,11 @@ def test_evaluate_candidate_fail_negative_when_a_negative_fires() -> None:
 
 
 def test_evaluate_candidate_no_ceiling_when_registry_ceiling_is_none() -> None:
-    candidate = _candidate("M2T-B0-CURRENT-HYBRID")
+    # PR #354 round 5 finding #2: declare the abstention so the negative row's
+    # `OUTPUT_MISSING` reads as a sanctioned non-fire, not an undeclared miss.
+    candidate = _candidate(
+        "M2T-B0-CURRENT-HYBRID", abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING})
+    )
     assert candidate.claim_ceiling == ClaimCeiling.NONE
     outcomes = [
         _outcome("positive", None, MeterOutput(values={"value": 12.0})),
@@ -297,7 +436,15 @@ def test_evaluate_candidate_not_evaluable_when_all_ineligible() -> None:
 
 
 def test_evaluate_candidate_sanctioned_abstention_only_still_passes() -> None:
-    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    # PR #354 round 5 finding #2: the NOISE_ONLY row's `OUTPUT_MISSING` must
+    # be declared (`abstention_reasons`) — otherwise it is an undeclared
+    # negative miss and PASS is no longer reachable (covered separately by
+    # `test_v14r5_...`-style tests below).
+    candidate = _candidate(
+        "M2T-HARMONIC-OLS-K4-WINHANN",
+        claim_ceiling=ClaimCeiling.ABSOLUTE,
+        abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
+    )
     outcomes = [
         _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
         # F0 prepass unusable on SILENCE: sanctioned (SILENCE, F0_UNUSABLE) —
@@ -320,17 +467,14 @@ def test_evaluate_candidate_sanctioned_abstention_only_still_passes() -> None:
     assert report["verdict_reason"] is None
 
 
-def test_evaluate_candidate_not_evaluable_when_negative_control_row_is_non_sanctioned_missing() -> (
-    None
-):
-    # RUN10-CAL-v1.2 WP4b: `c3b_failclosed_analysis.md` §3.2 — a negative
-    # control row entirely skipped by the F0-unusable synthesis (no real
-    # candidate call at all) is only "present and non-fired" when the
-    # (control_class, reason) pair is sanctioned. NOISE_ONLY/F0_UNUSABLE is
-    # NOT in `SANCTIONED_ABSTENTIONS`, so a real campaign choosing an F0
-    # candidate that renders this row unusable would leave the negative
-    # control judgment-less for NOISE_ONLY — this must NOT read as a clean
-    # PASS via a false 0.0 fire rate.
+def test_evaluate_candidate_noise_only_f0_unusable_now_sanctioned_v14() -> None:
+    # v1.4 §前提 3 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, P2 census PASS —
+    # `scratchpad/v14/p23/p23_report.txt` §5.1): `SANCTIONED_ABSTENTIONS` now
+    # includes `(NOISE_ONLY, "F0_UNUSABLE")` alongside `(SILENCE,
+    # "F0_UNUSABLE")` — a negative control row entirely skipped by the
+    # F0-unusable synthesis for NOISE_ONLY is now "present and non-fired"
+    # too (supersedes the pre-v1.4
+    # `..._non_sanctioned_missing` test that pinned the narrower vocabulary).
     candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
     outcomes = [
         _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
@@ -338,11 +482,41 @@ def test_evaluate_candidate_not_evaluable_when_negative_control_row_is_non_sanct
         _outcome("negative", "NOISE_ONLY", MeterOutput(), reason=diagnose.F0_UNUSABLE_REASON),
     ]
     report = diagnose.evaluate_candidate(candidate, outcomes)
+    assert report["sanctioned_abstentions"] == 2
+    assert report["missing_by_reason"] == {"F0_UNUSABLE": 2}
+    assert report["negative_fire_rate"] == 0.0
+    assert report["negative_controls_incomplete_by_class"] == {
+        "NOISE_ONLY": False,
+        "SILENCE": False,
+    }
+    assert report["verdict"] == "PASS"
+    assert report["verdict_reason"] is None
+
+
+def test_evaluate_candidate_not_evaluable_when_negative_control_row_is_non_sanctioned_missing() -> (
+    None
+):
+    # RUN10-CAL-v1.2 WP4b: `c3b_failclosed_analysis.md` §3.2 — a negative
+    # control row entirely skipped by the F0-unusable synthesis (no real
+    # candidate call at all) is only "present and non-fired" when the
+    # (control_class, reason) pair is sanctioned. PURE_SINE/F0_UNUSABLE is
+    # NOT in `SANCTIONED_ABSTENTIONS` (v1.4 §前提 3 explicitly does not
+    # extend sanctioning beyond SILENCE/NOISE_ONLY), so a real campaign
+    # choosing an F0 candidate that renders this row unusable would leave
+    # the negative control judgment-less for PURE_SINE — this must NOT read
+    # as a clean PASS via a false 0.0 fire rate.
+    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    outcomes = [
+        _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
+        _outcome("negative", "SILENCE", MeterOutput(), reason=diagnose.F0_UNUSABLE_REASON),
+        _outcome("negative", "PURE_SINE", MeterOutput(), reason=diagnose.F0_UNUSABLE_REASON),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes)
     assert report["sanctioned_abstentions"] == 1
     assert report["missing_by_reason"] == {"F0_UNUSABLE": 2}
     assert report["negative_fire_rate"] == 0.0
     assert report["negative_controls_incomplete_by_class"] == {
-        "NOISE_ONLY": True,
+        "PURE_SINE": True,
         "SILENCE": False,
     }
     assert report["verdict"] == "NOT_EVALUABLE"
@@ -367,7 +541,14 @@ def test_evaluate_candidate_negative_controls_incomplete_beats_fail_negative() -
 
 
 def test_evaluate_candidate_confound_outcomes_excluded_from_rates() -> None:
-    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    # PR #354 round 5 finding #2: declare the abstention so the negative
+    # row's `OUTPUT_MISSING` is a sanctioned non-fire, not an undeclared
+    # miss — this test's subject is confound exclusion, not this filter.
+    candidate = _candidate(
+        "M2T-HARMONIC-OLS-K4-WINHANN",
+        claim_ceiling=ClaimCeiling.ABSOLUTE,
+        abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
+    )
     outcomes = [
         _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
         _outcome("negative", "SILENCE", MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)),
@@ -379,6 +560,83 @@ def test_evaluate_candidate_confound_outcomes_excluded_from_rates() -> None:
     assert report["positive_fire_rate"] == 1.0
     assert report["missing_by_reason"] == {"OUTPUT_MISSING": 2}
     assert report["verdict"] == "PASS"
+
+
+# ---------------------------------------------------------------------------
+# PR #354 round 5 finding #2 (2026-09-09): `evaluate_candidate()` applies the
+# shared `fixtures.controls.abstained()` distinction to negative cells whose
+# present output carries a `missing_reason`/`ineligible` — `detected()` alone
+# maps all of these to non-fire regardless of whether the candidate declares
+# the reason, so `negative_rate` cannot see the difference. An undeclared
+# instance now fires `verdict="FAIL_NEGATIVE"`,
+# `verdict_reason="UNDECLARED_NEGATIVE_MISS"`; a declared one stays PASS-
+# eligible, matching `campaign.selection_stage.negative_control_undeclared_
+# missing`'s selection-side counterpart.
+# ---------------------------------------------------------------------------
+
+
+def test_v14r5_undeclared_output_missing_on_negative_is_fail_negative() -> None:
+    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    assert candidate.abstention_reasons == frozenset()
+    outcomes = [
+        _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
+        _outcome("negative", "SILENCE", MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes)
+    assert report["verdict"] == "FAIL_NEGATIVE"
+    assert report["verdict_reason"] == diagnose.UNDECLARED_NEGATIVE_MISS
+
+
+def test_v14r5_declared_output_missing_on_negative_stays_pass() -> None:
+    candidate = _candidate(
+        "M2T-HARMONIC-OLS-K4-WINHANN",
+        claim_ceiling=ClaimCeiling.ABSOLUTE,
+        abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
+    )
+    outcomes = [
+        _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
+        _outcome("negative", "SILENCE", MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes)
+    assert report["verdict"] == "PASS"
+    assert report["verdict_reason"] is None
+
+
+def test_v14r5_ineligible_negative_is_fail_negative_even_if_declared() -> None:
+    """`fixtures.controls.abstained()` never treats `ineligible=True` as a
+    declared abstention (that vocabulary is reserved for `missing_reason`) —
+    so an ineligible negative cell fails regardless of `abstention_reasons`."""
+    candidate = _candidate(
+        "M2T-HARMONIC-OLS-K4-WINHANN",
+        claim_ceiling=ClaimCeiling.ABSOLUTE,
+        abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
+    )
+    outcomes = [
+        _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
+        _outcome(
+            "negative",
+            "SILENCE",
+            MeterOutput(ineligible=True, ineligible_reason="INELIGIBLE_DEPENDENCY_ABSENT"),
+        ),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes)
+    assert report["verdict"] == "FAIL_NEGATIVE"
+    assert report["verdict_reason"] == diagnose.UNDECLARED_NEGATIVE_MISS
+
+
+def test_v14r5_undeclared_missing_on_positive_does_not_fire_the_new_reason() -> None:
+    """The new distinction is scoped to negative-role outcomes only — an
+    undeclared `missing_reason` on a *positive* cell is policed exclusively
+    by the pre-existing `positive_fire_rate < 1.0` (FAIL_POSITIVE) branch,
+    which is also checked first."""
+    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    outcomes = [
+        _outcome("positive", None, MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)),
+        _outcome("negative", "SILENCE", MeterOutput(values={})),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes)
+    assert report["verdict"] == "FAIL_POSITIVE"
+    assert report["verdict_reason"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -438,7 +696,7 @@ def test_run_diagnosis_writes_nothing_under_campaigns_or_vg_cal(
 
     assert before == after
     assert not (fake_home / ".vg_cal").exists()
-    assert report["schema"] == "diagnose/0.3"
+    assert report["schema"] == "diagnose/0.5"
     assert report["claimable"] is False
     # M2T-B0-CURRENT-HYBRID does not need F0 injection: no prepass sweep.
     assert report["f0_prepass"] == "not_applicable"
@@ -515,7 +773,7 @@ def test_cli_out_writes_only_the_requested_file(
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     assert payload["family"] == _TILT_FAMILY
     assert payload["claimable"] is False
-    assert payload["schema"] == "diagnose/0.3"
+    assert payload["schema"] == "diagnose/0.5"
     assert payload["f0_prepass"] == "not_applicable"
     assert not (fake_home / ".vg_cal").exists()
 
@@ -585,7 +843,7 @@ def test_cli_real_render_measure_f0_control(
     out = capsys.readouterr().out
     assert exit_code == 0
     report = json.loads(out)
-    assert report["schema"] == "diagnose/0.3"
+    assert report["schema"] == "diagnose/0.5"
     assert report["family"] == _F0_FAMILY
     assert report["claimable"] is False
     assert len(report["cells"]) <= 6

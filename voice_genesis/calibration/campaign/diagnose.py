@@ -50,8 +50,9 @@ determinism 検査・`FrozenCampaign` 前提）を呼ばない。代わりに:
    再現は C3a selection stage の責務のまま）。F0 が使用不能（欠測 or
    非有限 or 非正）な instance では、実経路の「候補を一切呼ばない」skip
    挙動を模して候補呼び出し自体を省略し、`missing_reason="F0_UNUSABLE"`
-   を合成する（`fixtures.controls.SANCTIONED_ABSTENTIONS` の
-   `(SILENCE, "F0_UNUSABLE")` 判定を意味のあるものにするため。実経路では
+   を合成する（`fixtures.controls.SANCTIONED_ABSTENTIONS` の判定——v1.4
+   §前提 3 の 2 組 `{(SILENCE, "F0_UNUSABLE"),
+   (NOISE_ONLY, "F0_UNUSABLE")}`——を意味のあるものにするため。実経路では
    これは `MeterOutput.missing_reason` ではなく `measurement_missing`
    ledger event の `reason` フィールドだが、ledger を持たない本モジュール
    では `CellOutcome.missing_reason` という別軸のラベルとして同じ役割を
@@ -67,10 +68,16 @@ determinism 検査・`FrozenCampaign` 前提）を呼ばない。代わりに:
 モジュールの初版（WP4）にもあった: negative control 行が F0_UNUSABLE で
 丸ごとスキップされた（=候補が一度も呼ばれず record が皆無になった）とき、
 `detected()` は欠落を一様に「非発火（False）」へ写像するため、
-`(NOISE_ONLY, "F0_UNUSABLE")` のような **非 sanctioned** な行欠測が
+`(TOO_SHORT, "F0_UNUSABLE")` のような **非 sanctioned** な行欠測が
 「negative fire rate 0.0 = clean」という偽の PASS を作れてしまっていた
-（`fixtures.controls.SANCTIONED_ABSTENTIONS` の閉語彙に無いのは
-`(SILENCE, "F0_UNUSABLE")` のみが登録されているため）。
+（`fixtures.controls.SANCTIONED_ABSTENTIONS` は閉語彙であり、そこに無い
+組は sanctioned にならない）。**v1.4 での更新**（PR #354 round 4 P2 是正）:
+`SANCTIONED_ABSTENTIONS` は v1.4 §前提 3 で 2 組
+`{(SILENCE, "F0_UNUSABLE"), (NOISE_ONLY, "F0_UNUSABLE")}` へ拡張された
+ため、旧文が非 sanctioned の例に挙げていた `(NOISE_ONLY, "F0_UNUSABLE")`
+は現在は **sanctioned** である（無声対照に F0 は存在しない）。本改訂が
+閉じた穴の構造そのものは変わらない——閉語彙に無い組は依然として偽 PASS を
+作らせない。
 
 本改訂は `campaign.selection_stage.candidate_fail_filter_report()` の
 `negative_controls_incomplete` filter と同じ意味論をとる: ある negative
@@ -101,14 +108,21 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from scipy.stats import kendalltau
 
 from voice_genesis.calibration.campaign import measure_stage
+from voice_genesis.calibration.campaign.selection_stage import truth_value_for_row
 from voice_genesis.calibration.candidates import registry
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import Candidate
 from voice_genesis.calibration.fixtures import matrix
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
-from voice_genesis.calibration.fixtures.controls import SANCTIONED_ABSTENTIONS, ControlClass, detected
+from voice_genesis.calibration.fixtures.controls import (
+    SANCTIONED_ABSTENTIONS,
+    ControlClass,
+    abstained,
+    detected,
+)
 from voice_genesis.calibration.fixtures.generators import common as gen_common
 from voice_genesis.calibration.fixtures.generators import render_row
 from voice_genesis.calibration.fixtures.matrix import FixtureRow, MatrixRow
@@ -167,7 +181,23 @@ _DIAGNOSE_SPLIT = "DIAGNOSE"
 #: フィールド + `missing_reason`/`ineligible`/`detected`）。既定（フラグ
 #: 無し）の出力形状は v0.2 と同一——分離実測のための追加情報であり、
 #: verdict や fire rate の意味論は一切変えない。
-SCHEMA = "diagnose/0.3"
+#: v0.4 (RUN10-CAL-v1.4 §前提 6): `--dump-values` 指定時のみ
+#: `results[].candidates[].census`（control class x outcome 件数表。P2
+#: 棄権 census の内製化）と `results[].candidates[].kendall_tau_sign`
+#: （DIRECTIONAL 候補のみ、正例セルの (truth, primary_output) 対の
+#: Kendall tau-b 符号。P3 極性 census の内製化）を追加する。既定（フラグ
+#: 無し）の出力形状は v0.2/v0.3 と同一——追加情報のみで verdict や fire
+#: rate の意味論は一切変えない。
+#: v0.5 (PR #354 round 5 finding #2, 2026-09-09): `evaluate_candidate()` は
+#: 従来 `detected()` 経由で undeclared missing_reason/ineligible な負例
+#: record を無条件に非発火へ写像し、PASS まで抜けてしまう経路を持っていた
+#: （`fixtures.controls.abstained()` による宣言/未宣言の弁別が verdict に
+#: 反映されていなかった）。v0.5 で `verdict="FAIL_NEGATIVE"` かつ
+#: `verdict_reason="UNDECLARED_NEGATIVE_MISS"` の組が新たに現れ得る
+#: （closed verdict vocabulary は不変、`verdict_reason` が FAIL_NEGATIVE でも
+#: 非 `None` になり得る点のみ形状が変わる）。宣言済み棄権（`abstained()`
+#: が `True` を返す record）は従来どおり非発火 → PASS-eligible のまま。
+SCHEMA = "diagnose/0.5"
 
 _ROLE_POSITIVE = "positive"
 _ROLE_NEGATIVE = "negative"
@@ -266,6 +296,12 @@ class CellOutcome:
     missing_reason: str | None
     row_id: str | None = None
     probe_index: int | None = None
+    #: RUN10-CAL-v1.4 §前提 6 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`): 正例
+    #: セルの truth スカラー（`selection_stage.truth_value_for_row()`）。
+    #: `evaluate_candidate()` の DIRECTIONAL `kendall_tau_sign` 算出専用
+    #: （fire rate/verdict の判定には使わない）。既定 `None` で、合成
+    #: `CellOutcome` を使う既存の純関数テストは従来どおり省略できる。
+    truth: float | None = None
 
 
 def render_diagnose_signal(row: FixtureRow, row_id: str, probe_index: int) -> tuple[np.ndarray, int]:
@@ -319,13 +355,17 @@ def measure_cell(
     f0_hz: float | None,
     row_id: str,
     probe_index: int,
+    truth: float | None = None,
 ) -> CellOutcome:
     """1 (row, probe_index) × 1 candidate の測定。F0 依存候補で `f0_hz` が
     使用不能なら、実経路の skip 挙動（候補を一切呼ばない）を模して呼び出し
-    自体を省略し `F0_UNUSABLE_REASON` を合成する。"""
+    自体を省略し `F0_UNUSABLE_REASON` を合成する。`truth`（既定 `None`）は
+    `CellOutcome.truth` へそのまま渡す（v1.4 §前提 6 の DIRECTIONAL
+    `kendall_tau_sign` 専用、判定には使わない）。"""
     if needs_f0_injection(candidate) and f0_hz is None:
         return CellOutcome(
-            role, control_class, MeterOutput(), F0_UNUSABLE_REASON, row_id, probe_index
+            role, control_class, MeterOutput(), F0_UNUSABLE_REASON, row_id, probe_index,
+            truth=truth,
         )
     records = measure_stage.run_within_process_calls(
         candidate,
@@ -338,7 +378,7 @@ def measure_cell(
     )
     output = records[0].output
     reason = output.missing_reason.value if output.missing_reason is not None else None
-    return CellOutcome(role, control_class, output, reason, row_id, probe_index)
+    return CellOutcome(role, control_class, output, reason, row_id, probe_index, truth=truth)
 
 
 # ---------------------------------------------------------------------------
@@ -356,17 +396,40 @@ def _round_or_none(value: float | None) -> float | None:
     return None if value is None else round(value, 4)
 
 
+#: PR #354 round 5 finding #2: distinct `verdict_reason` for a negative cell
+#: whose present output carries an undeclared `missing_reason`/`ineligible`
+#: (`fixtures.controls.abstained()` is `False`) — the shared distinction with
+#: `campaign.selection_stage.negative_control_undeclared_missing`. Kept apart
+#: from the plain `FAIL_NEGATIVE` (an actual `detected()` fire) so the report
+#: names which of the two negative-side failure shapes occurred.
+UNDECLARED_NEGATIVE_MISS = "UNDECLARED_NEGATIVE_MISS"
+
+
 def _verdict(
     ceiling: ClaimCeiling,
     positive_rate: float | None,
     negative_rate: float | None,
     all_ineligible: bool,
     incomplete_classes: frozenset[str],
+    has_undeclared_negative_miss: bool = False,
 ) -> tuple[str, str | None]:
     """`(verdict, verdict_reason)`。`verdict_reason` は `NOT_EVALUABLE` の
     3 分岐（判定材料が無い / 全 ineligible / 非 sanctioned な負例欠測）を
     区別する（WP4b 改訂: 3 番目の `negative_controls_incomplete` が新設）。
-    PASS/FAIL_POSITIVE/FAIL_NEGATIVE/NO_CEILING では常に `None`。"""
+    PASS/FAIL_POSITIVE/NO_CEILING では常に `None`。
+
+    PR #354 round 5 finding #2（2026-09-09）: `FAIL_NEGATIVE` は 2 分岐を
+    持つようになった——`negative_rate > 0.0`（`detected()` が実際に発火した
+    record が 1 件以上）の従来経路は `verdict_reason=None` のまま、新設の
+    `has_undeclared_negative_miss`（`abstained()` で説明されない
+    missing_reason/ineligible な負例 record が 1 件以上）は
+    `verdict_reason="UNDECLARED_NEGATIVE_MISS"` を持つ。`detected()` は
+    missing_reason/ineligible な record を無条件に非発火へ写像するため
+    `negative_rate` 自体はこの経路を検出できない——`has_undeclared_
+    negative_miss` は `evaluate_candidate()` が `abstained()` で別途算出する
+    独立した入力。`positive_rate < 1.0`（FAIL_POSITIVE）は本分岐より先に
+    判定する（`campaign.selection_stage` の positive-control 非発火判定と
+    同様、positive 側の失敗を優先して報告する）。"""
     if positive_rate is None or negative_rate is None:
         return "NOT_EVALUABLE", "no_positive_or_negative_rows"
     if all_ineligible:
@@ -375,6 +438,8 @@ def _verdict(
         return "NOT_EVALUABLE", "negative_controls_incomplete"
     if positive_rate < 1.0:
         return "FAIL_POSITIVE", None
+    if has_undeclared_negative_miss:
+        return "FAIL_NEGATIVE", UNDECLARED_NEGATIVE_MISS
     if negative_rate > 0.0:
         return "FAIL_NEGATIVE", None
     if ceiling == ClaimCeiling.NONE:
@@ -399,6 +464,96 @@ def _cell_value_entry(candidate: Candidate, outcome: CellOutcome) -> dict[str, A
     }
 
 
+def _census_block(
+    candidate: Candidate, outcomes: Sequence[CellOutcome]
+) -> dict[str, dict[str, Any]]:
+    """RUN10-CAL-v1.4 §前提 6 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`):
+    control class（負例）/ `"positive"` / `"confound"` ごとの outcome 件数表
+    （`--dump-values` schema v0.4 専用）。P2 棄権 census
+    (`scratchpad/v14/p23/p23_report.txt` §2 の外部集計スクリプト
+    `analyze_p23.py` が出していた表と同じ語彙）を schema へ内製化したもの:
+
+    - `f0_unusable_prepass_skip`: 前提 2 経路 (A)（F0 prepass skip、record
+      皆無。合成 `F0_UNUSABLE_REASON`）の件数。
+    - `missing_reason`: 前提 2 経路 (B)（`MeterOutput.missing_reason`、
+      record あり）の理由別件数。`f0_unusable_prepass_skip` とは排他
+      （前者は record が無いため `missing_reason` に現れない）。
+    - `ineligible`: `MeterOutput.ineligible` の件数（`missing_reason` とは
+      排他 — `MeterOutput.__post_init__` 相当の規約どおり同時に立たない）。
+    - `measured_detected`/`measured_not_detected`: 上記いずれにも該当しない
+      record の `fixtures.controls.detected()` 結果。
+    """
+    groups: dict[str, list[CellOutcome]] = {}
+    for outcome in outcomes:
+        key = outcome.control_class if outcome.role == _ROLE_NEGATIVE else outcome.role
+        groups.setdefault(key, []).append(outcome)
+
+    census: dict[str, dict[str, Any]] = {}
+    for key, group_outcomes in sorted(groups.items()):
+        prepass_skip = 0
+        ineligible = 0
+        measured_detected = 0
+        measured_not_detected = 0
+        missing_reason_counts: Counter[str] = Counter()
+        for o in group_outcomes:
+            if o.missing_reason == F0_UNUSABLE_REASON:
+                prepass_skip += 1
+                continue
+            if o.output.ineligible:
+                ineligible += 1
+                continue
+            if o.missing_reason is not None:
+                missing_reason_counts[o.missing_reason] += 1
+                continue
+            if detected(o.output, predicate=candidate.detection_predicate):
+                measured_detected += 1
+            else:
+                measured_not_detected += 1
+        census[key] = {
+            "n_cells": len(group_outcomes),
+            "measured_detected": measured_detected,
+            "measured_not_detected": measured_not_detected,
+            "f0_unusable_prepass_skip": prepass_skip,
+            "missing_reason": dict(sorted(missing_reason_counts.items())),
+            "ineligible": ineligible,
+        }
+    return census
+
+
+def _kendall_tau_sign(candidate: Candidate, outcomes: Sequence[CellOutcome]) -> int | None:
+    """RUN10-CAL-v1.4 §前提 6: DIRECTIONAL 候補について、正例セルの
+    `(truth, primary_output)` 対の Kendall tau-b の符号（`+1`/`-1`/`0`）を
+    返す（P3 極性 census, `scratchpad/v14/p23/p23_report.txt` §5.4 の
+    `analyze_p23.py` 集計と同じ算出をここに内製化する）。DIRECTIONAL 以外の
+    候補、または算出条件（distinct truth/value がそれぞれ >= 2 件）を
+    満たさない場合は `None`。**記録専用**（`registry.Candidate.
+    truth_polarity` の宣言判定・PASS 判定のいずれにも使わない — `--dump-
+    values` の診断出力のみ）。"""
+    if candidate.claim_ceiling is not ClaimCeiling.DIRECTIONAL:
+        return None
+    truths: list[float] = []
+    values: list[float] = []
+    for o in outcomes:
+        if o.role != _ROLE_POSITIVE or o.truth is None:
+            continue
+        value = measure_stage.primary_output_value(candidate, o.output)
+        if value is None or not math.isfinite(value):
+            continue
+        truths.append(o.truth)
+        values.append(value)
+    if len(truths) < 2 or len(set(truths)) < 2 or len(set(values)) < 2:
+        return None
+    tau, _p_value = kendalltau(truths, values)
+    if tau is None or not math.isfinite(float(tau)):
+        return None
+    tau = float(tau)
+    if tau > 0:
+        return 1
+    if tau < 0:
+        return -1
+    return 0
+
+
 def evaluate_candidate(
     candidate: Candidate, outcomes: Sequence[CellOutcome], *, dump_values: bool = False
 ) -> dict[str, Any]:
@@ -416,9 +571,22 @@ def evaluate_candidate(
     `NOT_EVALUABLE(negative_controls_incomplete)` にする
     （`campaign.selection_stage.candidate_fail_filter_report()` の
     `negative_controls_incomplete` filter と同じ意味論）。sanctioned な行
-    （現行 `(SILENCE, "F0_UNUSABLE")` のみ）はここでの `sanctioned_
+    （v1.4 §前提 3 の 2 組 `{(SILENCE, "F0_UNUSABLE"),
+    (NOISE_ONLY, "F0_UNUSABLE")}`）はここでの `sanctioned_
     abstentions` に数え、not-fired（False）として fire rate に算入する
-    （従来どおり）。"""
+    （従来どおり）。
+
+    PR #354 round 5 finding #2（2026-09-09）: 上記の path (A)（行丸ごと
+    skip）とは別に、path (B)（record は存在するが `missing_reason`/
+    `ineligible` を持つ）の negative record を `fixtures.controls.
+    abstained()` で宣言済み/未宣言に弁別する。`detected()` は両者を
+    区別なく非発火へ写像するため、従来は未宣言の欠落・ineligible も
+    `negative_rate == 0.0` に埋もれて `PASS` まで抜け得た
+    （`campaign.selection_stage.negative_control_undeclared_missing` が
+    selection 側で閉じていた穴の diagnose 側対応）。1 件でも未宣言なら
+    `verdict="FAIL_NEGATIVE"`, `verdict_reason="UNDECLARED_NEGATIVE_MISS"`
+    （`UNDECLARED_NEGATIVE_MISS` 定数）。宣言済み棄権（`abstained()` が
+    `True`）は従来どおり non-fire → PASS-eligible のまま。"""
     positive_flags: list[bool] = []
     negative_outcomes_by_class: dict[str, list[CellOutcome]] = {}
     missing_by_reason: Counter[str] = Counter()
@@ -446,6 +614,7 @@ def evaluate_candidate(
     incomplete_classes: set[str] = set()
     sanctioned_abstentions = 0
     negative_flags_all: list[bool] = []
+    has_undeclared_negative_miss = False
 
     for cc, class_outcomes in sorted(negative_outcomes_by_class.items()):
         flags = [
@@ -465,12 +634,31 @@ def evaluate_candidate(
                 sanctioned_abstentions += 1
             else:
                 incomplete_classes.add(cc)
+        # PR #354 round 5 finding #2: `detected()` maps every missing_reason/
+        # ineligible record to non-fire unconditionally (declared or not), so
+        # `flags`/`negative_flags_all` alone cannot see an undeclared miss —
+        # apply the shared `fixtures.controls.abstained()` distinction here,
+        # per-record, mirroring `campaign.selection_stage.negative_control_
+        # undeclared_missing`. `row_all_skipped` outcomes are the synthetic
+        # F0-unusable-prepass-skip `CellOutcome` (`MeterOutput()` default:
+        # `missing_reason=None`, `ineligible=False`) so they never satisfy the
+        # `or` guard below and this loop cannot double-count path (A).
+        for o in class_outcomes:
+            if (o.output.missing_reason is not None or o.output.ineligible) and not abstained(
+                o.output, candidate
+            ):
+                has_undeclared_negative_miss = True
 
     positive_rate = _rate(positive_flags)
     negative_rate = _rate(negative_flags_all)
     all_ineligible = verdict_relevant_total > 0 and verdict_relevant_ineligible == verdict_relevant_total
     verdict, verdict_reason = _verdict(
-        candidate.claim_ceiling, positive_rate, negative_rate, all_ineligible, frozenset(incomplete_classes)
+        candidate.claim_ceiling,
+        positive_rate,
+        negative_rate,
+        all_ineligible,
+        frozenset(incomplete_classes),
+        has_undeclared_negative_miss,
     )
 
     report: dict[str, Any] = {
@@ -489,6 +677,10 @@ def evaluate_candidate(
     }
     if dump_values:
         report["cell_values"] = [_cell_value_entry(candidate, o) for o in outcomes]
+        # RUN10-CAL-v1.4 §前提 6: census block（control class x outcome 件数
+        # 表）+ DIRECTIONAL 候補の kendall_tau_sign（schema v0.4）。
+        report["census"] = _census_block(candidate, outcomes)
+        report["kendall_tau_sign"] = _kendall_tau_sign(candidate, outcomes)
     return report
 
 
@@ -550,12 +742,17 @@ def run_diagnosis_for_f0_candidate(
     outcomes_by_candidate: dict[str, list[CellOutcome]] = {c.candidate_id: [] for c in candidates}
     for mr, role in cells:
         control_class = mr.row.control_class if role == _ROLE_NEGATIVE else None
+        # RUN10-CAL-v1.4 §前提 6: truth スカラー（positive セルのみ意味を
+        # 持つ。負例/confound 行は `truth_value_for_row()` が `None` を返す
+        # ため、そのまま `CellOutcome.truth=None` になる）。
+        truth = truth_value_for_row(mr.row)
         for probe_index in range(repeats):
             signal, sr = _signal_for(mr, probe_index)
             for candidate in candidates:
                 f0_hz = _f0_for(mr, probe_index) if needs_f0_injection(candidate) else None
                 outcome = measure_cell(
-                    candidate, role, control_class, signal, sr, f0_hz, mr.row_id, probe_index
+                    candidate, role, control_class, signal, sr, f0_hz, mr.row_id, probe_index,
+                    truth=truth,
                 )
                 outcomes_by_candidate[candidate.candidate_id].append(outcome)
 

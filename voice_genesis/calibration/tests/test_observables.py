@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from voice_genesis.calibration.observables import (
@@ -7,6 +9,7 @@ from voice_genesis.calibration.observables import (
     DuplicateInstanceIdError,
     ErrorTerms,
     InvalidControlOutcomeError,
+    apply_polarity,
     bias,
     detection_rates,
     error_terms,
@@ -66,9 +69,70 @@ def test_error_terms_zero_guard_applies_near_zero_truth() -> None:
     assert result.re == pytest.approx(2.0)
 
 
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 7: `error_terms(..., truth_floor=...)` — normalized
+# MAE denominator floor (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`).
+# ---------------------------------------------------------------------------
+
+
+def test_error_terms_truth_floor_none_is_bit_for_bit_unchanged() -> None:
+    """omitting `truth_floor` (or passing `None` explicitly) must reproduce
+    the pre-v1.4 `max(|truth|, zero_guard)` denominator exactly."""
+    without_kwarg = error_terms(m=0.4, truth=0.0, zero_guard=0.2)
+    with_none = error_terms(m=0.4, truth=0.0, zero_guard=0.2, truth_floor=None)
+    assert without_kwarg == with_none == ErrorTerms(e=0.4, ae=0.4, re=2.0)
+
+
+def test_error_terms_truth_floor_replaces_zero_guard_at_zero_truth() -> None:
+    """the 2dde4014 degenerate case this WP targets: truth=0 with a tiny
+    `zero_guard` (~1e-9) makes RE explode; a construct-meaningful
+    `truth_floor` (E_use) keeps it finite and bounded."""
+    tiny_zero_guard_result = error_terms(m=0.4, truth=0.0, zero_guard=1e-9)
+    assert tiny_zero_guard_result.re > 1e8  # the degenerate blowup this WP fixes
+
+    floored_result = error_terms(m=0.4, truth=0.0, zero_guard=1e-9, truth_floor=2.0)
+    assert math.isfinite(floored_result.re)
+    assert floored_result.e == pytest.approx(0.4)
+    assert floored_result.ae == pytest.approx(0.4)
+    assert floored_result.re == pytest.approx(0.2)  # 0.4 / max(0.0, 2.0) = 0.2
+
+
+def test_error_terms_truth_floor_only_applies_when_it_exceeds_truth() -> None:
+    """`truth_floor` competes with `|truth|`, not `zero_guard` -- a nonzero
+    truth larger than the floor still uses `|truth|` as the denominator
+    (matching the non-degenerate, non-near-zero-truth case unchanged)."""
+    result = error_terms(m=12.0, truth=10.0, zero_guard=1e-9, truth_floor=2.0)
+    assert result.re == pytest.approx(0.2)  # |e|=2.0 / max(10.0, 2.0) = 0.2
+
+
 def test_bias_hand_computed() -> None:
     # mean([1,-1,3,-3,2]) = 2/5 = 0.4
     assert bias([1.0, -1.0, 3.0, -3.0, 2.0]) == pytest.approx(0.4)
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 5: `apply_polarity()` — the single source of truth
+# `selection_stage.build_candidate_criteria` and `holdout_stage.
+# build_directional_gate_inputs` both call.
+# ---------------------------------------------------------------------------
+
+
+def test_apply_polarity_sign_table() -> None:
+    assert apply_polarity(3.0, 1) == pytest.approx(3.0)
+    assert apply_polarity(3.0, -1) == pytest.approx(-3.0)
+    assert apply_polarity(-3.0, 1) == pytest.approx(-3.0)
+    assert apply_polarity(-3.0, -1) == pytest.approx(3.0)
+    assert apply_polarity(0.0, -1) == pytest.approx(0.0)
+
+
+def test_apply_polarity_none_raises() -> None:
+    with pytest.raises(ValueError):
+        apply_polarity(3.0, None)
+
+
+def test_apply_polarity_rejects_non_unit_polarity() -> None:
+    with pytest.raises(ValueError):
+        apply_polarity(3.0, 2)
 
 
 def test_mae_hand_computed() -> None:

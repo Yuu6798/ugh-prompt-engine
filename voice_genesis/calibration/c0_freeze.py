@@ -499,7 +499,15 @@ _PROVENANCE_SPEC: dict[str, str] = {
 #: `DESIGN_VG_METER_CAL_DEBT_v1.3.md`（`approvals.DESIGN_DOC_CHAIN[0]`）へ
 #: 切り替わったため "1.3" を発行する。v1.2 固有検査の適用 floor は
 #: `c0_validate._is_v1_2_or_later()` のまま（版数順で v1.3 も含む）。
-_DESIGN_REVISION: str = "1.3"
+#:
+#: RUN10-CAL-v1.4（`DESIGN_VG_METER_CAL_DEBT_v1.4.md`）: 統治文書が
+#: `DESIGN_VG_METER_CAL_DEBT_v1.4.md`（`approvals.DESIGN_DOC_CHAIN[0]`）へ
+#: 切り替わったため "1.4" を発行する。`c0_validate._ALLOWED_DESIGN_
+#: REVISIONS`/`_DESIGN_REVISION_ORDER` と同時に更新済み。v1.4 は
+#: `_check_sanctioned_abstentions_vocabulary()`（design_revision >= 1.4 の
+#: 本番 freeze が `fixtures.controls.SANCTIONED_ABSTENTIONS` の閉語彙一致を
+#: 要求）を新設する。
+_DESIGN_REVISION: str = "1.4"
 
 
 def _design_doc_sha256(root: Path) -> str:

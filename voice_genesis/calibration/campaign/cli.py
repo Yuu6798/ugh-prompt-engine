@@ -1077,6 +1077,57 @@ def _control_class_by_negative_row_id(
     }
 
 
+def _try_load_e_use_rows_for_selection(
+    campaign: FrozenCampaign,
+) -> tuple[Any, ...] | None:
+    """RUN10-CAL-v1.4 §前提 7 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`):
+    best-effort E_use 表ロード、C3a/C3b selection 専用（`selection_stage.
+    truth_floor_for_candidate()` の入力）。
+
+    C4 の `holdout_stage.load_e_use_rows()` とは異なり、**pin を宣言してい
+    ない** campaign での E_use 表欠落は C3 selection 自体の fail-closed 事由
+    に **しない**——`_run_c4` 側の既存コメントが明記するとおり「多くの tiny
+    test campaign は e_use_table.json / frozen_inputs.e_use_table_sha256 pin
+    を持たない」ため、`load_e_use_rows()` をそのまま C3 で呼ぶと欠落
+    campaign すべてで `StaleEUseTableError` の ledger `stop_event` 書き込み +
+    例外送出が発生してしまう（正規化 MAE の分母 floor は selection の
+    ランキング精度改善であり、C4 の gate 入力のような fail-closed 対象では
+    ない）。
+
+    PR #354 round 1 finding #1 (P1, ADOPT): 上記の「pin 未宣言 = legacy/tiny
+    campaign」という前提は、**pin が宣言されている**（`frozen_inputs.
+    e_use_table_sha256` が非空文字列）のに検証/パースが失敗するケース
+    （ファイル欠落・改竄・破損 JSON）まではカバーしない——旧実装はこの区別を
+    せず `StaleEUseTableError` を一律 `None` へ握り潰していたため、凍結後に
+    pin 済み `e_use_table.json` が壊れていても C3a/C3b は気づかず従来の
+    `zero_guard` ランキングへ静かにフォールバックし、`SELECTION_FROZEN` を
+    発行し得た（壊れた pin の隠蔽）。本関数は now: pin が宣言されている場合は
+    `StaleEUseTableError` をそのまま**伝播**させる（C4 の
+    `holdout_stage.load_e_use_rows()` と同じ fail-closed 事由——新規
+    `vocab.BlockedCode` は追加せず、呼び出し元 `_run_c3a`/`_run_c3b` が
+    ledger `f0_selection_frozen`/`selection_frozen` を書く前に例外で
+    中断させる）。pin が宣言されていない場合のみ、従来どおり `None` を返す
+    （呼び出し側は `truth_floor_for_candidate()` に `None` を渡し、legacy の
+    `zero_guard` 挙動を保つ）。
+
+    本関数は `holdout_stage.load_e_use_rows()` が内部で使う純粋な
+    読み込み/検証/パース関数（`_read_and_verify_e_use_table_bytes`/
+    `_parse_e_use_table_bytes`。ledger 書き込みを一切行わない）を直接呼ぶ
+    ことで、パースロジックを複製せずに ledger 書き込みなしの
+    best-effort 版を実現する。"""
+    frozen_inputs = campaign.manifest.get("frozen_inputs")
+    pin = frozen_inputs.get("e_use_table_sha256") if isinstance(frozen_inputs, Mapping) else None
+    pin_declared = isinstance(pin, str) and bool(pin)
+    try:
+        path, data = holdout_stage._read_and_verify_e_use_table_bytes(campaign)
+        rows = holdout_stage._parse_e_use_table_bytes(path, data)
+    except holdout_stage.StaleEUseTableError:
+        if pin_declared:
+            raise
+        return None
+    return tuple(rows)
+
+
 def _criteria_with_fail_filters(
     candidate: Any,
     records: Sequence[Any],
@@ -1089,6 +1140,7 @@ def _criteria_with_fail_filters(
     noise_only_negative_control_ids: frozenset[str] = frozenset(),
     control_class_by_negative_row_id: Mapping[str, str] | None = None,
     missing_reason_by_negative_row_id: Mapping[str, str] | None = None,
+    truth_floor: float | None = None,
 ) -> tuple[Any, dict[str, object], dict[str, object]]:
     """finding #8: `build_candidate_criteria()`（有限値の有無のみ）に加えて
     `candidates.adapter` 共通 5 fail filter を適用し、いずれか 1 つでも
@@ -1125,8 +1177,16 @@ def _criteria_with_fail_filters(
     の既定 `0.0` のまま変更しない（`negative_controls_incomplete` が
     NOISE_ONLY 行の record 欠落を別途 fail-closed で捕捉するため、この
     フォールバックが実質的に発生するのは NOISE_ONLY 母集団自体が空の
-    C3b 呼び出しのみ）。"""
-    base = selection_stage.build_candidate_criteria(candidate, records, truth_by_instance)
+    C3b 呼び出しのみ）。
+
+    RUN10-CAL-v1.4 §前提 7（`DESIGN_VG_METER_CAL_DEBT_v1.4.md`）:
+    `truth_floor`（既定 `None`）は `selection_stage.build_candidate_criteria()`
+    の同名 kwarg へそのまま渡す（正規化 MAE の分母 floor。呼び出し側
+    ——C3a/C3b の各 call site——が `selection_stage.truth_floor_for_
+    candidate(candidate, e_use_rows)` で事前に解決した値を渡す）。"""
+    base = selection_stage.build_candidate_criteria(
+        candidate, records, truth_by_instance, truth_floor=truth_floor
+    )
     report = selection_stage.candidate_fail_filter_report(
         candidate,
         records,
@@ -1134,7 +1194,8 @@ def _criteria_with_fail_filters(
         positive_control_row_ids=positive_control_ids,
         expected_coverage_instances=expected_coverage_instances,
         noise_only_control_row_ids=noise_only_negative_control_ids,
-        # v1.2 WP1 配線: sanctioned abstention（`(SILENCE, "F0_UNUSABLE")`）を
+        # v1.2 WP1 配線: sanctioned abstention（v1.4 §前提 3 の 2 組
+        # `{(SILENCE, "F0_UNUSABLE"), (NOISE_ONLY, "F0_UNUSABLE")}`）を
         # `negative_controls_incomplete`/`negative_control_false_fire` の
         # fail-closed から除外するための判定材料。
         control_class_by_negative_row_id=control_class_by_negative_row_id,
@@ -1493,6 +1554,10 @@ def _run_c3a(
     control_class_by_neg_row_id = _control_class_by_negative_row_id(
         matrix_rows, all_declared_neg_ids
     )
+    # RUN10-CAL-v1.4 §前提 7: best-effort E_use load for the normalized-MAE
+    # truth_floor (see `_try_load_e_use_rows_for_selection()` docstring —
+    # absent/unreadable table degrades to `None`, not fail-closed here).
+    e_use_rows_for_selection = _try_load_e_use_rows_for_selection(campaign)
     for c in candidates:
         candidate_criteria, report, scope_report = _criteria_with_fail_filters(
             c,
@@ -1505,6 +1570,7 @@ def _run_c3a(
             noise_only_negative_control_ids=noise_only_neg_ids,
             control_class_by_negative_row_id=control_class_by_neg_row_id,
             missing_reason_by_negative_row_id=missing_reason_index.get(c.candidate_id, {}),
+            truth_floor=selection_stage.truth_floor_for_candidate(c, e_use_rows_for_selection),
         )
         criteria.append(candidate_criteria)
         fail_filter_reports[c.candidate_id] = report
@@ -1661,6 +1727,11 @@ def _run_c3b(
     criteria_by_family: dict[str, list] = {}
     fail_filter_reports_by_family: dict[str, dict[str, dict[str, bool]]] = {}
     claim_scope_reports_by_family: dict[str, dict[str, dict[str, object]]] = {}
+    # RUN10-CAL-v1.4 §前提 7: best-effort E_use load for the normalized-MAE
+    # truth_floor, computed once for all families (see
+    # `_try_load_e_use_rows_for_selection()` docstring — absent/unreadable
+    # table degrades to `None`, not fail-closed here).
+    e_use_rows_for_selection = _try_load_e_use_rows_for_selection(campaign)
 
     def _compute_family_criteria(
         family: FixtureFamily, meter_candidates: Sequence[Any], records: list
@@ -1707,6 +1778,7 @@ def _run_c3b(
                 max_claim_scope=max_claim_scope,
                 control_class_by_negative_row_id=control_class_by_neg_row_id,
                 missing_reason_by_negative_row_id=missing_reason_index.get(c.candidate_id, {}),
+                truth_floor=selection_stage.truth_floor_for_candidate(c, e_use_rows_for_selection),
             )
             family_criteria.append(candidate_criteria)
             family_fail_filter_reports[c.candidate_id] = report

@@ -1,0 +1,656 @@
+---
+document_id: VG-METER-CAL-DEBT-DESIGN-v1.4
+project: VoiceGenesis
+document_class: CANONICAL_DESIGN_REVISION
+status: APPROVED_DESIGN_REVISION / NOT_PREREGISTERED / EXECUTION_NOT_AUTHORIZED
+design_revision: "1.4"
+revises: VG-METER-CAL-DEBT-DESIGN-v1.3
+base_document_path: voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.3.md
+base_document_sha256: 68b4d80330582d2b85728670fbff5d03884ace21ff6ae5fd62ddf571cf041c74
+revision_rule: v1.3 は read-only。本書は v1.1 §0/§V6 の改訂規約（in-place 改変禁止・
+  新 revision を append-only で作成）に従う新 revision であり、本書に明記した節のみ
+  v1.3（およびその上流の v1.2/v1.1/v1.0）を上書きする。明記のない全ての節は v1.3 が
+  引き続き正。
+evidence_basis:
+  - "P2 棄権 census (2026-09-09): campaign.diagnose --dump-values による
+    TILT_GT (F0 依存 harmonic 12 候補) / APERIODICITY_GT (全 24 候補) の
+    control class x missing_reason 全数走査
+    (scratchpad/v14/p23/p23_report.txt)"
+  - "P3 極性 census (2026-09-09): APERIODICITY_GT 全候補の正例 sweep 行に
+    対する Kendall tau 符号照合 (同上)"
+authorship:
+  design_compiler: "CLAUDE (Fable session, 2026-09-09)"
+  approving_authority: "USER 裁定 (2026-09-09): 実装ルート = Claude 完結。
+    前提3/前提4は User 責任で承認（P2 census の採用条件は維持）。"
+execution_authorized: false
+meter_changes_authorized: false
+run11_measurement_entry_authorized: false
+note_on_execution: 実行は v1.0 §18 の 3 承認 Gate（campaign 実行 / C0 freeze / seal 受容）
+  に引き続き従う。本書の承認は設計改訂の承認であり実行授権ではない。
+---
+
+# RUN10-CAL 設計 v1.4 — 棄権 2 経路の統一・DIRECTIONAL 極性 preregistration・記録の観測性是正
+
+**本書は確定した統治文書である（PR #354 round 1 finding #4 是正: 旧文は
+`DRAFTING`/「起草中」のまま §Y1–§Y4 を「後続の docs コミットで append する」と
+予告していたが、§Y1（P1–P3 実測表）/ §Y2（棄権と極性の preregistration まとめ）/
+§Y3（記録欠陥の是正まとめ）/ §Y4（答えた問い・答えていない問い・負債の terminal
+status）はいずれも既に本書へ append 済みであり、`DESIGN_DOC_CHAIN` 先頭として
+参照されている）。§Y0 は Design Memo（scratchpad/design_memo_v14.md）の「前提と
+なる設計判断」を verbatim 転記したもの。**
+
+WP-A（コード + テスト）は本書 §Y0 の前提 1–7 を実装対象とし、既に
+`voice_genesis/calibration/{fixtures/controls.py, candidates/registry.py,
+campaign/selection_stage.py, campaign/holdout_stage.py, observables.py,
+c0_freeze.py, c0_validate.py, approvals.py, campaign/diagnose.py, tests/**}` へ
+反映済みである（コミット履歴 = ブランチ `claude/run10-cal-v1-4`）。前提 8/9 は
+文書化のみで WP-A の実装対象外。
+
+## §Y-0. 前提の出所（2026-09-09 execution-boundary correction 適用）
+
+**本 revision（PR #354 第 6 巡是正）は `.claude/memory/
+VOICEGENESIS_EXECUTION_BOUNDARY_CORRECTION_2026-09-09.md`（origin/main
+マージ済み、PR #353）が定める是正に従う**: campaign
+`RUN10-CAL-20260908-2dde4014` は同 campaign 配下の
+`authorization_quarantine.json`（`schema: vgcal-quarantine/1`）により
+`status: QUARANTINED` / `claimable: false` / `debt_discharge_eligible:
+false` / `run11_eligible: false` と記録されている。**本書の §Y0 前提
+1–9・§Y1–§Y4 のいずれも同 campaign の観測を要件・判定・受け入れ条件の
+根拠として用いない**。
+
+根拠として用いるのは以下の 5 種に限る:
+
+- (a) unarmed `campaign.diagnose` census（fixture 上、freeze/封印/ledger
+  なし、claim 不可）——§Y1.2 P2（TILT_GT/APERIODICITY_GT）、§Y1.2b（追補
+  F0_CONTROL）、§Y1.3 P3（極性）
+- (b) fixture-only probe（render + 独立 rFFT/回帰 + 実 `Candidate.
+  measure()`、secret 不使用）——§Y1.1 P1 の Grid 実測、および
+  `scratchpad/v15/p4/` の δ 掃引（fixture のみで生成・測定した独立 probe。
+  P1 が実際に消費した holdout 行の realized 値そのものは対象外）
+- (c) コード/契約の読解（`candidates/impl/*.py`・`fixtures/axes.py`・
+  `fixture_spec` 等）
+- (d) 合成 ledger/records によるユニットテスト
+- (e) 非隔離 campaign `RUN10-CAL-20260904-862dec28` の記録済み終端結果
+  （`CAMPAIGN_CLOSED`、6 meter が `NOT_EVALUABLE`・M4 が
+  `DIAGNOSTIC_ONLY`・`debt_discharged=false`）——これが負債の canonical
+  terminal status（§Y4）
+
+隔離 campaign `RUN10-CAL-20260908-2dde4014` の観測（`gate_detail` の
+実測値、holdout 行とその realized 条件、注入 pYIN 値 131.4704/130.7132
+Hz、再現された傾き、FDR0/FNR1/n_neg/n_pos/sanctioned の実測値、
+`resolvable_count=18`、|e| の段差値、`campaign_v13/diag/` の再構成 等）は
+本文中に **evidence-only** として言及することはあっても、要件・判定・
+受け入れ条件の根拠にはしない（該当箇所はその都度「evidence-only」と
+明記する）。
+
+## §Y0. 前提となる設計判断（確定済み。実装で再解釈しない）
+
+Design Memo（RUN10-CAL-v1.4）「前提となる設計判断」節の verbatim 転記。
+
+1. **棄権（abstention）の定義** = 「測定器が測定不能を正しく申告した記録」。**負例側（negative control）でのみ非発火として算入**し、正例・PRIMARY・coverage・margin では従来どおり欠落 = 失敗。棄権を認める組は **freeze 前に preregistration**（registry → `candidate_space`/`selection_rule` の pin に入る）し、C-1 census（P2）で「正例で同じ理由の棄権が 0 件」を実測してから採用する。
+2. **棄権の 2 経路を同一の閉語彙で扱う**: (A) F0 prepass skip（ledger `measurement_missing` reason `F0_UNUSABLE`、record 皆無）と (B) `MeterOutput.missing_reason`（`vocab.MissingReason`、record あり）。round 20 契約「非空 group 内の missing/invalid は無条件失敗」は **「宣言されていない理由の missing / ineligible は失敗」** に狭める（宣言済み理由のみ免責）。
+3. (A) の語彙は `SANCTIONED_ABSTENTIONS = {(SILENCE, F0_UNUSABLE), (NOISE_ONLY, F0_UNUSABLE)}`。根拠（2026-09-09 是正: §Y-0 のとおり隔離 campaign 由来の観測を要件根拠から除去）= (i) 物理: 無声対照（SILENCE/NOISE_ONLY）に基本周波数（F0）は存在しないため、F0 依存候補が prepass で skip するのは構成概念どおりの正しい棄権である。(ii) §Y1.2 P2 census（unarmed `campaign.diagnose --dump-values`）: TILT_GT の F0 依存 12 候補で正例 180/180 が `measured_detected`・`F0_UNUSABLE` 0 件、SILENCE/NOISE_ONLY は 12 候補すべて 3/3 が `F0_UNUSABLE`。PURE_SINE 等には拡張しない。（evidence-only 言及: 隔離 campaign `RUN10-CAL-20260908-2dde4014` の NOISE_ONLY probe 実測——HNR −9.7〜−9.8 dB で正しく非発火した probe と skip した probe が混在していたという観測——は QUARANTINED であり要件根拠には用いない）。
+4. (B) の語彙は **候補ごと**に `Candidate.abstention_reasons: frozenset[MissingReason]`（既定 空）。**訂正（2026-09-09、PR #354 第 6 巡採用: Codex round 6 finding「前提 4 を宣言 6 候補と整合させる」是正）**: v1.4 が `candidates/registry.py` へ実際に宣言したのは `M2A-B0-AUTOCORR-PERIODICITY: {OUTPUT_MISSING}`（`hnr_db_approx` が非有限 = 周期成分なし = 棄権、§Y1.2 census で正例 0/18 が同一理由棄権）に加え、F0_CONTROL family 全 5 候補 `F0-B0-CURRENT` / `F0-PYIN-FRAME2048-HOP256` / `F0-PYIN-FRAME2048-HOP512` / `F0-PYIN-FRAME4096-HOP256` / `F0-PYIN-FRAME4096-HOP512`（いずれも `{OUTPUT_MISSING}`）の **計 6 候補**である。F0_CONTROL 5 件の census は第 1 稿の時点では未実施であり、PR #354 round 3 追補で実施した（§Y1.2b: 正例 12/12 が `measured_detected`・`OUTPUT_MISSING` 0 件、SILENCE 3/3 `OUTPUT_MISSING`）。他候補（HNR_ACF 8 件・HARMONIC_RESIDUAL 12 件）は「正例で同一理由の棄権 0 件」の条件自体は満たすが、負例側に棄権では説明できない実発火（HNR_ACF: NOISE_ONLY 3/3 `measured_detected`、HARMONIC_RESIDUAL: NOISE_ONLY 1/3 `measured_detected`）を持つため宣言しない。D4C_WORLD（3 件）は測定不能（`ineligible=INELIGIBLE_DEPENDENCY_ABSENT`）のため対象外。
+5. **DIRECTIONAL 極性は宣言する**: `Candidate.truth_polarity: Literal[+1, -1]`（construct の変化方向 / truth の変化方向）。`gates._same_nonzero_sign` と `selection_stage.build_candidate_criteria` の tau / reversal は `polarity * delta_output` を使う。既存 `DirectionalPair.correct_sign` は holdout 側で同じ式から再計算する（正本は 1 箇所 = `observables` に `apply_polarity()` を置き両者が呼ぶ。複製禁止）。v1.4 で宣言: `M2A-B0-AUTOCORR-PERIODICITY = -1`（HNR は noise fraction と逆相関）、他の APERIODICITY 候補は construct から機械的に決める（`injected_noise_fraction` 系 = +1、`harmonic_to_noise_ratio` 系 = −1、`world_d4c_aperiodicity` = +1）。宣言と P3 census の tau 符号が矛盾する候補は **宣言せず** `NO_POLARITY` として DIRECTIONAL 不適格（ceiling を DIAGNOSTIC_ONLY に cap）。（根拠 = construct の物理的変化方向 + §Y1.3 P3 census（unarmed `diagnose`、tau 符号一致・矛盾 0 件）。隔離 campaign 由来の観測は用いない。）
+6. **記録の観測性**: `MeterHoldoutResult.gate_detail` に gate 5 の `control_detection`（fdr0 / fnr1 / n_neg / n_pos / min_count_met / negative_control_failures / positive_control_failures / negative_control_sanctioned_abstentions）と `margins_summary`（n, |e| q50/q95/max, |BIAS|, U_GT+U_num, U_rep, U_proc, median E_use, G q95/max）、DIRECTIONAL には `pairs_summary`（resolvable_count, correct_count, reversal_count, kendall_tau, polarity）を **常に**書く。（根拠 = 設計要件そのもの: gate 判定に使った数値が記録に残ること＝記録の自己記述性。evidence-only 言及: 隔離 campaign `RUN10-CAL-20260908-2dde4014` ではこれらの値が gate_detail に欠落していたという観測が動機の一つではあったが、その欠落の実測値自体は要件根拠にはしない——要件根拠は本設計要件それ自体である。）
+7. **正規化 MAE の分母**: `observables.error_terms` の `re = ae / max(|truth|, zero_guard)` は式の性質として真値 0 行で発散する（AE が有限でも分母が 0 に張り付き RE が非有限へ発散し、順位が真値 0 行の絶対誤差だけで決まる縮退を招く）。根拠（2026-09-09 是正）= (i) この式自体の数学的性質、(ii) 凍結行列の TILT が truth 0.0 を含むこと（`fixtures/axes.py` の `TILT_SLOPES_DB_PER_OCT` に `0.0` 水準が宣言済み）。v1.4 は分母の floor を **construct の E_use（absolute mode）** に置換（`re = ae / max(|truth|, E_use)`）。relative mode（F0 の 20 cent）は従来の |truth|（真値 0 なし）。`selection_rule_sha` は変わる（v1.4 preregistration）（訂正 2026-09-09: `selection_rule_sha` は `selection.py` のみを hash するため不変。criteria 構築（`campaign/selection_stage.py`）の変更は manifest `candidates.*_paths_sha256` で pin される — §Y3 / D116 参照）。（evidence-only 言及: 隔離 campaign `RUN10-CAL-20260908-2dde4014` の TILT holdout ではこの縮退が実際に発生し、第 1 順位要素の RE が 2e8〜7e9 へ発散した——この具体値は要件根拠として用いない。QUARANTINED。）
+8. **APERIODICITY の微小段** 0→0.01→0.03→0.1 は Δtruth < 2(U_GT+U_num)=0.128 で構造的に解像不能。根拠 = 凍結行列の水準（`fixtures/axes.py` の APERIODICITY 水準宣言）と宣言済み U 境界（`fixture_spec` の `u_gt_bound`/`u_num_bound`）から機械的に導出した閾値であり、隔離 campaign の観測には依存しない。fixture 水準は凍結行列の一部であり v1.4 では変更しない（文書化のみ。v1.4 doc §Y4「答えていない問い」に登録）。
+9. **TILT 測定器の F0 誤差感度**は **測定器を触る前に P1 で生成器/測定器を切り分ける**。根拠 = §Y1.1 P1 の Grid 実測（生成器は無罪: 全 5 水準 × 2 f0 で `|rendered−truth| ≤ 0.033` dB/oct）+ `scratchpad/v15/p4/` の fixture-only δ 掃引（render + 独立回帰、secret 不使用。IN-MATRIX 53 セル×8 (regressor,window) 組で CURRENT 機構の許容 δ 帯は `[+0,+0]` cent——注入 F0 に僅かでも誤差があれば E_use=2.0 dB/oct を超える。pYIN の量子化グリッド 10 cent・F0 construct 自身の relative 許容 20 cent のいずれよりも 1 桁厳しい）。P1 の結果 = `VERDICT=METER_OFF`（測定器側）。測定器の再設計は v1.5（段階 1 へ戻る、User 承認が必要な meter change）に送る。いずれも v1.4 では実装しない。（evidence-only 言及: 隔離 campaign `RUN10-CAL-20260908-2dde4014` の TILT holdout では |e| が真値 0/−6 で 0.28、−12/−18/−24 で 14.5〜14.9 dB/oct の段差として観測された——この具体値は要件根拠として用いない。QUARANTINED。）
+
+## §Y1. 実測（WP-P、日付 = `date -u` 実測）
+
+WP-P は probe のみで、本番コード（`voice_genesis/` 配下）は一切変更していない
+（`campaigns/**`・`~/.vg_cal/` も無変更）。生データは scratchpad
+`v14/p1/`・`v14/p23/`（+ `v15/p4/`、premise 9 の δ 掃引）に保存済み。
+実行日時は各 probe スクリプトの `date -u` 実測（P1: 2026-09-09T07:30:32Z、
+P2/P3: 2026-09-09 07:28 UTC、P4: 2026-09-09、`v15/p4/p4_run.log` 参照）。
+
+### §Y1.1 P1 — TILT 段差誤差の生成器 vs 測定器 切り分け
+
+**判定: `VERDICT = METER_OFF`**（`scratchpad/v14/p1/p1_report.txt` §0）。
+**根拠は Grid 10 セル実測（本節、fixture のみ）+ §Y1.1c P4 δ 掃引（fixture
+のみ）に限る**——隔離 campaign `RUN10-CAL-20260908-2dde4014` の holdout
+再現（§Y1.1b）は evidence-only であり本判定の根拠には用いない
+（2026-09-09 是正、§Y-0 参照）。
+
+生成器（`fixtures/generators/tilt.py` + `common.finalize`）は無罪:
+全 5 水準 × 2 f0（grid 10 セル）のいずれも `|rendered_slope − truth| ≤
+0.033` dB/oct（判定閾値 ±0.5 の 1/15 以下）。測定器は truth F0 を渡す限り
+正しい（12 候補すべて `|measured − rendered| ≤ 0.03` dB/oct）。§Y1.1c の
+P4 δ 掃引が示すとおり、測定器（`tilt_harmonic.py`）は注入 F0 に僅かな
+相対誤差 δ が入るだけで急峻に破綻する（IN-MATRIX 53 セルでの CURRENT
+機構の許容 δ 帯は `[+0,+0]` cent）——「測定器」側の欠陥である。
+
+**Grid 10 セル**（`sr 48000 / dur 2.0 s / gain −12 dBFS / noise_clean /
+context steady-isolated / f0_meter = truth f0`。`harmonics_kept` は独立測定
+= 1..8、全セルで floor+20 dB 条件と `k·f0<0.45·sr` 条件を満たす。値は
+`p1_table_combined.csv` より verbatim）:
+
+| case | truth | rendered_slope | harmonics_kept | OLS-K4-BH (measured) | e = OLS4−truth | TS-K6-BH (measured) | e = TS6−truth |
+|---|---:|---:|---|---:|---:|---:|---:|
+| GRID_s0_f130.813 | 0.0 | −0.0251 | 1..8 | −0.0015 | −0.0015 | −0.0029 | −0.0029 |
+| GRID_s0_f391.995 | 0.0 | 0.0028 | 1..8 | 0.0001 | 0.0001 | 0.0001 | 0.0001 |
+| GRID_s-6_f130.813 | −6.0 | −6.0251 | 1..8 | −6.0013 | −0.0013 | −6.0026 | −0.0026 |
+| GRID_s-6_f391.995 | −6.0 | −5.9972 | 1..8 | −5.9999 | 0.0001 | −5.9999 | 0.0001 |
+| GRID_s-12_f130.813 | −12.0 | −12.0250 | 1..8 | −12.0013 | −0.0013 | −12.0027 | −0.0027 |
+| GRID_s-12_f391.995 | −12.0 | −11.9972 | 1..8 | −11.9999 | 0.0001 | −11.9999 | 0.0001 |
+| GRID_s-18_f130.813 | −18.0 | −18.0253 | 1..8 | −18.0013 | −0.0013 | −18.0024 | −0.0024 |
+| GRID_s-18_f391.995 | −18.0 | −17.9973 | 1..8 | −17.9999 | 0.0001 | −17.9999 | 0.0001 |
+| GRID_s-24_f130.813 | −24.0 | −24.0248 | 1..8 | −24.0009 | −0.0009 | −24.0030 | −0.0030 |
+| GRID_s-24_f391.995 | −24.0 | −23.9988 | 1..8 | −24.0000 | 0.0000 | −23.9999 | 0.0001 |
+
+### §Y1.1c P4 — 注入 F0 誤差 δ 掃引（fixture のみ、`scratchpad/v15/p4/`）
+
+fixture-only probe（`fixtures.determinism.render_row_pcm_hex` で render、
+候補 `tilt_harmonic` の窓/回帰経路を逐語複製した独立ハーネスで測定。
+secret 不使用。健全性ゲート = 複製経路と実候補 `resolve_measure_callable`
+の出力が全セル×2 窓で `|Δ| ≤ 1e-9` 一致——`p4_gate.txt`）。セルは
+GRID 40（truth {0,−6,−12,−18,−24}×f0{130.813,391.995}×sr{44100,48000}×
+dur{1.0,2.0}、clean）+ NOISY 3（TILT_GT ノイズ行、SNR 40/20/10）+
+STRESS 4（probe 追加、truth −24×SNR{20,10}×f0{130.8,392.0}）の
+IN-MATRIX 53 セル（`p4_summary.txt` §7 が正）。δ ∈
+`[-50,-20,-10,-8.68,-5,-2,-1.32,0,1.32,2,5,8.68,10,20,50]` cent
+（±8.68/±1.32 = 10 cent グリッドの量子化幅、±10 = pYIN グリッド、
+±20 = F0 construct 自身の relative 許容——いずれも構成の宣言値であり
+隔離 campaign の実測値ではない）。判定閾値 = E_use 2.0 dB/oct。
+
+**主判定**（IN-MATRIX 53 セル、8 (regressor,window) 組の最大 |e| [dB/oct]、
+`p4_summary.txt` §7 より verbatim）:
+
+| mechanism（現行 = CURRENT） | δ=0 | ±8.68 | ±10 | ±20 | ±50 | ±100 | 許容帯（全 8 組の共通部分） |
+|---|---:|---:|---:|---:|---:|---:|---|
+| CURRENT | 0.29 | 59.68 | 56.50 | 58.07 | 36.43 | 42.80 | `[+0, +0]` cent |
+
+CURRENT 機構（v1.4 時点の実装）は δ=0 でのみ E_use を満たし、テスト対象の
+最小非零 δ（±1.32 cent、pYIN の量子化格子幅）でも複数セルが破綻する
+（`p4_summary.txt` §3「失敗モード」: core 帯 |δ|≤50 のみで 5146/15048 行が
+違反）。F0 construct 自身の宣言許容（relative mode 20 cent）・pYIN の
+量子化グリッド（10 cent）のいずれと比べても、測定器が実際に耐えられる
+δ 帯は 1 桁以上狭い。P4 は代替機構（局所ピーク探索・注入 F0 の局所精密化）
+の比較まで行っているが、**それらの採否は v1.5 のスコープであり v1.4 では
+実装しない**（本節は P1 の `METER_OFF` 判定を fixture のみで補強する
+目的にのみ引用する）。
+
+### §Y1.1b（隔離 campaign 由来 — evidence-only、判定根拠に用いない）
+
+以下は隔離 campaign `RUN10-CAL-20260908-2dde4014` が実際に注入した F0 を
+用いた再現実験であり、**§Y1.1 の `METER_OFF` 判定の根拠には用いない**
+（2026-09-09 是正、§Y-0 参照）。史料として本文に残す。
+
+**Holdout 10 行（注入 F0 の再現実験、evidence-only）**: campaign が実際に注入した
+realized F0（2 値: `131.4704 Hz` = truth 130.813 の +8.68 cent、8 行 /
+`130.7132 Hz` = truth 130.813 の −1.32 cent、2 行）を測定器に渡した結果
+（`p1_mechanism.json` より。`harmonics_kept` = 独立測定 1..8。OLS-K4-BH は
+`candidates_f0_injected` を、TS-K6-BH は `campaign_measured_TS_K6_BH` /
+`candidates_f0_injected` を丸め3桁で転記。`e` は `measured − truth`）:
+
+| row_id | truth | f0_injected | Δf0 | rendered_slope | harmonics_kept | OLS-K4-BH | e(OLS4) | TS-K6-BH | e(TS6) |
+|---|---:|---:|---:|---:|---|---:|---:|---:|---:|
+| f0c4078c24 | −12.0 | 131.4704 | +8.68c | −12.025 | 1..8 | −51.507 | −39.507 | −55.461 | −43.461 |
+| 13755ada0b | −12.0 | 131.4704 | +8.68c | −12.033 | 1..8 | −21.083 | −9.083 | −34.644 | −22.644 |
+| dddefcf0a5 | −24.0 | 131.4704 | +8.68c | −23.980 | 1..8 | −30.099 | −6.099 | −38.929 | −14.929 |
+| a83a036f14 | −12.0 | 131.4704 | +8.68c | −11.981 | 1..8 | −18.104 | −6.104 | −26.486 | −14.486 |
+| ead18ea829 | −12.0 | 131.4704 | +8.68c | −11.981 | 1..8 | −18.104 | −6.104 | −26.486 | −14.486 |
+| e4040707df | −18.0 | 131.4704 | +8.68c | −17.980 | 1..8 | −24.103 | −6.103 | −32.485 | −14.485 |
+| 9e117940c0 | −12.0 | 131.4704 | +8.68c | −11.981 | 1..8 | −18.104 | −6.104 | −26.481 | −14.481 |
+| 2ba19d8bce (\*) | −12.0 | 131.4704 | +8.68c | −11.968 | 1..8 | −17.745 | −5.745 | −24.703 | −12.703 |
+| c405c64eb1 | −6.0 | 130.7132 | −1.32c | −5.981 | 1..8 | −6.124 | −0.124 | −6.281 | −0.281 |
+| c2b8725cd8 | 0.0 | 130.7132 | −1.32c | 0.019 | 1..8 | −0.124 | −0.124 | −0.281 | −0.281 |
+
+（\*) `2ba19d8bce` のみ `noise_clean=False`（SNR 20 dB）。probe は
+`render_root_secret` を持たないため実現ノイズが異なる——campaign 側の
+probe 分散 `[-23.502, -25.727]`（`campaign_measured_TS_K6_BH` 5 probe）の
+内側であり再現とみなす（`p1_report.txt` §3）。他 9 行は clean = RNG 不使用
+のため波形が bit 一致し、`campaign_measured` と `candidates_f0_injected` は
+小数第 3 位まで一致する。
+
+**f0 感度掃引の要約（evidence-only）**（`p1_f0_sensitivity.csv`。隔離
+campaign の realized holdout 行 `a83a036f14`/`f0c4078c24` の条件
+（sr/dur/truth）で `f0_meter` を ±30 cent 掃引し、`|e| ≤ E_use = 2.0`
+dB/oct に収まる帯を測ったもの——行の選び方が隔離 campaign の holdout に
+紐づくため本表も evidence-only とし、§Y1.1 判定の根拠には用いない。
+判定根拠となる δ 掃引は §Y1.1c の P4（fixture のみ、行選定が隔離
+campaign に依存しない）を参照）:
+
+- `a83a036f14`（44.1 kHz / 1.0 s）: K4-BH ±4 cent、他 10 候補 ±2 cent、
+  TS-K8-HANN は `[−2, +1]` cent。OLS-K6-BH 参考値: −4c → −14.12、
+  −2c → −12.54、0 → −11.99、+2c → −12.54、+4c → −14.18、+8.7c → −23.99。
+- `f0c4078c24`（48 kHz / 2.0 s）: K4-BH / TS-K4-BH ±2 cent、他 ±1 cent、
+  TS-K8-HANN は `[0, +1]` cent。OLS-K6-BH 参考値: −2c → −14.19、
+  0 → −12.00、+2c → −14.16、+4c → −21.75。
+- → 参考値としては TILT 測定器の実効 F0 許容誤差が ±1〜2 cent 程度に
+  収まる（§Y1.1c の P4 主判定と整合する傾向）が、この具体値自体は
+  §Y1.1 判定の根拠にはしない。
+
+### §Y1.1d 機構分析（コード読解、fixture 非依存 — 判定根拠に用いる）
+
+`candidates/impl/tilt_harmonic.py::harmonic_amplitudes_db` は
+`target_bin = round(k·f0/bin_hz)` で決まる固定 bin を**ピーク探索せずに**
+読む。注入 F0 に相対誤差 δ があると k 次倍音の周波数ずれは `k·δ·f0`
+[Hz] で **k に比例して増大**する一方、窓のメインローブ幅は `sr/L`
+（L=分析長）で固定である。高次ほど窓のサイドローブを読み、k 依存の
+余分な減衰が乗って傾きが過剰に負へ倒れる。同じ相対誤差 δ でも frame 長
+（周波数分解能。`sr/L` が小さいほど同じ Hz 誤差が相対的に大きな bin 数の
+ずれになる）が長いほど誤差が増大する——§Y1.1c の P4 δ 掃引（fixture の
+みで sr∈{44100,48000}/dur∈{1.0,2.0} を格子的に掃引したもの）がこの
+frame 長依存を裏付ける。**E_use（絶対誤差 2.0 dB/oct）を満たすのは
+（P4 実測で）δ=0 のみ**であり、F0 construct の 20 cent 許容・pYIN の
+10 cent グリッドのいずれよりも測定器の実効許容は 1 桁以上厳しい。
+
+### §Y1.2 P2 — 棄権 census（`scratchpad/v14/p23/p23_report.txt`）
+
+**TILT_GT**（F0 依存 harmonic 12 候補、`--f0-candidate F0-PYIN-FRAME2048-HOP512`）:
+
+- 正例（TRUTH_CORE 5 水準 × 3 probe = 15 cell/候補 × 12 候補）:
+  **180/180 が `measured_detected`**。`F0_UNUSABLE`/`missing_reason`/
+  `ineligible` はいずれも 0 件（abstention 総数 = 0/180）。
+- SILENCE: 12 候補すべて **3/3 が `F0_UNUSABLE`**（prepass skip）。
+- NOISE_ONLY: 12 候補すべて **3/3 が `F0_UNUSABLE`**（本 census の
+  probe 分布では 3 本とも skip。2dde4014 実測とは probe 分布が異なるが
+  「NOISE_ONLY で発火した cell は 0」という結論は一致——§5.5 注記 (b)）。
+
+**APERIODICITY_GT**（全 24 候補）:
+
+- `M2A-B0-AUTOCORR-PERIODICITY`: 正例 18/18 が `measured_detected`
+  （**AUTOCORR positives 18/18**）。負例は SILENCE 3/3・NOISE_ONLY 3/3が
+  すべて `missing_reason=OUTPUT_MISSING`（**negatives 6/6 OUTPUT_MISSING**、
+  `hnr_db_approx` が非有限 = 周期成分なし）。confound 18/18 も measured。
+- HNR_ACF 系 8 候補（情報のみ・v1.4 は宣言しない）: 正例 18/18 measured、
+  `OUTPUT_MISSING` 0。ただし **NOISE_ONLY は 3/3 が measured かつ detected**
+  （`hnr_db` ≈ −9.18〜−10.72 dB。predicate 無しのため「有限値=発火」）
+  → diagnose verdict `FAIL_NEGATIVE`。棄権宣言では救われない。
+- HARMONIC_RESIDUAL 系 12 候補（情報のみ）: 正例 18/18 measured、
+  `OUTPUT_MISSING` 0。負例は SILENCE 3/3 `F0_UNUSABLE`、NOISE_ONLY は
+  2/3 `F0_UNUSABLE` + 1/3 measured&detected（`residual_fraction` ≈
+  0.990〜0.998）→ `FAIL_NEGATIVE`。必要な語彙は `OUTPUT_MISSING` ではなく
+  `(NOISE_ONLY, F0_UNUSABLE)`（前提 3 側）だが、残り 1 probe の実発火が
+  あるため棄権化しても `FAIL_NEGATIVE` は消えない。
+- D4C_WORLD 系 3 候補（情報のみ）: 正例 18/18 が
+  `ineligible=INELIGIBLE_DEPENDENCY_ABSENT`（pyworld 未導入）。
+  `OUTPUT_MISSING` は 0 件だが測定が成立していないため
+  `NOT_MEASURABLE(dependency_absent)`。
+
+**判定**:
+
+- **前提 3（`(NOISE_ONLY, F0_UNUSABLE)` の採用条件）= PASS**
+  （TILT_GT F0 依存 12 候補、正例で `F0_UNUSABLE` 0/180）。
+- **前提 4（`M2A-B0-AUTOCORR-PERIODICITY: {OUTPUT_MISSING}` の宣言条件）
+  = PASS**（正例 18/18 で `OUTPUT_MISSING` 0 件）。
+
+#### §Y1.2b F0_CONTROL 棄権 census（追補、`scratchpad/v14/p2f0/p2f0_report.txt`、2026-09-09）
+
+第 1 稿の P2 census は TILT_GT と APERIODICITY_GT のみを対象とし、
+**F0_CONTROL family を一度も census していなかった**（→ §Y4「答えた問い」
+の記録欠陥 3）。そのため F0 候補は 1 件も `abstention_reasons` を宣言せず、
+PR #354 round 3 で新設した selection fail filter
+`negative_control_undeclared_missing` が本番 C3a で F0 family 全件を
+偽失敗させる経路が開いていた。本追補はその census を実施したものである。
+
+実行: `python3 -m voice_genesis.calibration.campaign.diagnose --family
+F0_CONTROL --dump-values --repeats 3 --max-cells 30`（1 invocation・91.3 s。
+F0_CONTROL は F0 依存候補を含まないため `f0_prepass: "not_applicable"`、
+掃引は起きない）。cell = 1 row × 1 probe × 1 候補。正例（TRUTH_CORE）4 行
+× 3 probe = 12 cell/候補、confound 18 行 × 3 = 54 cell/候補、負例は
+SILENCE / NOISE_ONLY / TOO_SHORT 各 1 行 × 3 probe = 3 cell/候補。
+
+| candidate | 正例 12 | confound 54 | SILENCE 3 | NOISE_ONLY 3 | TOO_SHORT 3 | verdict | 宣言 |
+|---|---|---|---|---|---|---|---|
+| `F0-B0-CURRENT` | det 12 / OM 0 / other 0 | det 54 / OM 0 | OM 3 | OM 3 | **det 3** | FAIL_NEGATIVE | **宣言** |
+| `F0-PYIN-FRAME2048-HOP256` | det 12 / OM 0 / other 0 | det 54 / OM 0 | OM 3 | OM 3 | OM 3 | PASS | **宣言** |
+| `F0-PYIN-FRAME2048-HOP512` | det 12 / OM 0 / other 0 | det 54 / OM 0 | OM 3 | **det 2** / OM 1 | OM 3 | FAIL_NEGATIVE | **宣言** |
+| `F0-PYIN-FRAME4096-HOP256` | det 12 / OM 0 / other 0 | det 54 / OM 0 | OM 3 | **det 2** / OM 1 | OM 3 | FAIL_NEGATIVE | **宣言** |
+| `F0-PYIN-FRAME4096-HOP512` | det 12 / OM 0 / other 0 | det 54 / OM 0 | OM 3 | **det 1** / OM 2 | OM 3 | FAIL_NEGATIVE | **宣言** |
+
+（det = `measured_detected`、OM = `missing_reason=OUTPUT_MISSING`。
+`ineligible` と `f0_unusable_prepass_skip` は全候補・全 class で 0 件。）
+
+**判定 = 前提 4 の宣言条件を 5 候補全件が満たす（PASS）**: 正例
+12/12 が measured&detected で `OUTPUT_MISSING` 0 件（confound 54/54 も
+同様に 0 件）、かつ SILENCE は 5 候補すべて 3/3 が `OUTPUT_MISSING`。
+非宣言に留める候補は **0 件**。
+
+物理的根拠: 無声対照（SILENCE / NOISE_ONLY / TOO_SHORT）に基本周波数は
+存在しない。F0 推定器が有声フレームを 1 本も見つけずに `OUTPUT_MISSING`
+を返すのは、誤検出でも実装欠陥でもなく構成概念どおりの正しい非検出である
+（registry の `missing_rule` =「全フレーム無声/推定失敗 → OUTPUT_MISSING
+（縮退代入なし）」の負例側の現れ方そのもの）。実装位置:
+`candidates/impl/f0_pyin.py` L40-41（`voiced.size == 0` → `NaN`）→
+L49-50（`not np.isfinite(f0)` → `MeterOutput(missing_reason=
+OUTPUT_MISSING)`）、および L28-30（`len(y) < frame_length` → `NaN`。
+TOO_SHORT 行の 3/3 `OUTPUT_MISSING` はこの経路）。B0 側は
+`candidates/impl/b0_wrappers.py` L62-64（`estimate_f0_hps` の非有限 →
+同じ `OUTPUT_MISSING`）。
+
+**宣言が救わないもの（境界の明示）**: 本宣言は経路 (B)（棄権）にのみ効き、
+`negative_control_false_fire`（実発火）とは無関係である。上表の太字
+——`F0-B0-CURRENT` の TOO_SHORT 3/3 発火、pyin 3 候補の NOISE_ONLY
+1〜2/3 発火——は宣言後も失敗として算入されたままであり、diagnose verdict
+`FAIL_NEGATIVE` も変わらない（唯一 `F0-PYIN-FRAME2048-HOP256` のみ
+PASS）。本追補は「正しい非検出を偽失敗にしない」ことだけを行う。
+
+### §Y1.3 P3 — 極性 census（APERIODICITY_GT、正例/TRUTH_CORE セル）
+
+| candidate（代表） | construct | declared | tau | n | consistent |
+|---|---|---:|---:|---:|---|
+| `M2A-B0-AUTOCORR-PERIODICITY` + HNR_ACF 系 8 件（計 9） | `harmonic_to_noise_ratio` | −1 | −0.9487 | 18 | Y |
+| `M2A-HARMONIC-RESIDUAL-*` 12 件 | `injected_noise_fraction` | +1 | +0.9487 | 18 | Y |
+| `M2A-D4C-BAND-*` 3 件 | `world_d4c_aperiodicity` | +1 | None（measured cell 0） | 0 | NA |
+
+（全 24 候補の内訳は `p23_report.txt` §4 の P3 表が正。tau は 6 truth 水準
+`{0.0, 0.01, 0.03, 0.1, 0.3, 0.6}` 上の Kendall tau-b、`M2A-B0-AUTOCORR-
+PERIODICITY` の `(truth, hnr_db)` sanity 表は同 report §4 末尾。）
+
+**判定: 矛盾 0、D4C は NA（pyworld 不在）。`NO_POLARITY` に落ちる候補は
+本 census の範囲では 0 件**（ただし v1.4 が実際に registry へ宣言したのは
+APERIODICITY_GT の 3 algorithm family のみ——他 meter の DIRECTIONAL 候補は
+§Y2 のとおり `truth_polarity` 未宣言のまま `NO_POLARITY` で cap される）。
+
+## §Y2. 棄権と極性の preregistration
+
+**棄権語彙（経路 A、`fixtures.controls.SANCTIONED_ABSTENTIONS`、閉語彙）**:
+
+```
+SANCTIONED_ABSTENTIONS = {
+    (ControlClass.SILENCE,     "F0_UNUSABLE"),
+    (ControlClass.NOISE_ONLY,  "F0_UNUSABLE"),
+}
+```
+
+（v1.2 の 1 組から v1.4 で 2 組へ拡張。根拠 = §Y1.2 前提 3 PASS。追加は
+次 revision の preregistration 経由のみ。)
+
+**棄権語彙（経路 B、`Candidate.abstention_reasons`、候補ごと）**:
+v1.4 で宣言するのは以下の **6 候補**（`{OUTPUT_MISSING}`、いずれも census
+根拠つき）:
+
+| candidate | meter | 根拠 | 正例の同一理由棄権 |
+|---|---|---|---:|
+| `M2A-B0-AUTOCORR-PERIODICITY` | M2_APERIODICITY | §Y1.2 前提 4 PASS | 0/18 |
+| `F0-B0-CURRENT` | F0_CONTROL | §Y1.2b（round 3 追補） | 0/12 |
+| `F0-PYIN-FRAME2048-HOP256` | F0_CONTROL | §Y1.2b（round 3 追補） | 0/12 |
+| `F0-PYIN-FRAME2048-HOP512` | F0_CONTROL | §Y1.2b（round 3 追補） | 0/12 |
+| `F0-PYIN-FRAME4096-HOP256` | F0_CONTROL | §Y1.2b（round 3 追補） | 0/12 |
+| `F0-PYIN-FRAME4096-HOP512` | F0_CONTROL | §Y1.2b（round 3 追補） | 0/12 |
+
+F0_CONTROL 5 件は **PR #354 round 3 追補**（2026-09-09）で追加した。
+第 1 稿は F0 family を census しておらず、round 3 で新設した selection
+fail filter `negative_control_undeclared_missing` が「宣言のない負例欠落」
+を無条件失敗とするため、本番 C3a が F0 family 全件を偽失敗させる経路が
+開いていた（§Y1.2b / §Y4 記録欠陥 3）。census 上 **非宣言に留める F0 候補は
+0 件**。**PR #354 round 2 finding #3
+是正**: 他の APERIODICITY_GT 候補（HNR_ACF 8 件・HARMONIC_RESIDUAL 12 件）
+は「正例で同一理由の棄権 0 件」の条件自体は満たす（§Y1.2: 両系列とも
+正例 18/18 measured・`OUTPUT_MISSING` 0 件）——**宣言しない理由はそこでは
+なく**、負例側が経路 B の棄権では説明できない実発火を持つため:
+HNR_ACF は NOISE_ONLY 3/3 が `measured_detected`（`hnr_db` ≈
+−9.18〜−10.72 dB）、HARMONIC_RESIDUAL は NOISE_ONLY 1/3 が
+`measured_detected`（`residual_fraction` ≈ 0.990〜0.998。残り 2/3 は
+経路 A `(NOISE_ONLY, F0_UNUSABLE)` で説明できる F0-prepass skip）。
+どちらも棄権宣言が記述すべき「候補レベルの棄権事象」自体が発生して
+いない実測（診断 verdict は `FAIL_NEGATIVE`）であり、宣言しても
+救われない（§Y1.2 参照）。D4C_WORLD（3 件）は測定不能
+（`ineligible=INELIGIBLE_DEPENDENCY_ABSENT`）のため対象外。
+
+**規則文（`fixtures.controls.abstained(output, candidate)`が正本）**:
+`output.missing_reason in candidate.abstention_reasons and not
+output.ineligible` のときのみ「正しい棄権」。round 20 契約「非空 group
+内の missing/invalid は無条件失敗」は**「宣言されていない理由の missing /
+ineligible は失敗」**へ狭める（宣言済み理由のみ免責）。**負例側
+（negative control）でのみ非発火として算入**し、正例・PRIMARY・coverage・
+margin では従来どおり欠落=失敗のまま——棄権が認められる組は必ず
+freeze 前に preregistration（registry → `candidate_space`/`selection_rule`
+の pin に入る）し、C-1 census（P2）で「正例で同じ理由の棄権が 0 件」を
+実測してから採用する。
+
+**User 裁定（2026-09-09）**: 前提 3（`(NOISE_ONLY, F0_UNUSABLE)` の棄権化）
+と前提 4（`M2A-B0-AUTOCORR-PERIODICITY` の `OUTPUT_MISSING` 棄権宣言）は
+**User 責任で承認**（「2についてはユーザー責任で承認します」）。採用条件
+（P2 census で正例の棄権 0 件）は維持し、実測（§Y1.2）で満たすことを
+確認したうえで実装した。
+
+**極性宣言（`Candidate.truth_polarity`、APERIODICITY_GT のみ）**:
+
+| candidate group | construct | truth_polarity | P3 census |
+|---|---|---:|---|
+| `M2A-B0-AUTOCORR-PERIODICITY`（1 件） | `harmonic_to_noise_ratio` | −1 | tau=−0.9487, consistent |
+| `M2A-HNR-ACF-*`（8 件） | `harmonic_to_noise_ratio` | −1 | tau=−0.9487, consistent |
+| `M2A-HARMONIC-RESIDUAL-*`（12 件） | `injected_noise_fraction` | +1 | tau=+0.9487, consistent |
+| `M2A-D4C-BAND-*`（3 件） | `world_d4c_aperiodicity` | +1 | NA（pyworld 不在。実測未検証、construct 物理からの機械的宣言を維持） |
+
+正本は `observables.apply_polarity(delta_output, polarity)` の 1 箇所
+（`selection_stage.build_candidate_criteria` の tau/reversal と
+`holdout_stage.build_directional_gate_inputs` の `delta_output`/
+`correct_sign` が両方これを呼ぶ。`gates.py` 自体は無改変——極性は入力側で
+適用する）。
+
+**pin 箇所の注記**（`abstention_reasons`/`truth_polarity` 共通）: 両宣言は
+`selection_stage.candidate_space_sha()` の payload に含まれ、
+`kind="candidate_space"`/`artifact_sha=candidate_space_sha()` の ledger
+event として記帳される（`selection_frozen.candidate_space_sha` フィールドは
+この event の `entry_sha` を参照——unseal 5-sha 契約は `artifact_sha` ではなく
+`entry_sha` を使う、`selection_stage.py` モジュール docstring 参照）。**凍結
+manifest の `candidates` セクション**（`c0_freeze._path_hash_maps()`）は
+path+hash のみを保持し宣言値そのものは含まない別軸の pin（コード改変検知用、
+§Y3「正規化 MAE `truth_floor`」の `candidates.*_paths_sha256` と同じ仕組み）
+——両者を混同しないこと。
+
+**`NO_POLARITY` cap とその波及**: `truth_polarity is None` の DIRECTIONAL
+候補は `claim_scope_report()` で `DIAGNOSTIC_ONLY` へ cap される
+（`cap_reason="NO_POLARITY"`）。v1.4 は APERIODICITY_GT の 3 algorithm
+family（計 24 候補）にしか極性を宣言していないため、**M5_TRANSITION
+（7 候補）と M6_IDENTITY（2 候補）の DIRECTIONAL 候補は全て
+`NO_POLARITY` で `DIAGNOSTIC_ONLY` に cap される**——これは v1.4 の
+claim ceiling の実質的な縮小であり、次 revision で極性を宣言するまで
+系全体に及ぶ副作用である（§Y4「答えていない問い」に登録）。
+
+## §Y3. 記録欠陥の是正
+
+**`gate_detail` 3 ブロック**（`MeterHoldoutResult.gate_detail`、ABSOLUTE/
+DIRECTIONAL とも常に書く。値は `campaign/holdout_stage.py` の
+`control_detection_summary()`/`margins_summary()`/`pairs_summary()` が
+生成する JSON-serializable な素通し会計であり、いずれも判定は行わない）:
+
+- `control_detection`（ABSOLUTE/DIRECTIONAL 共通形状）: `fdr0`, `fnr1`,
+  `n_neg`, `n_pos`, `min_count_met`, `negative_control_failures`,
+  `positive_control_failures`, `negative_control_sanctioned_abstentions`。
+- `margins_summary`（ABSOLUTE のみ）: `n`, `ae_q50`, `ae_q95`, `ae_max`,
+  `abs_bias`（=|BIAS|）, `u_gt_plus_u_num`, `u_rep`, `u_proc`,
+  `e_use_median`, `g_q95`, `g_max`（`gates.AbsoluteGateResult.g_values`
+  由来。gate2'/gate_max' の判定量そのもの）。
+- `pairs_summary`（DIRECTIONAL のみ）: `resolvable_count`（`gates.
+  DirectionalGateResult.resolvable_count` を転記）, `correct_count`,
+  `reversal_count`（`DirectionalPair.correct_sign`、極性適用済みの単純
+  カウント——`gates.directional_gates()` の resolvability 閾値判定の
+  再実装ではない）, `kendall_tau`（記録専用、PASS 判定には使わない）,
+  `polarity`（`Candidate.truth_polarity`）。
+
+**正規化 MAE の `truth_floor`**: `observables.error_terms(m, truth,
+zero_guard, *, truth_floor=None)` の `RE = AE / max(|truth|, truth_floor
+if truth_floor is not None else zero_guard)`。`truth_floor` は construct
+の **E_use（absolute mode・有限正値）** を渡す（`selection_stage.
+truth_floor_for_candidate()` が正本。relative mode の construct・
+E_use 未定義の construct・一致行なしは `None` = 従来の `zero_guard` 挙動、
+bit-for-bit 不変。**PR #354 round 2 finding #1 是正**: 一致行が
+`e_use_mode == "absolute"` かつ値が宣言されている（`e_use_value is not
+None`）のにその値が非有限/非正の場合は、もはや `None`→`zero_guard` へ
+静かにフォールバックしない——`ZeroDivisionError` を招く縮退経路だった
+ため、`e_use_table.finite_positive_or_none()` で判定し `StaleEUseTable
+Error` を送出して fail-closed する（round 1 finding #1 の stale/mutated
+pin と同じ「宣言されたが使えない値」扱い）。「値が一致行に存在しない/
+relative/UNJUSTIFIED」は本節の対象外のまま `None` を返す）。
+**`selection_rule_sha()` は `voice_genesis/calibration/
+selection.py` のみをハッシュする別モジュールであり、本変更が実際に
+生きる `campaign/selection_stage.py`（criteria builder）はここに含まれ
+ない**（WP-A block 6 deviation 2）。この面は manifest の
+`candidates.*_paths_sha256`（`meter_implementation_paths_sha256` 等、
+`c0_freeze.py`/`c0_validate.py` が pin する path+hash マップ）が
+`campaign/selection_stage.py` を独立に被覆しており、変更検知の欠落は
+ない。
+
+**selection 側の deviation（audit-only key）— PR #354 round 3 finding #1
+採用（2026-09-09）で上書き**: memo は holdout 側の round 20 相当の
+「非宣言理由は無条件失敗」契約を selection 側にも適用するよう読めたが、
+WP-A 時点の `selection_stage` はそもそも round-20 型の契約を持たず
+（`neg_detections` は常に `fixtures.controls.detected()` ベースで
+missing/invalid を無条件に非発火とみなす——holdout 固有の契約とは別物）、
+文字どおり適用すると当時の既存テストが割れたため（WP-A block 3
+deviation）、`candidate_fail_filter_report()` へ **audit-only** の
+`negative_control_declared_abstentions`（`FAIL_FILTER_NAMES` に非含有、
+eligibility に無影響）を追加するに留めていた——fire/non-fire の判定
+ロジックは byte-for-byte 不変のままだった。
+
+round 3 是正: この deviation はホールドアウトとの不整合（同じ「宣言
+されていない missing/ineligible な負例 record」が holdout では
+`_negative_fired()` 経由で失敗、selection では eligible のまま）を
+放置する結果になっていたため、独立 fail filter
+`negative_control_undeclared_missing`（`FAIL_FILTER_NAMES` に追加、
+`negative_control_false_fire` へは fold しない）を新設し、holdout の
+`_negative_fired()` v1.4 経路 (B) と同一の述語（`fixtures.controls.
+abstained()`、正本 1 箇所）を `(row_id, probe_index)` instance 単位で
+selection 側にも適用する形で本 deviation を解消した（実装は
+`campaign/selection_stage.candidate_fail_filter_report()` docstring
+「round 3 是正」パラグラフが正）。既存の 6 テストのうち、この deviation
+を前提にしていたものは新しい fire/non-fire 判定に合わせて更新済み
+（詳細はコミット本文）。`negative_control_declared_abstentions`
+（audit-only）自体は新 filter の入力の可視化として引き続き残す
+（削除しない——冗長ではなく、新 filter が「宣言済みなら non-failure」と
+判定した record 件数の内訳を示す）。
+
+**round 5 finding #1 是正（2026-09-09）**: round 3 実装時、この audit-only
+カウンタ自体はゼロ許容母集団 `negative_control_row_ids` のみを対象に数えて
+おり、`negative_control_undeclared_missing` 本体の母集団 `declared_
+negative_row_ids`（`negative_control_row_ids` ∪ `noise_only_control_
+row_ids`）と揃っていなかった——C3a (`f0_selection_frozen.fail_filter_
+reports[*]`) が NOISE_ONLY 行上の宣言済み `OUTPUT_MISSING`（F0 census が
+示す pYIN 系候補の実態）を undercount する provenance バグ。母集団を
+`declared_negative_row_ids` に揃えて是正（`negative_control_undeclared_
+missing` 自体の判定は当初から同じ母集団だったため無変更）。
+
+**diagnose schema 0.4 census**: `campaign/diagnose.py::SCHEMA =
+"diagnose/0.4"`。`--dump-values` は候補ごとに `census`
+（`_census_block()`: `n_cells`/`measured_detected`/
+`measured_not_detected`/`f0_unusable_prepass_skip`/`missing_reason`
+（理由別件数）/`ineligible` を control class / `"positive"` /
+`"confound"` ごとに集計。P2 census が使った語彙をそのまま内製化）と、
+DIRECTIONAL 候補の `kendall_tau_sign`（`_kendall_tau_sign()`。P3 census と
+同じ Kendall tau-b の符号、`None`/`+1`/`-1`）を追加する。非 `--dump-values`
+の report 形状（verdict/fire rates）は不変。
+
+**diagnose schema 0.5（PR #354 round 5 finding #2 是正、2026-09-09）**:
+`evaluate_candidate()` は `detected()` が missing_reason/ineligible な負例
+record を宣言の有無に関わらず非発火へ写像することを利用して、未宣言の
+欠落・ineligible が `census` に現れつつ `verdict="PASS"` を返す穴を
+持っていた（selection 側 round 3 是正と対になる diagnose 側の同型穴）。
+`fixtures.controls.abstained()` で宣言/未宣言を弁別し、1 件でも未宣言なら
+`verdict="FAIL_NEGATIVE"`, `verdict_reason="UNDECLARED_NEGATIVE_MISS"`
+（`campaign/diagnose.py::SCHEMA = "diagnose/0.5"`）。closed verdict
+vocabulary（PASS/FAIL_POSITIVE/FAIL_NEGATIVE/NO_CEILING/NOT_EVALUABLE）は
+不変——`verdict_reason` が FAIL_NEGATIVE でも非 `None` になり得る点のみ
+report 形状が変わる。宣言済み棄権（AUTOCORR の `OUTPUT_MISSING`、F0 候補 5
+件を含む）は従来どおり non-fire → PASS-eligible のまま（実測は
+`scratchpad/v14/p2f0/` の再測 census、`--repeats 3 --max-cells 30` で確認
+——5 件とも verdict 不変）。
+
+**`design_revision`/統治文書連鎖**: `c0_freeze._DESIGN_REVISION = "1.4"`、
+`c0_validate._ALLOWED_DESIGN_REVISIONS`/`_DESIGN_REVISION_ORDER` に
+`"1.4"` を追加。`approvals.DESIGN_DOC_CHAIN` は
+`(v1.4, v1.3, v1.2, v1.1, v1.0)` の 5 段（先頭が本書）。新設
+`c0_validate._check_sanctioned_abstentions_vocabulary()` は
+design_revision >= 1.4 かつ非 rehearsal の manifest に対し、実行時
+`fixtures.controls.SANCTIONED_ABSTENTIONS` が本書 §Y2 の 2 組と厳密一致
+することを要求する（不一致は `VALIDATION_BLOCKED`）。
+
+## §Y4. 答えた問い / 答えていない問い / 負債の terminal status
+
+**答えた問い（4 件）**:
+
+1. **TILT 測定器の注入 F0 誤差に対する感度は生成器起因か測定器起因か**
+   （2026-09-09 是正: 問いの発端は隔離 campaign の holdout 実測段差
+   ——evidence-only——だったが、答えの根拠は Grid + δ 掃引に限る）
+   — **測定器**（証拠: §Y1.1 P1 の Grid 実測 `VERDICT=METER_OFF` +
+   §Y1.1c P4 の fixture-only δ 掃引。いずれも fixture のみで secret
+   不使用）。`fixtures/generators/tilt.py`/`common.finalize` は無罪。
+   実体は `candidates/impl/tilt_harmonic.py::harmonic_amplitudes_db` の
+   固定 bin 読み（ピーク探索なし）が、注入 F0 の相対誤差を k 次倍音で
+   k 倍に増幅すること（§Y1.1d）——P4 実測では CURRENT 機構の許容 δ 帯が
+   IN-MATRIX 53 セルで `[+0,+0]` cent。
+2. **前提 3/4 の棄権宣言は「正例で同じ理由の棄権 0 件」の採用条件を
+   満たすか** — **満たす**（証拠: §Y1.2 P2 census、両前提とも PASS。
+   0 件）。
+3. **APERIODICITY_GT 候補の宣言極性は実測 tau の符号と一致するか** —
+   **一致する**（証拠: §Y1.3 P3 census。矛盾 0 件。D4C 3 件のみ pyworld
+   不在で NA）。
+4. **F0_CONTROL 候補は `OUTPUT_MISSING` を棄権として宣言できるか**
+   （PR #354 round 3 追補で追加した問い） — **5 候補全件できる**（証拠:
+   §Y1.2b F0 census。正例 12/12 measured&detected・`OUTPUT_MISSING`
+   0 件、SILENCE 3/3 `OUTPUT_MISSING`）。
+
+**記録欠陥 3（第 1 稿の census 漏れ、2026-09-09 追補で是正）**:
+第 1 稿の P2 census（§Y1.2、`scratchpad/v14/p23/p23_report.txt`）は
+**TILT_GT と APERIODICITY_GT の 2 family のみを対象とし、F0_CONTROL
+family を一度も census していなかった**。当時は経路 (B) の棄権が
+holdout 側でしか失敗算入されず、F0 の C3a は selection 側だけを通るため
+実害が出ていなかったが、PR #354 round 3 finding #1 で selection 側にも
+holdout と同一述語の fail filter
+（`negative_control_undeclared_missing`）を入れた時点で、**未 census =
+未宣言の F0 候補全 5 件が本番 C3a で偽失敗する**経路が開いた（実 pyin を
+回す E2E テスト 2 件が SELECTED → SELECTION_FAILED_CLOSED に反転したのが
+その顕在化）。v1.4 の規則「census してから、census が支持する分だけ宣言
+する」に従い、round 3 追補で F0 census を実施し（§Y1.2b）5 候補全件を
+宣言した。**教訓**: 棄権の宣言軸を新設したら、その軸を消費する filter が
+届く **全 family** を census 対象に含める（family を 1 つ落とすと、その
+family は「宣言なし = 常に失敗」に倒れる）。
+
+**答えていない問い（明示）**:
+
+- **pYIN が行ごとにどちらの格子点（+8.68 cent / −1.32 cent）を選ぶかの
+  要因**は本 probe の範囲外（§Y1.1 末尾。8/10 行が +8.68 cent 側、
+  2/10 行が −1.32 cent 側に落ちたが、行のスペクトル特性との対応関係は
+  未調査）。
+- **M5_TRANSITION（7 候補）/M6_IDENTITY（2 候補）の DIRECTIONAL 極性
+  宣言**は v1.4 の範囲外（§Y2「`NO_POLARITY` cap とその波及」。宣言が
+  無いため `DIAGNOSTIC_ONLY` に cap されたまま）。
+- **APERIODICITY の微小段 0→0.01→0.03→0.1 の解像不能**（§Y0 前提 8。
+  `Δtruth < 2(U_GT+U_num) = 0.128`）は本 revision でも解消しない
+  （fixture 水準は据え置き）。C-1 診断（unarmed）の点推定は単調に分離
+  しているが（§Y1.3 の HNR sanity 表）、これは holdout の不確かさ収支に
+  対する claim 能力を意味しない。
+- **TILT 測定器の再設計は v1.5**（§Y0 前提 9。段階 1 へ戻る作業。
+  User 承認が必要な meter change）。P1 が示した候補案（v1.4 では
+  実装しない）: (a) 倍音ごとの局所ピーク探索（±0.25·f0）+ QIFFT、
+  (b) 注入 F0 の精緻化（倍音位置からの F0 再推定 / 10 cent グリッドの
+  解除）、(c) TILT 候補が要求する F0 品質を候補宣言に持ち上げ、prepass の
+  20 cent 許容と整合しない候補を不適格にする。
+- **`M2T-B0-CURRENT-HYBRID` の `claim_ceiling=NONE`**（unit 混在）は
+  v1.3 に続き本書でも解かない。
+- **FORMANT 検出器の新設計**は v1.3 §X2.2 のまま未着手（別 memo）。
+- **隔離 campaign の観測を用いずに、v1.4 の是正が本番 campaign で意図
+  どおり働くか**は未検証（2026-09-09 追加）。§Y1–§Y3 は unarmed census /
+  fixture probe / 合成 ledger テストのみで検証しており、実 production
+  campaign（freeze → seal → C3a/C3b → holdout → close の全経路）を
+  1 度も通していない。新しい production campaign の実施には新 campaign
+  ID・fresh split/render secret・操作別の直接 Gate 承認が必要
+  （`VOICEGENESIS_EXECUTION_BOUNDARY_CORRECTION_2026-09-09.md`）。
+
+**負債の terminal status（v1.4 マージ時点、2026-09-09 是正）**: canonical
+terminal status は**非隔離** campaign `RUN10-CAL-20260904-862dec28`
+（`CAMPAIGN_CLOSED`、chain ok 70,630 entries）の記録による——7 meter 中
+6 が `NOT_EVALUABLE`（`F0_CONTROL`/`M2_SPECTRAL_TILT`/`M3_FORMANTS`/
+`M5_TRANSITION` = `SELECTION_FAILED_CLOSED`、`M2_APERIODICITY` は候補
+選定後 `DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT`〔D77〕、
+`M6_IDENTITY` は ABSOLUTE ceiling 未達）、`M4_RESONANCE` =
+`DIAGNOSTIC_ONLY`、**`debt_discharged = false`**（`.claude/memory/
+STATUS.md` 「直近フェーズ履歴」節）。**v1.4 は本番 campaign を 1 度も
+回していない**（WP-P は unarmed diagnose・ledger なし、WP-A はコード+
+テストのみ）ため、この terminal status を変更しない——**v1.4 は負債を
+1 円も返済しない**。§Y1–§Y3 は測定意味論と記録の是正であり、それ自体は
+負債を返済しない。**再 freeze の前提**は (1) v1.5 で TILT 測定器を修正
+すること（P1 の帰結。段階 1 へ戻る）、(2) rehearsal green の実測、
+(3) 実 gate 承認時刻を実測した再 freeze（F0/TILT/APERIODICITY の
+3 家系）——の 3 点。（evidence-only 注記: その後 2026-09-08 に本番
+campaign `RUN10-CAL-20260908-2dde4014` が `CAMPAIGN_CLOSED` まで完走
+したが、当該 campaign は task-scoped authorization が未確立だったため
+2026-09-09 是正で `QUARANTINED`/`claimable=false`/
+`debt_discharge_eligible=false` となり、その結果は本 terminal status の
+根拠にもならない——上記 862dec28 の terminal status が唯一 canonical
+である。）

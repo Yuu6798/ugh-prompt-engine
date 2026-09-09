@@ -168,6 +168,137 @@ def test_detection_predicate_accepts_a_declared_value() -> None:
 
 
 # ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 2 経路 (B)/§前提 4: `Candidate.abstention_reasons`
+# — optional; declared by `M2A-B0-AUTOCORR-PERIODICITY` (P2 census PASS —
+# `scratchpad/v14/p23/p23_report.txt` §5.2) and, as of the PR #354 round 3
+# 追補 (2026-09-09), by all 5 F0_CONTROL candidates (F0 census
+# `scratchpad/v14/p2f0/p2f0_report.txt`: positives 12/12 measured&detected,
+# 0 `OUTPUT_MISSING`; SILENCE 3/3 `OUTPUT_MISSING`) — 6 candidates total.
+# ---------------------------------------------------------------------------
+
+#: v1.4 preregistration の宣言集合（pinned value）。F0_CONTROL 5 件は round 3
+#: 追補で追加（第 1 稿の census が TILT_GT/APERIODICITY_GT のみで F0 を
+#: 欠いていたため未宣言のままだった——`DESIGN_VG_METER_CAL_DEBT_v1.4.md` §Y4）。
+_V1_4_DECLARED_ABSTENTION_IDS = {
+    "M2A-B0-AUTOCORR-PERIODICITY",
+    "F0-B0-CURRENT",
+    "F0-PYIN-FRAME2048-HOP256",
+    "F0-PYIN-FRAME2048-HOP512",
+    "F0-PYIN-FRAME4096-HOP256",
+    "F0-PYIN-FRAME4096-HOP512",
+}
+
+
+def test_abstention_reasons_declared_exactly_by_v1_4_preregistration() -> None:
+    declared = {
+        c.candidate_id for c in reg.ALL_CANDIDATES if c.abstention_reasons
+    }
+    assert declared == _V1_4_DECLARED_ABSTENTION_IDS
+
+
+def test_declared_abstention_reasons_value() -> None:
+    for candidate_id in sorted(_V1_4_DECLARED_ABSTENTION_IDS):
+        candidate = reg.candidate_by_id(candidate_id)
+        assert candidate.abstention_reasons == frozenset(
+            {vocab.MissingReason.OUTPUT_MISSING}
+        ), candidate_id
+
+
+def test_every_f0_control_candidate_declares_output_missing_abstention() -> None:
+    """PR #354 round 3 追補: F0 census が全 5 候補について「正例で
+    `OUTPUT_MISSING` 0 件」を示したため、F0_CONTROL family は全件宣言する
+    （family 単位で漏れが出れば production C3a がその候補だけ偽失敗する）。"""
+    f0_candidates = reg.candidates_for_meter(vocab.MeterId.F0_CONTROL)
+    assert len(f0_candidates) == 5
+    for candidate in f0_candidates:
+        assert candidate.abstention_reasons == frozenset(
+            {vocab.MissingReason.OUTPUT_MISSING}
+        ), candidate.candidate_id
+
+
+def test_abstention_reasons_accepts_a_declared_value() -> None:
+    """AGENTS.md §7 item 11: 新しい導出軸は None/空でない fixture テストと
+    セットで導入する（`dataclasses.replace` 経由の round-trip 確認）。
+    base は宣言していない候補（round 3 追補で F0-B0-CURRENT が宣言側へ
+    移ったため M3-B0-CURRENT-CENTROID へ差し替え）。"""
+    import dataclasses
+
+    base = reg.candidate_by_id("M3-B0-CURRENT-CENTROID")
+    assert base.abstention_reasons == frozenset()
+    declared = dataclasses.replace(
+        base, abstention_reasons=frozenset({vocab.MissingReason.OUTPUT_MISSING})
+    )
+    assert declared.abstention_reasons == frozenset({vocab.MissingReason.OUTPUT_MISSING})
+    assert base.abstention_reasons == frozenset()
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 5: `Candidate.truth_polarity` — declared for
+# APERIODICITY_GT's 3 DIRECTIONAL algorithm families only (harmonic_to_
+# noise_ratio: -1, injected_noise_fraction: +1, world_d4c_aperiodicity: +1).
+# No other family declares a polarity in v1.4.
+# ---------------------------------------------------------------------------
+
+_V1_4_HNR_TO_NOISE_RATIO_IDS = frozenset(
+    {"M2A-B0-AUTOCORR-PERIODICITY"}
+    | {c.candidate_id for c in reg.ALL_CANDIDATES if c.algorithm_family == "HNR_ACF"}
+)
+_V1_4_INJECTED_NOISE_FRACTION_IDS = frozenset(
+    c.candidate_id for c in reg.ALL_CANDIDATES if c.algorithm_family == "HARMONIC_RESIDUAL"
+)
+_V1_4_WORLD_D4C_IDS = frozenset(
+    c.candidate_id for c in reg.ALL_CANDIDATES if c.algorithm_family == "D4C_WORLD"
+)
+
+
+def test_truth_polarity_declared_exactly_by_aperiodicity_directional_families() -> None:
+    declared = {c.candidate_id for c in reg.ALL_CANDIDATES if c.truth_polarity is not None}
+    expected = (
+        _V1_4_HNR_TO_NOISE_RATIO_IDS
+        | _V1_4_INJECTED_NOISE_FRACTION_IDS
+        | _V1_4_WORLD_D4C_IDS
+    )
+    assert declared == expected
+    assert len(declared) == 9 + 12 + 3
+
+
+def test_truth_polarity_values_match_construct_physics() -> None:
+    for candidate_id in sorted(_V1_4_HNR_TO_NOISE_RATIO_IDS):
+        assert reg.candidate_by_id(candidate_id).truth_polarity == -1, candidate_id
+    for candidate_id in sorted(_V1_4_INJECTED_NOISE_FRACTION_IDS):
+        assert reg.candidate_by_id(candidate_id).truth_polarity == 1, candidate_id
+    for candidate_id in sorted(_V1_4_WORLD_D4C_IDS):
+        assert reg.candidate_by_id(candidate_id).truth_polarity == 1, candidate_id
+
+
+def test_truth_polarity_not_declared_outside_aperiodicity_gt() -> None:
+    declared_ids = {c.candidate_id for c in reg.ALL_CANDIDATES if c.truth_polarity is not None}
+    for candidate_id in declared_ids:
+        assert reg.candidate_by_id(candidate_id).meter == vocab.MeterId.M2_APERIODICITY
+
+
+def test_truth_polarity_rejects_values_outside_plus_minus_one_or_none() -> None:
+    import dataclasses
+
+    base = reg.candidate_by_id("F0-B0-CURRENT")
+    for bad_value in (0, 2, -2, 0.5):
+        with pytest.raises(ValueError):
+            dataclasses.replace(base, truth_polarity=bad_value)
+
+
+def test_truth_polarity_accepts_a_declared_value() -> None:
+    import dataclasses
+
+    base = reg.candidate_by_id("F0-B0-CURRENT")
+    assert base.truth_polarity is None
+    declared_pos = dataclasses.replace(base, truth_polarity=1)
+    declared_neg = dataclasses.replace(base, truth_polarity=-1)
+    assert declared_pos.truth_polarity == 1
+    assert declared_neg.truth_polarity == -1
+    assert base.truth_polarity is None
+
+
+# ---------------------------------------------------------------------------
 # §2.6 パラメタグリッドの literal 一致（memo §2.6 が凍結する値そのもの）
 # ---------------------------------------------------------------------------
 

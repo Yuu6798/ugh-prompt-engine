@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -351,6 +352,31 @@ def find_row(
     return matches[0]
 
 
+class StaleEUseTableError(RuntimeError):
+    """PR #354 round 1 採用 (P1/P2): `e_use_table.json` の pin 検証
+    (`campaign.holdout_stage._read_and_verify_e_use_table_bytes()`) が凍結
+    manifest の `frozen_inputs.e_use_table_sha256` pin と一致しない/pin・
+    ファイル自体が欠落している場合、**または** pin 検証を通過した表の中に
+    候補が一致する `e_use_mode="absolute"` 行が存在するのにその
+    `e_use_value` が有限正でない場合（`finite_positive_or_none()` 参照）に
+    送出する、E_use 表まわりの fail-closed error の単一クラス
+    （凍結後の改竄・欠落・pin 未設定・declared-but-unusable value のいずれも
+    同じ「declared E_use pin is broken」事由として同じ経路で扱う）。
+    `campaign.holdout_stage.StaleEUseTableError` は本クラスの再エクスポート
+    （後方互換のエイリアス、循環 import 回避のため定義自体はこちらが正）。"""
+
+
+def finite_positive_or_none(value: float) -> float | None:
+    """E_use の絶対量は正の許容誤差量でなければならないという単一の妥当性
+    規則（`campaign.holdout_stage.absolute_e_use_value()`/
+    `campaign.selection_stage.truth_floor_for_candidate()` の共有
+    single source — 重複実装を禁止する）。`math.isfinite(value) and
+    value > 0.0` なら `float(value)`、そうでなければ `None`。"""
+    if not (math.isfinite(value) and value > 0.0):
+        return None
+    return float(value)
+
+
 def auto_ceiling(row: EUseEvidenceRow, has_apriori_truth_order: bool) -> ClaimCeiling | None:
     """設計正本 §10.2 の自動 ceiling: `row.evidence_class != UNJUSTIFIED` の
     行には適用対象がない（`None` を返す — 呼び出し側は通常経路の ceiling 判定
@@ -465,4 +491,6 @@ __all__ = [
     "generate_template",
     "find_row",
     "auto_ceiling",
+    "StaleEUseTableError",
+    "finite_positive_or_none",
 ]

@@ -243,12 +243,30 @@ def test_c1_fixtures_armed_end_to_end_via_cli(
 # `MeasurementRecord`/`MeterOutput`) on a genuine F0_CONTROL SILENCE negative
 # control row, run through the real `cli._run_c3a` orchestration
 # (`selection_stage.run_c3a_f0_selection` inside it, not a hand-built
-# `CandidateCriteria`). Before the fix, pyin's real (deterministic, all-6-
-# repeats) `OUTPUT_MISSING` on silence tripped `within_fresh_process_mismatch`
-# and made F0-B0-CURRENT the only candidate ineligible, so
+# `CandidateCriteria`). Before the D67 fix, pyin's real (deterministic,
+# all-6-repeats) `OUTPUT_MISSING` on silence tripped `within_fresh_process_
+# mismatch` and made F0-B0-CURRENT the only candidate ineligible, so
 # `select_across_ceilings` had zero eligible candidates and C3a recorded
 # `SELECTION_FAILED_CLOSED` — i.e. no candidate could ever pass a negative
-# control.
+# control via that filter.
+#
+# PR #354 round 3 finding #1 (2026-09-09): D67 fixed the `within_fresh_
+# process_mismatch` false positive, but this same consistent `OUTPUT_MISSING`
+# is *also* a missing negative-control record, and round 3's independent
+# `negative_control_undeclared_missing` filter (holdout-consistent, not
+# folded into `negative_control_false_fire`) fails any *undeclared* one.
+# Round 3 追補 (same day): the F0_CONTROL abstention census was missing from
+# the v1.4 first draft (`scratchpad/v14/p23/p23_report.txt` covered TILT_GT
+# and APERIODICITY_GT only), so no F0 candidate declared `abstention_
+# reasons` and the whole F0 family would have failed closed in production
+# C3a. The F0 census (`scratchpad/v14/p2f0/p2f0_report.txt`: positives 12/12
+# measured&detected with 0 `OUTPUT_MISSING`, SILENCE 3/3 `OUTPUT_MISSING`,
+# all 5 candidates) backs a `{OUTPUT_MISSING}` declaration on every
+# F0_CONTROL candidate, so a correct non-detection on silence is again a
+# *declared* abstention and this test's original `SELECTED` semantics are
+# restored. The undeclared half of the contract stays pinned by the sibling
+# `test_c3a_f0_selection_fails_closed_when_the_candidate_does_not_declare_
+# abstention` below.
 # ---------------------------------------------------------------------------
 
 
@@ -263,7 +281,14 @@ def test_c3a_f0_selection_passes_with_candidate_that_correctly_non_detects_on_si
     `librosa.pyin` genuinely finds no voiced frames on true silence and
     returns `OUTPUT_MISSING` for every within- and fresh-process repeat
     (`candidates/impl/f0_pyin.py::measure`) — deterministically, so this is
-    not flaky."""
+    not flaky.
+
+    `F0-B0-CURRENT` declares `abstention_reasons={OUTPUT_MISSING}` (PR #354
+    round 3 追補, F0 census `scratchpad/v14/p2f0/p2f0_report.txt`), so this
+    correct non-detection is a *declared* abstention: neither
+    `within_fresh_process_mismatch` (D67) nor `negative_control_false_fire`
+    nor the round-3 `negative_control_undeclared_missing` filter fires, and
+    the candidate is selected."""
     from voice_genesis.calibration.fixtures.matrix import build_matrix
 
     all_rows = build_matrix()
@@ -317,8 +342,80 @@ def test_c3a_f0_selection_passes_with_candidate_that_correctly_non_detects_on_si
     ]
     assert f0_events
     fail_filters = f0_events[-1]["fail_filters_by_candidate"]["F0-B0-CURRENT"]
+    # D67's ruling is unaffected — the mismatch/any-fire filters stay clean.
     assert fail_filters["within_fresh_process_mismatch"] is False
     assert fail_filters["negative_control_false_fire"] is False
+    # ... and the round-3 filter does not fire either, because the candidate
+    # *declares* OUTPUT_MISSING as a correct abstention (round 3 追補).
+    assert fail_filters["negative_control_undeclared_missing"] is False
+
+
+@pytest.mark.slow
+def test_c3a_f0_selection_fails_closed_when_the_candidate_does_not_declare_abstention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sibling of the test above and the fail-closed half of PR #354 round 3
+    finding #1: the exact same real fixture/real-`librosa.pyin` run, but with
+    the `abstention_reasons` declaration stripped off the candidate
+    (`dataclasses.replace(..., abstention_reasons=frozenset())`). The
+    consistent `OUTPUT_MISSING` on the SILENCE row is then an *undeclared*
+    missing negative-control record and `negative_control_undeclared_missing`
+    fails the candidate, ending C3a in `SELECTION_FAILED_CLOSED` —
+    holdout-consistent (`holdout_stage.control_detection_for_family.
+    _negative_fired()` path (B)). Keeping this next to the passing case pins
+    that the declaration, not the filter's removal, is what restores
+    selection."""
+    import dataclasses
+
+    from voice_genesis.calibration.fixtures.matrix import build_matrix
+
+    all_rows = build_matrix()
+    truth_rows = [
+        mr
+        for mr in all_rows
+        if mr.row.family == "F0_CONTROL" and mr.row.block == "TRUTH_CORE"
+    ][:3]
+    silence_rows = [
+        mr
+        for mr in all_rows
+        if mr.row.family == "F0_CONTROL" and mr.row.control_class == "SILENCE"
+    ]
+    assert silence_rows, "test setup requires a real F0_CONTROL SILENCE fixture row"
+    subset = truth_rows + silence_rows
+
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+
+    undeclared_b0 = dataclasses.replace(
+        candidate_by_id("F0-B0-CURRENT"), abstention_reasons=frozenset()
+    )
+    assert undeclared_b0.abstention_reasons == frozenset()
+    only_b0 = (undeclared_b0,)
+    orig_candidates_for_meter = cli.active_candidates_for_meter
+
+    def _trimmed_candidates_for_meter(meter):
+        if meter is MeterId.F0_CONTROL:
+            return only_b0
+        return orig_candidates_for_meter(meter)
+
+    monkeypatch.setattr(cli, "active_candidates_for_meter", _trimmed_candidates_for_meter)
+
+    result = cli._run_c3a(campaign, subset, 1)
+    assert result["result"] == "OK", result
+    assert result["outcome"] == "SELECTION_FAILED_CLOSED", result
+    assert result["selected_candidate_id"] is None
+
+    f0_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "f0_selection_frozen"
+    ]
+    assert f0_events
+    fail_filters = f0_events[-1]["fail_filters_by_candidate"]["F0-B0-CURRENT"]
+    assert fail_filters["within_fresh_process_mismatch"] is False
+    assert fail_filters["negative_control_false_fire"] is False
+    assert fail_filters["negative_control_undeclared_missing"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -334,13 +431,19 @@ def test_c3a_f0_selection_passes_with_candidate_that_correctly_non_detects_on_si
 # ---------------------------------------------------------------------------
 
 
-def _f0_v11_campaign(tmp_path: Path):
+def _f0_v11_campaign(tmp_path: Path, *, frozen_inputs: Any | None = None):
     """Full canonical matrix (no `subset` override — the splitter's v1.1 §V2
     holdout sweep pinning needs the real population to satisfy coverage; a
     small hand-picked F0_CONTROL-only subset starves it). `measure_stage.
     run_measure_stage` is monkeypatched by the caller, so the extra
     non-F0_CONTROL rows never trigger a real render/measure and this test
-    stays fast despite the full 456-row matrix."""
+    stays fast despite the full 456-row matrix.
+
+    `frozen_inputs` (PR #354 round 1 finding #1 test use): forwarded to
+    `build_tiny_campaign()` unchanged (default `None` = no `frozen_inputs`
+    key at all, this fixture's original behaviour) — lets a caller declare
+    an `e_use_table_sha256` pin without writing a matching
+    `e_use_table.json`, to exercise the stale-pin fail-closed path."""
     from voice_genesis.calibration.fixtures.matrix import build_matrix
 
     all_rows = build_matrix()
@@ -348,7 +451,7 @@ def _f0_v11_campaign(tmp_path: Path):
         mr for mr in all_rows if mr.row.family == "F0_CONTROL" and mr.row.control_class is not None
     ]
     assert {mr.row.control_class for mr in control_rows} == {"SILENCE", "NOISE_ONLY", "TOO_SHORT"}
-    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, frozen_inputs=frozen_inputs)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
     return campaign, all_rows
 
@@ -395,10 +498,19 @@ def test_v11_c3a_noise_only_false_fire_stays_eligible_and_rate_is_recorded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC5(b)/(e): a candidate that false-fires on 2/5 NOISE_ONLY instances
-    but never fires on SILENCE/TOO_SHORT must still be `SELECTED` (NOISE_ONLY
-    is excluded from `negative_control_false_fire`'s any-fire population),
-    and the `f0_selection_frozen` ledger payload must record the exact
-    NOISE_ONLY breakdown."""
+    but never fires on SILENCE/TOO_SHORT is exempt from `negative_control_
+    false_fire`'s any-fire population for that reason, stays eligible, and
+    the `f0_selection_frozen` ledger payload must record the exact NOISE_ONLY
+    breakdown and wire it into the ranking vector.
+
+    PR #354 round 3 finding #1 briefly flipped this to
+    `SELECTION_FAILED_CLOSED` because `F0-B0-CURRENT` declared no
+    `abstention_reasons`, making the fabricated SILENCE/TOO_SHORT
+    non-detections (and the 3/5 non-detected NOISE_ONLY probes) undeclared
+    missing negative-control records. The round 3 追補 F0 census
+    (`scratchpad/v14/p2f0/p2f0_report.txt`) backs `{OUTPUT_MISSING}` on all
+    5 F0_CONTROL candidates, so those records are declared abstentions and
+    the original `SELECTED` semantics are restored."""
     from voice_genesis.calibration.candidates.registry import candidate_by_id
 
     campaign, subset = _f0_v11_campaign(tmp_path)
@@ -433,11 +545,15 @@ def test_v11_c3a_noise_only_false_fire_stays_eligible_and_rate_is_recorded(
     assert fail_filters["noise_only_instances_total"] == 5
     assert fail_filters["noise_only_instances_detected"] == 2
     assert fail_filters["noise_only_false_detection_rate"] == pytest.approx(0.4)
+    # round 3 追補: declared abstention -> the round-3 filter stays clean.
+    assert fail_filters["negative_control_undeclared_missing"] is False
 
     # the rate feeds `nuisance_sensitivity_max`, the existing ranking-vector
     # slot immediately after the error terms (v1.0 §8's declared "voiced
     # false detection rate" position) — confirm it is actually wired into
-    # the frozen rounded ranking vector, not just recorded as an audit key.
+    # the frozen rounded ranking vector, not just recorded as an audit key
+    # (vectors are recorded for every candidate with criteria, eligible or
+    # not — `selection.select_across_ceilings()`).
     rounded_vector = f0_events[-1]["rounded_vectors"]["F0-B0-CURRENT"]
     assert rounded_vector[3] == pytest.approx(0.4)
 
@@ -2018,6 +2134,26 @@ def _aperiodicity_family_subset() -> list[Any]:
     return sweep_truth_core + non_truth_core
 
 
+#: PR #354 round 2 finding #2 (P2, ADOPT): the 3 observability blocks
+#: (`control_detection`/`margins_summary`/`pairs_summary`) and
+#: `negative_control_sanctioned_abstentions` must be present (possibly
+#: `None`) in every per-meter `gate_detail`, regardless of whether the
+#: result came from a real gate wrapper or one of `_run_c4`'s
+#: early-terminal `MeterHoldoutResult` branches — see
+#: `holdout_stage.with_observability_blocks()`.
+_OBSERVABILITY_BLOCK_KEYS = (
+    "control_detection",
+    "margins_summary",
+    "pairs_summary",
+    "negative_control_sanctioned_abstentions",
+)
+
+
+def _assert_observability_block_keys(gate_detail: dict[str, Any]) -> None:
+    for key in _OBSERVABILITY_BLOCK_KEYS:
+        assert key in gate_detail, (key, gate_detail)
+
+
 def _force_rows_into_holdout(campaign: Any, row_ids: list[str]) -> Any:
     """Override `campaign.realized_split.assignment` so each of `row_ids` is
     unconditionally `Split.HOLDOUT`, leaving every other row's assignment as
@@ -2179,6 +2315,10 @@ def test_c4_selected_candidate_fully_skipped_closes_not_evaluable(
     # finding #4: claim_scope must be recorded even on the NOT_EVALUABLE
     # early-close branch (previously dropped by the early `continue`).
     assert "claim_scope" in m2a_result["gate_detail"]
+    # PR #354 round 2 finding #2: the 3 observability blocks +
+    # negative_control_sanctioned_abstentions must be present (as `None`)
+    # even on this early-terminal NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE branch.
+    _assert_observability_block_keys(m2a_result["gate_detail"])
 
     # the authoritative close report must carry the same terminal status
     # (close.close_campaign() copies `per_meter` from this event verbatim).
@@ -2294,6 +2434,9 @@ def test_c4_selected_candidate_partially_covered_closes_diagnostic_only(
     assert gate_detail["expected_instance_count"] == len(expected_instances)
     assert gate_detail["seen_instance_count"] == len(partial_instances)
     assert "claim_scope" in gate_detail
+    # PR #354 round 2 finding #2: same guarantee on this DIAGNOSTIC_ONLY cap
+    # (gate-1 partial coverage) early-terminal branch.
+    _assert_observability_block_keys(gate_detail)
 
     # the authoritative close report must carry the same terminal status.
     close_result = cli.close_stage.close_campaign(campaign, holdout_events[-1])
@@ -2763,6 +2906,9 @@ def test_c4_directional_v1_1_manifest_missing_holdout_sweeps_fails_closed_as_inp
     # v1.1 manifest (the sibling non-v1.1 test above locks in that this
     # fallback still applies for legacy manifests).
     assert gate_detail["gate_detail_reason_code"] == "HOLDOUT_SWEEPS_DECLARATION_MISSING"
+    # PR #354 round 2 finding #2: same guarantee on this
+    # HOLDOUT_SWEEPS_DECLARATION_MISSING early-terminal branch.
+    _assert_observability_block_keys(gate_detail)
 
 
 def test_c4_directional_partial_coverage_at_minimum_count_closes_diagnostic_only(
@@ -3395,6 +3541,21 @@ def test_c4_absolute_gate_wiring_reaches_calibrated_absolute_on_clean_synthetic_
     # never appear on a coverage-complete, capacity-satisfied real-gate path.
     assert "UNDERSPEC-CAL-D17" not in json.dumps(m2t_result)
 
+    # PR #354 round 2 finding #2 (P2, ADOPT) schema-shape lock:
+    # `holdout_stage.with_observability_blocks()` must give every meter
+    # written to `holdout_executed_valid` the same 3 observability-block
+    # keys + `negative_control_sanctioned_abstentions`, whether the result
+    # came from a real gate wrapper (M2_SPECTRAL_TILT above) or one of the
+    # placeholder/early-terminal closers (`diagnostic_only_close()` for
+    # M4_RESONANCE/F0_CONTROL here, since this fixture only wires TILT_GT).
+    for meter_result in per_meter.values():
+        _assert_observability_block_keys(meter_result["gate_detail"])
+    m4_result = per_meter[MeterId.M4_RESONANCE.value]
+    assert m4_result["gate_detail"]["control_detection"] is None
+    assert m4_result["gate_detail"]["margins_summary"] is None
+    assert m4_result["gate_detail"]["pairs_summary"] is None
+    assert m4_result["gate_detail"]["negative_control_sanctioned_abstentions"] is None
+
 
 @pytest.mark.slow
 def test_c4_absolute_gate_wiring_fails_honestly_to_diagnostic_only_with_tiny_e_use(
@@ -3596,19 +3757,50 @@ def test_c4_gate5_sanctioned_abstention_silence_f0_unusable_reaches_calibrated_a
     assert gate_detail["negative_control_sanctioned_abstentions"] == 5, gate_detail
 
 
-def test_c4_gate5_sanctioned_abstention_closed_vocabulary_excludes_noise_only(
+def test_c4_gate5_sanctioned_abstention_noise_only_f0_unusable_reaches_calibrated_absolute_v14(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """v1.3 (Codex #350 round 3 P1 ADOPT): sibling of the test above with
-    the *only* change being `neg-a`'s `control_class` set to `NOISE_ONLY`
-    instead of `SILENCE` (same entirely-missing measurement, same
-    `F0_UNUSABLE` ledger reason). `(NOISE_ONLY, "F0_UNUSABLE")` is not a
-    member of the closed `fixtures.controls.SANCTIONED_ABSTENTIONS`
-    vocabulary, so this instance must NOT be sanctioned -- it stays a gate5
-    failure (`FDR0 != 0`) and the meter must fail honestly, not reach
-    `CALIBRATED_ABSOLUTE`."""
+    """v1.4 §前提 3 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, P2 census PASS —
+    `scratchpad/v14/p23/p23_report.txt` §5.1): sibling of the test above
+    with the *only* change being `neg-a`'s `control_class` set to
+    `NOISE_ONLY` instead of `SILENCE` (same entirely-missing measurement,
+    same `F0_UNUSABLE` ledger reason). `fixtures.controls.
+    SANCTIONED_ABSTENTIONS` now includes `(NOISE_ONLY, "F0_UNUSABLE")`
+    alongside `(SILENCE, "F0_UNUSABLE")`, so this instance is now sanctioned
+    too and the meter reaches `CALIBRATED_ABSOLUTE` exactly like the SILENCE
+    case above (supersedes the pre-v1.4 `..._excludes_noise_only` test that
+    pinned the narrower vocabulary)."""
     campaign, subset, candidate = _build_absolute_gate_campaign_with_sanctioned_negative_control(
         tmp_path, monkeypatch, e_use_value=2.0, neg_a_control_class="NOISE_ONLY"
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2t_result = per_meter[MeterId.M2_SPECTRAL_TILT.value]
+    assert m2t_result["terminal_status"] == "CALIBRATED_ABSOLUTE", m2t_result
+    assert m2t_result["selected_candidate_id"] == candidate.candidate_id
+    gate_detail = m2t_result["gate_detail"]
+    assert gate_detail["passed"] is True, gate_detail
+    assert gate_detail["failure_reasons"] == []
+    assert gate_detail["negative_control_sanctioned_abstentions"] == 5, gate_detail
+
+
+def test_c4_gate5_sanctioned_abstention_closed_vocabulary_excludes_pure_sine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """the closed vocabulary is still closed -- `(PURE_SINE, "F0_UNUSABLE")`
+    is not a member of `fixtures.controls.SANCTIONED_ABSTENTIONS` (v1.4
+    §前提 3 explicitly does not extend sanctioning beyond SILENCE/
+    NOISE_ONLY), so this instance must NOT be sanctioned -- it stays a
+    gate5 failure (`FDR0 != 0`) and the meter must fail honestly, not reach
+    `CALIBRATED_ABSOLUTE`."""
+    campaign, subset, candidate = _build_absolute_gate_campaign_with_sanctioned_negative_control(
+        tmp_path, monkeypatch, e_use_value=2.0, neg_a_control_class="PURE_SINE"
     )
 
     result = cli._run_c4(campaign, subset, 1)
@@ -3649,12 +3841,19 @@ def test_c4_gate5_sanctioned_abstention_closed_vocabulary_excludes_noise_only(
 # (not one `SILENCE` + one `NOISE_ONLY`, unlike the fixture above) precisely
 # to keep this real-audio path deterministic: real noise's own real F0
 # reading is not fixed by this test the way real silence's is, so a
-# `NOISE_ONLY` row here could unpredictably land on either side of the
-# closed `SANCTIONED_ABSTENTIONS` vocabulary boundary depending on whether
-# `pyin` happens to hallucinate a pitch on that specific noise realization --
-# an orthogonal question `test_c4_gate5_sanctioned_abstention_closed_
-# vocabulary_excludes_noise_only` above already covers exactly, without that
-# risk, via its own hand-planted event.
+# `NOISE_ONLY` row here could unpredictably land on either side of "F0
+# prepass genuinely skips it" vs. "pyin hallucinates a pitch and it is
+# genuinely measured" for the `F0-B0-CURRENT` candidate this test uses --
+# an orthogonal question the hand-planted-event fixture tests above already
+# cover exactly, without that risk. v1.4 §前提 3
+# (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, P2 census PASS) adds a *separate*
+# NOISE_ONLY real-path variant below
+# (`test_c4_gate5_sanctioned_abstention_real_f0_prepass_path_noise_only_
+# reaches_calibrated_absolute_v14`) using the real F0-PYIN-FRAME2048-HOP512
+# candidate the P2 census (`scratchpad/v14/p23/p23_report.txt`) empirically
+# observed deterministically skipping all measured probes on real NOISE_ONLY
+# PCM, so that variant does not carry the nondeterminism risk this comment
+# warns about for `F0-B0-CURRENT`.
 # ---------------------------------------------------------------------------
 
 
@@ -3828,6 +4027,147 @@ def test_c4_gate5_sanctioned_abstention_real_f0_prepass_path_reaches_calibrated_
     assert gate_detail["passed"] is True, gate_detail
     assert gate_detail["failure_reasons"] == []
     # 2 SILENCE rows x fixture_controls.PROBE_REPEATS (5) = 10 sanctioned,
+    # entirely-missing negative-control instances.
+    assert gate_detail["negative_control_sanctioned_abstentions"] == 10, gate_detail
+
+
+@pytest.mark.slow
+def test_c4_gate5_sanctioned_abstention_real_f0_prepass_path_noise_only_reaches_calibrated_absolute_v14(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.4 §前提 3 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, P2 census PASS --
+    `scratchpad/v14/p23/p23_report.txt` §5.1: real NOISE_ONLY PCM through the
+    real F0 prepass deterministically skips all measured probes, 3/3 across
+    12 candidates x 3 probe_index in the census). Sibling of the SILENCE-only
+    real-path test above, with `neg-a`/`neg-b` both real `NOISE_ONLY` instead
+    of `SILENCE` -- this is the "stub-free real-path test with a NOISE_ONLY
+    variant" the v1.4 design memo (§Acceptance WP-A, item 3) calls for,
+    extending the D110/D111 real-path coverage to the newly-sanctioned
+    `(NOISE_ONLY, "F0_UNUSABLE")` pair. Deliberately identical in every other
+    respect to the SILENCE test (same hand-planted C3a/C3b freeze, same F0
+    candidate `F0-B0-CURRENT`, same TILT harmonic candidate) so this test
+    isolates the control_class change."""
+    candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_SPECTRAL_TILT) if c.algorithm_family == "HARMONIC_OLS"
+    )
+    assert candidate.algorithm_family in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+    anchor1 = _real_tilt_row("anchor-6", block="TRUTH_CORE", slope=-6.0, positive_control=True)
+    anchor2 = _real_tilt_row("anchor-12", block="TRUTH_CORE", slope=-12.0, positive_control=True)
+    confound = _real_tilt_row(
+        "confound-sr", block="CONFOUND", slope=-6.0, nuisance_tag="sr_hz=8000"
+    )
+    neg_a = _real_tilt_row(
+        "neg-a", block="NEGATIVE_CONTROL", slope=None, control_class="NOISE_ONLY"
+    )
+    neg_b = _real_tilt_row(
+        "neg-b", block="NEGATIVE_CONTROL", slope=None, control_class="NOISE_ONLY"
+    )
+    subset = [anchor1, anchor2, confound, neg_a, neg_b]
+    padding_rows = [
+        _real_tilt_row(f"padding-{i}", block="TRUTH_CORE", slope=-18.0) for i in range(15)
+    ]
+    padded_subset = subset + padding_rows
+
+    from voice_genesis.calibration import e_use_table as e_use_table_module
+    from voice_genesis.calibration.gates import EUseEvidenceRow
+    from voice_genesis.calibration.vocab import EvidenceClass
+
+    e_use_row = EUseEvidenceRow(
+        construct_id=candidate.construct,
+        unit=candidate.unit,
+        domain=candidate.domain,
+        intended_use="v1.4 §前提 3 NOISE_ONLY real-path E2E test",
+        maximum_claim="ABSOLUTE",
+        e_use_value=100.0,
+        derivation_rule="test fixture",
+        evidence_class=EvidenceClass.USER_ACCEPTED_USE_BOUND,
+        source_id_or_url="test",
+        source_checked_at="2026-09-09",
+        source_hash_or_version="test",
+        applicability_argument="test",
+        review_status="APPROVED_BY_DELEGATION",
+    )
+    serialized = (
+        json.dumps(
+            [e_use_table_module.row_to_dict(e_use_row)], indent=2, ensure_ascii=False, sort_keys=True
+        )
+        + "\n"
+    )
+    e_use_sha = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path,
+        subset=padded_subset,
+        frozen_inputs={"e_use_table_sha256": e_use_sha},
+        force_holdout_row_ids=[mr.row_id for mr in subset],
+        fixture_spec={
+            "TILT_GT": {"u_gt_bound": 0.5, "u_num_bound": 0.5, "confound_axes": ["sr_hz"]},
+        },
+    )
+    (campaign_dir / "e_use_table.json").write_text(serialized, encoding="utf-8")
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    # see the SILENCE-only test above for why this leakage pre-check bypass
+    # is orthogonal to the property under test here.
+    monkeypatch.setattr(render_stage, "_refuse_if_pre_unseal_holdout", lambda *a, **kw: None)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": "F0-B0-CURRENT",
+            "outcome": "SELECTED",
+        }
+    )
+    campaign.ledger.append(
+        {"kind": "selection_frozen", "selected_by_family": {"TILT_GT": candidate.candidate_id}}
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    # confirm this genuinely exercised the real F0_UNUSABLE skip path on real
+    # NOISE_ONLY PCM (not an accidental finite F0 reading on either row): the
+    # selected candidate has zero own MeasurementRecords for neg-a/neg-b, and
+    # the real `measurement_missing` ledger event names it for both rows with
+    # reason "F0_UNUSABLE".
+    meter_calls = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"]
+    own_neg_calls = [
+        m
+        for m in meter_calls
+        if m["candidate_id"] == candidate.candidate_id
+        and m["row_id"] in (neg_a.row_id, neg_b.row_id)
+    ]
+    assert own_neg_calls == [], own_neg_calls
+    missing_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "measurement_missing"
+    ]
+    missing_cells = {
+        (row_id, cid)
+        for ev in missing_events
+        if ev.get("reason") == "F0_UNUSABLE"
+        for row_id, _probe_index, cid in ev["cells"]
+    }
+    assert (
+        neg_a.row_id,
+        candidate.candidate_id,
+    ) in missing_cells, "neg-a must have a real F0_UNUSABLE measurement_missing event"
+    assert (
+        neg_b.row_id,
+        candidate.candidate_id,
+    ) in missing_cells, "neg-b must have a real F0_UNUSABLE measurement_missing event"
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2t_result = per_meter[MeterId.M2_SPECTRAL_TILT.value]
+    assert m2t_result["terminal_status"] == "CALIBRATED_ABSOLUTE", m2t_result
+    assert m2t_result["selected_candidate_id"] == candidate.candidate_id
+    gate_detail = m2t_result["gate_detail"]
+    assert gate_detail["passed"] is True, gate_detail
+    assert gate_detail["failure_reasons"] == []
+    # 2 NOISE_ONLY rows x fixture_controls.PROBE_REPEATS (5) = 10 sanctioned,
     # entirely-missing negative-control instances.
     assert gate_detail["negative_control_sanctioned_abstentions"] == 10, gate_detail
 
@@ -6805,3 +7145,168 @@ def test_candidate_enumeration_follows_rehearsal_mode(
         rehearsal_family = cli._candidates_for_family(family)
         assert {c.candidate_id for c in rehearsal_family} <= pool_ids, family
         assert len(rehearsal_family) <= 2, family
+
+
+# ---------------------------------------------------------------------------
+# PR #354 round 1 finding #1 (P1, ADOPT) "Reject stale E_use tables during
+# selection": `_try_load_e_use_rows_for_selection()` must fail closed
+# (propagate `StaleEUseTableError`) when the frozen manifest declares an
+# E_use pin (`frozen_inputs.e_use_table_sha256`) but the table is
+# missing/mutated/malformed — it must only degrade to `None` (legacy
+# `zero_guard` ranking) when no pin was ever declared (tiny/legacy
+# campaigns, `build_tiny_campaign()`'s default).
+# ---------------------------------------------------------------------------
+
+
+def _write_pinned_e_use_table(campaign_dir: Path, rows: list) -> str:
+    """Serialize `rows` (`EUseEvidenceRow`) to `<campaign_dir>/e_use_table.json`
+    the same way `_build_absolute_gate_campaign()` does, returning the
+    sha256 to pass as `frozen_inputs={"e_use_table_sha256": ...}`."""
+    from voice_genesis.calibration import e_use_table as e_use_table_module
+
+    serialized = (
+        json.dumps(
+            [e_use_table_module.row_to_dict(r) for r in rows],
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    (campaign_dir / "e_use_table.json").write_text(serialized, encoding="utf-8")
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _e_use_row_for_selection_test() -> Any:
+    from voice_genesis.calibration.gates import EUseEvidenceRow
+    from voice_genesis.calibration.vocab import EvidenceClass
+
+    return EUseEvidenceRow(
+        construct_id="fundamental_frequency",
+        unit="hz",
+        domain="d",
+        intended_use="test",
+        maximum_claim="test",
+        e_use_value=2.0,
+        derivation_rule="test",
+        evidence_class=EvidenceClass.USER_ACCEPTED_USE_BOUND,
+        source_id_or_url="test",
+        source_checked_at="2026-09-09",
+        source_hash_or_version="test",
+        applicability_argument="test",
+        review_status="APPROVED_BY_DELEGATION",
+    )
+
+
+def test_try_load_e_use_rows_for_selection_no_pin_returns_none(tmp_path: Path) -> None:
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    assert cli._try_load_e_use_rows_for_selection(campaign) is None
+
+
+def test_try_load_e_use_rows_for_selection_pinned_valid_returns_rows(
+    tmp_path: Path,
+) -> None:
+    """pin declared + `e_use_table.json` present and byte-identical to the
+    pin -> the parsed rows, not `None` (the `truth_floor_for_candidate()`
+    input this WP §前提7 wires up)."""
+    row = _e_use_row_for_selection_test()
+    # the pin has to be computed from the exact bytes that will be written,
+    # and `build_tiny_campaign()` needs the pin *before* freezing — write
+    # once to compute the sha256, then rebuild the (now pinned) campaign and
+    # rewrite the same bytes into its fresh campaign_dir.
+    scratch_dir = tmp_path / "scratch"
+    scratch_dir.mkdir()
+    e_use_sha = _write_pinned_e_use_table(scratch_dir, [row])
+
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, frozen_inputs={"e_use_table_sha256": e_use_sha}
+    )
+    _write_pinned_e_use_table(campaign_dir, [row])
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    rows = cli._try_load_e_use_rows_for_selection(campaign)
+    assert rows is not None
+    assert len(rows) == 1
+    assert rows[0].construct_id == "fundamental_frequency"
+    assert rows[0].e_use_value == 2.0
+
+
+def test_try_load_e_use_rows_for_selection_pinned_missing_file_raises(
+    tmp_path: Path,
+) -> None:
+    """pin declared but `e_use_table.json` was never written (or was
+    deleted post-freeze) -> `StaleEUseTableError` propagates (fail closed);
+    it is not swallowed into `None` the way a legitimately undeclared pin
+    is."""
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, frozen_inputs={"e_use_table_sha256": "0" * 64}
+    )
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    assert not (campaign_dir / "e_use_table.json").exists()
+
+    with pytest.raises(holdout_stage.StaleEUseTableError):
+        cli._try_load_e_use_rows_for_selection(campaign)
+
+
+def test_try_load_e_use_rows_for_selection_pinned_mutated_bytes_raises(
+    tmp_path: Path,
+) -> None:
+    """pin declared and the file exists, but its bytes were mutated after
+    freeze (sha256 mismatch) -> `StaleEUseTableError` propagates."""
+    row = _e_use_row_for_selection_test()
+    scratch_dir = tmp_path / "scratch"
+    scratch_dir.mkdir()
+    e_use_sha = _write_pinned_e_use_table(scratch_dir, [row])
+
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, frozen_inputs={"e_use_table_sha256": e_use_sha}
+    )
+    _write_pinned_e_use_table(campaign_dir, [row])
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    # mutate the on-disk table after freeze -> bytes no longer match the pin.
+    (campaign_dir / "e_use_table.json").write_text("[]\n", encoding="utf-8")
+
+    with pytest.raises(holdout_stage.StaleEUseTableError):
+        cli._try_load_e_use_rows_for_selection(campaign)
+
+
+def test_run_c3a_refuses_when_e_use_pin_declared_and_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """end-to-end (P1 ADOPT): a C3a invocation on a campaign whose manifest
+    declares an E_use pin but whose `e_use_table.json` is missing must
+    refuse the stage — `StaleEUseTableError` propagates out of `_run_c3a`
+    and no `f0_selection_frozen` ledger event is ever written (the concealed
+    fallback to `zero_guard` ranking + `SELECTION_FROZEN` this finding
+    closes)."""
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+
+    campaign, subset = _f0_v11_campaign(
+        tmp_path, frozen_inputs={"e_use_table_sha256": "0" * 64}
+    )
+    assert not (Path(campaign.campaign_dir) / "e_use_table.json").exists()
+
+    only_b0 = (candidate_by_id("F0-B0-CURRENT"),)
+    monkeypatch.setattr(
+        cli,
+        "active_candidates_for_meter",
+        lambda meter, _orig=cli.active_candidates_for_meter: (
+            only_b0 if meter is MeterId.F0_CONTROL else _orig(meter)
+        ),
+    )
+    monkeypatch.setattr(
+        measure_stage,
+        "run_measure_stage",
+        lambda campaign_arg, instances, candidates_arg, **kwargs: _fabricate_f0_v11_records(
+            subset, instances, candidates_arg, silence_and_too_short_fire=False
+        ),
+    )
+
+    with pytest.raises(holdout_stage.StaleEUseTableError):
+        cli._run_c3a(campaign, subset, 1)
+
+    f0_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "f0_selection_frozen"
+    ]
+    assert f0_events == []

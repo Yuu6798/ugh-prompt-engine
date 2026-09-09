@@ -57,9 +57,12 @@ from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.candidates import adapter
 from voice_genesis.calibration.candidates.registry import Candidate, active_candidates
 from voice_genesis.calibration.canonical import manifest_sha
+from voice_genesis.calibration.e_use_table import StaleEUseTableError, finite_positive_or_none
+from voice_genesis.calibration.e_use_table import find_row as find_e_use_row
 from voice_genesis.calibration.fixtures import controls as fixture_controls
 from voice_genesis.calibration.fixtures.matrix import FixtureRow
-from voice_genesis.calibration.observables import bias, error_terms, q95, two_stage_median
+from voice_genesis.calibration.gates import EUseEvidenceRow
+from voice_genesis.calibration.observables import apply_polarity, bias, error_terms, q95, two_stage_median
 from voice_genesis.calibration.selection import CandidateCriteria, SelectionOutcome, select_across_ceilings
 from voice_genesis.calibration.vocab import ClaimCeiling
 
@@ -80,7 +83,13 @@ def candidate_space_sha(candidates: Sequence[Candidate] | None = None) -> str:
 
     v1.2 WP2b: 既定 pool は `ALL_CANDIDATES` ではなく `active_candidates()`
     ——`--rehearsal` では C0 が凍結した縮小プールと同じ集合を C3 で再確認する
-    （本番では `ALL_CANDIDATES` と同一なので sha は不変）。"""
+    （本番では `ALL_CANDIDATES` と同一なので sha は不変）。
+
+    RUN10-CAL-v1.4 §前提 2/§前提 5: `abstention_reasons`（非空のみ）/
+    `truth_polarity`（非 `None` のみ）も同じ「宣言時のみキーを出力する」
+    規約で payload に含める——v1.4 で新規宣言する候補（M2A-B0-AUTOCORR-
+    PERIODICITY 他）以外の payload は本 revision 前と bit-for-bit 同一の
+    まま。"""
     pool = candidates if candidates is not None else active_candidates()
     payload = {}
     for c in pool:
@@ -102,6 +111,14 @@ def candidate_space_sha(candidates: Sequence[Candidate] | None = None) -> str:
                 "field": c.detection_predicate.field,
                 "min_value": c.detection_predicate.min_value,
             }
+        # RUN10-CAL-v1.4 §前提 2/§前提 5 preregistration: `abstention_reasons`
+        # (非空のみ)/`truth_polarity`(非 None のみ)も凍結対象——`detection_
+        # predicate` と同じ規約(未宣言候補では payload にキー自体を出力せず、
+        # v1.3 以前の候補の sha を bit-for-bit 不変に保つ)。
+        if c.abstention_reasons:
+            entry["abstention_reasons"] = sorted(r.value for r in c.abstention_reasons)
+        if c.truth_polarity is not None:
+            entry["truth_polarity"] = c.truth_polarity
         payload[c.candidate_id] = entry
     return manifest_sha(payload)
 
@@ -320,11 +337,15 @@ def truth_value_for_row(row: FixtureRow) -> float | None:
 
 #: fail filter 名の閉集合（`candidates.adapter` の 5 種、設計正本 §8、+
 #: `candidate_fail_filter_report()` 自身が定義する `positive_rows_absent`/
-#: `negative_controls_incomplete`/`coverage_incomplete` の計 8 種。round 17
-#: finding #1 採用で `negative_controls_incomplete` を追加、round 28 ADOPT (2)
+#: `negative_controls_incomplete`/`coverage_incomplete`/
+#: `negative_control_undeclared_missing` の計 9 種。round 17 finding #1
+#: 採用で `negative_controls_incomplete` を追加、round 28 ADOPT (2)
 #: (`[UNDERSPEC-CAL-D64]`) で `coverage_incomplete` を追加、round 30
 #: self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`) で `coverage_incomplete` の
-#: 母集団・判定を拡張（filter 名自体は増えない）。
+#: 母集団・判定を拡張（filter 名自体は増えない）、PR #354 round 3 finding #1
+#: 採用（2026-09-09）で `negative_control_undeclared_missing` を追加
+#: （holdout `_negative_fired()` v1.4 経路 (B) と同一述語を selection 側にも
+#: 適用——`negative_control_false_fire` へは fold しない別 filter）。
 #: `candidate_fail_filter_report()` が返す dict のキーと 1:1 対応する。
 FAIL_FILTER_NAMES: tuple[str, ...] = (
     "schema_violation",
@@ -335,6 +356,7 @@ FAIL_FILTER_NAMES: tuple[str, ...] = (
     "positive_rows_absent",
     "negative_controls_incomplete",
     "coverage_incomplete",
+    "negative_control_undeclared_missing",
 )
 
 
@@ -345,9 +367,10 @@ def sanctioned_abstention_row_ids(
 ) -> frozenset[str]:
     """RUN10-CAL-v1.2 WP1: `missing_row_ids`（宣言された negative control 行の
     うち own record が皆無だった行）のうち、`fixtures.controls.
-    SANCTIONED_ABSTENTIONS`（現行は `(SILENCE, "F0_UNUSABLE")` 1 組のみの
-    閉語彙）に列挙された (control_class, missing_reason) の組と一致する行
-    だけを返す。
+    SANCTIONED_ABSTENTIONS`（閉語彙。v1.4 §前提 3 で 2 組
+    `{(SILENCE, "F0_UNUSABLE"), (NOISE_ONLY, "F0_UNUSABLE")}`——v1.2/v1.3 の
+    1 組から拡張済み）に列挙された (control_class, missing_reason) の組と
+    一致する行だけを返す。
 
     `control_class_by_row_id`（row_id -> `fixtures.controls.ControlClass`
     の値文字列。宣言された negative control 行のみを対象とする）と
@@ -399,7 +422,7 @@ def candidate_fail_filter_report(
     """finding #8: `candidates.adapter` の共通 5 fail filter（schema 違反 /
     無説明非有限 / within-process と fresh-process の不一致 / negative
     control 偽検出 / positive control 不発火）を `candidate` の全 record へ
-    適用し、`{filter_name: 発火したか}` を返す（`FAIL_FILTER_NAMES` の 7 キー
+    適用し、`{filter_name: 発火したか}` を返す（`FAIL_FILTER_NAMES` の 9 キー
     すべてを必ず持つ）。`eligible_after_fail_filters()` と組み合わせて使う。
 
     `negative_control_row_ids`/`positive_control_row_ids` が空（対象 family
@@ -528,7 +551,8 @@ def candidate_fail_filter_report(
     宣言された negative control 行のみ）と `missing_reason_by_negative_row_id`
     （row_id -> 当該候補への ledger `measurement_missing` の `reason`）を
     渡すと、両方が非 `None` の行のうち組が `fixtures.controls.
-    SANCTIONED_ABSTENTIONS`（閉語彙、現行 `(SILENCE, "F0_UNUSABLE")` のみ）
+    SANCTIONED_ABSTENTIONS`（閉語彙。v1.4 §前提 3 で 2 組
+    `{(SILENCE, "F0_UNUSABLE"), (NOISE_ONLY, "F0_UNUSABLE")}`）
     に含まれる行を「present かつ non-fired」として扱う——
     `negative_controls_incomplete` の completeness 判定からは除外し（fail-
     closed のまま維持されるのは非 sanctioned な欠測のみ）、
@@ -539,7 +563,38 @@ def candidate_fail_filter_report(
     既定 `None`）。sanctioned 行以外の欠測（例: `OUTPUT_MISSING` による
     行欠落や NOISE_ONLY の control_class）は従来どおり incomplete のまま。
     粒度混在（本 filter は row_id 単位、`coverage_incomplete` は instance
-    単位）は v1.2 では変更しない（境界宣言）。"""
+    単位）は v1.2 では変更しない（境界宣言）。
+
+    PR #354 round 3 finding #1 採用（2026-09-09、`negative_control_
+    undeclared_missing`）: round 1–2 まで selection 側は「非空 group 内の
+    宣言されていない missing_reason/ineligible」を無条件に non-fire として
+    扱っており（`fixtures.controls.detected()` が record 単位でそう写像
+    するため）、`holdout_stage.control_detection_for_family._negative_fired()`
+    の v1.4 経路 (B)（同じ record 形状を無条件失敗と判定する）と乖離して
+    いた——selection は該当 record を数えても `negative_control_false_fire`
+    （any-fire ゼロ許容）が「非発火」側に倒すため、行 completeness
+    （`negative_controls_incomplete`）も満たしたまま候補が誤って
+    eligible に残る経路があった。新設した独立 filter
+    `negative_control_undeclared_missing` がこれを閉じる: `declared_
+    negative_row_ids`（`negative_control_row_ids` ∪ `noise_only_control_
+    row_ids`、completeness 判定と同じ母集団）に属する own record のうち
+    いずれか 1 件でも `missing_reason is not None or ineligible` かつ
+    `fixtures.controls.abstained(output, candidate)` が `False`（＝宣言
+    されていない）であれば filter 全体を `True` にする——holdout の
+    `_negative_fired()` 経路 (B) が per-instance（`(row_id, probe_index)`
+    group）に適用する述語と同一であり、「いずれかの instance の いずれかの
+    repeat が該当すれば filter 発火」という判定は record 全体への flat な
+    any-reduction と数学的に同値なため、instance 単位のグルーピングは
+    行わない（実装コメント参照）。record が丸ごと皆無の instance（group
+    空）はこの filter の対象外のまま（経路 (A)、`negative_controls_
+    incomplete`/`sanctioned_abstention_row_ids` の管轄）。
+    `negative_control_false_fire`（record 単位の
+    any-fire ゼロ許容）へは fold しない——別の観点（any-fire vs
+    宣言されていない欠落）を record clarity のため独立 filter として
+    残す。v1.4 前提 2/§Y3 の「selection 側は audit-only の
+    `negative_control_declared_abstentions` に留める」という WP-A block 3
+    deviation はこの round 3 是正で上書きされる（`DESIGN_VG_METER_CAL_
+    DEBT_v1.4.md` §Y3 該当パラグラフを参照/更新済み）。"""
     own_records = [r for r in records if r.candidate_id == candidate.candidate_id]
 
     required_field = measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY.get(
@@ -586,11 +641,75 @@ def candidate_fail_filter_report(
         missing_reason_by_negative_row_id,
     )
 
+    # RUN10-CAL-v1.4 §前提 2 経路 (B), round 3 是正（PR #354 round 3 finding
+    # #1 採用、2026-09-09）: `fixtures.controls.detected()` は
+    # missing_reason/ineligible の record を宣言の有無に関わらず `False`
+    # （非発火）へ写像するため、`neg_detections`（any-fire 判定の入力）
+    # 自体はこの record を無条件に非発火として数える——これは
+    # `negative_control_false_fire`（any-fire ゼロ許容）の入力としては
+    # 本 revision 前と不変のまま維持する（fire/non-fire の record 単位の
+    # 意味論に手を入れると `negative_control_false_fire` 自体の判定が
+    # 変わってしまうため）。**しかし** round 1–2 時点はこの record 単位の
+    # 非発火写像を「selection 側には holdout 型の round 20 契約
+    # （`holdout_stage.control_detection_for_family._negative_fired()`
+    # の「非空 group 内の宣言されていない missing/ineligible は無条件
+    # 失敗」）が存在しない」と誤って結論していた（旧 WP-A block 3
+    # deviation、`negative_control_declared_abstentions` を audit-only の
+    # ままに留めていた）。round 3 で是正: 下記
+    # `negative_control_undeclared_missing`（新設の独立 fail filter、
+    # `negative_control_false_fire` へは folding しない）が holdout と
+    # 同一の述語（`fixtures.controls.abstained()`、正本 1 箇所）で
+    # この穴を閉じる——`abstained()` は `holdout_stage` と共用のまま。
     neg_detections = [
         fixture_controls.detected(r.output, predicate=candidate.detection_predicate)
         for r in own_records
         if r.row_id in negative_control_row_ids
     ]
+    # PR #354 round 5 finding #1 是正（2026-09-09）: この audit-only カウンタ
+    # は `negative_control_undeclared_missing`（上記コメント参照）と
+    # 同じ母集団 `declared_negative_row_ids`（`negative_control_row_ids` ∪
+    # `noise_only_control_row_ids`）で数えるべきところ、round 3 実装時は
+    # ゼロ許容母集団 `negative_control_row_ids` のみを対象にしていた
+    # （zero-tolerance と declared 母集団を混同）。この結果 C3a
+    # (`f0_selection_frozen.fail_filter_reports[*]`) は NOISE_ONLY 行上で
+    # 宣言された `OUTPUT_MISSING`（F0 census が示す pYIN 系候補の実態）を
+    # undercounts していた——`negative_control_undeclared_missing` 自体の
+    # 判定（母集団は当初から `declared_negative_row_ids`）には影響しない
+    # 独立した provenance バグ。母集団を揃えて是正する。
+    negative_control_declared_abstentions = sum(
+        1
+        for r in own_records
+        if r.row_id in declared_negative_row_ids
+        and (r.output.missing_reason is not None or r.output.ineligible)
+        and fixture_controls.abstained(r.output, candidate)
+    )
+    # round 3 是正（PR #354 round 3 finding #1）: `negative_control_
+    # undeclared_missing` — holdout の `_negative_fired()` v1.4 経路 (B)
+    # と同一の述語を per-instance（`(row_id, probe_index)`）で適用する。
+    # 母集団は `negative_controls_incomplete` の completeness 母集団と
+    # 同じ和集合 `declared_negative_row_ids`（`negative_control_row_ids`
+    # ∪ `noise_only_control_row_ids`）——v1.1 §V1 の NOISE_ONLY 分離は
+    # `negative_control_false_fire`（any-fire ゼロ許容）専用の carve-out
+    # であり、この filter（宣言されていない missing/ineligible の失敗
+    # 算入）まで NOISE_ONLY を免除する根拠にはならない。record が丸ごと
+    # 皆無の instance（group 空）はここでは対象外——それは
+    # `negative_controls_incomplete`（経路 (A)、行単位、sanctioned
+    # abstention 済み）の管轄のまま。record が宣言（`Candidate.
+    # abstention_reasons`、`abstained()`）で説明されれば non-failure
+    # （holdout の `any_declared_abstention` と同じ免責）。「per-instance で
+    # 判定し、いずれかの instance が失敗すれば filter 全体が True」は
+    # 「宣言された母集団の中に、宣言されていない missing/ineligible な
+    # record が 1 件でもあるか」という flat な any-reduction と数学的に
+    # 同値なため、holdout のような per-instance group 化（`any_declared_
+    # abstention` の instance 単位 bookkeeping が別途必要な holdout とは
+    # 異なり、selection 側はそれを必要としない——`negative_control_
+    # declared_abstentions` で record 単位に別途会計済み）は行わない。
+    negative_control_undeclared_missing = any(
+        (r.output.missing_reason is not None or r.output.ineligible)
+        and not fixture_controls.abstained(r.output, candidate)
+        for r in own_records
+        if r.row_id in declared_negative_row_ids
+    )
     # v1.2 WP1: a sanctioned-abstention row has zero own records because the
     # F0-dependent candidate was never called on it (a skip, not a call that
     # came back silent) — fold it into the any-fire population as `False`
@@ -707,18 +826,37 @@ def candidate_fail_filter_report(
         "positive_rows_absent": positive_rows_absent,
         "negative_controls_incomplete": negative_controls_incomplete,
         "coverage_incomplete": coverage_incomplete,
+        # PR #354 round 3 finding #1 採用（2026-09-09）: 独立 fail filter
+        # （`negative_control_false_fire` へは fold しない——record 単位の
+        # any-fire 判定とは別の、per-instance の「宣言されていない
+        # missing/ineligible」判定であることを台帳上も区別する）。
+        "negative_control_undeclared_missing": negative_control_undeclared_missing,
         # v1.1 §V1: audit-only keys, not in `FAIL_FILTER_NAMES` — never
         # consulted by `eligible_after_fail_filters()`. Non-empty only when
         # the caller (F0_CONTROL's C3a) passes `noise_only_control_row_ids`.
         "noise_only_false_detection_rate": noise_only_false_detection_rate,
         "noise_only_instances_detected": noise_only_instances_detected,
         "noise_only_instances_total": noise_only_instances_total,
+        # RUN10-CAL-v1.4 §前提 2 経路 (B): audit-only, not in
+        # `FAIL_FILTER_NAMES` — count of *present* negative-control records
+        # whose missing_reason/ineligible is explained by the candidate's
+        # declared `abstention_reasons` (`fixtures.controls.abstained()`).
+        # PR #354 round 3 是正: この record 単位の内訳は
+        # `negative_control_false_fire`/`negative_controls_incomplete` を
+        # 変えないままだが（両者は record 単位ではなく any-fire/行単位の
+        # 判定であり不変）、round 3 で新設した
+        # `negative_control_undeclared_missing`（per-instance、上記）の
+        # 「宣言済みなら non-failure」の免責根拠そのものである——この
+        # audit-only キーは新 filter の判定結果の要約ではなく、その入力
+        # となる宣言済み record 件数の可視化として引き続き残す。
+        "negative_control_declared_abstentions": negative_control_declared_abstentions,
     }
 
 
 def eligible_after_fail_filters(report: Mapping[str, object]) -> bool:
     """`candidate_fail_filter_report()` の戻り値から eligibility を導出する:
-    7 filter のいずれか 1 つでも発火（True）していれば ineligible。"""
+    `FAIL_FILTER_NAMES`（9 filter）のいずれか 1 つでも発火（True）していれば
+    ineligible。"""
     return not any(report.get(name, False) for name in FAIL_FILTER_NAMES)
 
 
@@ -781,14 +919,111 @@ def claim_scope_report(
     を適用し、`(capped, report)` を返す。`report` は SELECTION_FROZEN /
     HOLDOUT_EXECUTED_VALID payload の `claim_scope_by_candidate` に候補ごと
     そのまま積める形（`construct`/`original_ceiling`/`capped_ceiling`/
-    `capped`）。"""
+    `capped`/`cap_reason`）。
+
+    RUN10-CAL-v1.4 §前提 5 preregistration
+    (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`): scope capping の後、結果の
+    ceiling が `DIRECTIONAL` かつ `candidate.truth_polarity is None`
+    （極性が preregistration されていない）なら、さらに `DIAGNOSTIC_ONLY`
+    へ capping する（理由 `"NO_POLARITY"`）——極性宣言の無い DIRECTIONAL
+    主張は許可しない（tau/reversal の符号解釈が定義できないため）。v1.4 で
+    極性を宣言するのは APERIODICITY_GT の 3 algorithm family のみなので、
+    M5_TRANSITION/M6_IDENTITY の DIRECTIONAL 候補は本 revision で
+    `DIAGNOSTIC_ONLY` へ一律 capping される（意図した仕様上の帰結——
+    v1.4 doc §Y4「答えていない問い」に登録）。`cap_reason` は
+    `"NO_POLARITY"`（本規則で capping）/ `"MAX_CLAIM_SCOPE"`（scope capping
+    のみ）/ `None`（capping なし）のいずれか。`capped` は最終 ceiling が
+    元の `claim_ceiling` と異なるかどうか（理由を問わない、既存の意味を
+    維持）。"""
     capped, was_capped = capped_ceiling(candidate.construct, candidate.claim_ceiling, max_claim_scope)
+    no_polarity_capped = False
+    # NO_POLARITY capping keys off the candidate's *originally declared*
+    # `claim_ceiling` (not the post-scope-cap result): scope capping
+    # (`capped_ceiling()` above) can independently downgrade an ABSOLUTE
+    # candidate to DIRECTIONAL for an unrelated reason (its construct is
+    # outside `max_claim_scope`) — that candidate never claimed a
+    # DIRECTIONAL polarity in the first place, so it must not be further
+    # capped by a polarity rule that only applies to candidates that
+    # declared DIRECTIONAL themselves (mirrors `build_candidate_criteria`'s
+    # own `candidate.claim_ceiling is DIRECTIONAL` condition).
+    if candidate.claim_ceiling is ClaimCeiling.DIRECTIONAL and candidate.truth_polarity is None:
+        capped = ClaimCeiling.DIAGNOSTIC_ONLY
+        no_polarity_capped = True
+    if no_polarity_capped:
+        cap_reason: str | None = "NO_POLARITY"
+    elif was_capped:
+        cap_reason = "MAX_CLAIM_SCOPE"
+    else:
+        cap_reason = None
     return capped, {
         "construct": candidate.construct,
         "original_ceiling": candidate.claim_ceiling.value,
         "capped_ceiling": capped.value,
-        "capped": was_capped,
+        "capped": capped != candidate.claim_ceiling,
+        "cap_reason": cap_reason,
     }
+
+
+def truth_floor_for_candidate(
+    candidate: Candidate, e_use_rows: Sequence[EUseEvidenceRow] | None
+) -> float | None:
+    """RUN10-CAL-v1.4 §前提 7 preregistration
+    (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`): `candidate.construct`/`unit`/
+    `domain` に一致する E_use 行（`e_use_table.find_row()`、`holdout_stage.
+    load_e_use_rows()` と同じ表）が `e_use_mode == "absolute"` かつ有限の
+    `e_use_value` を持てば、その値を `observables.error_terms()` の
+    `truth_floor` として返す——正規化 MAE (`RE[i]`) の分母 floor を
+    `zero_guard` から construct の E_use（絶対受入誤差）へ置換する。
+
+    以下のいずれかに該当すれば `None`（呼び出し側は従来の `zero_guard` を
+    使う。挙動不変）:
+    - `e_use_rows` が `None`（呼び出し側が E_use 表を読めなかった/対象外
+      ——C3 selection は C4 と異なり E_use 表欠落を fail-closed 事由に
+      **しない**、`campaign.cli._try_load_e_use_rows_for_selection()` の
+      docstring 参照）。
+    - `find_row()` が一致行を返さない（0 件/複数件）。
+    - 行が見つかっても `e_use_mode == "relative"`（construct 単位の相対誤差
+      であり、instance ごとの truth に対する絶対展開が別途必要——本関数は
+      展開しない。§前提 7 は relative mode を変更しない）。
+    - `evidence_class == UNJUSTIFIED`（`e_use_value` が `None`）。
+
+    PR #354 round 1 finding #2 (P2, ADOPT): 一致行が `e_use_mode ==
+    "absolute"` かつ `e_use_value is not None`（=値が宣言されている）のに
+    その値が有限正でない（0/負/非有限）場合はもはや `None` を返さない——
+    `zero_guard` へ静かにフォールバックすると `RE[i] = AE[i]/max(|truth[i]|,
+    0)` の `ZeroDivisionError` を招く縮退経路だった（round 1 finding #2 実測:
+    `ae / max(0, 0)`）。「宣言されたが使えない E_use」は finding #1 の
+    stale/mutated pin と同じ「broken pin」事由であるため、判定は
+    `e_use_table.finite_positive_or_none()`（`holdout_stage.
+    absolute_e_use_value()` と共有する単一 source）に一本化した上で、
+    失敗時は `StaleEUseTableError` を送出して fail-closed する（呼び出し元
+    ——`campaign.cli` の C3a/C3b 各 call site——はこれを finding #1 と同じ
+    「pin が壊れている」経路として伝播させる。新規 `vocab.BlockedCode` は
+    追加しない）。「値が一致行に存在しない/relative/UNJUSTIFIED」は本関数の
+    対象外（宣言自体が無い legitimate ケースであり、値の妥当性検査より前で
+    `None` を返す——挙動不変）。
+
+    正本はここ 1 箇所——`build_candidate_criteria()` はこの関数の戻り値を
+    そのまま `observables.error_terms()` へ渡すのみで、E_use 行の探索・
+    mode 判定ロジックを複製しない。"""
+    if e_use_rows is None:
+        return None
+    row = find_e_use_row(
+        e_use_rows, construct_id=candidate.construct, unit=candidate.unit, domain=candidate.domain
+    )
+    if row is None or row.e_use_mode != "absolute" or row.e_use_value is None:
+        return None
+    floor = finite_positive_or_none(row.e_use_value)
+    if floor is None:
+        raise StaleEUseTableError(
+            "truth_floor_for_candidate: "
+            f"candidate={candidate.candidate_id!r} matched an absolute E_use row "
+            f"(construct={row.construct_id!r}, unit={row.unit!r}, domain={row.domain!r}) whose "
+            f"e_use_value={row.e_use_value!r} is not finite-positive — a declared but unusable "
+            "E_use is a broken pin (same fail-closed treatment as a stale/mutated "
+            "e_use_table.json; see finding #1)"
+        )
+    return floor
 
 
 def build_candidate_criteria(
@@ -797,6 +1032,7 @@ def build_candidate_criteria(
     truth_by_instance: Mapping[tuple[str, int], float],
     *,
     zero_guard: float = 1e-9,
+    truth_floor: float | None = None,
 ) -> CandidateCriteria:
     """`[UNDERSPEC-CAL-D16]` 実測 record 列（within+fresh 6 call/instance）
     から `CandidateCriteria` を構築する集計規則:
@@ -812,9 +1048,16 @@ def build_candidate_criteria(
       では吸収されるはずのケースでも平均値へ直接混入していた
       （`[UNDERSPEC-CAL-D43]`）。
     - `e[i] = m[i] - truth[i]`（raw signed error）、`AE[i] = |e[i]|`、
-      `RE[i] = AE[i]/max(|truth[i]|, zero_guard)`（`observables.error_terms`、
-      §10.1: `e[i] = m[i] - x[i]`、`AE[i] = |e[i]|`、
-      `RE[i] = AE[i]/max(|x[i]|, d[i])`）。
+      `RE[i] = AE[i]/max(|truth[i]|, truth_floor if truth_floor is not None
+      else zero_guard)`（`observables.error_terms`、§10.1: `e[i] = m[i] -
+      x[i]`、`AE[i] = |e[i]|`、`RE[i] = AE[i]/max(|x[i]|, d[i])`）。**v1.4
+      §前提 7 preregistration**（`DESIGN_VG_METER_CAL_DEBT_v1.4.md`）:
+      `truth_floor`（既定 `None` = 挙動不変）は `truth_floor_for_candidate()`
+      が construct の E_use（absolute mode）から導出した値——真値 0 近傍の
+      行で `RE[i]` が `zero_guard`（極小値）除算により発散する縮退
+      （2dde4014 実測: TILT 第 1 順位要素 2e8〜7e9）を防ぐ。E_use が
+      relative mode / 未凍結 / `UNJUSTIFIED` の construct では `None` の
+      まま（従来の `zero_guard` を使う）。
     - ABSOLUTE 系列: **normalized MAE は `RE[i]` の平均**（primary-domain の
       相対誤差指標。§9 の "primary-domain normalized MAE" 呼称に対応）、
       **BIAS は raw `e[i]` の平均**（§10.1: `BIAS = mean_i(e[i])` — `e[i]`
@@ -868,7 +1111,7 @@ def build_candidate_criteria(
         # median, grouped by MeasurementRecord.process_id (matches
         # holdout_stage.build_instance_margins's input shape exactly).
         m = two_stage_median(per_process)
-        et = error_terms(m, truth, zero_guard)
+        et = error_terms(m, truth, zero_guard, truth_floor=truth_floor)
         truths.append(truth)
         measured.append(m)
         raw_errors.append(et.e)
@@ -890,9 +1133,28 @@ def build_candidate_criteria(
     signed_bias = bias(raw_errors)
     primary_q95_ae = q95([abs(e) for e in raw_errors])
 
+    # RUN10-CAL-v1.4 §前提 5 preregistration: DIRECTIONAL 候補が
+    # `truth_polarity` を宣言していれば、tau/adjacent-reversal は
+    # `apply_polarity()`（正本）で極性適用済みの測定値を使う——`measured`
+    # 自体は他所（ABSOLUTE 系列の bias/MAE 等）で再利用しないため、ここで
+    # 安全に変換して差し替えられる。宣言が無い（`truth_polarity is None`）
+    # DIRECTIONAL 候補、および非 DIRECTIONAL 候補は無変換のまま（v1.3 以前と
+    # 完全に同一の挙動——`claim_scope_report` が NO_POLARITY で
+    # `DIAGNOSTIC_ONLY` へ cap するため、宣言の無い DIRECTIONAL 候補は
+    # そもそも DIRECTIONAL gate まで到達しない）。
+    apply_dir_polarity = (
+        candidate.claim_ceiling is ClaimCeiling.DIRECTIONAL
+        and candidate.truth_polarity is not None
+    )
+    directional_measured = (
+        [apply_polarity(m, candidate.truth_polarity) for m in measured]
+        if apply_dir_polarity
+        else measured
+    )
+
     kendall_tau = 0.0
-    if len(truths) >= 2 and len(set(truths)) >= 2 and len(set(measured)) >= 2:
-        tau, _p_value = kendalltau(truths, measured)
+    if len(truths) >= 2 and len(set(truths)) >= 2 and len(set(directional_measured)) >= 2:
+        tau, _p_value = kendalltau(truths, directional_measured)
         if tau is not None and math.isfinite(float(tau)):
             kendall_tau = float(tau)
 
@@ -901,7 +1163,7 @@ def build_candidate_criteria(
     reversals = 0
     for a, b in zip(order, order[1:]):
         delta_truth = truths[b] - truths[a]
-        delta_measured = measured[b] - measured[a]
+        delta_measured = directional_measured[b] - directional_measured[a]
         if delta_truth != 0 and (delta_measured > 0) != (delta_truth > 0):
             reversals += 1
     adjacent_reversal_rate = reversals / reversal_pairs
@@ -937,5 +1199,6 @@ __all__ = [
     "max_claim_scope_from_manifest",
     "capped_ceiling",
     "claim_scope_report",
+    "truth_floor_for_candidate",
     "build_candidate_criteria",
 ]

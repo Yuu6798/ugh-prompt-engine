@@ -288,12 +288,119 @@ def test_detected_with_predicate_nonfinite_value_is_false() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_sanctioned_abstentions_is_the_single_preregistered_pair() -> None:
+def test_sanctioned_abstentions_is_the_two_preregistered_pairs() -> None:
     """closed vocabulary — additions are preregistration-only for the next
-    revision (module docstring). Locks the current membership so an
-    unreviewed addition shows up as a test diff."""
+    revision (module docstring). v1.4 §前提 3 (P2 census PASS,
+    `scratchpad/v14/p23/p23_report.txt` §5.1) adds `(NOISE_ONLY,
+    "F0_UNUSABLE")` alongside the existing `(SILENCE, "F0_UNUSABLE")`. Locks
+    the current membership so an unreviewed addition shows up as a test
+    diff."""
     assert controls.SANCTIONED_ABSTENTIONS == frozenset(
-        {(controls.ControlClass.SILENCE, "F0_UNUSABLE")}
+        {
+            (controls.ControlClass.SILENCE, "F0_UNUSABLE"),
+            (controls.ControlClass.NOISE_ONLY, "F0_UNUSABLE"),
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 前提 2 経路 (B): `abstained()` — per-record declared
+# abstention (`Candidate.abstention_reasons`), independent of the row-level
+# `SANCTIONED_ABSTENTIONS` (path A, entirely-missing groups).
+# ---------------------------------------------------------------------------
+
+
+class _FakeCandidate:
+    def __init__(self, abstention_reasons: frozenset) -> None:
+        self.abstention_reasons = abstention_reasons
+
+
+def test_abstained_declared_reason_matches_and_eligible_is_true() -> None:
+    candidate = _FakeCandidate(frozenset({MissingReason.OUTPUT_MISSING}))
+    output = MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
+    assert controls.abstained(output, candidate) is True
+
+
+def test_abstained_no_declaration_is_false() -> None:
+    """既定（空 frozenset）の候補は、たとえ missing_reason が立っていても
+    常に棄権と認めない（従来挙動 = 失敗のまま）。"""
+    candidate = _FakeCandidate(frozenset())
+    output = MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
+    assert controls.abstained(output, candidate) is False
+
+
+def test_abstained_declared_but_reason_mismatch_is_false() -> None:
+    candidate = _FakeCandidate(frozenset({MissingReason.INPUT_MISSING}))
+    output = MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)
+    assert controls.abstained(output, candidate) is False
+
+
+def test_abstained_no_missing_reason_is_false() -> None:
+    candidate = _FakeCandidate(frozenset({MissingReason.OUTPUT_MISSING}))
+    output = MeterOutput(values={"hnr_db": 1.0})
+    assert controls.abstained(output, candidate) is False
+
+
+def test_abstained_declared_reason_but_ineligible_is_false() -> None:
+    """`ineligible=True` は棄権の対象外（依存欠如は別語彙）。"""
+    candidate = _FakeCandidate(frozenset({MissingReason.OUTPUT_MISSING}))
+    output = MeterOutput(
+        missing_reason=MissingReason.OUTPUT_MISSING,
+        ineligible=True,
+        ineligible_reason="no dep",
+    )
+    assert controls.abstained(output, candidate) is False
+
+
+def test_abstained_ineligible_without_missing_reason_is_false() -> None:
+    candidate = _FakeCandidate(frozenset({MissingReason.OUTPUT_MISSING}))
+    output = MeterOutput(ineligible=True, ineligible_reason="no dep")
+    assert controls.abstained(output, candidate) is False
+
+
+# ---------------------------------------------------------------------------
+# `abstained()` call-site AST test (mirrors `_detected_calls_without_
+# predicate_kwarg` below): both `selection_stage.candidate_fail_filter_report`
+# and `holdout_stage.control_detection_for_family` must call
+# `fixtures.controls.abstained` rather than re-deriving the same
+# `missing_reason in candidate.abstention_reasons` predicate inline (v1.4
+# §前提 2 経路 (B), memo Implementation Approach: "正本は 1 箇所 = ...
+# 両 stage がそれを呼ぶ。複製禁止").
+# ---------------------------------------------------------------------------
+
+
+def _calls_named(source: str, name: str) -> bool:
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        func_name = (
+            func.id
+            if isinstance(func, ast.Name)
+            else func.attr
+            if isinstance(func, ast.Attribute)
+            else None
+        )
+        if func_name == name:
+            return True
+    return False
+
+
+def test_abstained_is_called_from_selection_stage_and_holdout_stage() -> None:
+    calibration_root = Path(__file__).resolve().parents[1]
+    selection_stage_src = (calibration_root / "campaign" / "selection_stage.py").read_text(
+        encoding="utf-8"
+    )
+    holdout_stage_src = (calibration_root / "campaign" / "holdout_stage.py").read_text(
+        encoding="utf-8"
+    )
+    assert _calls_named(selection_stage_src, "abstained"), (
+        "selection_stage.py must call fixtures.controls.abstained() — "
+        "the single source of truth for declared-reason abstention"
+    )
+    assert _calls_named(holdout_stage_src, "abstained"), (
+        "holdout_stage.py must call fixtures.controls.abstained() — "
+        "the single source of truth for declared-reason abstention"
     )
 
 

@@ -1629,3 +1629,87 @@ def test_gate_approval_ordering_skips_and_notes_when_record_absent(tmp_path: Pat
 def test_gate_approval_ordering_is_a_noop_for_in_memory_manifests() -> None:
     report = c0_validate._check_gate_approval_ordering(_complete_manifest(), None)
     assert report.violations == () and report.notes == ()
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 3: `_check_sanctioned_abstentions_vocabulary()` —
+# design_revision >= 1.4 の本番 (rehearsal=False) freeze/validate は
+# `fixtures.controls.SANCTIONED_ABSTENTIONS` の閉語彙一致を要求する
+# (`DESIGN_VG_METER_CAL_DEBT_v1.4.md` §前提3)。
+# ---------------------------------------------------------------------------
+
+
+def _complete_v1_4_manifest() -> dict[str, object]:
+    manifest = _complete_manifest()
+    manifest["frozen_design"] = {**manifest["frozen_design"], "design_revision": "1.4"}  # type: ignore[dict-item]
+    return manifest
+
+
+def test_sanctioned_abstentions_vocabulary_matches_current_code_passes() -> None:
+    """the real, currently-loaded `fixtures.controls.SANCTIONED_ABSTENTIONS`
+    (v1.4: `{(SILENCE, "F0_UNUSABLE"), (NOISE_ONLY, "F0_UNUSABLE")}`) must
+    pass this check unconditionally for a design_revision >= 1.4 production
+    manifest -- this is a regression guard against a future code change
+    breaking this WP's own preregistration."""
+    violations = c0_validate._check_sanctioned_abstentions_vocabulary(_complete_v1_4_manifest())
+    assert violations == []
+
+
+def test_sanctioned_abstentions_vocabulary_mismatch_is_blocked() -> None:
+    """a hypothetical code drift (simulated by monkeypatching the module-
+    level constant) is caught: design_revision >= 1.4 production manifest
+    with a `SANCTIONED_ABSTENTIONS` that no longer matches the two
+    preregistered pairs must be VALIDATION_BLOCKED via
+    `BLOCKED_C0_MANIFEST_INCOMPLETE`."""
+    import voice_genesis.calibration.fixtures.controls as fixture_controls_module
+
+    original = fixture_controls_module.SANCTIONED_ABSTENTIONS
+    try:
+        fixture_controls_module.SANCTIONED_ABSTENTIONS = frozenset(
+            {(fixture_controls_module.ControlClass.SILENCE, "F0_UNUSABLE")}
+        )
+        violations = c0_validate._check_sanctioned_abstentions_vocabulary(
+            _complete_v1_4_manifest()
+        )
+        assert violations != []
+        assert any("SANCTIONED_ABSTENTIONS" in v for v in violations)
+
+        result = c0_validate.validate_c0_manifest(_complete_v1_4_manifest())
+        assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+        assert any("SANCTIONED_ABSTENTIONS" in k for k in result.missing_required_keys)
+    finally:
+        fixture_controls_module.SANCTIONED_ABSTENTIONS = original
+
+
+def test_sanctioned_abstentions_vocabulary_rehearsal_is_exempt() -> None:
+    """rehearsal manifests are exempt (mirrors `_check_candidate_space_pool`'s
+    rehearsal branch) -- a mismatched vocabulary under `rehearsal=True` is
+    not blocked, since rehearsal claims nothing."""
+    import voice_genesis.calibration.fixtures.controls as fixture_controls_module
+
+    original = fixture_controls_module.SANCTIONED_ABSTENTIONS
+    try:
+        fixture_controls_module.SANCTIONED_ABSTENTIONS = frozenset()
+        manifest = _complete_v1_4_manifest()
+        manifest["frozen_design"]["rehearsal"] = True  # type: ignore[index]
+        violations = c0_validate._check_sanctioned_abstentions_vocabulary(manifest)
+        assert violations == []
+    finally:
+        fixture_controls_module.SANCTIONED_ABSTENTIONS = original
+
+
+def test_sanctioned_abstentions_vocabulary_not_applied_below_v1_4() -> None:
+    """design_revision < 1.4 (e.g. v1.3, the pre-existing default before
+    this WP) manifests are not subject to this check regardless of the
+    code's current vocabulary."""
+    import voice_genesis.calibration.fixtures.controls as fixture_controls_module
+
+    original = fixture_controls_module.SANCTIONED_ABSTENTIONS
+    try:
+        fixture_controls_module.SANCTIONED_ABSTENTIONS = frozenset()
+        manifest = _complete_manifest()
+        manifest["frozen_design"] = {**manifest["frozen_design"], "design_revision": "1.3"}  # type: ignore[dict-item]
+        violations = c0_validate._check_sanctioned_abstentions_vocabulary(manifest)
+        assert violations == []
+    finally:
+        fixture_controls_module.SANCTIONED_ABSTENTIONS = original

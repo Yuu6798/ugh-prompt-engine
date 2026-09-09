@@ -3,6 +3,7 @@
   "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.1.md",
   "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.2.md",
   "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.3.md",
+  "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.4.md",
   "voice_genesis/calibration/__init__.py",
   "voice_genesis/calibration/approvals.py",
   "voice_genesis/calibration/authorization_guard.py",

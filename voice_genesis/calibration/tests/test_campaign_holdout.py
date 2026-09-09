@@ -16,7 +16,7 @@ from voice_genesis.calibration import e_use_table
 from voice_genesis.calibration.campaign import holdout_stage, measure_stage, selection_stage
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.candidates.adapter import MeterOutput
-from voice_genesis.calibration.candidates.registry import candidates_for_meter
+from voice_genesis.calibration.candidates.registry import candidate_by_id, candidates_for_meter
 from voice_genesis.calibration.fixtures.controls import DetectionPredicate
 from voice_genesis.calibration.fixtures.matrix import FixtureRow, MatrixRow
 from voice_genesis.calibration.gates import DirectionalPair, EUseEvidenceRow, InvariancePair
@@ -1470,6 +1470,188 @@ def test_control_detection_for_family_negative_control_one_invalid_repeat_fails_
     assert detection.fdr0 == pytest.approx(1.0 / 5.0)
 
 
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 2 経路 (B) (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`):
+# `fixtures.controls.abstained()` — a *non-empty* group whose missing_reason
+# is explained by a candidate-declared `Candidate.abstention_reasons` is
+# present-and-non-fired, narrowing the round 20 "any missing/invalid repeat
+# fails" contract for declaring candidates only.
+# ---------------------------------------------------------------------------
+
+
+def _tilt_candidate_with_abstention(reasons: frozenset) -> object:
+    return replace(_tilt_candidate(), abstention_reasons=reasons)
+
+
+def test_control_detection_for_family_declared_output_missing_on_negative_is_non_fired() -> None:
+    """v1.4 §前提 2 経路 (B): every repeat of a non-empty negative-control
+    group is `missing_reason=OUTPUT_MISSING`, and the candidate declares
+    `abstention_reasons={OUTPUT_MISSING}` — this must now be present-and-
+    non-fired (not the round 20 unconditional failure that applied before
+    v1.4 / that still applies to a non-declaring candidate, see
+    `test_control_detection_for_family_negative_control_all_missing_reason_
+    is_failure` above using the same fixture shape)."""
+    candidate = _tilt_candidate_with_abstention(frozenset({MissingReason.OUTPUT_MISSING}))
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            missing=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 0
+    assert detection.fdr0 == 0.0
+    assert detection.negative_control_sanctioned_abstentions == 5
+
+
+def test_control_detection_for_family_undeclared_reason_on_negative_stays_failure() -> None:
+    """v1.4 §前提 2 経路 (B): the candidate declares `abstention_reasons`
+    but for a *different* reason (`INPUT_MISSING`) than the one actually
+    observed (`OUTPUT_MISSING`) — `fixtures.controls.abstained()` requires
+    an exact match, so this instance stays a round 20 failure exactly as an
+    undeclaring candidate would."""
+    candidate = _tilt_candidate_with_abstention(frozenset({MissingReason.INPUT_MISSING}))
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            missing=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 5
+    assert detection.fdr0 == 1.0
+    assert detection.negative_control_sanctioned_abstentions == 0
+
+
+def test_control_detection_for_family_declared_reason_on_positive_stays_failure() -> None:
+    """v1.4 §前提 2 経路 (B): `abstained()` is consulted only by
+    `_negative_fired()` — the positive-control side (`_positive_detected()`)
+    is unaffected by any `Candidate.abstention_reasons` declaration. A
+    positive-control instance whose repeats are all `missing_reason=
+    OUTPUT_MISSING` must stay a failure (non-detected) even when the
+    candidate declares `abstention_reasons={OUTPUT_MISSING}` — declaring
+    abstention never turns a positive-control miss into a success."""
+    candidate = _tilt_candidate_with_abstention(frozenset({MissingReason.OUTPUT_MISSING}))
+    pos1 = _matrix_row(
+        "pos-1", family="TILT_GT", block="TRUTH_CORE", domain=Domain.PRIMARY,
+        positive_control=True,
+    )
+    matrix_rows = [pos1]
+    assignment = {"pos-1": Split.HOLDOUT}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "pos-1", probe_index, field="tilt_db_per_oct", value=None,
+            missing=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.n_pos == 5
+    assert detection.positive_control_failures == 5
+    assert detection.fnr1 == 1.0
+
+
+def test_control_detection_for_family_declared_reason_negative_does_not_mask_real_fire() -> None:
+    """v1.4 §前提 2 経路 (B): a sanctioned-abstention repeat in one instance
+    must not suppress a genuine false fire in a *different* repeat within
+    the same instance's group -- mirrors `test_v12_sanctioned_abstention_
+    does_not_mask_false_fire_on_other_row` (selection_stage) at the
+    holdout-side, single-instance granularity: probe_index 0 has one
+    abstained repeat (missing_reason=OUTPUT_MISSING) and one repeat that
+    genuinely fires (predicate=None default fire semantics: any finite
+    value)."""
+    candidate = _tilt_candidate_with_abstention(frozenset({MissingReason.OUTPUT_MISSING}))
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+
+    records = [
+        measure_stage.MeasurementRecord(
+            row_id="neg-1",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="within",
+            repeat_index=0,
+            process_id="within-process",
+            output=MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING),  # abstained
+        ),
+        measure_stage.MeasurementRecord(
+            row_id="neg-1",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="within",
+            repeat_index=1,
+            process_id="within-process",
+            output=MeterOutput(values={"tilt_db_per_oct": -3.0}),  # real fire
+        ),
+        measure_stage.MeasurementRecord(
+            row_id="neg-1",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="fresh",
+            repeat_index=0,
+            process_id="fresh-process-0",
+            output=MeterOutput(values={"tilt_db_per_oct": -3.0}),  # real fire
+        ),
+    ]
+    for probe_index in range(1, 5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            quiet_valid=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 1
+    assert detection.fdr0 == pytest.approx(1.0 / 5.0)
+
+
 def test_control_detection_for_family_negative_control_all_valid_and_quiet_is_success() -> None:
     """v1.1 §V3.6 (Codex round 20 P1 ADOPT): the only remaining "non-fire
     (success)" shape after the round 20 fix — every repeat produces a
@@ -1548,13 +1730,17 @@ def test_control_detection_for_family_sanctioned_abstention_silence_f0_unusable_
     assert detection.negative_control_sanctioned_abstentions == 1
 
 
-def test_control_detection_for_family_sanctioned_abstention_closed_vocabulary_excludes_noise_only() -> None:
-    """v1.3 (Codex #350 round 3 P1 ADOPT): the closed vocabulary is not
-    extended by this change -- `(NOISE_ONLY, "F0_UNUSABLE")` is not a member
-    of `fixtures.controls.SANCTIONED_ABSTENTIONS`, so an entirely-missing
-    NOISE_ONLY instance must still be counted as a failure exactly as
-    before, even though the missing_reason string matches the sanctioned
-    reason for SILENCE."""
+def test_control_detection_for_family_sanctioned_abstention_noise_only_f0_unusable_not_fired() -> None:
+    """v1.4 §前提 3 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, P2 census PASS —
+    `scratchpad/v14/p23/p23_report.txt` §5.1): `fixtures.controls.
+    SANCTIONED_ABSTENTIONS` now includes `(NOISE_ONLY, "F0_UNUSABLE")`
+    alongside `(SILENCE, "F0_UNUSABLE")` (無声対照に F0 は存在しないため、
+    F0 依存候補の NOISE_ONLY skip は SILENCE と同じ理由で正しい棄権)。an
+    entirely-missing NOISE_ONLY instance whose reason is `F0_UNUSABLE` must
+    now be counted as present-but-non-fired (FDR0 denominator only), mirroring
+    the pre-existing SILENCE test above (supersedes the pre-v1.4
+    `..._excludes_noise_only` test that pinned the narrower v1.2/v1.3
+    vocabulary)."""
     candidate = _tilt_candidate()
     neg1 = _matrix_row(
         "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
@@ -1576,6 +1762,42 @@ def test_control_detection_for_family_sanctioned_abstention_closed_vocabulary_ex
         candidate=candidate,
         records=records,
         control_class_by_negative_row_id={"neg-1": "NOISE_ONLY"},
+        missing_reason_by_negative_row_id={"neg-1": "F0_UNUSABLE"},
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 0
+    assert detection.fdr0 == 0.0
+    assert detection.negative_control_sanctioned_abstentions == 1
+
+
+def test_control_detection_for_family_sanctioned_abstention_closed_vocabulary_excludes_pure_sine() -> None:
+    """the closed vocabulary is still closed -- `(PURE_SINE, "F0_UNUSABLE")`
+    is not a member of `fixtures.controls.SANCTIONED_ABSTENTIONS` (v1.4
+    §前提 3 explicitly does not extend sanctioning beyond SILENCE/NOISE_ONLY:
+    `DESIGN_VG_METER_CAL_DEBT_v1.4.md` 前提 3 "PURE_SINE 等には拡張しない"),
+    so an entirely-missing PURE_SINE instance must still be counted as a
+    failure exactly as before."""
+    candidate = _tilt_candidate()
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="PURE_SINE",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(1, 5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            quiet_valid=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+        control_class_by_negative_row_id={"neg-1": "PURE_SINE"},
         missing_reason_by_negative_row_id={"neg-1": "F0_UNUSABLE"},
     )
     assert detection.n_neg == 5
@@ -2022,6 +2244,114 @@ def test_evaluate_absolute_meter_from_campaign_wires_real_inputs_and_gate5_fails
     assert any("gate5" in reason for reason in result.gate_detail["failure_reasons"])
 
 
+def test_evaluate_absolute_meter_from_campaign_control_detection_and_margins_summary_v14() -> None:
+    """RUN10-CAL-v1.4 §前提 6 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, Test
+    Strategy): a small synthetic ledger/records fixture reproducing the
+    `fdr0=0.2 / fnr1=0.0 / n_neg=10 / n_pos=25 / sanctioned=5` pattern the
+    memo's regression test calls for (the memo explicitly directs synthetic
+    reproduction over fixture-izing the real 2dde4014 read path: "tests は
+    小さな合成 ledger で同じ数値パターンを固定する"). Confirms `gate_detail
+    ["control_detection"]`/`gate_detail["margins_summary"]` are always-
+    present, self-describing blocks with the exact expected values.
+
+    - `neg-a` (SILENCE): 5 probes, every repeat `missing_reason=
+      OUTPUT_MISSING` -- the candidate declares `abstention_reasons=
+      {OUTPUT_MISSING}` (v1.4 §前提 2 経路 (B)), so all 5 are present-and-
+      non-fired (sanctioned).
+    - `neg-b` (NOISE_ONLY): 2 real fires + 3 genuine quiet non-detections ->
+      2 failures / 5 instances.
+    - n_neg = 5 + 5 = 10; negative_control_failures = 2; fdr0 = 2/10 = 0.2.
+    - 5 TRUTH_CORE rows x 5 probes, all cleanly detected at the declared
+      truth -> n_pos = 25, fnr1 = 0.0, zero AE/bias (margins_summary is all
+      zeros except the frozen U_GT+U_num/E_use/G constants)."""
+    candidate = replace(
+        _tilt_candidate(), abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING})
+    )
+    truth_core_rows = [
+        _matrix_row(f"pos-{i}", family="TILT_GT", block="TRUTH_CORE", slope_db_per_oct=-6.0)
+        for i in range(5)
+    ]
+    neg_a = _matrix_row(
+        "neg-a", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="SILENCE",
+    )
+    neg_b = _matrix_row(
+        "neg-b", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = truth_core_rows + [neg_a, neg_b]
+    row_by_id = {mr.row_id: mr.row for mr in matrix_rows}
+    assignment = {mr.row_id: Split.HOLDOUT for mr in matrix_rows}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for row in truth_core_rows:
+        for probe_index in range(5):
+            records += _within_fresh_record(
+                candidate.candidate_id, row.row_id, probe_index, field="tilt_db_per_oct",
+                value=-6.0,
+            )
+    for probe_index in range(5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-a", probe_index, field="tilt_db_per_oct", value=None,
+            missing=True,
+        )
+    for probe_index in range(2):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-b", probe_index, field="tilt_db_per_oct", value=-3.0,
+        )
+    for probe_index in range(2, 5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-b", probe_index, field="tilt_db_per_oct", value=None,
+            quiet_valid=True,
+        )
+
+    e_use_row = replace(
+        _e_use_row(candidate.construct, mode="absolute"),
+        unit=candidate.unit, domain=candidate.domain, e_use_value=2.0,
+    )
+    manifest = {
+        "frozen_design": {"fixture_spec": {"TILT_GT": {"u_gt_bound": 0.01, "u_num_bound": 0.01}}}
+    }
+    expected_primary_instances = {(row.row_id, p) for row in truth_core_rows for p in range(5)}
+
+    result = holdout_stage.evaluate_absolute_meter_from_campaign(
+        meter_id=MeterId.M2_SPECTRAL_TILT.value,
+        family="TILT_GT",
+        candidate=candidate,
+        manifest=manifest,
+        row_by_id=row_by_id,
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        records=records,
+        expected_primary_instances=expected_primary_instances,
+        e_use_rows=(e_use_row,),
+    )
+
+    control_detection = result.gate_detail["control_detection"]
+    assert control_detection == {
+        "fdr0": 0.2,
+        "fnr1": 0.0,
+        "n_neg": 10,
+        "n_pos": 25,
+        "min_count_met": True,
+        "negative_control_failures": 2,
+        "positive_control_failures": 0,
+        "negative_control_sanctioned_abstentions": 5,
+    }
+    margins = result.gate_detail["margins_summary"]
+    assert margins["n"] == 25
+    assert margins["ae_q50"] == pytest.approx(0.0)
+    assert margins["ae_q95"] == pytest.approx(0.0)
+    assert margins["ae_max"] == pytest.approx(0.0)
+    assert margins["abs_bias"] == pytest.approx(0.0)
+    assert margins["u_gt_plus_u_num"] == pytest.approx(0.02)
+    assert margins["e_use_median"] == pytest.approx(2.0)
+    # G[i] = AE+U_GT+U_num+U_rep+U_proc-E_use = 0+0.01+0.01+0+0-2.0 = -1.98
+    assert margins["g_q95"] == pytest.approx(-1.98)
+    assert margins["g_max"] == pytest.approx(-1.98)
+    assert "g_values" not in result.gate_detail  # raw list popped, summary only
+
+
 def _wf_record(
     candidate_id: str,
     row_id: str,
@@ -2165,6 +2495,173 @@ def test_build_directional_gate_inputs_uses_per_instance_two_stage_median_not_po
     old_delta_output = 15.0 - old_pooled_level_low
     assert old_delta_output == pytest.approx(-5.0)
     assert (pair.delta_output > 0) != (old_delta_output > 0)  # sign flip, as documented above
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 5 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`):
+# `build_directional_gate_inputs` applies `observables.apply_polarity()` to
+# `delta_output` (and `DirectionalPair.correct_sign`) for a candidate that
+# declares `truth_polarity`.
+# ---------------------------------------------------------------------------
+
+
+def _aperiodicity_directional_bundle(candidate) -> object:
+    """2-level TRUTH_CORE sweep for APERIODICITY_GT: hnr_db decreases
+    (12.0 -> 9.0) as injected_noise_fraction increases (0.0 -> 0.1) -- the
+    physically-correct inverse relationship `M2A-B0-AUTOCORR-PERIODICITY`'s
+    `truth_polarity=-1` declares."""
+    row_low = _matrix_row(
+        "a-low", family="APERIODICITY_GT", block="TRUTH_CORE", injected_noise_fraction=0.0
+    )
+    row_high = _matrix_row(
+        "a-high", family="APERIODICITY_GT", block="TRUTH_CORE", injected_noise_fraction=0.1
+    )
+    matrix_rows = [row_low, row_high]
+    row_by_id = {mr.row_id: mr.row for mr in matrix_rows}
+    assignment = {"a-low": Split.HOLDOUT, "a-high": Split.HOLDOUT}
+    manifest = {
+        "frozen_design": {
+            "fixture_spec": {"APERIODICITY_GT": {"u_gt_bound": 0.001, "u_num_bound": 0.001}}
+        }
+    }
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "a-low", probe_index, field="hnr_db", value=12.0
+        )
+        records += _within_fresh_record(
+            candidate.candidate_id, "a-high", probe_index, field="hnr_db", value=9.0
+        )
+    usable_primary_instances = {("a-low", p) for p in range(5)} | {("a-high", p) for p in range(5)}
+    expected_sweep_member_row_ids = {"sweep-a": ["a-low", "a-high"]}
+    return holdout_stage.build_directional_gate_inputs(
+        family="APERIODICITY_GT",
+        candidate=candidate,
+        row_by_id=row_by_id,
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        records=records,
+        usable_primary_instances=usable_primary_instances,
+        expected_sweep_member_row_ids=expected_sweep_member_row_ids,
+        manifest=manifest,
+    )
+
+
+def test_build_directional_gate_inputs_applies_declared_polarity() -> None:
+    candidate = candidate_by_id("M2A-B0-AUTOCORR-PERIODICITY")
+    assert candidate.truth_polarity == -1
+    bundle = _aperiodicity_directional_bundle(candidate)
+    assert len(bundle.pairs) == 1
+    pair = bundle.pairs[0]
+    assert pair.delta_truth == pytest.approx(0.1)
+    # raw delta_output = 9.0 - 12.0 = -3.0; apply_polarity(-3.0, -1) = 3.0.
+    assert pair.delta_output == pytest.approx(3.0)
+    assert pair.correct_sign is True
+
+
+def test_build_directional_gate_inputs_no_polarity_leaves_raw_delta_output() -> None:
+    """the same physically-correct-inverse shape as above, but the
+    candidate declares no polarity — raw (mis-signed, from this construct's
+    perspective) `delta_output`/`correct_sign` must be used unchanged,
+    matching pre-v1.4 behavior exactly."""
+    candidate = replace(candidate_by_id("M2A-B0-AUTOCORR-PERIODICITY"), truth_polarity=None)
+    bundle = _aperiodicity_directional_bundle(candidate)
+    assert len(bundle.pairs) == 1
+    pair = bundle.pairs[0]
+    assert pair.delta_truth == pytest.approx(0.1)
+    assert pair.delta_output == pytest.approx(-3.0)
+    assert pair.correct_sign is False
+
+
+def test_evaluate_directional_meter_from_campaign_pairs_summary_resolvable_count_v14() -> None:
+    """RUN10-CAL-v1.4 §前提 6 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, Test
+    Strategy): a small synthetic ledger/records fixture whose shape is
+    derived from the **frozen matrix itself** (allowed evidence per the v1.4
+    doc's §Y-0): APERIODICITY_GT declares `bandwise_band` held-fixed sweep
+    contexts over the 6 `injected_noise_fraction` truth levels
+    `0.0/0.01/0.03/0.1/0.3/0.6` (`fixtures/axes.py`, the same 6-level ladder
+    the P2 census walks), and the family's declared `u_gt_bound`/`u_num_bound`
+    fix the resolvability threshold. The same `resolvable_count=18` was also
+    seen in quarantined campaign `RUN10-CAL-20260908-2dde4014`
+    (`status: QUARANTINED`, `claimable=false`; 2026-09-09 execution-boundary
+    correction) — that observation is **evidence-only and is not the
+    justification for this test**; the number below follows from the
+    synthetic fixture's own structure. 2 sweeps x C(6,2)=15 possible pairs
+    each = 30 total, of which exactly 9
+    per sweep clear the truth-resolvability threshold `Delta_truth >
+    2*(U_GT+U_num)` (only pairs against the {0.3, 0.6} levels, given
+    `U_GT+U_num=0.064` here) -> 9*2=18 (the memo's §前提 8 note: "微小段
+    0->0.01->0.03->0.1 は...構造的に解像不能" — this fixture reproduces that
+    same resolution boundary). `U_rep`/`U_num` are forced to 0 (uniform
+    repeats) so output-side significance never gates a truth-resolvable pair
+    out. This test exercises the memo's Implementation Approach directly
+    (the fixture reproduces the *pattern*, not a fixture-ized replay of the
+    real ledger — memo Test Strategy: "tests は小さな合成 ledger で同じ数値
+    パターンを固定する")."""
+    candidate = candidate_by_id("M2A-B0-AUTOCORR-PERIODICITY")
+    assert candidate.truth_polarity == -1
+    levels = [0.0, 0.01, 0.03, 0.1, 0.3, 0.6]
+    hnr_by_level = {0.0: 12.0, 0.01: 12.4, 0.03: 11.3, 0.1: 9.1, 0.3: 2.7, 0.6: -15.0}
+
+    matrix_rows = []
+    expected_sweep_member_row_ids: dict[str, list[str]] = {}
+    for sweep_name in ("sweep-a", "sweep-b"):
+        row_ids = []
+        for level in levels:
+            row_id = f"{sweep_name}-{level}"
+            matrix_rows.append(
+                _matrix_row(
+                    row_id, family="APERIODICITY_GT", block="TRUTH_CORE",
+                    injected_noise_fraction=level,
+                )
+            )
+            row_ids.append(row_id)
+        expected_sweep_member_row_ids[sweep_name] = row_ids
+
+    row_by_id = {mr.row_id: mr.row for mr in matrix_rows}
+    assignment = {mr.row_id: Split.HOLDOUT for mr in matrix_rows}
+    records: list[measure_stage.MeasurementRecord] = []
+    usable_primary_instances: set[tuple[str, int]] = set()
+    for mr in matrix_rows:
+        level = mr.row.injected_noise_fraction
+        records += _within_fresh_record(
+            candidate.candidate_id, mr.row_id, 0, field="hnr_db", value=hnr_by_level[level],
+        )
+        usable_primary_instances.add((mr.row_id, 0))
+
+    manifest = {
+        "frozen_design": {
+            "fixture_spec": {
+                "APERIODICITY_GT": {"u_gt_bound": 0.05, "u_num_bound": 0.014}
+            }
+        }
+    }
+
+    result = holdout_stage.evaluate_directional_meter_from_campaign(
+        meter_id=MeterId.M2_APERIODICITY.value,
+        family="APERIODICITY_GT",
+        candidate=candidate,
+        manifest=manifest,
+        row_by_id=row_by_id,
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        records=records,
+        usable_primary_instances=usable_primary_instances,
+        expected_sweep_member_row_ids=expected_sweep_member_row_ids,
+        units_commensurate=False,
+    )
+    assert result.gate_detail["resolvable_count"] == 18
+    pairs_summary = result.gate_detail["pairs_summary"]
+    assert pairs_summary["resolvable_count"] == 18
+    assert pairs_summary["polarity"] == -1
+    # correct_count + reversal_count spans *all* observed pairs (C(6,2)=15
+    # per sweep x 2 = 30 total), not just the 18 resolvable ones -- see
+    # pairs_summary()'s docstring (descriptive stat over `bundle.pairs`).
+    assert pairs_summary["correct_count"] + pairs_summary["reversal_count"] == 30
+    assert pairs_summary["kendall_tau"] is not None
+    control_detection = result.gate_detail["control_detection"]
+    assert control_detection["n_neg"] == 0
+    assert control_detection["n_pos"] == len(matrix_rows) * 5  # fixture_controls.PROBE_REPEATS
 
 
 def test_directional_claim_shrinkage_detail_enumerates_and_prohibits_extrapolation() -> None:
