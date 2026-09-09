@@ -48,6 +48,32 @@ def error_terms(m: float, truth: float, zero_guard: float) -> ErrorTerms:
     return ErrorTerms(e=e, ae=ae, re=re)
 
 
+def apply_polarity(delta_output: float, polarity: int | None) -> float:
+    """RUN10-CAL-v1.4 §前提 5 preregistration
+    (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`): DIRECTIONAL 候補の
+    `registry.Candidate.truth_polarity`（`+1`/`-1`）を `delta_output`
+    （construct の測定値変化量、`m_b - m_a`）へ適用し `polarity *
+    delta_output` を返す。正本はここ 1 箇所——`selection_stage.
+    build_candidate_criteria`（tau/adjacent-reversal）と `holdout_stage.
+    build_directional_gate_inputs`（`DirectionalPair.delta_output`/
+    `correct_sign`）の双方がこの関数を呼ぶ（`gates.py` 自体は無変更で、
+    極性は入力側で適用してから渡す）。
+
+    `polarity is None` は「宣言なし」であり、本関数は呼ばない（呼び出し側が
+    事前に `polarity is not None` を確認してから呼ぶ契約）——誤って
+    `None` のまま渡された場合は `ValueError` で fail-closed する（黙って
+    `delta_output` をそのまま返すと「極性未宣言の DIRECTIONAL 候補」と
+    「極性 +1」が区別不能になる）。"""
+    if polarity is None:
+        raise ValueError(
+            "apply_polarity: polarity is None — caller must check "
+            "`Candidate.truth_polarity is not None` before calling"
+        )
+    if polarity not in (1, -1):
+        raise ValueError(f"apply_polarity: polarity must be +1 or -1, got {polarity!r}")
+    return polarity * delta_output
+
+
 def bias(errors: Sequence[float]) -> float:
     """`BIAS = mean_i(e[i])`。"""
     return float(np.mean(np.asarray(errors, dtype=float)))

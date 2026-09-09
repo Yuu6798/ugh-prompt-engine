@@ -7,6 +7,7 @@ from voice_genesis.calibration.observables import (
     DuplicateInstanceIdError,
     ErrorTerms,
     InvalidControlOutcomeError,
+    apply_polarity,
     bias,
     detection_rates,
     error_terms,
@@ -69,6 +70,31 @@ def test_error_terms_zero_guard_applies_near_zero_truth() -> None:
 def test_bias_hand_computed() -> None:
     # mean([1,-1,3,-3,2]) = 2/5 = 0.4
     assert bias([1.0, -1.0, 3.0, -3.0, 2.0]) == pytest.approx(0.4)
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 5: `apply_polarity()` — the single source of truth
+# `selection_stage.build_candidate_criteria` and `holdout_stage.
+# build_directional_gate_inputs` both call.
+# ---------------------------------------------------------------------------
+
+
+def test_apply_polarity_sign_table() -> None:
+    assert apply_polarity(3.0, 1) == pytest.approx(3.0)
+    assert apply_polarity(3.0, -1) == pytest.approx(-3.0)
+    assert apply_polarity(-3.0, 1) == pytest.approx(-3.0)
+    assert apply_polarity(-3.0, -1) == pytest.approx(3.0)
+    assert apply_polarity(0.0, -1) == pytest.approx(0.0)
+
+
+def test_apply_polarity_none_raises() -> None:
+    with pytest.raises(ValueError):
+        apply_polarity(3.0, None)
+
+
+def test_apply_polarity_rejects_non_unit_polarity() -> None:
+    with pytest.raises(ValueError):
+        apply_polarity(3.0, 2)
 
 
 def test_mae_hand_computed() -> None:

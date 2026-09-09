@@ -1882,3 +1882,120 @@ def test_candidate_space_sha_payload_omits_v1_4_keys_when_undeclared() -> None:
     assert declared_payload[declared.candidate_id]["abstention_reasons"] == ["OUTPUT_MISSING"]
     assert declared_payload[declared.candidate_id]["truth_polarity"] == -1
     assert manifest_sha(declared_payload) == declared_sha
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 5 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`): DIRECTIONAL
+# 極性の `build_candidate_criteria`/`claim_scope_report` 配線。
+# ---------------------------------------------------------------------------
+
+
+def test_build_candidate_criteria_negative_polarity_recovers_correct_sign() -> None:
+    """a candidate declares `truth_polarity=-1` (construct decreases as
+    truth increases, e.g. HNR vs noise fraction). The measured values here
+    are physically-correct decreasing pairs against increasing truth (a
+    perfect inverse relationship) — *raw* kendall tau/adjacent-reversal
+    would misread this as a perfect *reversal* (tau=-1, reversal_rate=1.0),
+    but polarity-adjusted (`apply_polarity(m, -1)`) values recover the
+    correct positive tau and zero reversal rate."""
+    candidate = dataclasses.replace(
+        candidate_by_id("F0-B0-CURRENT"),
+        claim_ceiling=ClaimCeiling.DIRECTIONAL,
+        truth_polarity=-1,
+    )
+    records = [
+        _record("row-1", 0, process_id="p", value=10.0),  # truth=1.0
+        _record("row-2", 0, process_id="p", value=8.0),  # truth=2.0
+        _record("row-3", 0, process_id="p", value=6.0),  # truth=3.0
+    ]
+    truth_by_instance = {("row-1", 0): 1.0, ("row-2", 0): 2.0, ("row-3", 0): 3.0}
+    criteria = selection_stage.build_candidate_criteria(candidate, records, truth_by_instance)
+    assert criteria.kendall_tau == pytest.approx(1.0)
+    assert criteria.adjacent_reversal_rate == pytest.approx(0.0)
+
+
+def test_build_candidate_criteria_no_polarity_leaves_raw_measured_unpolarized() -> None:
+    """the same physically-decreasing-vs-increasing-truth shape as above,
+    but the candidate declares no polarity (`truth_polarity=None`) — the
+    raw (mis-signed, from this construct's perspective) tau/reversal must
+    be used unchanged, matching pre-v1.4 behavior exactly."""
+    candidate = dataclasses.replace(
+        candidate_by_id("F0-B0-CURRENT"),
+        claim_ceiling=ClaimCeiling.DIRECTIONAL,
+        truth_polarity=None,
+    )
+    records = [
+        _record("row-1", 0, process_id="p", value=10.0),
+        _record("row-2", 0, process_id="p", value=8.0),
+        _record("row-3", 0, process_id="p", value=6.0),
+    ]
+    truth_by_instance = {("row-1", 0): 1.0, ("row-2", 0): 2.0, ("row-3", 0): 3.0}
+    criteria = selection_stage.build_candidate_criteria(candidate, records, truth_by_instance)
+    assert criteria.kendall_tau == pytest.approx(-1.0)
+    assert criteria.adjacent_reversal_rate == pytest.approx(1.0)
+
+
+def test_build_candidate_criteria_polarity_ignored_for_absolute_ceiling() -> None:
+    """`truth_polarity` only affects DIRECTIONAL candidates —
+    `candidate.claim_ceiling is ClaimCeiling.DIRECTIONAL` gates the
+    `apply_polarity()` call in `build_candidate_criteria`. An ABSOLUTE
+    candidate that happens to carry a declared `truth_polarity` (e.g. one
+    of the v1.4 APERIODICITY_GT HARMONIC_RESIDUAL candidates, ceiling
+    ABSOLUTE, polarity +1) must produce unpolarized tau/reversal."""
+    candidate = dataclasses.replace(
+        candidate_by_id("F0-B0-CURRENT"),
+        claim_ceiling=ClaimCeiling.ABSOLUTE,
+        truth_polarity=-1,
+    )
+    records = [
+        _record("row-1", 0, process_id="p", value=10.0),
+        _record("row-2", 0, process_id="p", value=8.0),
+        _record("row-3", 0, process_id="p", value=6.0),
+    ]
+    truth_by_instance = {("row-1", 0): 1.0, ("row-2", 0): 2.0, ("row-3", 0): 3.0}
+    criteria = selection_stage.build_candidate_criteria(candidate, records, truth_by_instance)
+    assert criteria.kendall_tau == pytest.approx(-1.0)
+    assert criteria.adjacent_reversal_rate == pytest.approx(1.0)
+
+
+def test_claim_scope_report_caps_directional_without_polarity_to_diagnostic_only() -> None:
+    candidate = dataclasses.replace(
+        candidate_by_id("F0-B0-CURRENT"),
+        claim_ceiling=ClaimCeiling.DIRECTIONAL,
+        truth_polarity=None,
+    )
+    in_scope = frozenset({candidate.construct})
+    capped, report = selection_stage.claim_scope_report(candidate, in_scope)
+    assert capped == ClaimCeiling.DIAGNOSTIC_ONLY
+    assert report["capped"] is True
+    assert report["cap_reason"] == "NO_POLARITY"
+
+
+def test_claim_scope_report_declared_polarity_directional_is_not_capped() -> None:
+    candidate = candidate_by_id("M2A-B0-AUTOCORR-PERIODICITY")
+    assert candidate.claim_ceiling is ClaimCeiling.DIRECTIONAL
+    assert candidate.truth_polarity is not None
+    in_scope = frozenset({candidate.construct})
+    capped, report = selection_stage.claim_scope_report(candidate, in_scope)
+    assert capped == ClaimCeiling.DIRECTIONAL
+    assert report["capped"] is False
+    assert report["cap_reason"] is None
+
+
+def test_claim_scope_report_out_of_scope_absolute_is_not_no_polarity_capped() -> None:
+    """the NO_POLARITY rule must key off the candidate's *originally
+    declared* `claim_ceiling`, not the post-scope-cap result — an ABSOLUTE
+    candidate downgraded to DIRECTIONAL purely by `max_claim_scope` capping
+    never claimed a polarity in the first place and must land on
+    `DIRECTIONAL`/`"MAX_CLAIM_SCOPE"`, not be further capped to
+    `DIAGNOSTIC_ONLY`/`"NO_POLARITY"` (regression guard for
+    `test_out_of_scope_absolute_candidate_excluded_from_absolute_pool`
+    above)."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    assert candidate.claim_ceiling is ClaimCeiling.ABSOLUTE
+    assert candidate.truth_polarity is None
+    out_of_scope = frozenset({"some_other_construct"})
+    capped, report = selection_stage.claim_scope_report(candidate, out_of_scope)
+    assert capped == ClaimCeiling.DIRECTIONAL
+    assert report["capped"] is True
+    assert report["cap_reason"] == "MAX_CLAIM_SCOPE"

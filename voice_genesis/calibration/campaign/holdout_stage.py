@@ -63,6 +63,7 @@ from voice_genesis.calibration.gates import (
     directional_gates,
 )
 from voice_genesis.calibration.observables import (
+    apply_polarity,
     detection_rates,
     error_terms,
     nuisance_ds,
@@ -1015,6 +1016,21 @@ def build_directional_gate_inputs(
                 truth_i, truth_j = levels[i], levels[j]
                 delta_truth = truth_j - truth_i
                 delta_output = level_outputs[truth_j] - level_outputs[truth_i]
+                # RUN10-CAL-v1.4 §前提 5 preregistration: `candidate.
+                # truth_polarity` が宣言されていれば `observables.
+                # apply_polarity()`（正本、selection_stage.
+                # build_candidate_criteria と共有）で `delta_output` へ
+                # 適用してから `DirectionalPair`/`correct_sign` へ渡す。
+                # `gates.py` 自体は無変更（極性は入力側で適用済み）。宣言が
+                # 無い（`truth_polarity is None`）候補は無変換のまま——v1.4
+                # は APERIODICITY_GT の 3 family のみ極性を宣言するため、
+                # 他 family の DIRECTIONAL 候補（M5/M6 等）はこの分岐に
+                # 到達しても無変換で v1.3 以前と同一の挙動を保つ
+                # （実運用では `selection_stage.claim_scope_report` の
+                # NO_POLARITY capping により、極性未宣言の DIRECTIONAL 候補は
+                # そもそも本関数まで到達しない）。
+                if candidate.truth_polarity is not None:
+                    delta_output = apply_polarity(delta_output, candidate.truth_polarity)
                 pair_id = f"{sweep_id}#{i}#{j}"
                 is_adjacent = j == i + 1
                 pairs.append(

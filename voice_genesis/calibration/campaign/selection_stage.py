@@ -59,7 +59,7 @@ from voice_genesis.calibration.candidates.registry import Candidate, active_cand
 from voice_genesis.calibration.canonical import manifest_sha
 from voice_genesis.calibration.fixtures import controls as fixture_controls
 from voice_genesis.calibration.fixtures.matrix import FixtureRow
-from voice_genesis.calibration.observables import bias, error_terms, q95, two_stage_median
+from voice_genesis.calibration.observables import apply_polarity, bias, error_terms, q95, two_stage_median
 from voice_genesis.calibration.selection import CandidateCriteria, SelectionOutcome, select_across_ceilings
 from voice_genesis.calibration.vocab import ClaimCeiling
 
@@ -830,13 +830,48 @@ def claim_scope_report(
     を適用し、`(capped, report)` を返す。`report` は SELECTION_FROZEN /
     HOLDOUT_EXECUTED_VALID payload の `claim_scope_by_candidate` に候補ごと
     そのまま積める形（`construct`/`original_ceiling`/`capped_ceiling`/
-    `capped`）。"""
+    `capped`/`cap_reason`）。
+
+    RUN10-CAL-v1.4 §前提 5 preregistration
+    (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`): scope capping の後、結果の
+    ceiling が `DIRECTIONAL` かつ `candidate.truth_polarity is None`
+    （極性が preregistration されていない）なら、さらに `DIAGNOSTIC_ONLY`
+    へ capping する（理由 `"NO_POLARITY"`）——極性宣言の無い DIRECTIONAL
+    主張は許可しない（tau/reversal の符号解釈が定義できないため）。v1.4 で
+    極性を宣言するのは APERIODICITY_GT の 3 algorithm family のみなので、
+    M5_TRANSITION/M6_IDENTITY の DIRECTIONAL 候補は本 revision で
+    `DIAGNOSTIC_ONLY` へ一律 capping される（意図した仕様上の帰結——
+    v1.4 doc §Y4「答えていない問い」に登録）。`cap_reason` は
+    `"NO_POLARITY"`（本規則で capping）/ `"MAX_CLAIM_SCOPE"`（scope capping
+    のみ）/ `None`（capping なし）のいずれか。`capped` は最終 ceiling が
+    元の `claim_ceiling` と異なるかどうか（理由を問わない、既存の意味を
+    維持）。"""
     capped, was_capped = capped_ceiling(candidate.construct, candidate.claim_ceiling, max_claim_scope)
+    no_polarity_capped = False
+    # NO_POLARITY capping keys off the candidate's *originally declared*
+    # `claim_ceiling` (not the post-scope-cap result): scope capping
+    # (`capped_ceiling()` above) can independently downgrade an ABSOLUTE
+    # candidate to DIRECTIONAL for an unrelated reason (its construct is
+    # outside `max_claim_scope`) — that candidate never claimed a
+    # DIRECTIONAL polarity in the first place, so it must not be further
+    # capped by a polarity rule that only applies to candidates that
+    # declared DIRECTIONAL themselves (mirrors `build_candidate_criteria`'s
+    # own `candidate.claim_ceiling is DIRECTIONAL` condition).
+    if candidate.claim_ceiling is ClaimCeiling.DIRECTIONAL and candidate.truth_polarity is None:
+        capped = ClaimCeiling.DIAGNOSTIC_ONLY
+        no_polarity_capped = True
+    if no_polarity_capped:
+        cap_reason: str | None = "NO_POLARITY"
+    elif was_capped:
+        cap_reason = "MAX_CLAIM_SCOPE"
+    else:
+        cap_reason = None
     return capped, {
         "construct": candidate.construct,
         "original_ceiling": candidate.claim_ceiling.value,
         "capped_ceiling": capped.value,
-        "capped": was_capped,
+        "capped": capped != candidate.claim_ceiling,
+        "cap_reason": cap_reason,
     }
 
 
@@ -939,9 +974,28 @@ def build_candidate_criteria(
     signed_bias = bias(raw_errors)
     primary_q95_ae = q95([abs(e) for e in raw_errors])
 
+    # RUN10-CAL-v1.4 §前提 5 preregistration: DIRECTIONAL 候補が
+    # `truth_polarity` を宣言していれば、tau/adjacent-reversal は
+    # `apply_polarity()`（正本）で極性適用済みの測定値を使う——`measured`
+    # 自体は他所（ABSOLUTE 系列の bias/MAE 等）で再利用しないため、ここで
+    # 安全に変換して差し替えられる。宣言が無い（`truth_polarity is None`）
+    # DIRECTIONAL 候補、および非 DIRECTIONAL 候補は無変換のまま（v1.3 以前と
+    # 完全に同一の挙動——`claim_scope_report` が NO_POLARITY で
+    # `DIAGNOSTIC_ONLY` へ cap するため、宣言の無い DIRECTIONAL 候補は
+    # そもそも DIRECTIONAL gate まで到達しない）。
+    apply_dir_polarity = (
+        candidate.claim_ceiling is ClaimCeiling.DIRECTIONAL
+        and candidate.truth_polarity is not None
+    )
+    directional_measured = (
+        [apply_polarity(m, candidate.truth_polarity) for m in measured]
+        if apply_dir_polarity
+        else measured
+    )
+
     kendall_tau = 0.0
-    if len(truths) >= 2 and len(set(truths)) >= 2 and len(set(measured)) >= 2:
-        tau, _p_value = kendalltau(truths, measured)
+    if len(truths) >= 2 and len(set(truths)) >= 2 and len(set(directional_measured)) >= 2:
+        tau, _p_value = kendalltau(truths, directional_measured)
         if tau is not None and math.isfinite(float(tau)):
             kendall_tau = float(tau)
 
@@ -950,7 +1004,7 @@ def build_candidate_criteria(
     reversals = 0
     for a, b in zip(order, order[1:]):
         delta_truth = truths[b] - truths[a]
-        delta_measured = measured[b] - measured[a]
+        delta_measured = directional_measured[b] - directional_measured[a]
         if delta_truth != 0 and (delta_measured > 0) != (delta_truth > 0):
             reversals += 1
     adjacent_reversal_rate = reversals / reversal_pairs

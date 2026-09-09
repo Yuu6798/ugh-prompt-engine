@@ -16,7 +16,7 @@ from voice_genesis.calibration import e_use_table
 from voice_genesis.calibration.campaign import holdout_stage, measure_stage, selection_stage
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.candidates.adapter import MeterOutput
-from voice_genesis.calibration.candidates.registry import candidates_for_meter
+from voice_genesis.calibration.candidates.registry import candidate_by_id, candidates_for_meter
 from voice_genesis.calibration.fixtures.controls import DetectionPredicate
 from voice_genesis.calibration.fixtures.matrix import FixtureRow, MatrixRow
 from voice_genesis.calibration.gates import DirectionalPair, EUseEvidenceRow, InvariancePair
@@ -2387,6 +2387,82 @@ def test_build_directional_gate_inputs_uses_per_instance_two_stage_median_not_po
     old_delta_output = 15.0 - old_pooled_level_low
     assert old_delta_output == pytest.approx(-5.0)
     assert (pair.delta_output > 0) != (old_delta_output > 0)  # sign flip, as documented above
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 5 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`):
+# `build_directional_gate_inputs` applies `observables.apply_polarity()` to
+# `delta_output` (and `DirectionalPair.correct_sign`) for a candidate that
+# declares `truth_polarity`.
+# ---------------------------------------------------------------------------
+
+
+def _aperiodicity_directional_bundle(candidate) -> object:
+    """2-level TRUTH_CORE sweep for APERIODICITY_GT: hnr_db decreases
+    (12.0 -> 9.0) as injected_noise_fraction increases (0.0 -> 0.1) -- the
+    physically-correct inverse relationship `M2A-B0-AUTOCORR-PERIODICITY`'s
+    `truth_polarity=-1` declares."""
+    row_low = _matrix_row(
+        "a-low", family="APERIODICITY_GT", block="TRUTH_CORE", injected_noise_fraction=0.0
+    )
+    row_high = _matrix_row(
+        "a-high", family="APERIODICITY_GT", block="TRUTH_CORE", injected_noise_fraction=0.1
+    )
+    matrix_rows = [row_low, row_high]
+    row_by_id = {mr.row_id: mr.row for mr in matrix_rows}
+    assignment = {"a-low": Split.HOLDOUT, "a-high": Split.HOLDOUT}
+    manifest = {
+        "frozen_design": {
+            "fixture_spec": {"APERIODICITY_GT": {"u_gt_bound": 0.001, "u_num_bound": 0.001}}
+        }
+    }
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "a-low", probe_index, field="hnr_db", value=12.0
+        )
+        records += _within_fresh_record(
+            candidate.candidate_id, "a-high", probe_index, field="hnr_db", value=9.0
+        )
+    usable_primary_instances = {("a-low", p) for p in range(5)} | {("a-high", p) for p in range(5)}
+    expected_sweep_member_row_ids = {"sweep-a": ["a-low", "a-high"]}
+    return holdout_stage.build_directional_gate_inputs(
+        family="APERIODICITY_GT",
+        candidate=candidate,
+        row_by_id=row_by_id,
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        records=records,
+        usable_primary_instances=usable_primary_instances,
+        expected_sweep_member_row_ids=expected_sweep_member_row_ids,
+        manifest=manifest,
+    )
+
+
+def test_build_directional_gate_inputs_applies_declared_polarity() -> None:
+    candidate = candidate_by_id("M2A-B0-AUTOCORR-PERIODICITY")
+    assert candidate.truth_polarity == -1
+    bundle = _aperiodicity_directional_bundle(candidate)
+    assert len(bundle.pairs) == 1
+    pair = bundle.pairs[0]
+    assert pair.delta_truth == pytest.approx(0.1)
+    # raw delta_output = 9.0 - 12.0 = -3.0; apply_polarity(-3.0, -1) = 3.0.
+    assert pair.delta_output == pytest.approx(3.0)
+    assert pair.correct_sign is True
+
+
+def test_build_directional_gate_inputs_no_polarity_leaves_raw_delta_output() -> None:
+    """the same physically-correct-inverse shape as above, but the
+    candidate declares no polarity — raw (mis-signed, from this construct's
+    perspective) `delta_output`/`correct_sign` must be used unchanged,
+    matching pre-v1.4 behavior exactly."""
+    candidate = replace(candidate_by_id("M2A-B0-AUTOCORR-PERIODICITY"), truth_polarity=None)
+    bundle = _aperiodicity_directional_bundle(candidate)
+    assert len(bundle.pairs) == 1
+    pair = bundle.pairs[0]
+    assert pair.delta_truth == pytest.approx(0.1)
+    assert pair.delta_output == pytest.approx(-3.0)
+    assert pair.correct_sign is False
 
 
 def test_directional_claim_shrinkage_detail_enumerates_and_prohibits_extrapolation() -> None:
