@@ -73,6 +73,44 @@ def test_symlink_replacement_for_manifest_fails_closed(tmp_path: Path) -> None:
     assert result.reasons == ("c0_manifest.json must not be a symlink",)
 
 
+def test_regular_file_replacement_for_frozen_manifest_fails_closed(
+    tmp_path: Path,
+) -> None:
+    base_campaign = _campaign(tmp_path / "base")
+    head_campaign = tmp_path / "head" / base_campaign.name
+    shutil.copytree(base_campaign, head_campaign)
+    (head_campaign / "c0_manifest.json").write_text("{}", encoding="utf-8")
+    _write_direct_reference(
+        head_campaign,
+        ["C0_FREEZE", "CAMPAIGN_EXECUTION", "GATE3_SEAL_ACCEPTANCE"],
+    )
+
+    result = validate_campaign(head_campaign, base_campaign_dir=base_campaign)
+
+    assert result.ok is False
+    assert result.mode == "C0_MANIFEST_MODIFIED"
+    assert result.reasons == (
+        "an existing frozen campaign c0_manifest.json must remain byte-identical",
+    )
+
+
+def test_identical_frozen_manifest_with_direct_reference_is_accepted(
+    tmp_path: Path,
+) -> None:
+    base_campaign = _campaign(tmp_path / "base")
+    head_campaign = tmp_path / "head" / base_campaign.name
+    shutil.copytree(base_campaign, head_campaign)
+    _write_direct_reference(
+        head_campaign,
+        ["C0_FREEZE", "CAMPAIGN_EXECUTION"],
+    )
+
+    result = validate_campaign(head_campaign, base_campaign_dir=base_campaign)
+
+    assert result.ok is True
+    assert result.mode == "DIRECT_REFERENCE"
+
+
 def test_campaign_directory_symlink_fails_closed(tmp_path: Path) -> None:
     target = _campaign(tmp_path / "target")
     campaign = tmp_path / "RUN10-CAL-LINK"

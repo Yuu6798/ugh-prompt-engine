@@ -287,6 +287,11 @@ def validate_campaign(
             ("campaign directory must not be a symlink",),
         )
     manifest = campaign_dir / "c0_manifest.json"
+    base_manifest = (
+        base_campaign_dir / "c0_manifest.json"
+        if base_campaign_dir is not None
+        else None
+    )
     if manifest.is_symlink():
         return GuardResult(
             campaign_id,
@@ -295,11 +300,6 @@ def validate_campaign(
             ("c0_manifest.json must not be a symlink",),
         )
     if not manifest.is_file():
-        base_manifest = (
-            base_campaign_dir / "c0_manifest.json"
-            if base_campaign_dir is not None
-            else None
-        )
         if base_manifest is not None and base_manifest.is_file():
             return GuardResult(
                 campaign_id,
@@ -308,6 +308,21 @@ def validate_campaign(
                 ("an existing frozen campaign c0_manifest.json must be preserved",),
             )
         return GuardResult(campaign_id, True, "NO_C0_MANIFEST", ())
+    if base_manifest is not None and base_manifest.is_file():
+        if base_manifest.is_symlink():
+            return GuardResult(
+                campaign_id,
+                False,
+                "UNSAFE_BASE_CAMPAIGN",
+                ("trusted-base c0_manifest.json must not be a symlink",),
+            )
+        if _file_sha256(manifest) != _file_sha256(base_manifest):
+            return GuardResult(
+                campaign_id,
+                False,
+                "C0_MANIFEST_MODIFIED",
+                ("an existing frozen campaign c0_manifest.json must remain byte-identical",),
+            )
 
     quarantine = campaign_dir / QUARANTINE_FILENAME
     if quarantine.is_symlink():
