@@ -262,3 +262,20 @@ def test_existing_quarantine_cannot_be_replaced_by_direct_reference(tmp_path: Pa
     assert result.ok is False
     assert result.mode == "QUARANTINE"
     assert result.reasons == ("an existing quarantine marker must be preserved",)
+
+
+def test_workflow_uses_trusted_base_guard_and_keeps_rename_sources() -> None:
+    workflow = (
+        Path(__file__).parents[3]
+        / ".github"
+        / "workflows"
+        / "vg-campaign-authorization-guard.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "pull_request_target:" in workflow
+    assert "persist-credentials: false" in workflow
+    assert "python trusted-base/voice_genesis/calibration/authorization_guard.py" in workflow
+    assert "--repo-root candidate" in workflow
+    assert "--base-repo-root trusted-base" in workflow
+    assert '"https://github.com/${BASE_REPOSITORY}.git" "$BASE_SHA"' in workflow
+    assert "git -C candidate diff --no-renames --name-only" in workflow
