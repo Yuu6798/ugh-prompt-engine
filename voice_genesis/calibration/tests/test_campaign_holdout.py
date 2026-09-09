@@ -2575,17 +2575,19 @@ def test_build_directional_gate_inputs_no_polarity_leaves_raw_delta_output() -> 
 
 def test_evaluate_directional_meter_from_campaign_pairs_summary_resolvable_count_v14() -> None:
     """RUN10-CAL-v1.4 §前提 6 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, Test
-    Strategy): a small synthetic ledger/records fixture reproducing the
-    `resolvable_count=18` pattern actually observed in the real closed
-    campaign `RUN10-CAL-20260908-2dde4014`'s M2_APERIODICITY holdout
-    `gate_detail` (read-only inspection of
-    `voice_genesis/calibration/campaigns/RUN10-CAL-20260908-2dde4014/
-    ledger.jsonl`'s `holdout_executed_valid` event; the campaign dir itself
-    is untouched, per the memo's read-only constraint). That campaign's
-    `M2A-B0-AUTOCORR-PERIODICITY` sweep structure was 2 sweeps
-    (`bandwise_band` held-fixed contexts) x 6 `injected_noise_fraction`
-    truth levels (`0.0/0.01/0.03/0.1/0.3/0.6`, the same 6-level P2 census
-    ladder) x C(6,2)=15 possible pairs each = 30 total, of which exactly 9
+    Strategy): a small synthetic ledger/records fixture whose shape is
+    derived from the **frozen matrix itself** (allowed evidence per the v1.4
+    doc's §Y-0): APERIODICITY_GT declares `bandwise_band` held-fixed sweep
+    contexts over the 6 `injected_noise_fraction` truth levels
+    `0.0/0.01/0.03/0.1/0.3/0.6` (`fixtures/axes.py`, the same 6-level ladder
+    the P2 census walks), and the family's declared `u_gt_bound`/`u_num_bound`
+    fix the resolvability threshold. The same `resolvable_count=18` was also
+    seen in quarantined campaign `RUN10-CAL-20260908-2dde4014`
+    (`status: QUARANTINED`, `claimable=false`; 2026-09-09 execution-boundary
+    correction) — that observation is **evidence-only and is not the
+    justification for this test**; the number below follows from the
+    synthetic fixture's own structure. 2 sweeps x C(6,2)=15 possible pairs
+    each = 30 total, of which exactly 9
     per sweep clear the truth-resolvability threshold `Delta_truth >
     2*(U_GT+U_num)` (only pairs against the {0.3, 0.6} levels, given
     `U_GT+U_num=0.064` here) -> 9*2=18 (the memo's §前提 8 note: "微小段
