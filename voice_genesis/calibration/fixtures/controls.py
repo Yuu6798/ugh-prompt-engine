@@ -91,13 +91,49 @@ def detected(output: adapter.MeterOutput, predicate: DetectionPredicate | None =
     return value >= predicate.min_value
 
 
-#: sanctioned abstention の閉語彙（RUN10-CAL-v1.2 WP1）: negative control 行
-#: (control_class) × ledger `measurement_missing` の `missing_reason` の組で
-#: 「棄権が正当」と事前登録された組み合わせのみを列挙する。追加は次 revision
-#: の preregistration 経由のみ（本 revision でのアドホックな追加は禁止）。
+#: sanctioned abstention の閉語彙（RUN10-CAL-v1.2 WP1、v1.4 §前提 3 で
+#: `(NOISE_ONLY, "F0_UNUSABLE")` を追加）: negative control 行 (control_class)
+#: × ledger `measurement_missing` の `missing_reason` の組で「棄権が正当」と
+#: 事前登録された組み合わせのみを列挙する。追加は次 revision の
+#: preregistration 経由のみ（本 revision でのアドホックな追加は禁止）。
+#:
+#: v1.4 追加根拠（`DESIGN_VG_METER_CAL_DEBT_v1.4.md` 前提 3、P2 census
+#: `scratchpad/v14/p23/p23_report.txt` §5.1 PASS）: 無声対照（NOISE_ONLY）に
+#: F0 は存在しないため、F0 依存候補が NOISE_ONLY 行で `F0_UNUSABLE` により
+#: skip するのは SILENCE と同じ理由による正しい棄権である（2dde4014 実測:
+#: NOISE_ONLY 行で F0 が「usable」だった probe は HNR -9.7〜-9.8 dB で正しく
+#: 非発火——skip 行と合わせて両方とも非発火が正）。
 SANCTIONED_ABSTENTIONS: frozenset[tuple[ControlClass, str]] = frozenset(
-    {(ControlClass.SILENCE, "F0_UNUSABLE")}
+    {
+        (ControlClass.SILENCE, "F0_UNUSABLE"),
+        (ControlClass.NOISE_ONLY, "F0_UNUSABLE"),
+    }
 )
+
+
+def abstained(output: adapter.MeterOutput, candidate: object) -> bool:
+    """棄権判定の正本（v1.4 前提 2 経路 (B)、`DESIGN_VG_METER_CAL_DEBT_v1.4.md`
+    §前提 4）: `output.missing_reason` が非 `None` かつ `candidate.
+    abstention_reasons`（`registry.Candidate` が候補ごとに宣言する
+    `frozenset[vocab.MissingReason]`、既定は空）に含まれ、かつ
+    `output.ineligible` が `False` のとき「正しい棄権」とみなす。
+
+    `ineligible` は棄権の対象外（pyworld 不在等の依存欠如は棄権ではなく
+    測定不能——`vocab.BlockedCode`/`ineligible_reason` の別語彙で扱う）。
+    `candidate.abstention_reasons` が空（既定）の候補では常に `False`
+    （従来挙動そのまま——v1.2/v1.3 で棄権を宣言していない候補の判定は
+    本関数の追加で一切変わらない）。
+
+    `campaign.selection_stage.candidate_fail_filter_report` と
+    `campaign.holdout_stage.control_detection_for_family._negative_fired`
+    は本関数を直接呼ぶ（正本はここ 1 箇所——両 call site が独自に
+    `missing_reason in ...` を複製することを禁止する。`tests/test_controls.py`
+    の call-site AST テストが全数を固定する）。"""
+    if output.missing_reason is None:
+        return False
+    if output.ineligible:
+        return False
+    return output.missing_reason in candidate.abstention_reasons
 
 
 def negative_control_row_ids(rows: Iterable[MatrixRow]) -> frozenset[str]:

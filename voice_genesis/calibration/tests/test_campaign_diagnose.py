@@ -320,17 +320,14 @@ def test_evaluate_candidate_sanctioned_abstention_only_still_passes() -> None:
     assert report["verdict_reason"] is None
 
 
-def test_evaluate_candidate_not_evaluable_when_negative_control_row_is_non_sanctioned_missing() -> (
-    None
-):
-    # RUN10-CAL-v1.2 WP4b: `c3b_failclosed_analysis.md` §3.2 — a negative
-    # control row entirely skipped by the F0-unusable synthesis (no real
-    # candidate call at all) is only "present and non-fired" when the
-    # (control_class, reason) pair is sanctioned. NOISE_ONLY/F0_UNUSABLE is
-    # NOT in `SANCTIONED_ABSTENTIONS`, so a real campaign choosing an F0
-    # candidate that renders this row unusable would leave the negative
-    # control judgment-less for NOISE_ONLY — this must NOT read as a clean
-    # PASS via a false 0.0 fire rate.
+def test_evaluate_candidate_noise_only_f0_unusable_now_sanctioned_v14() -> None:
+    # v1.4 §前提 3 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, P2 census PASS —
+    # `scratchpad/v14/p23/p23_report.txt` §5.1): `SANCTIONED_ABSTENTIONS` now
+    # includes `(NOISE_ONLY, "F0_UNUSABLE")` alongside `(SILENCE,
+    # "F0_UNUSABLE")` — a negative control row entirely skipped by the
+    # F0-unusable synthesis for NOISE_ONLY is now "present and non-fired"
+    # too (supersedes the pre-v1.4
+    # `..._non_sanctioned_missing` test that pinned the narrower vocabulary).
     candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
     outcomes = [
         _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
@@ -338,11 +335,41 @@ def test_evaluate_candidate_not_evaluable_when_negative_control_row_is_non_sanct
         _outcome("negative", "NOISE_ONLY", MeterOutput(), reason=diagnose.F0_UNUSABLE_REASON),
     ]
     report = diagnose.evaluate_candidate(candidate, outcomes)
+    assert report["sanctioned_abstentions"] == 2
+    assert report["missing_by_reason"] == {"F0_UNUSABLE": 2}
+    assert report["negative_fire_rate"] == 0.0
+    assert report["negative_controls_incomplete_by_class"] == {
+        "NOISE_ONLY": False,
+        "SILENCE": False,
+    }
+    assert report["verdict"] == "PASS"
+    assert report["verdict_reason"] is None
+
+
+def test_evaluate_candidate_not_evaluable_when_negative_control_row_is_non_sanctioned_missing() -> (
+    None
+):
+    # RUN10-CAL-v1.2 WP4b: `c3b_failclosed_analysis.md` §3.2 — a negative
+    # control row entirely skipped by the F0-unusable synthesis (no real
+    # candidate call at all) is only "present and non-fired" when the
+    # (control_class, reason) pair is sanctioned. PURE_SINE/F0_UNUSABLE is
+    # NOT in `SANCTIONED_ABSTENTIONS` (v1.4 §前提 3 explicitly does not
+    # extend sanctioning beyond SILENCE/NOISE_ONLY), so a real campaign
+    # choosing an F0 candidate that renders this row unusable would leave
+    # the negative control judgment-less for PURE_SINE — this must NOT read
+    # as a clean PASS via a false 0.0 fire rate.
+    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    outcomes = [
+        _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
+        _outcome("negative", "SILENCE", MeterOutput(), reason=diagnose.F0_UNUSABLE_REASON),
+        _outcome("negative", "PURE_SINE", MeterOutput(), reason=diagnose.F0_UNUSABLE_REASON),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes)
     assert report["sanctioned_abstentions"] == 1
     assert report["missing_by_reason"] == {"F0_UNUSABLE": 2}
     assert report["negative_fire_rate"] == 0.0
     assert report["negative_controls_incomplete_by_class"] == {
-        "NOISE_ONLY": True,
+        "PURE_SINE": True,
         "SILENCE": False,
     }
     assert report["verdict"] == "NOT_EVALUABLE"

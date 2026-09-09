@@ -3596,19 +3596,50 @@ def test_c4_gate5_sanctioned_abstention_silence_f0_unusable_reaches_calibrated_a
     assert gate_detail["negative_control_sanctioned_abstentions"] == 5, gate_detail
 
 
-def test_c4_gate5_sanctioned_abstention_closed_vocabulary_excludes_noise_only(
+def test_c4_gate5_sanctioned_abstention_noise_only_f0_unusable_reaches_calibrated_absolute_v14(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """v1.3 (Codex #350 round 3 P1 ADOPT): sibling of the test above with
-    the *only* change being `neg-a`'s `control_class` set to `NOISE_ONLY`
-    instead of `SILENCE` (same entirely-missing measurement, same
-    `F0_UNUSABLE` ledger reason). `(NOISE_ONLY, "F0_UNUSABLE")` is not a
-    member of the closed `fixtures.controls.SANCTIONED_ABSTENTIONS`
-    vocabulary, so this instance must NOT be sanctioned -- it stays a gate5
-    failure (`FDR0 != 0`) and the meter must fail honestly, not reach
-    `CALIBRATED_ABSOLUTE`."""
+    """v1.4 §前提 3 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, P2 census PASS —
+    `scratchpad/v14/p23/p23_report.txt` §5.1): sibling of the test above
+    with the *only* change being `neg-a`'s `control_class` set to
+    `NOISE_ONLY` instead of `SILENCE` (same entirely-missing measurement,
+    same `F0_UNUSABLE` ledger reason). `fixtures.controls.
+    SANCTIONED_ABSTENTIONS` now includes `(NOISE_ONLY, "F0_UNUSABLE")`
+    alongside `(SILENCE, "F0_UNUSABLE")`, so this instance is now sanctioned
+    too and the meter reaches `CALIBRATED_ABSOLUTE` exactly like the SILENCE
+    case above (supersedes the pre-v1.4 `..._excludes_noise_only` test that
+    pinned the narrower vocabulary)."""
     campaign, subset, candidate = _build_absolute_gate_campaign_with_sanctioned_negative_control(
         tmp_path, monkeypatch, e_use_value=2.0, neg_a_control_class="NOISE_ONLY"
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2t_result = per_meter[MeterId.M2_SPECTRAL_TILT.value]
+    assert m2t_result["terminal_status"] == "CALIBRATED_ABSOLUTE", m2t_result
+    assert m2t_result["selected_candidate_id"] == candidate.candidate_id
+    gate_detail = m2t_result["gate_detail"]
+    assert gate_detail["passed"] is True, gate_detail
+    assert gate_detail["failure_reasons"] == []
+    assert gate_detail["negative_control_sanctioned_abstentions"] == 5, gate_detail
+
+
+def test_c4_gate5_sanctioned_abstention_closed_vocabulary_excludes_pure_sine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """the closed vocabulary is still closed -- `(PURE_SINE, "F0_UNUSABLE")`
+    is not a member of `fixtures.controls.SANCTIONED_ABSTENTIONS` (v1.4
+    §前提 3 explicitly does not extend sanctioning beyond SILENCE/
+    NOISE_ONLY), so this instance must NOT be sanctioned -- it stays a
+    gate5 failure (`FDR0 != 0`) and the meter must fail honestly, not reach
+    `CALIBRATED_ABSOLUTE`."""
+    campaign, subset, candidate = _build_absolute_gate_campaign_with_sanctioned_negative_control(
+        tmp_path, monkeypatch, e_use_value=2.0, neg_a_control_class="PURE_SINE"
     )
 
     result = cli._run_c4(campaign, subset, 1)
@@ -3649,12 +3680,19 @@ def test_c4_gate5_sanctioned_abstention_closed_vocabulary_excludes_noise_only(
 # (not one `SILENCE` + one `NOISE_ONLY`, unlike the fixture above) precisely
 # to keep this real-audio path deterministic: real noise's own real F0
 # reading is not fixed by this test the way real silence's is, so a
-# `NOISE_ONLY` row here could unpredictably land on either side of the
-# closed `SANCTIONED_ABSTENTIONS` vocabulary boundary depending on whether
-# `pyin` happens to hallucinate a pitch on that specific noise realization --
-# an orthogonal question `test_c4_gate5_sanctioned_abstention_closed_
-# vocabulary_excludes_noise_only` above already covers exactly, without that
-# risk, via its own hand-planted event.
+# `NOISE_ONLY` row here could unpredictably land on either side of "F0
+# prepass genuinely skips it" vs. "pyin hallucinates a pitch and it is
+# genuinely measured" for the `F0-B0-CURRENT` candidate this test uses --
+# an orthogonal question the hand-planted-event fixture tests above already
+# cover exactly, without that risk. v1.4 §前提 3
+# (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, P2 census PASS) adds a *separate*
+# NOISE_ONLY real-path variant below
+# (`test_c4_gate5_sanctioned_abstention_real_f0_prepass_path_noise_only_
+# reaches_calibrated_absolute_v14`) using the real F0-PYIN-FRAME2048-HOP512
+# candidate the P2 census (`scratchpad/v14/p23/p23_report.txt`) empirically
+# observed deterministically skipping all measured probes on real NOISE_ONLY
+# PCM, so that variant does not carry the nondeterminism risk this comment
+# warns about for `F0-B0-CURRENT`.
 # ---------------------------------------------------------------------------
 
 
@@ -3828,6 +3866,147 @@ def test_c4_gate5_sanctioned_abstention_real_f0_prepass_path_reaches_calibrated_
     assert gate_detail["passed"] is True, gate_detail
     assert gate_detail["failure_reasons"] == []
     # 2 SILENCE rows x fixture_controls.PROBE_REPEATS (5) = 10 sanctioned,
+    # entirely-missing negative-control instances.
+    assert gate_detail["negative_control_sanctioned_abstentions"] == 10, gate_detail
+
+
+@pytest.mark.slow
+def test_c4_gate5_sanctioned_abstention_real_f0_prepass_path_noise_only_reaches_calibrated_absolute_v14(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.4 §前提 3 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, P2 census PASS --
+    `scratchpad/v14/p23/p23_report.txt` §5.1: real NOISE_ONLY PCM through the
+    real F0 prepass deterministically skips all measured probes, 3/3 across
+    12 candidates x 3 probe_index in the census). Sibling of the SILENCE-only
+    real-path test above, with `neg-a`/`neg-b` both real `NOISE_ONLY` instead
+    of `SILENCE` -- this is the "stub-free real-path test with a NOISE_ONLY
+    variant" the v1.4 design memo (§Acceptance WP-A, item 3) calls for,
+    extending the D110/D111 real-path coverage to the newly-sanctioned
+    `(NOISE_ONLY, "F0_UNUSABLE")` pair. Deliberately identical in every other
+    respect to the SILENCE test (same hand-planted C3a/C3b freeze, same F0
+    candidate `F0-B0-CURRENT`, same TILT harmonic candidate) so this test
+    isolates the control_class change."""
+    candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_SPECTRAL_TILT) if c.algorithm_family == "HARMONIC_OLS"
+    )
+    assert candidate.algorithm_family in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+    anchor1 = _real_tilt_row("anchor-6", block="TRUTH_CORE", slope=-6.0, positive_control=True)
+    anchor2 = _real_tilt_row("anchor-12", block="TRUTH_CORE", slope=-12.0, positive_control=True)
+    confound = _real_tilt_row(
+        "confound-sr", block="CONFOUND", slope=-6.0, nuisance_tag="sr_hz=8000"
+    )
+    neg_a = _real_tilt_row(
+        "neg-a", block="NEGATIVE_CONTROL", slope=None, control_class="NOISE_ONLY"
+    )
+    neg_b = _real_tilt_row(
+        "neg-b", block="NEGATIVE_CONTROL", slope=None, control_class="NOISE_ONLY"
+    )
+    subset = [anchor1, anchor2, confound, neg_a, neg_b]
+    padding_rows = [
+        _real_tilt_row(f"padding-{i}", block="TRUTH_CORE", slope=-18.0) for i in range(15)
+    ]
+    padded_subset = subset + padding_rows
+
+    from voice_genesis.calibration import e_use_table as e_use_table_module
+    from voice_genesis.calibration.gates import EUseEvidenceRow
+    from voice_genesis.calibration.vocab import EvidenceClass
+
+    e_use_row = EUseEvidenceRow(
+        construct_id=candidate.construct,
+        unit=candidate.unit,
+        domain=candidate.domain,
+        intended_use="v1.4 §前提 3 NOISE_ONLY real-path E2E test",
+        maximum_claim="ABSOLUTE",
+        e_use_value=100.0,
+        derivation_rule="test fixture",
+        evidence_class=EvidenceClass.USER_ACCEPTED_USE_BOUND,
+        source_id_or_url="test",
+        source_checked_at="2026-09-09",
+        source_hash_or_version="test",
+        applicability_argument="test",
+        review_status="APPROVED_BY_DELEGATION",
+    )
+    serialized = (
+        json.dumps(
+            [e_use_table_module.row_to_dict(e_use_row)], indent=2, ensure_ascii=False, sort_keys=True
+        )
+        + "\n"
+    )
+    e_use_sha = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path,
+        subset=padded_subset,
+        frozen_inputs={"e_use_table_sha256": e_use_sha},
+        force_holdout_row_ids=[mr.row_id for mr in subset],
+        fixture_spec={
+            "TILT_GT": {"u_gt_bound": 0.5, "u_num_bound": 0.5, "confound_axes": ["sr_hz"]},
+        },
+    )
+    (campaign_dir / "e_use_table.json").write_text(serialized, encoding="utf-8")
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    # see the SILENCE-only test above for why this leakage pre-check bypass
+    # is orthogonal to the property under test here.
+    monkeypatch.setattr(render_stage, "_refuse_if_pre_unseal_holdout", lambda *a, **kw: None)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": "F0-B0-CURRENT",
+            "outcome": "SELECTED",
+        }
+    )
+    campaign.ledger.append(
+        {"kind": "selection_frozen", "selected_by_family": {"TILT_GT": candidate.candidate_id}}
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    # confirm this genuinely exercised the real F0_UNUSABLE skip path on real
+    # NOISE_ONLY PCM (not an accidental finite F0 reading on either row): the
+    # selected candidate has zero own MeasurementRecords for neg-a/neg-b, and
+    # the real `measurement_missing` ledger event names it for both rows with
+    # reason "F0_UNUSABLE".
+    meter_calls = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"]
+    own_neg_calls = [
+        m
+        for m in meter_calls
+        if m["candidate_id"] == candidate.candidate_id
+        and m["row_id"] in (neg_a.row_id, neg_b.row_id)
+    ]
+    assert own_neg_calls == [], own_neg_calls
+    missing_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "measurement_missing"
+    ]
+    missing_cells = {
+        (row_id, cid)
+        for ev in missing_events
+        if ev.get("reason") == "F0_UNUSABLE"
+        for row_id, _probe_index, cid in ev["cells"]
+    }
+    assert (
+        neg_a.row_id,
+        candidate.candidate_id,
+    ) in missing_cells, "neg-a must have a real F0_UNUSABLE measurement_missing event"
+    assert (
+        neg_b.row_id,
+        candidate.candidate_id,
+    ) in missing_cells, "neg-b must have a real F0_UNUSABLE measurement_missing event"
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2t_result = per_meter[MeterId.M2_SPECTRAL_TILT.value]
+    assert m2t_result["terminal_status"] == "CALIBRATED_ABSOLUTE", m2t_result
+    assert m2t_result["selected_candidate_id"] == candidate.candidate_id
+    gate_detail = m2t_result["gate_detail"]
+    assert gate_detail["passed"] is True, gate_detail
+    assert gate_detail["failure_reasons"] == []
+    # 2 NOISE_ONLY rows x fixture_controls.PROBE_REPEATS (5) = 10 sanctioned,
     # entirely-missing negative-control instances.
     assert gate_detail["negative_control_sanctioned_abstentions"] == 10, gate_detail
 

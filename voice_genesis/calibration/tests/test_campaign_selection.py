@@ -1417,10 +1417,13 @@ def test_v12_silence_row_missing_for_unrelated_reason_stays_incomplete() -> None
     assert report["negative_controls_incomplete"] is True
 
 
-def test_v12_noise_only_control_class_f0_unusable_stays_incomplete() -> None:
-    """(c): `SANCTIONED_ABSTENTIONS` is the closed vocabulary
-    `{(SILENCE, "F0_UNUSABLE")}` only — a NOISE_ONLY-classed row missing for
-    the very same `F0_UNUSABLE` reason is not exempted."""
+def test_v14_noise_only_control_class_f0_unusable_now_sanctioned() -> None:
+    """v1.4 §前提 3 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, P2 census PASS):
+    `SANCTIONED_ABSTENTIONS` now closes over `{(SILENCE, "F0_UNUSABLE"),
+    (NOISE_ONLY, "F0_UNUSABLE")}` — a NOISE_ONLY-classed row missing for
+    `F0_UNUSABLE` is exempted the same way SILENCE is (supersedes the
+    pre-v1.4 `..._stays_incomplete` test that pinned the narrower
+    v1.2/v1.3 vocabulary)."""
     candidate = candidate_by_id(_D71_APERIODICITY_HARMONIC_RESIDUAL_ID)
     report = selection_stage.candidate_fail_filter_report(
         candidate,
@@ -1428,6 +1431,22 @@ def test_v12_noise_only_control_class_f0_unusable_stays_incomplete() -> None:
         negative_control_row_ids=frozenset({"row-noise-only"}),
         control_class_by_negative_row_id={"row-noise-only": "NOISE_ONLY"},
         missing_reason_by_negative_row_id={"row-noise-only": "F0_UNUSABLE"},
+    )
+    assert report["negative_controls_incomplete"] is False
+    assert report["negative_control_false_fire"] is False
+
+
+def test_v14_pure_sine_control_class_f0_unusable_stays_incomplete() -> None:
+    """the closed vocabulary is still closed — `(PURE_SINE, "F0_UNUSABLE")`
+    is not a member (v1.4 §前提 3 explicitly does not extend sanctioning
+    beyond SILENCE/NOISE_ONLY)."""
+    candidate = candidate_by_id(_D71_APERIODICITY_HARMONIC_RESIDUAL_ID)
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        [],
+        negative_control_row_ids=frozenset({"row-pure-sine"}),
+        control_class_by_negative_row_id={"row-pure-sine": "PURE_SINE"},
+        missing_reason_by_negative_row_id={"row-pure-sine": "F0_UNUSABLE"},
     )
     assert report["negative_controls_incomplete"] is True
 

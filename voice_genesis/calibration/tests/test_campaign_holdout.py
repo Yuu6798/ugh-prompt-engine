@@ -1548,13 +1548,17 @@ def test_control_detection_for_family_sanctioned_abstention_silence_f0_unusable_
     assert detection.negative_control_sanctioned_abstentions == 1
 
 
-def test_control_detection_for_family_sanctioned_abstention_closed_vocabulary_excludes_noise_only() -> None:
-    """v1.3 (Codex #350 round 3 P1 ADOPT): the closed vocabulary is not
-    extended by this change -- `(NOISE_ONLY, "F0_UNUSABLE")` is not a member
-    of `fixtures.controls.SANCTIONED_ABSTENTIONS`, so an entirely-missing
-    NOISE_ONLY instance must still be counted as a failure exactly as
-    before, even though the missing_reason string matches the sanctioned
-    reason for SILENCE."""
+def test_control_detection_for_family_sanctioned_abstention_noise_only_f0_unusable_not_fired() -> None:
+    """v1.4 §前提 3 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, P2 census PASS —
+    `scratchpad/v14/p23/p23_report.txt` §5.1): `fixtures.controls.
+    SANCTIONED_ABSTENTIONS` now includes `(NOISE_ONLY, "F0_UNUSABLE")`
+    alongside `(SILENCE, "F0_UNUSABLE")` (無声対照に F0 は存在しないため、
+    F0 依存候補の NOISE_ONLY skip は SILENCE と同じ理由で正しい棄権)。an
+    entirely-missing NOISE_ONLY instance whose reason is `F0_UNUSABLE` must
+    now be counted as present-but-non-fired (FDR0 denominator only), mirroring
+    the pre-existing SILENCE test above (supersedes the pre-v1.4
+    `..._excludes_noise_only` test that pinned the narrower v1.2/v1.3
+    vocabulary)."""
     candidate = _tilt_candidate()
     neg1 = _matrix_row(
         "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
@@ -1576,6 +1580,42 @@ def test_control_detection_for_family_sanctioned_abstention_closed_vocabulary_ex
         candidate=candidate,
         records=records,
         control_class_by_negative_row_id={"neg-1": "NOISE_ONLY"},
+        missing_reason_by_negative_row_id={"neg-1": "F0_UNUSABLE"},
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 0
+    assert detection.fdr0 == 0.0
+    assert detection.negative_control_sanctioned_abstentions == 1
+
+
+def test_control_detection_for_family_sanctioned_abstention_closed_vocabulary_excludes_pure_sine() -> None:
+    """the closed vocabulary is still closed -- `(PURE_SINE, "F0_UNUSABLE")`
+    is not a member of `fixtures.controls.SANCTIONED_ABSTENTIONS` (v1.4
+    §前提 3 explicitly does not extend sanctioning beyond SILENCE/NOISE_ONLY:
+    `DESIGN_VG_METER_CAL_DEBT_v1.4.md` 前提 3 "PURE_SINE 等には拡張しない"),
+    so an entirely-missing PURE_SINE instance must still be counted as a
+    failure exactly as before."""
+    candidate = _tilt_candidate()
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="PURE_SINE",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(1, 5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            quiet_valid=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+        control_class_by_negative_row_id={"neg-1": "PURE_SINE"},
         missing_reason_by_negative_row_id={"neg-1": "F0_UNUSABLE"},
     )
     assert detection.n_neg == 5
