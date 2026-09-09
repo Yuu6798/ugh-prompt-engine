@@ -127,10 +127,26 @@ def _validate_direct_reference(campaign_id: str, path: Path) -> GuardResult:
     return GuardResult(campaign_id, not reasons, "DIRECT_REFERENCE", tuple(reasons))
 
 
-def validate_campaign(campaign_dir: Path) -> GuardResult:
+def validate_campaign(
+    campaign_dir: Path,
+    *,
+    base_campaign_dir: Path | None = None,
+) -> GuardResult:
     campaign_id = campaign_dir.name
     manifest = campaign_dir / "c0_manifest.json"
     if not manifest.is_file():
+        base_manifest = (
+            base_campaign_dir / "c0_manifest.json"
+            if base_campaign_dir is not None
+            else None
+        )
+        if base_manifest is not None and base_manifest.is_file():
+            return GuardResult(
+                campaign_id,
+                False,
+                "C0_MANIFEST_REMOVED",
+                ("an existing frozen campaign c0_manifest.json must be preserved",),
+            )
         return GuardResult(campaign_id, True, "NO_C0_MANIFEST", ())
 
     quarantine = campaign_dir / QUARANTINE_FILENAME
@@ -159,12 +175,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Fail-closed VoiceGenesis campaign authorization-reference guard"
     )
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--base-repo-root",
+        type=Path,
+        help="Base-revision checkout used to reject removal of frozen campaign manifests",
+    )
     parser.add_argument("--campaign-id", action="append", required=True)
     args = parser.parse_args(argv)
 
     failed = False
     for campaign_id in args.campaign_id:
-        result = validate_campaign(_campaign_dir(args.repo_root, campaign_id))
+        base_campaign_dir = (
+            _campaign_dir(args.base_repo_root, campaign_id)
+            if args.base_repo_root is not None
+            else None
+        )
+        result = validate_campaign(
+            _campaign_dir(args.repo_root, campaign_id),
+            base_campaign_dir=base_campaign_dir,
+        )
         print(
             json.dumps(
                 {
