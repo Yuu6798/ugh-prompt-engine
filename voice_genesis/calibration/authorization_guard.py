@@ -266,7 +266,21 @@ def validate_campaign(
     base_campaign_dir: Path | None = None,
 ) -> GuardResult:
     campaign_id = campaign_dir.name
+    if campaign_dir.is_symlink():
+        return GuardResult(
+            campaign_id,
+            False,
+            "UNSAFE_CAMPAIGN_PATH",
+            ("campaign directory must not be a symlink",),
+        )
     manifest = campaign_dir / "c0_manifest.json"
+    if manifest.is_symlink():
+        return GuardResult(
+            campaign_id,
+            False,
+            "UNSAFE_CAMPAIGN_PATH",
+            ("c0_manifest.json must not be a symlink",),
+        )
     if not manifest.is_file():
         base_manifest = (
             base_campaign_dir / "c0_manifest.json"
@@ -283,6 +297,13 @@ def validate_campaign(
         return GuardResult(campaign_id, True, "NO_C0_MANIFEST", ())
 
     quarantine = campaign_dir / QUARANTINE_FILENAME
+    if quarantine.is_symlink():
+        return GuardResult(
+            campaign_id,
+            False,
+            "QUARANTINE",
+            (f"{QUARANTINE_FILENAME} must not be a symlink",),
+        )
     base_quarantine = (
         base_campaign_dir / QUARANTINE_FILENAME
         if base_campaign_dir is not None
@@ -317,6 +338,13 @@ def validate_campaign(
         )
 
     auth_ref = campaign_dir / AUTH_REF_FILENAME
+    if auth_ref.is_symlink():
+        return GuardResult(
+            campaign_id,
+            False,
+            "DIRECT_REFERENCE",
+            (f"{AUTH_REF_FILENAME} must not be a symlink",),
+        )
     if not auth_ref.is_file():
         return GuardResult(
             campaign_id,
@@ -330,7 +358,21 @@ def validate_campaign(
 
 
 def _campaign_dir(repo_root: Path, campaign_id: str) -> Path:
-    return repo_root / "voice_genesis" / "calibration" / "campaigns" / campaign_id
+    if not _nonblank_string(campaign_id) or Path(campaign_id).name != campaign_id:
+        raise ValueError("campaign_id must be one non-blank path component")
+
+    campaigns_root = repo_root
+    for component in ("voice_genesis", "calibration", "campaigns"):
+        campaigns_root = campaigns_root / component
+        if campaigns_root.is_symlink():
+            raise ValueError(f"campaign path component must not be a symlink: {component}")
+
+    campaign_dir = campaigns_root / campaign_id
+    if campaign_dir.is_symlink():
+        raise ValueError("campaign directory must not be a symlink")
+    if campaign_dir.resolve(strict=False).parent != campaigns_root.resolve(strict=False):
+        raise ValueError("campaign directory must remain inside campaigns root")
+    return campaign_dir
 
 
 def main(argv: Sequence[str] | None = None) -> int:

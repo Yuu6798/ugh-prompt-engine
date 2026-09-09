@@ -4,7 +4,9 @@ import json
 import shutil
 from pathlib import Path
 
-from voice_genesis.calibration.authorization_guard import validate_campaign
+import pytest
+
+from voice_genesis.calibration.authorization_guard import _campaign_dir, validate_campaign
 
 
 def _campaign(tmp_path: Path, campaign_id: str = "RUN10-CAL-TEST") -> Path:
@@ -54,6 +56,37 @@ def test_removed_existing_manifest_fails_closed(tmp_path: Path) -> None:
     assert result.reasons == (
         "an existing frozen campaign c0_manifest.json must be preserved",
     )
+
+
+def test_symlink_replacement_for_manifest_fails_closed(tmp_path: Path) -> None:
+    campaign = _campaign(tmp_path)
+    target = tmp_path / "other.json"
+    target.write_text(json.dumps({"campaign_id": campaign.name}), encoding="utf-8")
+    (campaign / "c0_manifest.json").unlink()
+    (campaign / "c0_manifest.json").symlink_to(target)
+    _write_direct_reference(campaign, ["C0_FREEZE", "CAMPAIGN_EXECUTION"])
+
+    result = validate_campaign(campaign)
+
+    assert result.ok is False
+    assert result.mode == "UNSAFE_CAMPAIGN_PATH"
+    assert result.reasons == ("c0_manifest.json must not be a symlink",)
+
+
+def test_campaign_directory_symlink_fails_closed(tmp_path: Path) -> None:
+    target = _campaign(tmp_path / "target")
+    campaign = tmp_path / "RUN10-CAL-LINK"
+    campaign.symlink_to(target, target_is_directory=True)
+
+    result = validate_campaign(campaign)
+
+    assert result.ok is False
+    assert result.mode == "UNSAFE_CAMPAIGN_PATH"
+
+
+def test_campaign_dir_rejects_path_traversal(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="one non-blank path component"):
+        _campaign_dir(tmp_path, "../outside")
 
 
 def test_never_frozen_directory_without_manifest_is_not_a_campaign(tmp_path: Path) -> None:
