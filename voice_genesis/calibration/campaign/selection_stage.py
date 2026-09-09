@@ -57,8 +57,10 @@ from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.candidates import adapter
 from voice_genesis.calibration.candidates.registry import Candidate, active_candidates
 from voice_genesis.calibration.canonical import manifest_sha
+from voice_genesis.calibration.e_use_table import find_row as find_e_use_row
 from voice_genesis.calibration.fixtures import controls as fixture_controls
 from voice_genesis.calibration.fixtures.matrix import FixtureRow
+from voice_genesis.calibration.gates import EUseEvidenceRow
 from voice_genesis.calibration.observables import apply_polarity, bias, error_terms, q95, two_stage_median
 from voice_genesis.calibration.selection import CandidateCriteria, SelectionOutcome, select_across_ceilings
 from voice_genesis.calibration.vocab import ClaimCeiling
@@ -875,12 +877,52 @@ def claim_scope_report(
     }
 
 
+def truth_floor_for_candidate(
+    candidate: Candidate, e_use_rows: Sequence[EUseEvidenceRow] | None
+) -> float | None:
+    """RUN10-CAL-v1.4 §前提 7 preregistration
+    (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`): `candidate.construct`/`unit`/
+    `domain` に一致する E_use 行（`e_use_table.find_row()`、`holdout_stage.
+    load_e_use_rows()` と同じ表）が `e_use_mode == "absolute"` かつ有限の
+    `e_use_value` を持てば、その値を `observables.error_terms()` の
+    `truth_floor` として返す——正規化 MAE (`RE[i]`) の分母 floor を
+    `zero_guard` から construct の E_use（絶対受入誤差）へ置換する。
+
+    以下のいずれかに該当すれば `None`（呼び出し側は従来の `zero_guard` を
+    使う。挙動不変）:
+    - `e_use_rows` が `None`（呼び出し側が E_use 表を読めなかった/対象外
+      ——C3 selection は C4 と異なり E_use 表欠落を fail-closed 事由に
+      **しない**、`campaign.cli._try_load_e_use_rows_for_selection()` の
+      docstring 参照）。
+    - `find_row()` が一致行を返さない（0 件/複数件）。
+    - 行が見つかっても `e_use_mode == "relative"`（construct 単位の相対誤差
+      であり、instance ごとの truth に対する絶対展開が別途必要——本関数は
+      展開しない。§前提 7 は relative mode を変更しない）。
+    - `evidence_class == UNJUSTIFIED`（`e_use_value` が `None`）。
+    - `e_use_value` が非有限。
+
+    正本はここ 1 箇所——`build_candidate_criteria()` はこの関数の戻り値を
+    そのまま `observables.error_terms()` へ渡すのみで、E_use 行の探索・
+    mode 判定ロジックを複製しない。"""
+    if e_use_rows is None:
+        return None
+    row = find_e_use_row(
+        e_use_rows, construct_id=candidate.construct, unit=candidate.unit, domain=candidate.domain
+    )
+    if row is None or row.e_use_mode != "absolute" or row.e_use_value is None:
+        return None
+    if not math.isfinite(row.e_use_value):
+        return None
+    return float(row.e_use_value)
+
+
 def build_candidate_criteria(
     candidate: Candidate,
     records: Sequence[measure_stage.MeasurementRecord],
     truth_by_instance: Mapping[tuple[str, int], float],
     *,
     zero_guard: float = 1e-9,
+    truth_floor: float | None = None,
 ) -> CandidateCriteria:
     """`[UNDERSPEC-CAL-D16]` 実測 record 列（within+fresh 6 call/instance）
     から `CandidateCriteria` を構築する集計規則:
@@ -896,9 +938,16 @@ def build_candidate_criteria(
       では吸収されるはずのケースでも平均値へ直接混入していた
       （`[UNDERSPEC-CAL-D43]`）。
     - `e[i] = m[i] - truth[i]`（raw signed error）、`AE[i] = |e[i]|`、
-      `RE[i] = AE[i]/max(|truth[i]|, zero_guard)`（`observables.error_terms`、
-      §10.1: `e[i] = m[i] - x[i]`、`AE[i] = |e[i]|`、
-      `RE[i] = AE[i]/max(|x[i]|, d[i])`）。
+      `RE[i] = AE[i]/max(|truth[i]|, truth_floor if truth_floor is not None
+      else zero_guard)`（`observables.error_terms`、§10.1: `e[i] = m[i] -
+      x[i]`、`AE[i] = |e[i]|`、`RE[i] = AE[i]/max(|x[i]|, d[i])`）。**v1.4
+      §前提 7 preregistration**（`DESIGN_VG_METER_CAL_DEBT_v1.4.md`）:
+      `truth_floor`（既定 `None` = 挙動不変）は `truth_floor_for_candidate()`
+      が construct の E_use（absolute mode）から導出した値——真値 0 近傍の
+      行で `RE[i]` が `zero_guard`（極小値）除算により発散する縮退
+      （2dde4014 実測: TILT 第 1 順位要素 2e8〜7e9）を防ぐ。E_use が
+      relative mode / 未凍結 / `UNJUSTIFIED` の construct では `None` の
+      まま（従来の `zero_guard` を使う）。
     - ABSOLUTE 系列: **normalized MAE は `RE[i]` の平均**（primary-domain の
       相対誤差指標。§9 の "primary-domain normalized MAE" 呼称に対応）、
       **BIAS は raw `e[i]` の平均**（§10.1: `BIAS = mean_i(e[i])` — `e[i]`
@@ -952,7 +1001,7 @@ def build_candidate_criteria(
         # median, grouped by MeasurementRecord.process_id (matches
         # holdout_stage.build_instance_margins's input shape exactly).
         m = two_stage_median(per_process)
-        et = error_terms(m, truth, zero_guard)
+        et = error_terms(m, truth, zero_guard, truth_floor=truth_floor)
         truths.append(truth)
         measured.append(m)
         raw_errors.append(et.e)
@@ -1040,5 +1089,6 @@ __all__ = [
     "max_claim_scope_from_manifest",
     "capped_ceiling",
     "claim_scope_report",
+    "truth_floor_for_candidate",
     "build_candidate_criteria",
 ]

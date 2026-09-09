@@ -36,15 +36,30 @@ class ErrorTerms:
     re: float
 
 
-def error_terms(m: float, truth: float, zero_guard: float) -> ErrorTerms:
-    """`e = m - truth`, `AE = |e|`, `RE = AE / max(|truth|, zero_guard)`。
+def error_terms(
+    m: float, truth: float, zero_guard: float, *, truth_floor: float | None = None
+) -> ErrorTerms:
+    """`e = m - truth`, `AE = |e|`, `RE = AE / max(|truth|, truth_floor if
+    truth_floor is not None else zero_guard)`。
 
     signed construct が 0 近傍のとき RE を PASS 判定に使わず診断専用に留めるのは
     呼び出し側の責務（ここでは式のみを提供する）。
+
+    RUN10-CAL-v1.4 §前提 7 preregistration
+    （`DESIGN_VG_METER_CAL_DEBT_v1.4.md`）: 既定 `truth_floor=None` は分母を
+    従来どおり `max(|truth|, zero_guard)` に保つ（v1.3 以前と bit-for-bit
+    同一の挙動）。`truth_floor` を渡すと、真値 0 近傍の行で分母が
+    `zero_guard`（通常 `1e-9` 程度の極小値）まで縮退し正規化誤差が発散する
+    問題（2dde4014 実測: TILT 第 1 順位要素 2e8〜7e9）を、construct の
+    E_use（absolute mode の受入誤差）という意味のある下限に置き換えて防ぐ。
+    呼び出し側（`selection_stage.build_candidate_criteria`）が construct の
+    E_use 行から値を導出して渡す——本関数自身は E_use テーブルを一切参照
+    しない（正本は `selection_stage.truth_floor_for_candidate()` の 1 箇所）。
     """
     e = m - truth
     ae = abs(e)
-    re = ae / max(abs(truth), zero_guard)
+    denom_floor = truth_floor if truth_floor is not None else zero_guard
+    re = ae / max(abs(truth), denom_floor)
     return ErrorTerms(e=e, ae=ae, re=re)
 
 

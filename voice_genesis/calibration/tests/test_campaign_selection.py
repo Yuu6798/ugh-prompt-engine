@@ -17,8 +17,16 @@ from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import candidate_by_id, candidates_for_meter
 from voice_genesis.calibration.fixtures import controls as controls_module
 from voice_genesis.calibration.fixtures.matrix import build_matrix
+from voice_genesis.calibration.gates import EUseEvidenceRow
 from voice_genesis.calibration.selection import CandidateCriteria, select_across_ceilings
-from voice_genesis.calibration.vocab import ClaimCeiling, Domain, MeterId, MissingReason, Split
+from voice_genesis.calibration.vocab import (
+    ClaimCeiling,
+    Domain,
+    EvidenceClass,
+    MeterId,
+    MissingReason,
+    Split,
+)
 
 from ._campaign_fixture import build_tiny_campaign
 
@@ -1999,3 +2007,90 @@ def test_claim_scope_report_out_of_scope_absolute_is_not_no_polarity_capped() ->
     assert capped == ClaimCeiling.DIRECTIONAL
     assert report["capped"] is True
     assert report["cap_reason"] == "MAX_CLAIM_SCOPE"
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 7 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`):
+# `truth_floor_for_candidate()` — E_use-derived normalized-MAE denominator
+# floor, threaded through `build_candidate_criteria(..., truth_floor=...)`.
+# ---------------------------------------------------------------------------
+
+
+def _e_use_row_for(
+    candidate, *, mode: str, e_use_value: float | None, evidence_class: EvidenceClass = EvidenceClass.NORMATIVE_SPEC
+) -> EUseEvidenceRow:
+    return EUseEvidenceRow(
+        construct_id=candidate.construct,
+        unit=candidate.unit,
+        domain=candidate.domain,
+        intended_use="test",
+        maximum_claim="test",
+        e_use_value=e_use_value,
+        derivation_rule="test",
+        evidence_class=evidence_class,
+        source_id_or_url="test",
+        source_checked_at="2026-09-09",
+        source_hash_or_version="test",
+        applicability_argument="test",
+        review_status="test",
+        e_use_mode=mode,
+    )
+
+
+def test_truth_floor_for_candidate_absolute_mode_finite_value() -> None:
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    row = _e_use_row_for(candidate, mode="absolute", e_use_value=2.0)
+    assert selection_stage.truth_floor_for_candidate(candidate, (row,)) == 2.0
+
+
+def test_truth_floor_for_candidate_relative_mode_is_none() -> None:
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    row = _e_use_row_for(candidate, mode="relative", e_use_value=0.2)
+    assert selection_stage.truth_floor_for_candidate(candidate, (row,)) is None
+
+
+def test_truth_floor_for_candidate_unjustified_is_none() -> None:
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    row = _e_use_row_for(
+        candidate, mode="absolute", e_use_value=None, evidence_class=EvidenceClass.UNJUSTIFIED
+    )
+    assert selection_stage.truth_floor_for_candidate(candidate, (row,)) is None
+
+
+def test_truth_floor_for_candidate_no_matching_row_is_none() -> None:
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    other = candidate_by_id("M2A-B0-AUTOCORR-PERIODICITY")
+    row = _e_use_row_for(other, mode="absolute", e_use_value=2.0)
+    assert selection_stage.truth_floor_for_candidate(candidate, (row,)) is None
+
+
+def test_truth_floor_for_candidate_e_use_rows_none_is_none() -> None:
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    assert selection_stage.truth_floor_for_candidate(candidate, None) is None
+
+
+def test_truth_floor_for_candidate_nonfinite_value_is_none() -> None:
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    row = _e_use_row_for(candidate, mode="absolute", e_use_value=float("inf"))
+    assert selection_stage.truth_floor_for_candidate(candidate, (row,)) is None
+
+
+def test_build_candidate_criteria_truth_floor_reaches_normalized_mae() -> None:
+    """end-to-end: a candidate's E_use-derived `truth_floor` changes
+    `primary_normalized_mae` for a near-zero-truth instance exactly the way
+    `error_terms(..., truth_floor=...)` unit tests already confirm at the
+    `observables` layer -- this test pins the wiring through
+    `build_candidate_criteria()` itself."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = [_record("row-zero", 0, process_id="p", value=0.4)]
+    truth_by_instance = {("row-zero", 0): 0.0}
+
+    without_floor = selection_stage.build_candidate_criteria(
+        candidate, records, truth_by_instance, zero_guard=1e-9
+    )
+    assert without_floor.primary_normalized_mae > 1e8  # the degenerate blowup this WP fixes
+
+    with_floor = selection_stage.build_candidate_criteria(
+        candidate, records, truth_by_instance, zero_guard=1e-9, truth_floor=2.0
+    )
+    assert with_floor.primary_normalized_mae == pytest.approx(0.2)  # 0.4 / max(0.0, 2.0)
