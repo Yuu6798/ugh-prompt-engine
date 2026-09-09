@@ -359,6 +359,52 @@ def test_abstained_ineligible_without_missing_reason_is_false() -> None:
 
 
 # ---------------------------------------------------------------------------
+# `abstained()` call-site AST test (mirrors `_detected_calls_without_
+# predicate_kwarg` below): both `selection_stage.candidate_fail_filter_report`
+# and `holdout_stage.control_detection_for_family` must call
+# `fixtures.controls.abstained` rather than re-deriving the same
+# `missing_reason in candidate.abstention_reasons` predicate inline (v1.4
+# §前提 2 経路 (B), memo Implementation Approach: "正本は 1 箇所 = ...
+# 両 stage がそれを呼ぶ。複製禁止").
+# ---------------------------------------------------------------------------
+
+
+def _calls_named(source: str, name: str) -> bool:
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        func_name = (
+            func.id
+            if isinstance(func, ast.Name)
+            else func.attr
+            if isinstance(func, ast.Attribute)
+            else None
+        )
+        if func_name == name:
+            return True
+    return False
+
+
+def test_abstained_is_called_from_selection_stage_and_holdout_stage() -> None:
+    calibration_root = Path(__file__).resolve().parents[1]
+    selection_stage_src = (calibration_root / "campaign" / "selection_stage.py").read_text(
+        encoding="utf-8"
+    )
+    holdout_stage_src = (calibration_root / "campaign" / "holdout_stage.py").read_text(
+        encoding="utf-8"
+    )
+    assert _calls_named(selection_stage_src, "abstained"), (
+        "selection_stage.py must call fixtures.controls.abstained() — "
+        "the single source of truth for declared-reason abstention"
+    )
+    assert _calls_named(holdout_stage_src, "abstained"), (
+        "holdout_stage.py must call fixtures.controls.abstained() — "
+        "the single source of truth for declared-reason abstention"
+    )
+
+
+# ---------------------------------------------------------------------------
 # #349 第 3 巡 ③ P2 (selection_stage.py:640 `noise_only_false_detection_rate`):
 # `detected()` の omitted `predicate=` を第 2 巡が取りこぼした穴。同型の穴が
 # 他 call site に残っていないかを AST で全数固定し、このファミリーを終端する。

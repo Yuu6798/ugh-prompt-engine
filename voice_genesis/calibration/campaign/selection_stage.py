@@ -600,11 +600,37 @@ def candidate_fail_filter_report(
         missing_reason_by_negative_row_id,
     )
 
+    # RUN10-CAL-v1.4 §前提 2 経路 (B): `fixtures.controls.detected()` already
+    # maps every missing_reason/ineligible record to `False` (non-fire)
+    # regardless of whether the reason is declared (`selection_stage` has no
+    # holdout-style round 20 "non-empty group's missing/invalid is an
+    # unconditional failure" contract — that contract is `holdout_stage.
+    # control_detection_for_family._negative_fired()`-specific; selection's
+    # only "missing = failure" behavior is row-level, via
+    # `negative_controls_incomplete` below). v1.4 does not change
+    # `neg_detections`'s fire/non-fire outcome; it adds a parallel,
+    # audit-only accounting of *declared* abstentions (`abstained()`, the
+    # single source of truth also called by `holdout_stage`) so a
+    # `M2A-B0-AUTOCORR-PERIODICITY`-shaped candidate's negative-control
+    # non-fire is visibly a *sanctioned* abstention rather than a
+    # coincidental one — mirrors `holdout_stage.ControlDetection.
+    # negative_control_sanctioned_abstentions`. See docstring paragraph
+    # above `own_records` for why a stricter (fire-flipping) reading of the
+    # memo would regress this function's pre-existing, non-round-20 "missing
+    # negative record stays non-fire" contract (`test_missing_negative_
+    # control_record_is_reported_as_incomplete` et al.).
     neg_detections = [
         fixture_controls.detected(r.output, predicate=candidate.detection_predicate)
         for r in own_records
         if r.row_id in negative_control_row_ids
     ]
+    negative_control_declared_abstentions = sum(
+        1
+        for r in own_records
+        if r.row_id in negative_control_row_ids
+        and (r.output.missing_reason is not None or r.output.ineligible)
+        and fixture_controls.abstained(r.output, candidate)
+    )
     # v1.2 WP1: a sanctioned-abstention row has zero own records because the
     # F0-dependent candidate was never called on it (a skip, not a call that
     # came back silent) — fold it into the any-fire population as `False`
@@ -727,6 +753,15 @@ def candidate_fail_filter_report(
         "noise_only_false_detection_rate": noise_only_false_detection_rate,
         "noise_only_instances_detected": noise_only_instances_detected,
         "noise_only_instances_total": noise_only_instances_total,
+        # RUN10-CAL-v1.4 §前提 2 経路 (B): audit-only, not in
+        # `FAIL_FILTER_NAMES` — count of *present* negative-control records
+        # whose missing_reason/ineligible is explained by the candidate's
+        # declared `abstention_reasons` (`fixtures.controls.abstained()`).
+        # Does not change `negative_control_false_fire`/
+        # `negative_controls_incomplete` (both already treat these records
+        # as non-fire/present via `fixtures.controls.detected()`); this key
+        # only makes the sanctioned-vs-coincidental distinction visible.
+        "negative_control_declared_abstentions": negative_control_declared_abstentions,
     }
 
 

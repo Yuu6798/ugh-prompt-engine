@@ -1469,6 +1469,99 @@ def test_v12_sanctioned_abstention_does_not_mask_false_fire_on_other_row() -> No
     assert selection_stage.eligible_after_fail_filters(report) is False
 
 
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 2 経路 (B) (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`):
+# `fixtures.controls.abstained()` in `selection_stage` — audit-only
+# accounting (`negative_control_declared_abstentions`), NOT a fire/non-fire
+# semantics change. `fixtures.controls.detected()` already maps every
+# missing_reason/ineligible negative-control record to non-fire regardless
+# of declaration (selection_stage has no holdout-style round 20 "non-empty
+# group's missing/invalid is an unconditional failure" contract — see
+# `build_candidate_criteria`'s docstring paragraph in the production module),
+# so a declared vs. undeclared reason produces the *same*
+# `negative_control_false_fire`/`negative_controls_incomplete` outcome here;
+# only the new audit-only key distinguishes "sanctioned" from "coincidental"
+# non-fire. Positive-control semantics are untouched either way.
+# ---------------------------------------------------------------------------
+
+
+def test_v14_declared_output_missing_on_negative_record_is_counted_as_declared_abstention() -> (
+    None
+):
+    candidate = dataclasses.replace(
+        candidate_by_id(_D71_APERIODICITY_HARMONIC_RESIDUAL_ID),
+        abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
+    )
+    records = [
+        _record("row-noise-only", 0, candidate_id=candidate.candidate_id, detected=False),
+        _record(
+            "row-noise-only", 0, candidate_id=candidate.candidate_id, detected=False,
+            repeat_kind="fresh", process_id="fresh-process-0",
+        ),
+    ]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-noise-only"}),
+    )
+    assert report["negative_controls_incomplete"] is False
+    assert report["negative_control_false_fire"] is False
+    assert report["within_fresh_process_mismatch"] is False
+    assert report["negative_control_declared_abstentions"] == 2
+    assert selection_stage.eligible_after_fail_filters(report) is True
+
+
+def test_v14_undeclared_reason_on_negative_record_not_counted_as_declared_abstention() -> None:
+    """the candidate declares `abstention_reasons` for a different reason
+    (`INPUT_MISSING`) than the one actually observed (`OUTPUT_MISSING`) —
+    `abstained()` requires an exact match, so this record is not counted as
+    a declared abstention. It still resolves to non-fire via `detected()`
+    (unchanged pre-v1.4 behavior — selection_stage's `negative_control_
+    false_fire` was never a "missing = failure" filter; see module note
+    above), so both declared and undeclared reasons produce the same
+    `negative_control_false_fire`/eligibility outcome here — only the audit
+    key differs."""
+    candidate = dataclasses.replace(
+        candidate_by_id(_D71_APERIODICITY_HARMONIC_RESIDUAL_ID),
+        abstention_reasons=frozenset({MissingReason.INPUT_MISSING}),
+    )
+    records = [
+        _record("row-noise-only", 0, candidate_id=candidate.candidate_id, detected=False),
+        _record(
+            "row-noise-only", 0, candidate_id=candidate.candidate_id, detected=False,
+            repeat_kind="fresh", process_id="fresh-process-0",
+        ),
+    ]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-noise-only"}),
+    )
+    assert report["negative_control_false_fire"] is False
+    assert report["negative_control_declared_abstentions"] == 0
+    assert selection_stage.eligible_after_fail_filters(report) is True
+
+
+def test_v14_declared_reason_on_positive_record_stays_failure() -> None:
+    """positive-control non-fire is unaffected by `abstention_reasons` —
+    `pos_detections` is still built from raw `fixtures.controls.detected()`
+    (unchanged by this WP), so a positive-control record with a declared
+    missing_reason still counts as non-fire (failure), not a "sanctioned"
+    success."""
+    candidate = dataclasses.replace(
+        candidate_by_id(_D71_APERIODICITY_HARMONIC_RESIDUAL_ID),
+        abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
+    )
+    records = [_record("row-pos", 0, candidate_id=candidate.candidate_id, detected=False)]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        positive_control_row_ids=frozenset({"row-pos"}),
+    )
+    assert report["positive_control_non_fire"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
 def test_v12_omitted_sanctioned_abstention_args_preserve_prior_behaviour() -> None:
     """Backward compatibility: omitting `control_class_by_negative_row_id`/
     `missing_reason_by_negative_row_id` (both default `None`) must reproduce

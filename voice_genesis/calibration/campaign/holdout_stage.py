@@ -405,19 +405,30 @@ def control_detection_for_family(
     （selection 側と同じ形の row_id -> 値マップ、いずれも既定 `None`）を
     渡すと、**group が完全に空の** instance に限り、その row_id が
     `sanctioned_abstention_row_ids()`（selection と同一の閉語彙
-    `fixtures.controls.SANCTIONED_ABSTENTIONS`、現行 `(SILENCE,
-    "F0_UNUSABLE")` のみ）に一致すれば「present かつ non-fired」（`False`）
-    として扱う——`FDR0` の分母（`n_neg`）には算入し分子には算入しない
-    （sanctioned 件数は `ControlDetection.negative_control_sanctioned_
-    abstentions` として別途会計する）。**group が非空**（何らかの own
-    record が存在し、その中に missing_reason/ineligible な repeat が
-    混じっている）場合はこの再分類の対象外のまま——round 20 の
-    「非空 group 内の missing/invalid は無条件に失敗」契約は変更しない
-    （全欠落 instance のみが対象、round 20 契約そのままの安全側）。
-    閉語彙は selection と同一のまま拡張しない（例: NOISE_ONLY×F0_UNUSABLE
-    や SILENCE×OUTPUT_MISSING は従来どおり失敗のまま）。両 kwargs が
-    省略/`None`（後方互換の既定）なら `sanctioned_abstention_row_ids()`
-    自身が空集合を返すため、本関数は本 revision 前と完全に同じ挙動を保つ。"""
+    `fixtures.controls.SANCTIONED_ABSTENTIONS`、v1.4 は `(SILENCE,
+    "F0_UNUSABLE")` + `(NOISE_ONLY, "F0_UNUSABLE")` の 2 組）に一致すれば
+    「present かつ non-fired」（`False`）として扱う——`FDR0` の分母
+    （`n_neg`）には算入し分子には算入しない（sanctioned 件数は
+    `ControlDetection.negative_control_sanctioned_abstentions` として
+    別途会計する）。両 kwargs が省略/`None`（後方互換の既定）なら
+    `sanctioned_abstention_row_ids()` 自身が空集合を返すため、この経路 (A)
+    は本 revision 前と完全に同じ挙動を保つ。
+
+    **v1.4 §前提 2 経路 (B)**（`DESIGN_VG_METER_CAL_DEBT_v1.4.md`）:
+    **group が非空**（候補は呼ばれ own record が存在する）場合も、各 repeat
+    の `missing_reason`/`ineligible` が `fixtures.controls.
+    abstained(r.output, candidate)`（候補が宣言する `Candidate.
+    abstention_reasons` との一致 + `ineligible=False`）で説明されれば
+    「present かつ non-fired」として扱う（`sanctioned_abstained_instances`
+    へ算入）——v1.3 までは「非空 group 内の missing/invalid は無条件に失敗」
+    （round 20 契約）が例外なく適用されていたが、v1.4 は候補ごとの
+    preregistration がある場合に限りこれを緩める。**宣言されていない
+    理由**の missing/invalid は round 20 契約のまま無条件に失敗
+    （`Candidate.abstention_reasons` の既定は空集合のため、v1.2/v1.3 の
+    候補はこの新分岐の影響を一切受けない）。同一 group 内の別 repeat が
+    真の偽検出（`detected()` True）であれば、その事実は隠蔽されない
+    （abstained な repeat は fire 判定自体をスキップするだけで、group 全体
+    の any-fire 判定からは除外しない）。"""
     neg_instances = fixture_controls.negative_control_instances(matrix_rows, family=family)
     pos_instances = fixture_controls.positive_detection_instances(
         matrix_rows, assignment, Split.HOLDOUT, family=family
@@ -471,13 +482,25 @@ def control_detection_for_family(
                 sanctioned_abstained_instances.add(instance)
                 return False
             return True  # missing entirely -> count as failure (v1.1 §V3.6)
-        if any(r.output.missing_reason is not None or r.output.ineligible for r in group):
-            # round 20 finding #2: any missing/invalid repeat enters the
-            # failure numerator unconditionally, even if other repeats in
-            # the same group are a genuine, valid non-detection (or even a
-            # real false-fire — either way this instance is already a
-            # failure, so the specific reason does not change the outcome).
-            return True
+        # RUN10-CAL-v1.4 §前提 2 経路 (B) (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`):
+        # a present repeat whose missing_reason/ineligible is explained by a
+        # *declared* `Candidate.abstention_reasons`
+        # (`fixtures.controls.abstained()`, the single source of truth) is
+        # the meter correctly abstaining on that repeat, not a failure — it
+        # contributes nothing to the any-fire failure signal (mirrors the
+        # entirely-missing branch above, path (A), at record granularity).
+        # Any other missing/invalid repeat still enters the failure
+        # numerator unconditionally (round 20 finding #2's contract,
+        # unchanged for non-abstained repeats).
+        any_declared_abstention = False
+        for r in group:
+            if r.output.missing_reason is not None or r.output.ineligible:
+                if fixture_controls.abstained(r.output, candidate):
+                    any_declared_abstention = True
+                    continue
+                return True
+        if any_declared_abstention:
+            sanctioned_abstained_instances.add(instance)
         return any(
             fixture_controls.detected(r.output, predicate=candidate.detection_predicate)
             for r in group

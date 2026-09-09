@@ -1470,6 +1470,188 @@ def test_control_detection_for_family_negative_control_one_invalid_repeat_fails_
     assert detection.fdr0 == pytest.approx(1.0 / 5.0)
 
 
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 2 経路 (B) (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`):
+# `fixtures.controls.abstained()` — a *non-empty* group whose missing_reason
+# is explained by a candidate-declared `Candidate.abstention_reasons` is
+# present-and-non-fired, narrowing the round 20 "any missing/invalid repeat
+# fails" contract for declaring candidates only.
+# ---------------------------------------------------------------------------
+
+
+def _tilt_candidate_with_abstention(reasons: frozenset) -> object:
+    return replace(_tilt_candidate(), abstention_reasons=reasons)
+
+
+def test_control_detection_for_family_declared_output_missing_on_negative_is_non_fired() -> None:
+    """v1.4 §前提 2 経路 (B): every repeat of a non-empty negative-control
+    group is `missing_reason=OUTPUT_MISSING`, and the candidate declares
+    `abstention_reasons={OUTPUT_MISSING}` — this must now be present-and-
+    non-fired (not the round 20 unconditional failure that applied before
+    v1.4 / that still applies to a non-declaring candidate, see
+    `test_control_detection_for_family_negative_control_all_missing_reason_
+    is_failure` above using the same fixture shape)."""
+    candidate = _tilt_candidate_with_abstention(frozenset({MissingReason.OUTPUT_MISSING}))
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            missing=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 0
+    assert detection.fdr0 == 0.0
+    assert detection.negative_control_sanctioned_abstentions == 5
+
+
+def test_control_detection_for_family_undeclared_reason_on_negative_stays_failure() -> None:
+    """v1.4 §前提 2 経路 (B): the candidate declares `abstention_reasons`
+    but for a *different* reason (`INPUT_MISSING`) than the one actually
+    observed (`OUTPUT_MISSING`) — `fixtures.controls.abstained()` requires
+    an exact match, so this instance stays a round 20 failure exactly as an
+    undeclaring candidate would."""
+    candidate = _tilt_candidate_with_abstention(frozenset({MissingReason.INPUT_MISSING}))
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            missing=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 5
+    assert detection.fdr0 == 1.0
+    assert detection.negative_control_sanctioned_abstentions == 0
+
+
+def test_control_detection_for_family_declared_reason_on_positive_stays_failure() -> None:
+    """v1.4 §前提 2 経路 (B): `abstained()` is consulted only by
+    `_negative_fired()` — the positive-control side (`_positive_detected()`)
+    is unaffected by any `Candidate.abstention_reasons` declaration. A
+    positive-control instance whose repeats are all `missing_reason=
+    OUTPUT_MISSING` must stay a failure (non-detected) even when the
+    candidate declares `abstention_reasons={OUTPUT_MISSING}` — declaring
+    abstention never turns a positive-control miss into a success."""
+    candidate = _tilt_candidate_with_abstention(frozenset({MissingReason.OUTPUT_MISSING}))
+    pos1 = _matrix_row(
+        "pos-1", family="TILT_GT", block="TRUTH_CORE", domain=Domain.PRIMARY,
+        positive_control=True,
+    )
+    matrix_rows = [pos1]
+    assignment = {"pos-1": Split.HOLDOUT}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for probe_index in range(5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "pos-1", probe_index, field="tilt_db_per_oct", value=None,
+            missing=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.n_pos == 5
+    assert detection.positive_control_failures == 5
+    assert detection.fnr1 == 1.0
+
+
+def test_control_detection_for_family_declared_reason_negative_does_not_mask_real_fire() -> None:
+    """v1.4 §前提 2 経路 (B): a sanctioned-abstention repeat in one instance
+    must not suppress a genuine false fire in a *different* repeat within
+    the same instance's group -- mirrors `test_v12_sanctioned_abstention_
+    does_not_mask_false_fire_on_other_row` (selection_stage) at the
+    holdout-side, single-instance granularity: probe_index 0 has one
+    abstained repeat (missing_reason=OUTPUT_MISSING) and one repeat that
+    genuinely fires (predicate=None default fire semantics: any finite
+    value)."""
+    candidate = _tilt_candidate_with_abstention(frozenset({MissingReason.OUTPUT_MISSING}))
+    neg1 = _matrix_row(
+        "neg-1", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = [neg1]
+    assignment = {"neg-1": Split.HOLDOUT}
+
+    records = [
+        measure_stage.MeasurementRecord(
+            row_id="neg-1",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="within",
+            repeat_index=0,
+            process_id="within-process",
+            output=MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING),  # abstained
+        ),
+        measure_stage.MeasurementRecord(
+            row_id="neg-1",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="within",
+            repeat_index=1,
+            process_id="within-process",
+            output=MeterOutput(values={"tilt_db_per_oct": -3.0}),  # real fire
+        ),
+        measure_stage.MeasurementRecord(
+            row_id="neg-1",
+            probe_index=0,
+            candidate_id=candidate.candidate_id,
+            repeat_kind="fresh",
+            repeat_index=0,
+            process_id="fresh-process-0",
+            output=MeterOutput(values={"tilt_db_per_oct": -3.0}),  # real fire
+        ),
+    ]
+    for probe_index in range(1, 5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-1", probe_index, field="tilt_db_per_oct", value=None,
+            quiet_valid=True,
+        )
+
+    detection = holdout_stage.control_detection_for_family(
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        family="TILT_GT",
+        candidate=candidate,
+        records=records,
+    )
+    assert detection.n_neg == 5
+    assert detection.negative_control_failures == 1
+    assert detection.fdr0 == pytest.approx(1.0 / 5.0)
+
+
 def test_control_detection_for_family_negative_control_all_valid_and_quiet_is_success() -> None:
     """v1.1 §V3.6 (Codex round 20 P1 ADOPT): the only remaining "non-fire
     (success)" shape after the round 20 fix — every repeat produces a
