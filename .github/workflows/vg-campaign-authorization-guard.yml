@@ -1,0 +1,49 @@
+name: VoiceGenesis Campaign Authorization Guard
+
+on:
+  pull_request:
+    paths:
+      - "voice_genesis/calibration/campaigns/**"
+      - "voice_genesis/calibration/authorization_guard.py"
+      - "voice_genesis/calibration/tests/test_authorization_guard.py"
+      - ".github/workflows/vg-campaign-authorization-guard.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  authorization-reference-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate changed campaign directories
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t campaigns < <(
+            git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- voice_genesis/calibration/campaigns/ \
+              | awk -F/ 'NF >= 4 {print $4}' \
+              | sort -u
+          )
+
+          if [[ ${#campaigns[@]} -eq 0 ]]; then
+            echo "No campaign directories changed; nothing to validate."
+            exit 0
+          fi
+
+          args=()
+          for campaign_id in "${campaigns[@]}"; do
+            args+=(--campaign-id "$campaign_id")
+          done
+
+          python voice_genesis/calibration/authorization_guard.py --repo-root . "${args[@]}"
