@@ -8,7 +8,7 @@ from voice_genesis.calibration.authorization_guard import validate_campaign
 
 def _campaign(tmp_path: Path, campaign_id: str = "RUN10-CAL-TEST") -> Path:
     path = tmp_path / campaign_id
-    path.mkdir()
+    path.mkdir(parents=True)
     (path / "c0_manifest.json").write_text(
         json.dumps({"campaign_id": campaign_id}), encoding="utf-8"
     )
@@ -19,6 +19,29 @@ def test_missing_reference_fails_closed(tmp_path: Path) -> None:
     result = validate_campaign(_campaign(tmp_path))
     assert result.ok is False
     assert result.mode == "MISSING_DIRECT_REFERENCE"
+
+
+def test_removed_existing_manifest_fails_closed(tmp_path: Path) -> None:
+    base_campaign = _campaign(tmp_path / "base")
+    head_campaign = tmp_path / "head" / base_campaign.name
+
+    result = validate_campaign(head_campaign, base_campaign_dir=base_campaign)
+
+    assert result.ok is False
+    assert result.mode == "C0_MANIFEST_REMOVED"
+    assert result.reasons == (
+        "an existing frozen campaign c0_manifest.json must be preserved",
+    )
+
+
+def test_never_frozen_directory_without_manifest_is_not_a_campaign(tmp_path: Path) -> None:
+    base_campaign = tmp_path / "base" / "RUN10-CAL-TEST"
+    head_campaign = tmp_path / "head" / base_campaign.name
+
+    result = validate_campaign(head_campaign, base_campaign_dir=base_campaign)
+
+    assert result.ok is True
+    assert result.mode == "NO_C0_MANIFEST"
 
 
 def test_general_delegation_reference_rejected(tmp_path: Path) -> None:
