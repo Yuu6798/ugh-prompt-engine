@@ -204,7 +204,13 @@ def test_evaluate_candidate_dump_values_records_raw_cells_without_changing_verdi
     dumped = diagnose.evaluate_candidate(candidate, outcomes, dump_values=True)
 
     assert "cell_values" not in baseline
-    assert {k: v for k, v in dumped.items() if k != "cell_values"} == baseline
+    assert "census" not in baseline
+    assert "kendall_tau_sign" not in baseline
+    # v1.4 §前提6: census/kendall_tau_sign are additive dump_values-only
+    # keys (schema v0.4) -- excluded here the same way cell_values is,
+    # confirming they never touch verdict/fire-rate semantics.
+    dump_only_keys = {"cell_values", "census", "kendall_tau_sign"}
+    assert {k: v for k, v in dumped.items() if k not in dump_only_keys} == baseline
 
     entries = dumped["cell_values"]
     assert [e["row_id"] for e in entries] == ["ROW-P1", "ROW-N1"]
@@ -224,6 +230,127 @@ def test_evaluate_candidate_dump_values_records_raw_cells_without_changing_verdi
     assert entries[1]["detected"] is False
     # JSON 直列化可能（CLI が json.dumps する経路と同じ制約）。
     json.dumps(dumped, sort_keys=True)
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 6: `census` block + DIRECTIONAL `kendall_tau_sign`
+# (schema v0.4, `--dump-values` 専用).
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_candidate_census_block_counts_by_group_and_outcome() -> None:
+    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    outcomes = [
+        _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
+        _outcome("positive", None, MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)),
+        _outcome("negative", "SILENCE", MeterOutput(), reason=diagnose.F0_UNUSABLE_REASON),
+        _outcome("negative", "NOISE_ONLY", MeterOutput(values={"tilt_db_per_oct": 1.5})),
+        _outcome("negative", "NOISE_ONLY", MeterOutput(values={})),
+        _outcome(
+            "negative", "NOISE_ONLY",
+            MeterOutput(ineligible=True, ineligible_reason="no dep"),
+        ),
+        _outcome("confound", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes, dump_values=True)
+    census = report["census"]
+
+    assert census["positive"] == {
+        "n_cells": 2,
+        "measured_detected": 1,
+        "measured_not_detected": 0,
+        "f0_unusable_prepass_skip": 0,
+        "missing_reason": {"OUTPUT_MISSING": 1},
+        "ineligible": 0,
+    }
+    assert census["SILENCE"] == {
+        "n_cells": 1,
+        "measured_detected": 0,
+        "measured_not_detected": 0,
+        "f0_unusable_prepass_skip": 1,
+        "missing_reason": {},
+        "ineligible": 0,
+    }
+    assert census["NOISE_ONLY"] == {
+        "n_cells": 3,
+        "measured_detected": 1,
+        "measured_not_detected": 1,
+        "f0_unusable_prepass_skip": 0,
+        "missing_reason": {},
+        "ineligible": 1,
+    }
+    assert census["confound"] == {
+        "n_cells": 1,
+        "measured_detected": 1,
+        "measured_not_detected": 0,
+        "f0_unusable_prepass_skip": 0,
+        "missing_reason": {},
+        "ineligible": 0,
+    }
+    json.dumps(report, sort_keys=True)
+
+
+def test_evaluate_candidate_kendall_tau_sign_none_for_non_directional_candidate() -> None:
+    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    outcomes = [
+        diagnose.CellOutcome(
+            role="positive", control_class=None,
+            output=MeterOutput(values={"tilt_db_per_oct": -6.0}), missing_reason=None, truth=0.0,
+        ),
+        diagnose.CellOutcome(
+            role="positive", control_class=None,
+            output=MeterOutput(values={"tilt_db_per_oct": -12.0}), missing_reason=None, truth=1.0,
+        ),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes, dump_values=True)
+    assert report["kendall_tau_sign"] is None
+
+
+def test_evaluate_candidate_kendall_tau_sign_positive_and_negative() -> None:
+    """M2A-B0-AUTOCORR-PERIODICITY (DIRECTIONAL, `harmonic_to_noise_ratio`)
+    positive cells with the physically-correct inverse relationship
+    (hnr_db decreases as truth/injected_noise_fraction increases) must
+    yield `kendall_tau_sign == -1` (raw tau, not polarity-adjusted -- this
+    is the P3 census sign, independent of `Candidate.truth_polarity`)."""
+    candidate = registry.candidate_by_id("M2A-B0-AUTOCORR-PERIODICITY")
+    assert candidate.claim_ceiling == ClaimCeiling.DIRECTIONAL
+
+    decreasing = [
+        diagnose.CellOutcome(
+            role="positive", control_class=None,
+            output=MeterOutput(values={"hnr_db": hnr}), missing_reason=None, truth=truth,
+        )
+        for truth, hnr in [(0.0, 12.0), (0.01, 12.4), (0.03, 11.3), (0.1, 9.1), (0.3, 2.7), (0.6, -15.0)]
+    ]
+    report = diagnose.evaluate_candidate(candidate, decreasing, dump_values=True)
+    assert report["kendall_tau_sign"] == -1
+
+    increasing = [
+        diagnose.CellOutcome(
+            role="positive", control_class=None,
+            output=MeterOutput(values={"hnr_db": hnr}), missing_reason=None, truth=truth,
+        )
+        for truth, hnr in [(0.0, -15.0), (0.01, 2.7), (0.03, 9.1), (0.1, 11.3), (0.3, 12.4), (0.6, 12.0)]
+    ]
+    report = diagnose.evaluate_candidate(candidate, increasing, dump_values=True)
+    assert report["kendall_tau_sign"] == 1
+
+
+def test_evaluate_candidate_kendall_tau_sign_none_when_insufficient_distinct_values() -> None:
+    candidate = registry.candidate_by_id("M2A-B0-AUTOCORR-PERIODICITY")
+    outcomes = [
+        diagnose.CellOutcome(
+            role="positive", control_class=None,
+            output=MeterOutput(values={"hnr_db": 12.0}), missing_reason=None, truth=0.0,
+        ),
+        # truth missing (e.g. non-positive-role or unresolvable row) is excluded.
+        diagnose.CellOutcome(
+            role="positive", control_class=None,
+            output=MeterOutput(values={"hnr_db": 9.0}), missing_reason=None, truth=None,
+        ),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes, dump_values=True)
+    assert report["kendall_tau_sign"] is None
 
 
 def test_evaluate_candidate_fail_positive_when_a_positive_does_not_fire() -> None:
@@ -465,7 +592,7 @@ def test_run_diagnosis_writes_nothing_under_campaigns_or_vg_cal(
 
     assert before == after
     assert not (fake_home / ".vg_cal").exists()
-    assert report["schema"] == "diagnose/0.3"
+    assert report["schema"] == "diagnose/0.4"
     assert report["claimable"] is False
     # M2T-B0-CURRENT-HYBRID does not need F0 injection: no prepass sweep.
     assert report["f0_prepass"] == "not_applicable"
@@ -542,7 +669,7 @@ def test_cli_out_writes_only_the_requested_file(
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     assert payload["family"] == _TILT_FAMILY
     assert payload["claimable"] is False
-    assert payload["schema"] == "diagnose/0.3"
+    assert payload["schema"] == "diagnose/0.4"
     assert payload["f0_prepass"] == "not_applicable"
     assert not (fake_home / ".vg_cal").exists()
 
@@ -612,7 +739,7 @@ def test_cli_real_render_measure_f0_control(
     out = capsys.readouterr().out
     assert exit_code == 0
     report = json.loads(out)
-    assert report["schema"] == "diagnose/0.3"
+    assert report["schema"] == "diagnose/0.4"
     assert report["family"] == _F0_FAMILY
     assert report["claimable"] is False
     assert len(report["cells"]) <= 6

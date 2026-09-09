@@ -85,7 +85,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 #: （v1.2 時点で 2 段固定）は世代ごとにコード変更を強いるため、**任意段数の
 #: リストへ一般化**した。新 revision の追加は本リストの先頭へ 1 行足すだけで
 #: 済む（後方互換の `BASE_*` 別名は置かない — 参照側は本リストを使う）。
+#:
+#: v1.4 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, 2026-09-09 統治文書切替):
+#: 棄権語彙拡張 (§前提3) / 極性 preregistration (§前提5) / gate_detail
+#: 永続化 (§前提6) / 正規化 MAE floor (§前提7)。v1.4 doc は WP-A 時点では
+#: §Y0（Design Memo の前提 1–9 の verbatim 転記）のみを持つ起草中文書であり、
+#: §Y1–§Y4（P1–P3 実測表・preregistration まとめ・負債の terminal status）
+#: は後続の docs コミットで append する。
 DESIGN_DOC_CHAIN: tuple[str, ...] = (
+    "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.4.md",
     "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.3.md",
     "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.2.md",
     "voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.1.md",

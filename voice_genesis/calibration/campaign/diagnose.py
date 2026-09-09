@@ -101,8 +101,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from scipy.stats import kendalltau
 
 from voice_genesis.calibration.campaign import measure_stage
+from voice_genesis.calibration.campaign.selection_stage import truth_value_for_row
 from voice_genesis.calibration.candidates import registry
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import Candidate
@@ -167,7 +169,14 @@ _DIAGNOSE_SPLIT = "DIAGNOSE"
 #: フィールド + `missing_reason`/`ineligible`/`detected`）。既定（フラグ
 #: 無し）の出力形状は v0.2 と同一——分離実測のための追加情報であり、
 #: verdict や fire rate の意味論は一切変えない。
-SCHEMA = "diagnose/0.3"
+#: v0.4 (RUN10-CAL-v1.4 §前提 6): `--dump-values` 指定時のみ
+#: `results[].candidates[].census`（control class x outcome 件数表。P2
+#: 棄権 census の内製化）と `results[].candidates[].kendall_tau_sign`
+#: （DIRECTIONAL 候補のみ、正例セルの (truth, primary_output) 対の
+#: Kendall tau-b 符号。P3 極性 census の内製化）を追加する。既定（フラグ
+#: 無し）の出力形状は v0.2/v0.3 と同一——追加情報のみで verdict や fire
+#: rate の意味論は一切変えない。
+SCHEMA = "diagnose/0.4"
 
 _ROLE_POSITIVE = "positive"
 _ROLE_NEGATIVE = "negative"
@@ -266,6 +275,12 @@ class CellOutcome:
     missing_reason: str | None
     row_id: str | None = None
     probe_index: int | None = None
+    #: RUN10-CAL-v1.4 §前提 6 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`): 正例
+    #: セルの truth スカラー（`selection_stage.truth_value_for_row()`）。
+    #: `evaluate_candidate()` の DIRECTIONAL `kendall_tau_sign` 算出専用
+    #: （fire rate/verdict の判定には使わない）。既定 `None` で、合成
+    #: `CellOutcome` を使う既存の純関数テストは従来どおり省略できる。
+    truth: float | None = None
 
 
 def render_diagnose_signal(row: FixtureRow, row_id: str, probe_index: int) -> tuple[np.ndarray, int]:
@@ -319,13 +334,17 @@ def measure_cell(
     f0_hz: float | None,
     row_id: str,
     probe_index: int,
+    truth: float | None = None,
 ) -> CellOutcome:
     """1 (row, probe_index) × 1 candidate の測定。F0 依存候補で `f0_hz` が
     使用不能なら、実経路の skip 挙動（候補を一切呼ばない）を模して呼び出し
-    自体を省略し `F0_UNUSABLE_REASON` を合成する。"""
+    自体を省略し `F0_UNUSABLE_REASON` を合成する。`truth`（既定 `None`）は
+    `CellOutcome.truth` へそのまま渡す（v1.4 §前提 6 の DIRECTIONAL
+    `kendall_tau_sign` 専用、判定には使わない）。"""
     if needs_f0_injection(candidate) and f0_hz is None:
         return CellOutcome(
-            role, control_class, MeterOutput(), F0_UNUSABLE_REASON, row_id, probe_index
+            role, control_class, MeterOutput(), F0_UNUSABLE_REASON, row_id, probe_index,
+            truth=truth,
         )
     records = measure_stage.run_within_process_calls(
         candidate,
@@ -338,7 +357,7 @@ def measure_cell(
     )
     output = records[0].output
     reason = output.missing_reason.value if output.missing_reason is not None else None
-    return CellOutcome(role, control_class, output, reason, row_id, probe_index)
+    return CellOutcome(role, control_class, output, reason, row_id, probe_index, truth=truth)
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +416,96 @@ def _cell_value_entry(candidate: Candidate, outcome: CellOutcome) -> dict[str, A
         "ineligible_reason": outcome.output.ineligible_reason,
         "detected": detected(outcome.output, predicate=candidate.detection_predicate),
     }
+
+
+def _census_block(
+    candidate: Candidate, outcomes: Sequence[CellOutcome]
+) -> dict[str, dict[str, Any]]:
+    """RUN10-CAL-v1.4 §前提 6 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`):
+    control class（負例）/ `"positive"` / `"confound"` ごとの outcome 件数表
+    （`--dump-values` schema v0.4 専用）。P2 棄権 census
+    (`scratchpad/v14/p23/p23_report.txt` §2 の外部集計スクリプト
+    `analyze_p23.py` が出していた表と同じ語彙）を schema へ内製化したもの:
+
+    - `f0_unusable_prepass_skip`: 前提 2 経路 (A)（F0 prepass skip、record
+      皆無。合成 `F0_UNUSABLE_REASON`）の件数。
+    - `missing_reason`: 前提 2 経路 (B)（`MeterOutput.missing_reason`、
+      record あり）の理由別件数。`f0_unusable_prepass_skip` とは排他
+      （前者は record が無いため `missing_reason` に現れない）。
+    - `ineligible`: `MeterOutput.ineligible` の件数（`missing_reason` とは
+      排他 — `MeterOutput.__post_init__` 相当の規約どおり同時に立たない）。
+    - `measured_detected`/`measured_not_detected`: 上記いずれにも該当しない
+      record の `fixtures.controls.detected()` 結果。
+    """
+    groups: dict[str, list[CellOutcome]] = {}
+    for outcome in outcomes:
+        key = outcome.control_class if outcome.role == _ROLE_NEGATIVE else outcome.role
+        groups.setdefault(key, []).append(outcome)
+
+    census: dict[str, dict[str, Any]] = {}
+    for key, group_outcomes in sorted(groups.items()):
+        prepass_skip = 0
+        ineligible = 0
+        measured_detected = 0
+        measured_not_detected = 0
+        missing_reason_counts: Counter[str] = Counter()
+        for o in group_outcomes:
+            if o.missing_reason == F0_UNUSABLE_REASON:
+                prepass_skip += 1
+                continue
+            if o.output.ineligible:
+                ineligible += 1
+                continue
+            if o.missing_reason is not None:
+                missing_reason_counts[o.missing_reason] += 1
+                continue
+            if detected(o.output, predicate=candidate.detection_predicate):
+                measured_detected += 1
+            else:
+                measured_not_detected += 1
+        census[key] = {
+            "n_cells": len(group_outcomes),
+            "measured_detected": measured_detected,
+            "measured_not_detected": measured_not_detected,
+            "f0_unusable_prepass_skip": prepass_skip,
+            "missing_reason": dict(sorted(missing_reason_counts.items())),
+            "ineligible": ineligible,
+        }
+    return census
+
+
+def _kendall_tau_sign(candidate: Candidate, outcomes: Sequence[CellOutcome]) -> int | None:
+    """RUN10-CAL-v1.4 §前提 6: DIRECTIONAL 候補について、正例セルの
+    `(truth, primary_output)` 対の Kendall tau-b の符号（`+1`/`-1`/`0`）を
+    返す（P3 極性 census, `scratchpad/v14/p23/p23_report.txt` §5.4 の
+    `analyze_p23.py` 集計と同じ算出をここに内製化する）。DIRECTIONAL 以外の
+    候補、または算出条件（distinct truth/value がそれぞれ >= 2 件）を
+    満たさない場合は `None`。**記録専用**（`registry.Candidate.
+    truth_polarity` の宣言判定・PASS 判定のいずれにも使わない — `--dump-
+    values` の診断出力のみ）。"""
+    if candidate.claim_ceiling is not ClaimCeiling.DIRECTIONAL:
+        return None
+    truths: list[float] = []
+    values: list[float] = []
+    for o in outcomes:
+        if o.role != _ROLE_POSITIVE or o.truth is None:
+            continue
+        value = measure_stage.primary_output_value(candidate, o.output)
+        if value is None or not math.isfinite(value):
+            continue
+        truths.append(o.truth)
+        values.append(value)
+    if len(truths) < 2 or len(set(truths)) < 2 or len(set(values)) < 2:
+        return None
+    tau, _p_value = kendalltau(truths, values)
+    if tau is None or not math.isfinite(float(tau)):
+        return None
+    tau = float(tau)
+    if tau > 0:
+        return 1
+    if tau < 0:
+        return -1
+    return 0
 
 
 def evaluate_candidate(
@@ -489,6 +598,10 @@ def evaluate_candidate(
     }
     if dump_values:
         report["cell_values"] = [_cell_value_entry(candidate, o) for o in outcomes]
+        # RUN10-CAL-v1.4 §前提 6: census block（control class x outcome 件数
+        # 表）+ DIRECTIONAL 候補の kendall_tau_sign（schema v0.4）。
+        report["census"] = _census_block(candidate, outcomes)
+        report["kendall_tau_sign"] = _kendall_tau_sign(candidate, outcomes)
     return report
 
 
@@ -550,12 +663,17 @@ def run_diagnosis_for_f0_candidate(
     outcomes_by_candidate: dict[str, list[CellOutcome]] = {c.candidate_id: [] for c in candidates}
     for mr, role in cells:
         control_class = mr.row.control_class if role == _ROLE_NEGATIVE else None
+        # RUN10-CAL-v1.4 §前提 6: truth スカラー（positive セルのみ意味を
+        # 持つ。負例/confound 行は `truth_value_for_row()` が `None` を返す
+        # ため、そのまま `CellOutcome.truth=None` になる）。
+        truth = truth_value_for_row(mr.row)
         for probe_index in range(repeats):
             signal, sr = _signal_for(mr, probe_index)
             for candidate in candidates:
                 f0_hz = _f0_for(mr, probe_index) if needs_f0_injection(candidate) else None
                 outcome = measure_cell(
-                    candidate, role, control_class, signal, sr, f0_hz, mr.row_id, probe_index
+                    candidate, role, control_class, signal, sr, f0_hz, mr.row_id, probe_index,
+                    truth=truth,
                 )
                 outcomes_by_candidate[candidate.candidate_id].append(outcome)
 
