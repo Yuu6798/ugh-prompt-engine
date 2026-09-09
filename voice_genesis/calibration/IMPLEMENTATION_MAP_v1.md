@@ -1332,5 +1332,5 @@ freeze）を実行しない:
 | | `c0_freeze.py` | `_DESIGN_REVISION = "1.4"` | |
 | | `c0_validate.py` | `_ALLOWED_DESIGN_REVISIONS`/`_DESIGN_REVISION_ORDER` に `"1.4"` を追加, `_is_v1_4_or_later()`, `_check_sanctioned_abstentions_vocabulary()`（design_revision >= 1.4 かつ非 rehearsal で実行時 `SANCTIONED_ABSTENTIONS` が §Y2 の 2 組と厳密一致することを要求。不一致は `VALIDATION_BLOCKED`） | |
 | | `c0_path_inventory.json` | （再生成。115 entry） | v1.4 設計文書パスを追加（WP-A block 7 で実施済み） |
-| §Y1（WP-P probe。本番コード変更なし） | （docs のみ） | `DESIGN_VG_METER_CAL_DEBT_v1.4.md` §Y1.1（P1: TILT=`METER_OFF`）/§Y1.2（P2 census）/§Y1.3（P3 census） | `D117`（P1）。生データ = `scratchpad/v14/p1/`・`v14/p23/` |
-| §Y4（答えた問い / 答えていない問い / terminal status） | （docs） | `DESIGN_VG_METER_CAL_DEBT_v1.4.md` §Y4, `README.md` D113–D117 | `debt_discharged=false` のまま据え置き。v1.4 は本番 campaign を回していない |
+| §Y1（WP-P probe。本番コード変更なし） | （docs のみ） | `DESIGN_VG_METER_CAL_DEBT_v1.4.md` §Y1.1（P1 Grid + §Y1.1c P4 δ 掃引: TILT=`METER_OFF`、判定根拠 = fixture のみ）/§Y1.1b（隔離 campaign 由来、evidence-only）/§Y1.2（P2 census）/§Y1.2b（F0_CONTROL 追補 census）/§Y1.3（P3 census） | `D117`（P1/P4）。生データ = `scratchpad/v14/p1/`・`v14/p23/`・`v14/p2f0/`・`v15/p4/`。2026-09-09 是正（§Y-0）: 隔離 campaign `RUN10-CAL-20260908-2dde4014` の観測は評価根拠に用いない |
+| §Y4（答えた問い / 答えていない問い / terminal status） | （docs） | `DESIGN_VG_METER_CAL_DEBT_v1.4.md` §Y4, `README.md` D113–D117 | terminal status は非隔離 campaign `RUN10-CAL-20260904-862dec28`（6 meter `NOT_EVALUABLE` + M4 `DIAGNOSTIC_ONLY`、`debt_discharged=false`）の記録による（2026-09-09 是正）。v1.4 は本番 campaign を回しておらず負債を返済しない |
