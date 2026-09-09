@@ -2244,6 +2244,114 @@ def test_evaluate_absolute_meter_from_campaign_wires_real_inputs_and_gate5_fails
     assert any("gate5" in reason for reason in result.gate_detail["failure_reasons"])
 
 
+def test_evaluate_absolute_meter_from_campaign_control_detection_and_margins_summary_v14() -> None:
+    """RUN10-CAL-v1.4 §前提 6 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, Test
+    Strategy): a small synthetic ledger/records fixture reproducing the
+    `fdr0=0.2 / fnr1=0.0 / n_neg=10 / n_pos=25 / sanctioned=5` pattern the
+    memo's regression test calls for (the memo explicitly directs synthetic
+    reproduction over fixture-izing the real 2dde4014 read path: "tests は
+    小さな合成 ledger で同じ数値パターンを固定する"). Confirms `gate_detail
+    ["control_detection"]`/`gate_detail["margins_summary"]` are always-
+    present, self-describing blocks with the exact expected values.
+
+    - `neg-a` (SILENCE): 5 probes, every repeat `missing_reason=
+      OUTPUT_MISSING` -- the candidate declares `abstention_reasons=
+      {OUTPUT_MISSING}` (v1.4 §前提 2 経路 (B)), so all 5 are present-and-
+      non-fired (sanctioned).
+    - `neg-b` (NOISE_ONLY): 2 real fires + 3 genuine quiet non-detections ->
+      2 failures / 5 instances.
+    - n_neg = 5 + 5 = 10; negative_control_failures = 2; fdr0 = 2/10 = 0.2.
+    - 5 TRUTH_CORE rows x 5 probes, all cleanly detected at the declared
+      truth -> n_pos = 25, fnr1 = 0.0, zero AE/bias (margins_summary is all
+      zeros except the frozen U_GT+U_num/E_use/G constants)."""
+    candidate = replace(
+        _tilt_candidate(), abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING})
+    )
+    truth_core_rows = [
+        _matrix_row(f"pos-{i}", family="TILT_GT", block="TRUTH_CORE", slope_db_per_oct=-6.0)
+        for i in range(5)
+    ]
+    neg_a = _matrix_row(
+        "neg-a", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="SILENCE",
+    )
+    neg_b = _matrix_row(
+        "neg-b", family="TILT_GT", block="NEGATIVE_CONTROL", domain=Domain.BOUNDARY,
+        control_class="NOISE_ONLY",
+    )
+    matrix_rows = truth_core_rows + [neg_a, neg_b]
+    row_by_id = {mr.row_id: mr.row for mr in matrix_rows}
+    assignment = {mr.row_id: Split.HOLDOUT for mr in matrix_rows}
+
+    records: list[measure_stage.MeasurementRecord] = []
+    for row in truth_core_rows:
+        for probe_index in range(5):
+            records += _within_fresh_record(
+                candidate.candidate_id, row.row_id, probe_index, field="tilt_db_per_oct",
+                value=-6.0,
+            )
+    for probe_index in range(5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-a", probe_index, field="tilt_db_per_oct", value=None,
+            missing=True,
+        )
+    for probe_index in range(2):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-b", probe_index, field="tilt_db_per_oct", value=-3.0,
+        )
+    for probe_index in range(2, 5):
+        records += _within_fresh_record(
+            candidate.candidate_id, "neg-b", probe_index, field="tilt_db_per_oct", value=None,
+            quiet_valid=True,
+        )
+
+    e_use_row = replace(
+        _e_use_row(candidate.construct, mode="absolute"),
+        unit=candidate.unit, domain=candidate.domain, e_use_value=2.0,
+    )
+    manifest = {
+        "frozen_design": {"fixture_spec": {"TILT_GT": {"u_gt_bound": 0.01, "u_num_bound": 0.01}}}
+    }
+    expected_primary_instances = {(row.row_id, p) for row in truth_core_rows for p in range(5)}
+
+    result = holdout_stage.evaluate_absolute_meter_from_campaign(
+        meter_id=MeterId.M2_SPECTRAL_TILT.value,
+        family="TILT_GT",
+        candidate=candidate,
+        manifest=manifest,
+        row_by_id=row_by_id,
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        records=records,
+        expected_primary_instances=expected_primary_instances,
+        e_use_rows=(e_use_row,),
+    )
+
+    control_detection = result.gate_detail["control_detection"]
+    assert control_detection == {
+        "fdr0": 0.2,
+        "fnr1": 0.0,
+        "n_neg": 10,
+        "n_pos": 25,
+        "min_count_met": True,
+        "negative_control_failures": 2,
+        "positive_control_failures": 0,
+        "negative_control_sanctioned_abstentions": 5,
+    }
+    margins = result.gate_detail["margins_summary"]
+    assert margins["n"] == 25
+    assert margins["ae_q50"] == pytest.approx(0.0)
+    assert margins["ae_q95"] == pytest.approx(0.0)
+    assert margins["ae_max"] == pytest.approx(0.0)
+    assert margins["abs_bias"] == pytest.approx(0.0)
+    assert margins["u_gt_plus_u_num"] == pytest.approx(0.02)
+    assert margins["e_use_median"] == pytest.approx(2.0)
+    # G[i] = AE+U_GT+U_num+U_rep+U_proc-E_use = 0+0.01+0.01+0+0-2.0 = -1.98
+    assert margins["g_q95"] == pytest.approx(-1.98)
+    assert margins["g_max"] == pytest.approx(-1.98)
+    assert "g_values" not in result.gate_detail  # raw list popped, summary only
+
+
 def _wf_record(
     candidate_id: str,
     row_id: str,
@@ -2463,6 +2571,95 @@ def test_build_directional_gate_inputs_no_polarity_leaves_raw_delta_output() -> 
     assert pair.delta_truth == pytest.approx(0.1)
     assert pair.delta_output == pytest.approx(-3.0)
     assert pair.correct_sign is False
+
+
+def test_evaluate_directional_meter_from_campaign_pairs_summary_resolvable_count_v14() -> None:
+    """RUN10-CAL-v1.4 §前提 6 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`, Test
+    Strategy): a small synthetic ledger/records fixture reproducing the
+    `resolvable_count=18` pattern actually observed in the real closed
+    campaign `RUN10-CAL-20260908-2dde4014`'s M2_APERIODICITY holdout
+    `gate_detail` (read-only inspection of
+    `voice_genesis/calibration/campaigns/RUN10-CAL-20260908-2dde4014/
+    ledger.jsonl`'s `holdout_executed_valid` event; the campaign dir itself
+    is untouched, per the memo's read-only constraint). That campaign's
+    `M2A-B0-AUTOCORR-PERIODICITY` sweep structure was 2 sweeps
+    (`bandwise_band` held-fixed contexts) x 6 `injected_noise_fraction`
+    truth levels (`0.0/0.01/0.03/0.1/0.3/0.6`, the same 6-level P2 census
+    ladder) x C(6,2)=15 possible pairs each = 30 total, of which exactly 9
+    per sweep clear the truth-resolvability threshold `Delta_truth >
+    2*(U_GT+U_num)` (only pairs against the {0.3, 0.6} levels, given
+    `U_GT+U_num=0.064` here) -> 9*2=18 (the memo's §前提 8 note: "微小段
+    0->0.01->0.03->0.1 は...構造的に解像不能" — this fixture reproduces that
+    same resolution boundary). `U_rep`/`U_num` are forced to 0 (uniform
+    repeats) so output-side significance never gates a truth-resolvable pair
+    out. This test exercises the memo's Implementation Approach directly
+    (the fixture reproduces the *pattern*, not a fixture-ized replay of the
+    real ledger — memo Test Strategy: "tests は小さな合成 ledger で同じ数値
+    パターンを固定する")."""
+    candidate = candidate_by_id("M2A-B0-AUTOCORR-PERIODICITY")
+    assert candidate.truth_polarity == -1
+    levels = [0.0, 0.01, 0.03, 0.1, 0.3, 0.6]
+    hnr_by_level = {0.0: 12.0, 0.01: 12.4, 0.03: 11.3, 0.1: 9.1, 0.3: 2.7, 0.6: -15.0}
+
+    matrix_rows = []
+    expected_sweep_member_row_ids: dict[str, list[str]] = {}
+    for sweep_name in ("sweep-a", "sweep-b"):
+        row_ids = []
+        for level in levels:
+            row_id = f"{sweep_name}-{level}"
+            matrix_rows.append(
+                _matrix_row(
+                    row_id, family="APERIODICITY_GT", block="TRUTH_CORE",
+                    injected_noise_fraction=level,
+                )
+            )
+            row_ids.append(row_id)
+        expected_sweep_member_row_ids[sweep_name] = row_ids
+
+    row_by_id = {mr.row_id: mr.row for mr in matrix_rows}
+    assignment = {mr.row_id: Split.HOLDOUT for mr in matrix_rows}
+    records: list[measure_stage.MeasurementRecord] = []
+    usable_primary_instances: set[tuple[str, int]] = set()
+    for mr in matrix_rows:
+        level = mr.row.injected_noise_fraction
+        records += _within_fresh_record(
+            candidate.candidate_id, mr.row_id, 0, field="hnr_db", value=hnr_by_level[level],
+        )
+        usable_primary_instances.add((mr.row_id, 0))
+
+    manifest = {
+        "frozen_design": {
+            "fixture_spec": {
+                "APERIODICITY_GT": {"u_gt_bound": 0.05, "u_num_bound": 0.014}
+            }
+        }
+    }
+
+    result = holdout_stage.evaluate_directional_meter_from_campaign(
+        meter_id=MeterId.M2_APERIODICITY.value,
+        family="APERIODICITY_GT",
+        candidate=candidate,
+        manifest=manifest,
+        row_by_id=row_by_id,
+        matrix_rows=matrix_rows,
+        assignment=assignment,
+        records=records,
+        usable_primary_instances=usable_primary_instances,
+        expected_sweep_member_row_ids=expected_sweep_member_row_ids,
+        units_commensurate=False,
+    )
+    assert result.gate_detail["resolvable_count"] == 18
+    pairs_summary = result.gate_detail["pairs_summary"]
+    assert pairs_summary["resolvable_count"] == 18
+    assert pairs_summary["polarity"] == -1
+    # correct_count + reversal_count spans *all* observed pairs (C(6,2)=15
+    # per sweep x 2 = 30 total), not just the 18 resolvable ones -- see
+    # pairs_summary()'s docstring (descriptive stat over `bundle.pairs`).
+    assert pairs_summary["correct_count"] + pairs_summary["reversal_count"] == 30
+    assert pairs_summary["kendall_tau"] is not None
+    control_detection = result.gate_detail["control_detection"]
+    assert control_detection["n_neg"] == 0
+    assert control_detection["n_pos"] == len(matrix_rows) * 5  # fixture_controls.PROBE_REPEATS
 
 
 def test_directional_claim_shrinkage_detail_enumerates_and_prohibits_extrapolation() -> None:

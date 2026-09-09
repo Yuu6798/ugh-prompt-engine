@@ -38,6 +38,8 @@ from dataclasses import dataclass, replace as dataclass_replace
 from pathlib import Path
 from typing import Any
 
+from scipy.stats import kendalltau
+
 from voice_genesis.calibration.campaign import measure_stage, workunits
 from voice_genesis.calibration.campaign.render_stage import run_render_stage
 from voice_genesis.calibration.campaign.selection_stage import (
@@ -64,9 +66,11 @@ from voice_genesis.calibration.gates import (
 )
 from voice_genesis.calibration.observables import (
     apply_polarity,
+    bias,
     detection_rates,
     error_terms,
     nuisance_ds,
+    q95,
     two_stage_median,
     u_proc,
     u_rep,
@@ -528,6 +532,126 @@ def control_detection_for_family(
     )
 
 
+def control_detection_summary(
+    *,
+    fdr0: float,
+    fnr1: float,
+    n_neg: int,
+    n_pos: int,
+    min_count_met: bool,
+    negative_control_failures: int,
+    positive_control_failures: int,
+    negative_control_sanctioned_abstentions: int,
+) -> dict[str, object]:
+    """RUN10-CAL-v1.4 §前提 6 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`): gate 5 の
+    観測性ブロック（`MeterHoldoutResult.gate_detail["control_detection"]`。
+    ABSOLUTE/DIRECTIONAL 共通形状）。値はすべて `ControlDetection`（`control_
+    detection_for_family()`）由来の素通し会計であり、本関数自身は判定を
+    一切行わない（JSON-serializable な number/bool のみ）。"""
+    return {
+        "fdr0": fdr0,
+        "fnr1": fnr1,
+        "n_neg": n_neg,
+        "n_pos": n_pos,
+        "min_count_met": min_count_met,
+        "negative_control_failures": negative_control_failures,
+        "positive_control_failures": positive_control_failures,
+        "negative_control_sanctioned_abstentions": negative_control_sanctioned_abstentions,
+    }
+
+
+def margins_summary(
+    margins: Sequence[InstanceMargin],
+    *,
+    u_rep_value: float | None,
+    u_proc_value: float | None,
+    g_values: Sequence[float] | None,
+) -> dict[str, object]:
+    """RUN10-CAL-v1.4 §前提 6: ABSOLUTE holdout の per-instance margin 分布の
+    観測性ブロック（`MeterHoldoutResult.gate_detail["margins_summary"]`）。
+    `n`（instance 数）、`ae_q50`/`ae_q95`/`ae_max`（raw `|e|` の分布。§10.1
+    `AE[i]=|e[i]|`）、`abs_bias`（`|mean_i(e[i])|`、§10.1 `BIAS`）、
+    `u_gt_plus_u_num`（family 単位の frozen bound。全 instance 共通値の
+    代表として median を取る——`build_absolute_gate_inputs()` は全 instance
+    に同一値を使うため常に定数だが、将来 instance 別化されても壊れない）、
+    `u_rep`/`u_proc`（campaign 実測の repeat/process 変動）、`e_use_median`
+    （§10.2 E_use の instance 別展開値の中央値）、`g_q95`/`g_max`（`gates.
+    AbsoluteGateResult.g_values` = `G[i] = AE[i]+U_GT[i]+U_num[i]+U_rep+U_proc
+    -E_use[i]`、gate2'/gate_max' の判定量そのもの）を返す。計算不能な値は
+    `None`（`margins`/`g_values` が空の場合。gate 判定には一切使わない、
+    記録専用の descriptive statistics）。"""
+    if not margins:
+        return {
+            "n": 0,
+            "ae_q50": None,
+            "ae_q95": None,
+            "ae_max": None,
+            "abs_bias": None,
+            "u_gt_plus_u_num": None,
+            "u_rep": u_rep_value,
+            "u_proc": u_proc_value,
+            "e_use_median": None,
+            "g_q95": None,
+            "g_max": None,
+        }
+    ae_values = [m.ae for m in margins]
+    e_values = [m.e for m in margins]
+    e_use_values = [m.e_use for m in margins]
+    u_gt_plus_u_num_values = [m.u_gt + m.u_num for m in margins]
+    return {
+        "n": len(margins),
+        "ae_q50": float(statistics.median(ae_values)),
+        "ae_q95": q95(ae_values),
+        "ae_max": max(ae_values),
+        "abs_bias": abs(bias(e_values)),
+        "u_gt_plus_u_num": float(statistics.median(u_gt_plus_u_num_values)),
+        "u_rep": u_rep_value,
+        "u_proc": u_proc_value,
+        "e_use_median": float(statistics.median(e_use_values)),
+        "g_q95": q95(g_values) if g_values else None,
+        "g_max": max(g_values) if g_values else None,
+    }
+
+
+def pairs_summary(
+    pairs: Sequence[DirectionalPair],
+    *,
+    resolvable_count: int | None,
+    polarity: int | None,
+) -> dict[str, object]:
+    """RUN10-CAL-v1.4 §前提 6: DIRECTIONAL holdout の pair 分布の観測性
+    ブロック（`MeterHoldoutResult.gate_detail["pairs_summary"]`）。
+    `resolvable_count` は `gates.DirectionalGateResult.resolvable_count`
+    をそのまま転記する（gate 自身が既に計算済みの値を再計算しない）。
+    `correct_count`/`reversal_count` は観測された全 pair
+    （`DirectionalPair.correct_sign`、v1.4 §前提 5 の極性適用済み）の
+    符号一致/不一致の単純カウント——`gates.directional_gates()` の
+    resolvability 閾値判定（U_GT/U_num/U_rep/U_proc からの (a)/(b)/(c)
+    連言）を再実装したものではない、純粋な記述統計。`kendall_tau` は
+    `(delta_truth, delta_output)` 対の Kendall tau-b（記録専用。PASS 判定
+    には使わない——`gates.py` の `tau_b` docstring と同じ規約）。`polarity`
+    は候補が宣言した `Candidate.truth_polarity`（`None` = 宣言なし）。
+    `pairs` が空、または tau 算出条件（distinct value >= 2 件）を満たさない
+    場合は該当フィールドが `None`。"""
+    correct_count = sum(1 for p in pairs if p.correct_sign)
+    reversal_count = sum(1 for p in pairs if not p.correct_sign)
+    kendall_tau: float | None = None
+    if len(pairs) >= 2:
+        truths = [p.delta_truth for p in pairs]
+        outputs = [p.delta_output for p in pairs]
+        if len(set(truths)) >= 2 and len(set(outputs)) >= 2:
+            tau, _p_value = kendalltau(truths, outputs)
+            if tau is not None and math.isfinite(float(tau)):
+                kendall_tau = float(tau)
+    return {
+        "resolvable_count": resolvable_count,
+        "correct_count": correct_count,
+        "reversal_count": reversal_count,
+        "kendall_tau": kendall_tau,
+        "polarity": polarity,
+    }
+
+
 def build_invariance_pairs_for_family(
     *,
     matrix_rows: Sequence[MatrixRow],
@@ -652,6 +776,15 @@ class AbsoluteGateInputBundle:
     #: のまま捨てられ、serialized 結果からは実測 non-firing による通過か
     #: 棄権による通過かが区別不能だった）。
     negative_control_sanctioned_abstentions: int = 0
+    #: RUN10-CAL-v1.4 §前提 6 (`DESIGN_VG_METER_CAL_DEBT_v1.4.md`):
+    #: `ControlDetection` の残り 4 フィールドの素通し会計（上記
+    #: `negative_control_sanctioned_abstentions` と同じ経路）。
+    #: `evaluate_absolute_meter_from_campaign()` の `gate_detail.
+    #: control_detection` ブロックの構成要素。
+    n_neg: int = 0
+    n_pos: int = 0
+    negative_control_failures: int = 0
+    positive_control_failures: int = 0
 
 
 def build_absolute_gate_inputs(
@@ -784,6 +917,10 @@ def build_absolute_gate_inputs(
         fnr1=detection.fnr1,
         min_count_met=detection.min_count_met,
         negative_control_sanctioned_abstentions=detection.negative_control_sanctioned_abstentions,
+        n_neg=detection.n_neg,
+        n_pos=detection.n_pos,
+        negative_control_failures=detection.negative_control_failures,
+        positive_control_failures=detection.positive_control_failures,
     )
 
 
@@ -836,6 +973,10 @@ def evaluate_absolute_meter_from_campaign(
             selected_candidate_id=candidate.candidate_id,
             gate_detail={
                 "reason": f"[v1.1 §V3.2] ABSOLUTE gate input assembly failed: {exc}",
+                # RUN10-CAL-v1.4 §前提 6: always-present keys even when gate
+                # input assembly itself failed (nothing to summarize yet).
+                "control_detection": None,
+                "margins_summary": None,
             },
         )
     result = evaluate_absolute_meter(
@@ -854,18 +995,31 @@ def evaluate_absolute_meter_from_campaign(
         fnr1=bundle.fnr1,
         min_count_met=bundle.min_count_met,
     )
+    # RUN10-CAL-v1.4 §前提 6: pop the raw per-instance g_values back out
+    # (see evaluate_absolute_meter()'s docstring note) after consuming them
+    # for margins_summary — only the summary persists.
+    detail = dict(result.gate_detail)
+    g_values = detail.pop("g_values", None)
+    detail["margins_summary"] = margins_summary(
+        bundle.margins, u_rep_value=bundle.u_rep, u_proc_value=bundle.u_proc, g_values=g_values
+    )
+    detail["control_detection"] = control_detection_summary(
+        fdr0=bundle.fdr0,
+        fnr1=bundle.fnr1,
+        n_neg=bundle.n_neg,
+        n_pos=bundle.n_pos,
+        min_count_met=bundle.min_count_met,
+        negative_control_failures=bundle.negative_control_failures,
+        positive_control_failures=bundle.positive_control_failures,
+        negative_control_sanctioned_abstentions=bundle.negative_control_sanctioned_abstentions,
+    )
     # Codex #350 round 4 P2 採用: sanctioned abstention 件数を serialized
     # 結果へ常に転記する（0 件でも書き、記録を自己記述にする——gate 論理は
-    # 不変のまま、会計フィールドのみを persist する）。
-    return dataclass_replace(
-        result,
-        gate_detail={
-            **dict(result.gate_detail),
-            "negative_control_sanctioned_abstentions": (
-                bundle.negative_control_sanctioned_abstentions
-            ),
-        },
-    )
+    # 不変のまま、会計フィールドのみを persist する）。v1.4 は同じ値を
+    # `control_detection.negative_control_sanctioned_abstentions` にも
+    # 積むが、既存キーはそのまま残す（後方互換）。
+    detail["negative_control_sanctioned_abstentions"] = bundle.negative_control_sanctioned_abstentions
+    return dataclass_replace(result, gate_detail=detail)
 
 
 def directional_claim_shrinkage_detail(
@@ -912,6 +1066,17 @@ class DirectionalGateInputBundle:
     #: Codex #350 round 4 P2 採用: `AbsoluteGateInputBundle` と同義の素通し
     #: 会計フィールド（詳細はそちら側の docstring 参照）。
     negative_control_sanctioned_abstentions: int = 0
+    #: RUN10-CAL-v1.4 §前提 6: `AbsoluteGateInputBundle` と同じ
+    #: `ControlDetection` 残フィールドの素通し会計。DIRECTIONAL gate 自体
+    #: （`gates.directional_gates()`）は fdr0/fnr1/n_neg/n_pos/min_count_met
+    #: を消費しない（negative_control_failures/positive_control_failures の
+    #: 2 カウントのみ使う）が、`gate_detail.control_detection` を ABSOLUTE
+    #: 側と同一形状で常に書くための記録専用フィールド。
+    fdr0: float = 0.0
+    fnr1: float = 0.0
+    n_neg: int = 0
+    n_pos: int = 0
+    min_count_met: bool = False
 
 
 def build_directional_gate_inputs(
@@ -1081,6 +1246,11 @@ def build_directional_gate_inputs(
         negative_control_failures=detection.negative_control_failures,
         positive_control_failures=detection.positive_control_failures,
         negative_control_sanctioned_abstentions=detection.negative_control_sanctioned_abstentions,
+        fdr0=detection.fdr0,
+        fnr1=detection.fnr1,
+        n_neg=detection.n_neg,
+        n_pos=detection.n_pos,
+        min_count_met=detection.min_count_met,
     )
 
 
@@ -1149,6 +1319,10 @@ def evaluate_directional_meter_from_campaign(
             selected_candidate_id=candidate.candidate_id,
             gate_detail={
                 "reason": f"[v1.1 §V3.2] DIRECTIONAL gate input assembly failed: {exc}",
+                # RUN10-CAL-v1.4 §前提 6: always-present keys even when gate
+                # input assembly itself failed (nothing to summarize yet).
+                "control_detection": None,
+                "pairs_summary": None,
             },
         )
     result = evaluate_directional_meter(
@@ -1168,15 +1342,33 @@ def evaluate_directional_meter_from_campaign(
         expected_sweep_member_row_ids=expected_sweep_member_row_ids,
         row_by_id=row_by_id,
     )
+    detail = dict(result.gate_detail)
+    detail["claim_text"] = {"evaluated_sweep_contexts": claim_detail["evaluated_sweep_contexts"]}
+    detail["prohibited_interpretations"] = claim_detail["prohibited_interpretations"]
+    detail["pairs_summary"] = pairs_summary(
+        bundle.pairs,
+        resolvable_count=detail.get("resolvable_count"),
+        polarity=candidate.truth_polarity,
+    )
+    detail["control_detection"] = control_detection_summary(
+        fdr0=bundle.fdr0,
+        fnr1=bundle.fnr1,
+        n_neg=bundle.n_neg,
+        n_pos=bundle.n_pos,
+        min_count_met=bundle.min_count_met,
+        negative_control_failures=bundle.negative_control_failures,
+        positive_control_failures=bundle.positive_control_failures,
+        negative_control_sanctioned_abstentions=bundle.negative_control_sanctioned_abstentions,
+    )
     return dataclass_replace(
         result,
         gate_detail={
-            **dict(result.gate_detail),
-            "claim_text": {"evaluated_sweep_contexts": claim_detail["evaluated_sweep_contexts"]},
-            "prohibited_interpretations": claim_detail["prohibited_interpretations"],
+            **detail,
             # Codex #350 round 4 P2 採用: sanctioned abstention 件数を
             # serialized 結果へ常に転記する（0 件でも書き、記録を
-            # 自己記述にする——gate 論理は不変）。
+            # 自己記述にする——gate 論理は不変）。v1.4 は同じ値を
+            # `control_detection.negative_control_sanctioned_abstentions` に
+            # も積むが、既存キーはそのまま残す（後方互換）。
             "negative_control_sanctioned_abstentions": (
                 bundle.negative_control_sanctioned_abstentions
             ),
@@ -1565,6 +1757,14 @@ def evaluate_absolute_meter(
         gate_detail={
             "passed": gate.passed,
             "failure_reasons": list(gate.failure_reasons),
+            # RUN10-CAL-v1.4 §前提 6: raw per-instance G[i] values
+            # (`gates.AbsoluteGateResult.g_values`), consumed only by
+            # `evaluate_absolute_meter_from_campaign()` to derive
+            # `gate_detail.margins_summary`'s `g_q95`/`g_max` — popped back
+            # out before the final persisted `gate_detail` (Risk: "gate_detail
+            # の肥大化: summary のみ"; per-instance margins already live in
+            # the ledger).
+            "g_values": list(gate.g_values),
         },
     )
 
