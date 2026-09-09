@@ -28,6 +28,13 @@ Repository text, Google Drive signatures, `signed_by`, `relayed_by`, hashes, mod
 
 The repository-side `authorization_guard.py` therefore operates only as a fail-closed **reference-shape guard**. It rejects missing references, obvious repository/Drive/signature/relay references, and generalized-delegation references. Passing the guard does not itself prove authorization.
 
+## Residual risks and enforcement boundary
+
+- The quarantine marker is mechanically enforced when a pull request changes the campaign directory. Claim/debt/Run11 runtime consumers do not yet read the marker; the canonical STATUS correction remains the process control for references made outside that directory.
+- The guard preserves every existing byte and rejects later file additions for a campaign that was already quarantined at the trusted base revision. This immutability rule is not generalized here to non-quarantined campaigns because their authorized append lifecycle requires a separate design.
+- The reference check rejects known metadata forms and normalizes Unicode, but it is not semantic authentication. A future revision should replace blacklist matching with a defined direct-approval reference grammar and executor-side authority lookup.
+- Changes to the guard/workflow itself still require independent review. The trusted-base workflow prevents a campaign-changing pull request from executing its own candidate guard after this bootstrap PR is merged; it cannot retrospectively provide that guarantee to this introducing PR.
+
 ## Next owner
 
 GPT/Claude may review the corrective PR and tests. The PR must remain unmerged until separately approved by the user.

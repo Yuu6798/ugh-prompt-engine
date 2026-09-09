@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -101,6 +102,8 @@ def _validate_base_evidence_preserved(
     campaign_id: str,
     campaign_dir: Path,
     base_campaign_dir: Path,
+    *,
+    reject_new_files: bool = False,
 ) -> GuardResult:
     reasons: list[str] = []
     base_files = sorted(
@@ -116,6 +119,19 @@ def _validate_base_evidence_preserved(
             continue
         if _file_sha256(current_path) != _file_sha256(base_path):
             reasons.append(f"base evidence file modified: {relative_path.as_posix()}")
+    if reject_new_files:
+        base_file_set = set(base_files)
+        current_files = sorted(
+            path.relative_to(campaign_dir)
+            for path in campaign_dir.rglob("*")
+            if path.is_file() or path.is_symlink()
+        )
+        for relative_path in current_files:
+            if relative_path not in base_file_set:
+                reasons.append(
+                    "new file added to quarantined campaign: "
+                    + relative_path.as_posix()
+                )
     return GuardResult(campaign_id, not reasons, "QUARANTINE", tuple(reasons))
 
 
@@ -146,7 +162,8 @@ def _required_operations(campaign_dir: Path) -> tuple[frozenset[str], tuple[str,
 
     Gate 3 is intentionally post-freeze, so it cannot be inferred from the C0
     manifest.  Any ledger evidence that the sealed holdout was accepted,
-    unsealed, or measured therefore requires an independent Gate 3 reference.
+    unsealed, rendered, measured, or revealed therefore requires an independent
+    Gate 3 reference.
     """
 
     required = set(REQUIRED_PRE_FREEZE_OPERATIONS)
@@ -171,6 +188,7 @@ def _required_operations(campaign_dir: Path) -> tuple[frozenset[str], tuple[str,
                 if (
                     payload.get("kind") in POST_SEAL_LEDGER_KINDS
                     or payload.get("stage") in POST_SEAL_STAGES
+                    or payload.get("split") == "HOLDOUT"
                 ):
                     required.add(SEAL_ACCEPTANCE_OPERATION)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
@@ -199,8 +217,15 @@ def _validate_direct_reference(campaign_id: str, path: Path, campaign_dir: Path)
     if not _nonblank_string(ref):
         reasons.append("direct_approval_ref must be a non-blank string")
     else:
-        normalized = ref.strip().lower()
+        normalized = unicodedata.normalize("NFKC", ref).casefold()
+        normalized = "".join(
+            "" if unicodedata.category(char) == "Cf" else char
+            for char in normalized
+        )
+        normalized = " ".join(normalized.split())
         hostname = urlparse(normalized).hostname
+        if hostname is None and "://" not in normalized:
+            hostname = urlparse("//" + normalized).hostname
         if normalized.startswith(FORBIDDEN_REFERENCE_PREFIXES):
             reasons.append(
                 "direct_approval_ref must not use repository/Drive/signature/relay metadata as authority"
@@ -282,6 +307,7 @@ def validate_campaign(
             campaign_id,
             campaign_dir,
             base_campaign_dir,
+            reject_new_files=bool(base_quarantine and base_quarantine.is_file()),
         )
         return GuardResult(
             campaign_id,

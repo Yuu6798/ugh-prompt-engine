@@ -149,6 +149,43 @@ def test_github_url_reference_rejected(tmp_path: Path) -> None:
     assert any("repository/Drive URLs" in reason for reason in result.reasons)
 
 
+def test_scheme_less_repository_and_drive_references_rejected(tmp_path: Path) -> None:
+    for index, ref in enumerate(
+        (
+            "github.com/example/repo/pull/1",
+            "drive.google.com/file/d/example/view",
+            "DRIVE.google.com/file/d/example/view",
+        )
+    ):
+        campaign = _campaign(tmp_path, f"RUN10-CAL-TEST-{index}")
+        _write_direct_reference(campaign, ["C0_FREEZE", "CAMPAIGN_EXECUTION"])
+        data = json.loads((campaign / "direct_authorization_ref.json").read_text())
+        data["direct_approval_ref"] = ref
+        (campaign / "direct_authorization_ref.json").write_text(
+            json.dumps(data), encoding="utf-8"
+        )
+
+        result = validate_campaign(campaign)
+
+        assert result.ok is False
+        assert any("repository/Drive URLs" in reason for reason in result.reasons)
+
+
+def test_unicode_signature_reference_rejected(tmp_path: Path) -> None:
+    campaign = _campaign(tmp_path)
+    _write_direct_reference(campaign, ["C0_FREEZE", "CAMPAIGN_EXECUTION"])
+    data = json.loads((campaign / "direct_authorization_ref.json").read_text())
+    data["direct_approval_ref"] = "signed\u00a0by\u200bGPT"
+    (campaign / "direct_authorization_ref.json").write_text(
+        json.dumps(data), encoding="utf-8"
+    )
+
+    result = validate_campaign(campaign)
+
+    assert result.ok is False
+    assert any("generalized delegation" in reason for reason in result.reasons)
+
+
 def test_scoped_direct_reference_accepted_as_reference_only(tmp_path: Path) -> None:
     campaign = _campaign(tmp_path)
     _write_direct_reference(campaign, ["C0_FREEZE", "CAMPAIGN_EXECUTION"])
@@ -209,6 +246,17 @@ def test_holdout_render_valid_requires_gate3_even_without_stage(tmp_path: Path) 
 def test_split_secret_reveal_requires_gate3_even_without_stage(tmp_path: Path) -> None:
     campaign = _campaign(tmp_path)
     _append_ledger_payload(campaign, {"kind": "split_secret_revealed"})
+    _write_direct_reference(campaign, ["C0_FREEZE", "CAMPAIGN_EXECUTION"])
+
+    result = validate_campaign(campaign)
+
+    assert result.ok is False
+    assert "GATE3_SEAL_ACCEPTANCE" in result.reasons[0]
+
+
+def test_holdout_split_requires_gate3_even_for_unknown_event_kind(tmp_path: Path) -> None:
+    campaign = _campaign(tmp_path)
+    _append_ledger_payload(campaign, {"kind": "future_event", "split": "HOLDOUT"})
     _write_direct_reference(campaign, ["C0_FREEZE", "CAMPAIGN_EXECUTION"])
 
     result = validate_campaign(campaign)
@@ -278,6 +326,36 @@ def test_quarantine_preserves_all_base_evidence_bytes(tmp_path: Path) -> None:
 
     assert result.ok is True
     assert result.mode == "QUARANTINE"
+
+
+def test_existing_quarantine_rejects_new_files(tmp_path: Path) -> None:
+    base_campaign = _campaign(tmp_path / "base")
+    (base_campaign / "authorization_quarantine.json").write_text(
+        json.dumps(
+            {
+                "schema": "vgcal-quarantine/1",
+                "campaign_id": base_campaign.name,
+                "status": "QUARANTINED",
+                "claimable": False,
+                "debt_discharge_eligible": False,
+                "run11_eligible": False,
+                "reason_codes": ["AUTHORIZATION_BOUNDARY_NOT_VERIFIED"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    head_campaign = tmp_path / "head" / base_campaign.name
+    shutil.copytree(base_campaign, head_campaign)
+    (head_campaign / "results_corrected_v2.json").write_text(
+        json.dumps({"debt_discharged": True}), encoding="utf-8"
+    )
+
+    result = validate_campaign(head_campaign, base_campaign_dir=base_campaign)
+
+    assert result.ok is False
+    assert result.reasons == (
+        "new file added to quarantined campaign: results_corrected_v2.json",
+    )
 
 
 def test_quarantine_rejects_modified_base_evidence(tmp_path: Path) -> None:
