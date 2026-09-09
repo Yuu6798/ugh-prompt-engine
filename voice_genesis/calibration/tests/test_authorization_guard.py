@@ -537,7 +537,7 @@ def test_existing_quarantine_cannot_be_replaced_by_direct_reference(tmp_path: Pa
     assert result.reasons == ("an existing quarantine marker must be preserved",)
 
 
-def test_workflow_uses_trusted_base_guard_and_keeps_rename_sources() -> None:
+def test_workflow_uses_trusted_base_guard_and_parses_git_paths_safely() -> None:
     workflow = (
         Path(__file__).parents[3]
         / ".github"
@@ -551,4 +551,8 @@ def test_workflow_uses_trusted_base_guard_and_keeps_rename_sources() -> None:
     assert "--repo-root candidate" in workflow
     assert "--base-repo-root trusted-base" in workflow
     assert '"https://github.com/${BASE_REPOSITORY}.git" "$BASE_SHA"' in workflow
-    assert "git -C candidate diff --no-renames --name-only" in workflow
+    assert "git -C candidate diff --no-renames --name-only -z" in workflow
+    assert "while IFS= read -r -d '' changed_path" in workflow
+    assert 'done < "$changed_paths_file"' in workflow
+    assert '[[ ! "$campaign_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]' in workflow
+    assert "awk -F/" not in workflow
