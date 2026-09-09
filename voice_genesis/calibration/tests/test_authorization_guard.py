@@ -16,6 +16,27 @@ def _campaign(tmp_path: Path, campaign_id: str = "RUN10-CAL-TEST") -> Path:
     return path
 
 
+def _write_direct_reference(campaign: Path, operations: list[str]) -> None:
+    (campaign / "direct_authorization_ref.json").write_text(
+        json.dumps(
+            {
+                "schema": "vgcal-direct-authorization-ref/1",
+                "campaign_id": campaign.name,
+                "authority_type": "DIRECT_USER_APPROVAL",
+                "direct_approval_ref": "USER-DIRECT-RUN10-CAL-TEST-20260909",
+                "approved_operations": operations,
+                "reference_is_not_authentication": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _append_ledger_payload(campaign: Path, payload: dict[str, object]) -> None:
+    with (campaign / "ledger.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"payload": payload}) + "\n")
+
+
 def test_missing_reference_fails_closed(tmp_path: Path) -> None:
     result = validate_campaign(_campaign(tmp_path))
     assert result.ok is False
@@ -130,22 +151,86 @@ def test_github_url_reference_rejected(tmp_path: Path) -> None:
 
 def test_scoped_direct_reference_accepted_as_reference_only(tmp_path: Path) -> None:
     campaign = _campaign(tmp_path)
-    (campaign / "direct_authorization_ref.json").write_text(
-        json.dumps(
-            {
-                "schema": "vgcal-direct-authorization-ref/1",
-                "campaign_id": campaign.name,
-                "authority_type": "DIRECT_USER_APPROVAL",
-                "direct_approval_ref": "USER-DIRECT-RUN10-CAL-TEST-20260909",
-                "approved_operations": ["C0_FREEZE", "CAMPAIGN_EXECUTION"],
-                "reference_is_not_authentication": True,
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_direct_reference(campaign, ["C0_FREEZE", "CAMPAIGN_EXECUTION"])
     result = validate_campaign(campaign)
     assert result.ok is True
     assert result.mode == "DIRECT_REFERENCE"
+
+
+def test_post_seal_evidence_requires_gate3_seal_acceptance(tmp_path: Path) -> None:
+    campaign = _campaign(tmp_path)
+    _append_ledger_payload(campaign, {"kind": "holdout_unseal"})
+    _write_direct_reference(campaign, ["C0_FREEZE", "CAMPAIGN_EXECUTION"])
+
+    result = validate_campaign(campaign)
+
+    assert result.ok is False
+    assert result.reasons == (
+        "approved_operations missing required operations: GATE3_SEAL_ACCEPTANCE",
+    )
+
+
+def test_gate3_scoped_reference_accepts_post_seal_evidence(tmp_path: Path) -> None:
+    campaign = _campaign(tmp_path)
+    _append_ledger_payload(campaign, {"kind": "holdout_executed_valid"})
+    _write_direct_reference(
+        campaign,
+        ["C0_FREEZE", "CAMPAIGN_EXECUTION", "GATE3_SEAL_ACCEPTANCE"],
+    )
+
+    result = validate_campaign(campaign)
+
+    assert result.ok is True
+    assert result.mode == "DIRECT_REFERENCE"
+
+
+def test_c4_stage_requires_gate3_even_without_unseal_event(tmp_path: Path) -> None:
+    campaign = _campaign(tmp_path)
+    _append_ledger_payload(campaign, {"kind": "stage_summary", "stage": "c4-holdout"})
+    _write_direct_reference(campaign, ["C0_FREEZE", "CAMPAIGN_EXECUTION"])
+
+    result = validate_campaign(campaign)
+
+    assert result.ok is False
+    assert "GATE3_SEAL_ACCEPTANCE" in result.reasons[0]
+
+
+def test_holdout_render_valid_requires_gate3_even_without_stage(tmp_path: Path) -> None:
+    campaign = _campaign(tmp_path)
+    _append_ledger_payload(campaign, {"kind": "holdout_render_valid"})
+    _write_direct_reference(campaign, ["C0_FREEZE", "CAMPAIGN_EXECUTION"])
+
+    result = validate_campaign(campaign)
+
+    assert result.ok is False
+    assert "GATE3_SEAL_ACCEPTANCE" in result.reasons[0]
+
+
+def test_split_secret_reveal_requires_gate3_even_without_stage(tmp_path: Path) -> None:
+    campaign = _campaign(tmp_path)
+    _append_ledger_payload(campaign, {"kind": "split_secret_revealed"})
+    _write_direct_reference(campaign, ["C0_FREEZE", "CAMPAIGN_EXECUTION"])
+
+    result = validate_campaign(campaign)
+
+    assert result.ok is False
+    assert "GATE3_SEAL_ACCEPTANCE" in result.reasons[0]
+
+
+def test_malformed_ledger_fails_closed_for_direct_reference(tmp_path: Path) -> None:
+    campaign = _campaign(tmp_path)
+    (campaign / "ledger.jsonl").write_text("not-json\n", encoding="utf-8")
+    _write_direct_reference(
+        campaign,
+        ["C0_FREEZE", "CAMPAIGN_EXECUTION", "GATE3_SEAL_ACCEPTANCE"],
+    )
+
+    result = validate_campaign(campaign)
+
+    assert result.ok is False
+    assert result.reasons[0].startswith(
+        "cannot derive authorization scope from ledger.jsonl: line 1:"
+    )
 
 
 def test_quarantine_marker_blocks_claim_and_debt_use(tmp_path: Path) -> None:

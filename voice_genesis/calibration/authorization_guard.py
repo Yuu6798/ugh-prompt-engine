@@ -23,6 +23,17 @@ AUTH_REF_SCHEMA = "vgcal-direct-authorization-ref/1"
 QUARANTINE_SCHEMA = "vgcal-quarantine/1"
 DIRECT_USER_APPROVAL = "DIRECT_USER_APPROVAL"
 REQUIRED_PRE_FREEZE_OPERATIONS = frozenset({"C0_FREEZE", "CAMPAIGN_EXECUTION"})
+SEAL_ACCEPTANCE_OPERATION = "GATE3_SEAL_ACCEPTANCE"
+POST_SEAL_LEDGER_KINDS = frozenset(
+    {
+        "gate3_accepted",
+        "holdout_unseal",
+        "holdout_render_valid",
+        "holdout_executed_valid",
+        "split_secret_revealed",
+    }
+)
+POST_SEAL_STAGES = frozenset({"c4", "c4-holdout"})
 FORBIDDEN_REFERENCE_PREFIXES = (
     "drive:",
     "drive://",
@@ -130,7 +141,47 @@ def _validate_quarantine(campaign_id: str, path: Path) -> GuardResult:
     return GuardResult(campaign_id, not reasons, "QUARANTINE", tuple(reasons))
 
 
-def _validate_direct_reference(campaign_id: str, path: Path) -> GuardResult:
+def _required_operations(campaign_dir: Path) -> tuple[frozenset[str], tuple[str, ...]]:
+    """Derive operation scope from campaign evidence without trusting the auth ref.
+
+    Gate 3 is intentionally post-freeze, so it cannot be inferred from the C0
+    manifest.  Any ledger evidence that the sealed holdout was accepted,
+    unsealed, or measured therefore requires an independent Gate 3 reference.
+    """
+
+    required = set(REQUIRED_PRE_FREEZE_OPERATIONS)
+    ledger_path = campaign_dir / "ledger.jsonl"
+    if not ledger_path.exists():
+        return frozenset(required), ()
+    if not ledger_path.is_file() or ledger_path.is_symlink():
+        return frozenset(required), ("ledger.jsonl must be a regular file",)
+
+    line_number = 0
+    try:
+        with ledger_path.open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                entry = json.loads(line)
+                if not isinstance(entry, Mapping):
+                    raise ValueError("expected a JSON object")
+                payload = entry.get("payload")
+                if not isinstance(payload, Mapping):
+                    raise ValueError("payload must be a JSON object")
+                if (
+                    payload.get("kind") in POST_SEAL_LEDGER_KINDS
+                    or payload.get("stage") in POST_SEAL_STAGES
+                ):
+                    required.add(SEAL_ACCEPTANCE_OPERATION)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        return frozenset(required), (
+            f"cannot derive authorization scope from ledger.jsonl: line {line_number}: {exc}",
+        )
+
+    return frozenset(required), ()
+
+
+def _validate_direct_reference(campaign_id: str, path: Path, campaign_dir: Path) -> GuardResult:
     reasons: list[str] = []
     try:
         data = _load_json(path)
@@ -166,11 +217,13 @@ def _validate_direct_reference(campaign_id: str, path: Path) -> GuardResult:
                 "direct_approval_ref must identify a direct scoped user approval, not generalized delegation"
             )
 
+    required_operations, ledger_reasons = _required_operations(campaign_dir)
+    reasons.extend(ledger_reasons)
     operations = data.get("approved_operations")
     if not isinstance(operations, list) or any(not _nonblank_string(x) for x in operations):
         reasons.append("approved_operations must be a list of non-blank strings")
     else:
-        missing = REQUIRED_PRE_FREEZE_OPERATIONS.difference(operations)
+        missing = required_operations.difference(operations)
         if missing:
             reasons.append(
                 "approved_operations missing required operations: " + ", ".join(sorted(missing))
@@ -247,7 +300,7 @@ def validate_campaign(
                 f"{AUTH_REF_FILENAME} is required unless the campaign has a valid {QUARANTINE_FILENAME}",
             ),
         )
-    return _validate_direct_reference(campaign_id, auth_ref)
+    return _validate_direct_reference(campaign_id, auth_ref, campaign_dir)
 
 
 def _campaign_dir(repo_root: Path, campaign_id: str) -> Path:
