@@ -80,7 +80,13 @@ def candidate_space_sha(candidates: Sequence[Candidate] | None = None) -> str:
 
     v1.2 WP2b: 既定 pool は `ALL_CANDIDATES` ではなく `active_candidates()`
     ——`--rehearsal` では C0 が凍結した縮小プールと同じ集合を C3 で再確認する
-    （本番では `ALL_CANDIDATES` と同一なので sha は不変）。"""
+    （本番では `ALL_CANDIDATES` と同一なので sha は不変）。
+
+    RUN10-CAL-v1.4 §前提 2/§前提 5: `abstention_reasons`（非空のみ）/
+    `truth_polarity`（非 `None` のみ）も同じ「宣言時のみキーを出力する」
+    規約で payload に含める——v1.4 で新規宣言する候補（M2A-B0-AUTOCORR-
+    PERIODICITY 他）以外の payload は本 revision 前と bit-for-bit 同一の
+    まま。"""
     pool = candidates if candidates is not None else active_candidates()
     payload = {}
     for c in pool:
@@ -102,6 +108,14 @@ def candidate_space_sha(candidates: Sequence[Candidate] | None = None) -> str:
                 "field": c.detection_predicate.field,
                 "min_value": c.detection_predicate.min_value,
             }
+        # RUN10-CAL-v1.4 §前提 2/§前提 5 preregistration: `abstention_reasons`
+        # (非空のみ)/`truth_polarity`(非 None のみ)も凍結対象——`detection_
+        # predicate` と同じ規約(未宣言候補では payload にキー自体を出力せず、
+        # v1.3 以前の候補の sha を bit-for-bit 不変に保つ)。
+        if c.abstention_reasons:
+            entry["abstention_reasons"] = sorted(r.value for r in c.abstention_reasons)
+        if c.truth_polarity is not None:
+            entry["truth_polarity"] = c.truth_polarity
         payload[c.candidate_id] = entry
     return manifest_sha(payload)
 

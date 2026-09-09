@@ -1689,3 +1689,103 @@ def test_candidate_space_sha_payload_omits_detection_predicate_key_when_undeclar
     declared_payload = {declared.candidate_id: _entry(declared)}
     assert "detection_predicate" in declared_payload[declared.candidate_id]
     assert manifest_sha(declared_payload) == declared_sha
+
+
+# ---------------------------------------------------------------------------
+# RUN10-CAL-v1.4 §前提 2/§前提 5: registry `Candidate.abstention_reasons`/
+# `Candidate.truth_polarity` fold into `candidate_space_sha`'s canonical
+# serialization the same way v1.3's `detection_predicate` did.
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_space_sha_changes_because_v1_4_declares_abstention_and_polarity() -> None:
+    """v1.4 §前提 2/§前提 5 preregistration: registry now declares
+    `abstention_reasons` (1 candidate) and `truth_polarity` (24 candidates,
+    all APERIODICITY_GT), so `candidate_space_sha()` no longer equals the
+    sha of a pool with both fields stripped back to their v1.3 defaults —
+    the v1.3 pinned-value assumption (implicit in
+    `test_candidate_space_sha_changes_because_v1_3_declares_predicates`)
+    does not hold for the full v1.4 `ALL_CANDIDATES` pool."""
+    from voice_genesis.calibration.candidates.registry import ALL_CANDIDATES
+
+    declared_abstention = [c for c in ALL_CANDIDATES if c.abstention_reasons]
+    assert len(declared_abstention) == 1, [c.candidate_id for c in declared_abstention]
+    declared_polarity = [c for c in ALL_CANDIDATES if c.truth_polarity is not None]
+    assert len(declared_polarity) == 24, [c.candidate_id for c in declared_polarity]
+
+    v1_3_shaped_pool = tuple(
+        dataclasses.replace(c, abstention_reasons=frozenset(), truth_polarity=None)
+        for c in ALL_CANDIDATES
+    )
+    assert selection_stage.candidate_space_sha() != selection_stage.candidate_space_sha(
+        v1_3_shaped_pool
+    )
+
+    # candidates that declare neither field are untouched by the v1.4
+    # additions — their sha contribution stays bit-for-bit v1.3-identical.
+    undeclared_pool = tuple(
+        c for c in ALL_CANDIDATES if not c.abstention_reasons and c.truth_polarity is None
+    )
+    assert selection_stage.candidate_space_sha(
+        undeclared_pool
+    ) == selection_stage.candidate_space_sha(
+        tuple(
+            dataclasses.replace(c, abstention_reasons=frozenset(), truth_polarity=None)
+            for c in undeclared_pool
+        )
+    )
+
+
+def test_candidate_space_sha_payload_omits_v1_4_keys_when_undeclared() -> None:
+    """mirrors `..._omits_detection_predicate_key_when_undeclared`: the
+    canonical payload must not carry `abstention_reasons`/`truth_polarity`
+    keys for a candidate that declares neither (empty frozenset / `None`,
+    the v1.3 default shape) — only a genuinely-declaring candidate's entry
+    carries the key(s)."""
+    from voice_genesis.calibration.canonical import manifest_sha
+
+    base_candidate = candidate_by_id("F0-B0-CURRENT")
+    declared = dataclasses.replace(
+        base_candidate,
+        abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
+        truth_polarity=-1,
+    )
+
+    def _entry(c) -> dict[str, object]:
+        entry: dict[str, object] = {
+            "meter": c.meter.value,
+            "construct": c.construct,
+            "unit": c.unit,
+            "algorithm_family": c.algorithm_family,
+            "parameters": dict(c.parameters),
+            "domain": c.domain,
+            "missing_rule": c.missing_rule,
+            "independence_tier": c.independence_tier.value,
+            "claim_ceiling": c.claim_ceiling.value,
+            "complexity_rank": c.complexity_rank,
+            "implementation_ref": c.implementation_ref,
+        }
+        if c.detection_predicate is not None:
+            entry["detection_predicate"] = {
+                "field": c.detection_predicate.field,
+                "min_value": c.detection_predicate.min_value,
+            }
+        if c.abstention_reasons:
+            entry["abstention_reasons"] = sorted(r.value for r in c.abstention_reasons)
+        if c.truth_polarity is not None:
+            entry["truth_polarity"] = c.truth_polarity
+        return entry
+
+    undeclared_payload = {base_candidate.candidate_id: _entry(base_candidate)}
+    assert "abstention_reasons" not in undeclared_payload[base_candidate.candidate_id]
+    assert "truth_polarity" not in undeclared_payload[base_candidate.candidate_id]
+    assert manifest_sha(undeclared_payload) == selection_stage.candidate_space_sha(
+        (base_candidate,)
+    )
+
+    declared_sha = selection_stage.candidate_space_sha((declared,))
+    assert declared_sha != selection_stage.candidate_space_sha((base_candidate,))
+    declared_payload = {declared.candidate_id: _entry(declared)}
+    assert declared_payload[declared.candidate_id]["abstention_reasons"] == ["OUTPUT_MISSING"]
+    assert declared_payload[declared.candidate_id]["truth_polarity"] == -1
+    assert manifest_sha(declared_payload) == declared_sha

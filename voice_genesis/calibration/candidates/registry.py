@@ -90,6 +90,43 @@ class Candidate:
     （`_M2T_HARMONIC_DETECTION_PREDICATE`）。宣言により
     `candidate_space_sha()` の payload が変わる（v1.2 の「未宣言候補では
     sha 不変」は、未宣言候補にのみ成り立つ主張として引き続き有効）。"""
+    abstention_reasons: frozenset[vocab.MissingReason] = frozenset()
+    """RUN10-CAL-v1.4 §前提 2 経路 (B)/§前提 4 preregistration
+    （`DESIGN_VG_METER_CAL_DEBT_v1.4.md`）: 候補が negative control 行で
+    「正しく棄権した」と事前登録する `vocab.MissingReason` の閉集合（既定
+    空）。`fixtures.controls.abstained(output, candidate)` が
+    `output.missing_reason in candidate.abstention_reasons and not
+    output.ineligible` として消費する——`SANCTIONED_ABSTENTIONS`（§前提 3、
+    経路 (A): F0 prepass skip で record 自体が皆無になるケース）とは別の
+    閉語彙で、こちらは経路 (B): record は存在し `MeterOutput.missing_reason`
+    が立つケースを対象とする。v1.4 で宣言するのは
+    `M2A-B0-AUTOCORR-PERIODICITY: {OUTPUT_MISSING}` のみ（P2 census
+    `scratchpad/v14/p23/p23_report.txt` §5.2 PASS: 正例 18/18 で
+    `OUTPUT_MISSING` 0 件）。宣言は `candidate_space_sha()` の payload へ
+    含まれる（空集合の候補では従来どおりキー自体を出力しない）。"""
+    truth_polarity: int | None = None
+    """RUN10-CAL-v1.4 §前提 5 preregistration
+    （`DESIGN_VG_METER_CAL_DEBT_v1.4.md`）: DIRECTIONAL 候補の
+    construct 変化方向と truth（injected_noise_fraction 等）の変化方向の
+    関係（`+1` = 同方向, `-1` = 逆方向）。`None` は「宣言なし」であり
+    DIRECTIONAL 不適格（`selection_stage.build_candidate_criteria` が
+    `claim_scope_report` で `DIAGNOSTIC_ONLY` へ cap し、理由
+    `NO_POLARITY` を記録する）。`observables.apply_polarity()` が
+    `polarity * delta_output` として tau/reversal/`DirectionalPair.
+    correct_sign` の入力に一様に適用する（`gates.py` 自体は無変更）。
+    構築時に `{+1, -1, None}` のいずれかであることを検証する
+    （`Candidate.__post_init__`）。v1.4 で宣言するのは APERIODICITY_GT の
+    `harmonic_to_noise_ratio` 系（`-1`。HNR は noise fraction と逆相関）と
+    `injected_noise_fraction` 系（`+1`）、`world_d4c_aperiodicity` 系
+    （`+1`。P3 census は pyworld 不在で実測未検証——construct の物理から
+    宣言するのみ）のみ。他 family は v1.4 では宣言しない。"""
+
+    def __post_init__(self) -> None:
+        if self.truth_polarity not in (1, -1, None):
+            raise ValueError(
+                f"Candidate.truth_polarity must be +1, -1, or None; got {self.truth_polarity!r} "
+                f"(candidate_id={self.candidate_id!r})"
+            )
 
     def params_dict(self) -> dict[str, object]:
         return dict(self.parameters)
@@ -367,6 +404,12 @@ def _build_m2_aperiodicity() -> list[Candidate]:
             claim_ceiling=vocab.ClaimCeiling.DIRECTIONAL,
             complexity_rank=rank,
             implementation_ref="candidates.impl.b0_wrappers:measure_m2a_b0_periodicity",
+            # v1.4 §前提 4 preregistration (P2 census PASS §5.2): `hnr_db_approx`
+            # が非有限（周期成分なし）を示す OUTPUT_MISSING は正しい棄権。
+            abstention_reasons=frozenset({vocab.MissingReason.OUTPUT_MISSING}),
+            # v1.4 §前提 5 preregistration (P3 census consistent, tau=-0.9487):
+            # HNR は injected_noise_fraction と逆相関。
+            truth_polarity=-1,
         )
     )
     rank += 1
@@ -389,6 +432,12 @@ def _build_m2_aperiodicity() -> list[Candidate]:
                 claim_ceiling=vocab.ClaimCeiling.DIRECTIONAL,
                 complexity_rank=rank,
                 implementation_ref="candidates.impl.aperiodicity:measure_hnr_acf",
+                # v1.4 §前提 5 preregistration (P3 census consistent,
+                # tau=-0.9487): HNR は injected_noise_fraction と逆相関。
+                # v1.4 は `abstention_reasons` を本 family には宣言しない
+                # （P2 census: NOISE_ONLY 負例で実発火が観測され、棄権では
+                # 救われない——`p23_report.txt` §5.2 参考情報）。
+                truth_polarity=-1,
             )
         )
         rank += 1
@@ -412,6 +461,10 @@ def _build_m2_aperiodicity() -> list[Candidate]:
                 claim_ceiling=vocab.ClaimCeiling.ABSOLUTE,
                 complexity_rank=rank,
                 implementation_ref="candidates.impl.aperiodicity:measure_harmonic_residual",
+                # v1.4 §前提 5 preregistration (P3 census consistent,
+                # tau=+0.9487): residual_fraction は injected_noise_fraction
+                # と同方向。
+                truth_polarity=1,
             )
         )
         rank += 1
@@ -437,6 +490,15 @@ def _build_m2_aperiodicity() -> list[Candidate]:
                 claim_ceiling=vocab.ClaimCeiling.DIAGNOSTIC_ONLY,
                 complexity_rank=rank,
                 implementation_ref="candidates.impl.aperiodicity:measure_d4c",
+                # v1.4 §前提 5 preregistration: WORLD の aperiodicity は
+                # construct の物理（noise 増で増加）から `+1` を宣言する。
+                # 実測未検証（pyworld 不在）——P3 census
+                # (`scratchpad/v14/p23/p23_report.txt` §5.4) は本環境に
+                # pyworld が無いため全 cell ineligible となり、tau は
+                # 算出不能（NA。confirm も反証もできない）。反証されては
+                # いないため v1.4 は宣言を維持するが、実測裏付けは pyworld
+                # 導入後の再 census に残る（v1.4 doc §Y4「答えていない問い」）。
+                truth_polarity=1,
             )
         )
         rank += 1
