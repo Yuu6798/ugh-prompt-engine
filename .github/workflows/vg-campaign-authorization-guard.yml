@@ -46,4 +46,11 @@ jobs:
             args+=(--campaign-id "$campaign_id")
           done
 
-          python voice_genesis/calibration/authorization_guard.py --repo-root . "${args[@]}"
+          base_checkout="$(mktemp -d)"
+          git worktree add --detach "$base_checkout" "$BASE_SHA"
+          trap 'git worktree remove --force "$base_checkout"' EXIT
+
+          python voice_genesis/calibration/authorization_guard.py \
+            --repo-root . \
+            --base-repo-root "$base_checkout" \
+            "${args[@]}"
