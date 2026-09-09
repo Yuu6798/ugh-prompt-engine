@@ -1594,6 +1594,67 @@ def test_v14_undeclared_reason_on_negative_record_not_counted_as_declared_absten
     assert selection_stage.eligible_after_fail_filters(report) is False
 
 
+# ---------------------------------------------------------------------------
+# PR #354 round 5 finding #1 (2026-09-09): `negative_control_declared_
+# abstentions` must count over the same `declared_negative_row_ids` union
+# (`negative_control_row_ids` ∪ `noise_only_control_row_ids`) as the
+# `negative_control_undeclared_missing` filter it audits, not just the
+# zero-tolerance `negative_control_row_ids` subset — otherwise C3a
+# (`f0_selection_frozen.fail_filter_reports[*]`) undercounts declared
+# NOISE_ONLY abstentions the F0 census shows pYIN candidates actually emit.
+# ---------------------------------------------------------------------------
+
+
+def test_v14r5_declared_output_missing_on_noise_only_row_is_counted() -> None:
+    """A NOISE_ONLY-only row (declared solely via `noise_only_control_row_ids`,
+    absent from `negative_control_row_ids`) carrying a declared `OUTPUT_
+    MISSING` must be counted by the audit-only `negative_control_declared_
+    abstentions` counter — this is the C3a shape the F0 census exercises."""
+    candidate = dataclasses.replace(
+        candidate_by_id(_D71_APERIODICITY_HARMONIC_RESIDUAL_ID),
+        abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
+    )
+    records = [
+        _record("row-noise-only", 0, candidate_id=candidate.candidate_id, detected=False),
+        _record(
+            "row-noise-only", 0, candidate_id=candidate.candidate_id, detected=False,
+            repeat_kind="fresh", process_id="fresh-process-0",
+        ),
+    ]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset(),
+        noise_only_control_row_ids=frozenset({"row-noise-only"}),
+    )
+    assert report["negative_control_declared_abstentions"] == 2
+    assert report["negative_control_undeclared_missing"] is False
+
+
+def test_v14r5_no_noise_only_set_counter_unchanged() -> None:
+    """C3b shape (no `noise_only_control_row_ids` declared at all): the
+    counter's population collapses back to plain `negative_control_row_ids`,
+    reproducing the pre-round-5 count exactly."""
+    candidate = dataclasses.replace(
+        candidate_by_id(_D71_APERIODICITY_HARMONIC_RESIDUAL_ID),
+        abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
+    )
+    records = [
+        _record("row-negctl", 0, candidate_id=candidate.candidate_id, detected=False),
+        _record(
+            "row-negctl", 0, candidate_id=candidate.candidate_id, detected=False,
+            repeat_kind="fresh", process_id="fresh-process-0",
+        ),
+    ]
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=frozenset({"row-negctl"}),
+    )
+    assert report["negative_control_declared_abstentions"] == 2
+    assert report["negative_control_undeclared_missing"] is False
+
+
 def test_v14_declared_reason_on_positive_record_stays_failure() -> None:
     """positive-control non-fire is unaffected by `abstention_reasons` —
     `pos_detections` is still built from raw `fixtures.controls.detected()`

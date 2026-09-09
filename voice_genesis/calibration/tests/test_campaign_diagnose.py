@@ -119,7 +119,15 @@ def _outcome(role: str, control_class: str | None, output: MeterOutput, reason: 
 
 
 def test_evaluate_candidate_pass_when_positive_fires_and_negative_silent() -> None:
-    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    # PR #354 round 5 finding #2: the negative rows' `OUTPUT_MISSING` must be
+    # a *declared* abstention (`abstention_reasons`) for this to stay PASS —
+    # this fixture is exercising "candidate declares it may abstain and did",
+    # not the undeclared-miss shape covered separately below.
+    candidate = _candidate(
+        "M2T-HARMONIC-OLS-K4-WINHANN",
+        claim_ceiling=ClaimCeiling.ABSOLUTE,
+        abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
+    )
     outcomes = [
         _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
         _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -8.0})),
@@ -381,7 +389,11 @@ def test_evaluate_candidate_fail_negative_when_a_negative_fires() -> None:
 
 
 def test_evaluate_candidate_no_ceiling_when_registry_ceiling_is_none() -> None:
-    candidate = _candidate("M2T-B0-CURRENT-HYBRID")
+    # PR #354 round 5 finding #2: declare the abstention so the negative row's
+    # `OUTPUT_MISSING` reads as a sanctioned non-fire, not an undeclared miss.
+    candidate = _candidate(
+        "M2T-B0-CURRENT-HYBRID", abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING})
+    )
     assert candidate.claim_ceiling == ClaimCeiling.NONE
     outcomes = [
         _outcome("positive", None, MeterOutput(values={"value": 12.0})),
@@ -424,7 +436,15 @@ def test_evaluate_candidate_not_evaluable_when_all_ineligible() -> None:
 
 
 def test_evaluate_candidate_sanctioned_abstention_only_still_passes() -> None:
-    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    # PR #354 round 5 finding #2: the NOISE_ONLY row's `OUTPUT_MISSING` must
+    # be declared (`abstention_reasons`) — otherwise it is an undeclared
+    # negative miss and PASS is no longer reachable (covered separately by
+    # `test_v14r5_...`-style tests below).
+    candidate = _candidate(
+        "M2T-HARMONIC-OLS-K4-WINHANN",
+        claim_ceiling=ClaimCeiling.ABSOLUTE,
+        abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
+    )
     outcomes = [
         _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
         # F0 prepass unusable on SILENCE: sanctioned (SILENCE, F0_UNUSABLE) —
@@ -521,7 +541,14 @@ def test_evaluate_candidate_negative_controls_incomplete_beats_fail_negative() -
 
 
 def test_evaluate_candidate_confound_outcomes_excluded_from_rates() -> None:
-    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    # PR #354 round 5 finding #2: declare the abstention so the negative
+    # row's `OUTPUT_MISSING` is a sanctioned non-fire, not an undeclared
+    # miss — this test's subject is confound exclusion, not this filter.
+    candidate = _candidate(
+        "M2T-HARMONIC-OLS-K4-WINHANN",
+        claim_ceiling=ClaimCeiling.ABSOLUTE,
+        abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
+    )
     outcomes = [
         _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
         _outcome("negative", "SILENCE", MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)),
@@ -533,6 +560,83 @@ def test_evaluate_candidate_confound_outcomes_excluded_from_rates() -> None:
     assert report["positive_fire_rate"] == 1.0
     assert report["missing_by_reason"] == {"OUTPUT_MISSING": 2}
     assert report["verdict"] == "PASS"
+
+
+# ---------------------------------------------------------------------------
+# PR #354 round 5 finding #2 (2026-09-09): `evaluate_candidate()` applies the
+# shared `fixtures.controls.abstained()` distinction to negative cells whose
+# present output carries a `missing_reason`/`ineligible` — `detected()` alone
+# maps all of these to non-fire regardless of whether the candidate declares
+# the reason, so `negative_rate` cannot see the difference. An undeclared
+# instance now fires `verdict="FAIL_NEGATIVE"`,
+# `verdict_reason="UNDECLARED_NEGATIVE_MISS"`; a declared one stays PASS-
+# eligible, matching `campaign.selection_stage.negative_control_undeclared_
+# missing`'s selection-side counterpart.
+# ---------------------------------------------------------------------------
+
+
+def test_v14r5_undeclared_output_missing_on_negative_is_fail_negative() -> None:
+    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    assert candidate.abstention_reasons == frozenset()
+    outcomes = [
+        _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
+        _outcome("negative", "SILENCE", MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes)
+    assert report["verdict"] == "FAIL_NEGATIVE"
+    assert report["verdict_reason"] == diagnose.UNDECLARED_NEGATIVE_MISS
+
+
+def test_v14r5_declared_output_missing_on_negative_stays_pass() -> None:
+    candidate = _candidate(
+        "M2T-HARMONIC-OLS-K4-WINHANN",
+        claim_ceiling=ClaimCeiling.ABSOLUTE,
+        abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
+    )
+    outcomes = [
+        _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
+        _outcome("negative", "SILENCE", MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes)
+    assert report["verdict"] == "PASS"
+    assert report["verdict_reason"] is None
+
+
+def test_v14r5_ineligible_negative_is_fail_negative_even_if_declared() -> None:
+    """`fixtures.controls.abstained()` never treats `ineligible=True` as a
+    declared abstention (that vocabulary is reserved for `missing_reason`) —
+    so an ineligible negative cell fails regardless of `abstention_reasons`."""
+    candidate = _candidate(
+        "M2T-HARMONIC-OLS-K4-WINHANN",
+        claim_ceiling=ClaimCeiling.ABSOLUTE,
+        abstention_reasons=frozenset({MissingReason.OUTPUT_MISSING}),
+    )
+    outcomes = [
+        _outcome("positive", None, MeterOutput(values={"tilt_db_per_oct": -6.0})),
+        _outcome(
+            "negative",
+            "SILENCE",
+            MeterOutput(ineligible=True, ineligible_reason="INELIGIBLE_DEPENDENCY_ABSENT"),
+        ),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes)
+    assert report["verdict"] == "FAIL_NEGATIVE"
+    assert report["verdict_reason"] == diagnose.UNDECLARED_NEGATIVE_MISS
+
+
+def test_v14r5_undeclared_missing_on_positive_does_not_fire_the_new_reason() -> None:
+    """The new distinction is scoped to negative-role outcomes only — an
+    undeclared `missing_reason` on a *positive* cell is policed exclusively
+    by the pre-existing `positive_fire_rate < 1.0` (FAIL_POSITIVE) branch,
+    which is also checked first."""
+    candidate = _candidate("M2T-HARMONIC-OLS-K4-WINHANN", claim_ceiling=ClaimCeiling.ABSOLUTE)
+    outcomes = [
+        _outcome("positive", None, MeterOutput(missing_reason=MissingReason.OUTPUT_MISSING)),
+        _outcome("negative", "SILENCE", MeterOutput(values={})),
+    ]
+    report = diagnose.evaluate_candidate(candidate, outcomes)
+    assert report["verdict"] == "FAIL_POSITIVE"
+    assert report["verdict_reason"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -592,7 +696,7 @@ def test_run_diagnosis_writes_nothing_under_campaigns_or_vg_cal(
 
     assert before == after
     assert not (fake_home / ".vg_cal").exists()
-    assert report["schema"] == "diagnose/0.4"
+    assert report["schema"] == "diagnose/0.5"
     assert report["claimable"] is False
     # M2T-B0-CURRENT-HYBRID does not need F0 injection: no prepass sweep.
     assert report["f0_prepass"] == "not_applicable"
@@ -669,7 +773,7 @@ def test_cli_out_writes_only_the_requested_file(
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     assert payload["family"] == _TILT_FAMILY
     assert payload["claimable"] is False
-    assert payload["schema"] == "diagnose/0.4"
+    assert payload["schema"] == "diagnose/0.5"
     assert payload["f0_prepass"] == "not_applicable"
     assert not (fake_home / ".vg_cal").exists()
 
@@ -739,7 +843,7 @@ def test_cli_real_render_measure_f0_control(
     out = capsys.readouterr().out
     assert exit_code == 0
     report = json.loads(out)
-    assert report["schema"] == "diagnose/0.4"
+    assert report["schema"] == "diagnose/0.5"
     assert report["family"] == _F0_FAMILY
     assert report["claimable"] is False
     assert len(report["cells"]) <= 6

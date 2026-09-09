@@ -665,10 +665,21 @@ def candidate_fail_filter_report(
         for r in own_records
         if r.row_id in negative_control_row_ids
     ]
+    # PR #354 round 5 finding #1 是正（2026-09-09）: この audit-only カウンタ
+    # は `negative_control_undeclared_missing`（上記コメント参照）と
+    # 同じ母集団 `declared_negative_row_ids`（`negative_control_row_ids` ∪
+    # `noise_only_control_row_ids`）で数えるべきところ、round 3 実装時は
+    # ゼロ許容母集団 `negative_control_row_ids` のみを対象にしていた
+    # （zero-tolerance と declared 母集団を混同）。この結果 C3a
+    # (`f0_selection_frozen.fail_filter_reports[*]`) は NOISE_ONLY 行上で
+    # 宣言された `OUTPUT_MISSING`（F0 census が示す pYIN 系候補の実態）を
+    # undercounts していた——`negative_control_undeclared_missing` 自体の
+    # 判定（母集団は当初から `declared_negative_row_ids`）には影響しない
+    # 独立した provenance バグ。母集団を揃えて是正する。
     negative_control_declared_abstentions = sum(
         1
         for r in own_records
-        if r.row_id in negative_control_row_ids
+        if r.row_id in declared_negative_row_ids
         and (r.output.missing_reason is not None or r.output.ineligible)
         and fixture_controls.abstained(r.output, candidate)
     )

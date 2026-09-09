@@ -429,6 +429,16 @@ selection 側にも適用する形で本 deviation を解消した（実装は
 （削除しない——冗長ではなく、新 filter が「宣言済みなら non-failure」と
 判定した record 件数の内訳を示す）。
 
+**round 5 finding #1 是正（2026-09-09）**: round 3 実装時、この audit-only
+カウンタ自体はゼロ許容母集団 `negative_control_row_ids` のみを対象に数えて
+おり、`negative_control_undeclared_missing` 本体の母集団 `declared_
+negative_row_ids`（`negative_control_row_ids` ∪ `noise_only_control_
+row_ids`）と揃っていなかった——C3a (`f0_selection_frozen.fail_filter_
+reports[*]`) が NOISE_ONLY 行上の宣言済み `OUTPUT_MISSING`（F0 census が
+示す pYIN 系候補の実態）を undercount する provenance バグ。母集団を
+`declared_negative_row_ids` に揃えて是正（`negative_control_undeclared_
+missing` 自体の判定は当初から同じ母集団だったため無変更）。
+
 **diagnose schema 0.4 census**: `campaign/diagnose.py::SCHEMA =
 "diagnose/0.4"`。`--dump-values` は候補ごとに `census`
 （`_census_block()`: `n_cells`/`measured_detected`/
@@ -438,6 +448,21 @@ selection 側にも適用する形で本 deviation を解消した（実装は
 DIRECTIONAL 候補の `kendall_tau_sign`（`_kendall_tau_sign()`。P3 census と
 同じ Kendall tau-b の符号、`None`/`+1`/`-1`）を追加する。非 `--dump-values`
 の report 形状（verdict/fire rates）は不変。
+
+**diagnose schema 0.5（PR #354 round 5 finding #2 是正、2026-09-09）**:
+`evaluate_candidate()` は `detected()` が missing_reason/ineligible な負例
+record を宣言の有無に関わらず非発火へ写像することを利用して、未宣言の
+欠落・ineligible が `census` に現れつつ `verdict="PASS"` を返す穴を
+持っていた（selection 側 round 3 是正と対になる diagnose 側の同型穴）。
+`fixtures.controls.abstained()` で宣言/未宣言を弁別し、1 件でも未宣言なら
+`verdict="FAIL_NEGATIVE"`, `verdict_reason="UNDECLARED_NEGATIVE_MISS"`
+（`campaign/diagnose.py::SCHEMA = "diagnose/0.5"`）。closed verdict
+vocabulary（PASS/FAIL_POSITIVE/FAIL_NEGATIVE/NO_CEILING/NOT_EVALUABLE）は
+不変——`verdict_reason` が FAIL_NEGATIVE でも非 `None` になり得る点のみ
+report 形状が変わる。宣言済み棄権（AUTOCORR の `OUTPUT_MISSING`、F0 候補 5
+件を含む）は従来どおり non-fire → PASS-eligible のまま（実測は
+`scratchpad/v14/p2f0/` の再測 census、`--repeats 3 --max-cells 30` で確認
+——5 件とも verdict 不変）。
 
 **`design_revision`/統治文書連鎖**: `c0_freeze._DESIGN_REVISION = "1.4"`、
 `c0_validate._ALLOWED_DESIGN_REVISIONS`/`_DESIGN_REVISION_ORDER` に

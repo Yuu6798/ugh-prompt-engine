@@ -117,7 +117,12 @@ from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import Candidate
 from voice_genesis.calibration.fixtures import matrix
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
-from voice_genesis.calibration.fixtures.controls import SANCTIONED_ABSTENTIONS, ControlClass, detected
+from voice_genesis.calibration.fixtures.controls import (
+    SANCTIONED_ABSTENTIONS,
+    ControlClass,
+    abstained,
+    detected,
+)
 from voice_genesis.calibration.fixtures.generators import common as gen_common
 from voice_genesis.calibration.fixtures.generators import render_row
 from voice_genesis.calibration.fixtures.matrix import FixtureRow, MatrixRow
@@ -183,7 +188,16 @@ _DIAGNOSE_SPLIT = "DIAGNOSE"
 #: Kendall tau-b 符号。P3 極性 census の内製化）を追加する。既定（フラグ
 #: 無し）の出力形状は v0.2/v0.3 と同一——追加情報のみで verdict や fire
 #: rate の意味論は一切変えない。
-SCHEMA = "diagnose/0.4"
+#: v0.5 (PR #354 round 5 finding #2, 2026-09-09): `evaluate_candidate()` は
+#: 従来 `detected()` 経由で undeclared missing_reason/ineligible な負例
+#: record を無条件に非発火へ写像し、PASS まで抜けてしまう経路を持っていた
+#: （`fixtures.controls.abstained()` による宣言/未宣言の弁別が verdict に
+#: 反映されていなかった）。v0.5 で `verdict="FAIL_NEGATIVE"` かつ
+#: `verdict_reason="UNDECLARED_NEGATIVE_MISS"` の組が新たに現れ得る
+#: （closed verdict vocabulary は不変、`verdict_reason` が FAIL_NEGATIVE でも
+#: 非 `None` になり得る点のみ形状が変わる）。宣言済み棄権（`abstained()`
+#: が `True` を返す record）は従来どおり非発火 → PASS-eligible のまま。
+SCHEMA = "diagnose/0.5"
 
 _ROLE_POSITIVE = "positive"
 _ROLE_NEGATIVE = "negative"
@@ -382,17 +396,40 @@ def _round_or_none(value: float | None) -> float | None:
     return None if value is None else round(value, 4)
 
 
+#: PR #354 round 5 finding #2: distinct `verdict_reason` for a negative cell
+#: whose present output carries an undeclared `missing_reason`/`ineligible`
+#: (`fixtures.controls.abstained()` is `False`) — the shared distinction with
+#: `campaign.selection_stage.negative_control_undeclared_missing`. Kept apart
+#: from the plain `FAIL_NEGATIVE` (an actual `detected()` fire) so the report
+#: names which of the two negative-side failure shapes occurred.
+UNDECLARED_NEGATIVE_MISS = "UNDECLARED_NEGATIVE_MISS"
+
+
 def _verdict(
     ceiling: ClaimCeiling,
     positive_rate: float | None,
     negative_rate: float | None,
     all_ineligible: bool,
     incomplete_classes: frozenset[str],
+    has_undeclared_negative_miss: bool = False,
 ) -> tuple[str, str | None]:
     """`(verdict, verdict_reason)`。`verdict_reason` は `NOT_EVALUABLE` の
     3 分岐（判定材料が無い / 全 ineligible / 非 sanctioned な負例欠測）を
     区別する（WP4b 改訂: 3 番目の `negative_controls_incomplete` が新設）。
-    PASS/FAIL_POSITIVE/FAIL_NEGATIVE/NO_CEILING では常に `None`。"""
+    PASS/FAIL_POSITIVE/NO_CEILING では常に `None`。
+
+    PR #354 round 5 finding #2（2026-09-09）: `FAIL_NEGATIVE` は 2 分岐を
+    持つようになった——`negative_rate > 0.0`（`detected()` が実際に発火した
+    record が 1 件以上）の従来経路は `verdict_reason=None` のまま、新設の
+    `has_undeclared_negative_miss`（`abstained()` で説明されない
+    missing_reason/ineligible な負例 record が 1 件以上）は
+    `verdict_reason="UNDECLARED_NEGATIVE_MISS"` を持つ。`detected()` は
+    missing_reason/ineligible な record を無条件に非発火へ写像するため
+    `negative_rate` 自体はこの経路を検出できない——`has_undeclared_
+    negative_miss` は `evaluate_candidate()` が `abstained()` で別途算出する
+    独立した入力。`positive_rate < 1.0`（FAIL_POSITIVE）は本分岐より先に
+    判定する（`campaign.selection_stage` の positive-control 非発火判定と
+    同様、positive 側の失敗を優先して報告する）。"""
     if positive_rate is None or negative_rate is None:
         return "NOT_EVALUABLE", "no_positive_or_negative_rows"
     if all_ineligible:
@@ -401,6 +438,8 @@ def _verdict(
         return "NOT_EVALUABLE", "negative_controls_incomplete"
     if positive_rate < 1.0:
         return "FAIL_POSITIVE", None
+    if has_undeclared_negative_miss:
+        return "FAIL_NEGATIVE", UNDECLARED_NEGATIVE_MISS
     if negative_rate > 0.0:
         return "FAIL_NEGATIVE", None
     if ceiling == ClaimCeiling.NONE:
@@ -535,7 +574,19 @@ def evaluate_candidate(
     （v1.4 §前提 3 の 2 組 `{(SILENCE, "F0_UNUSABLE"),
     (NOISE_ONLY, "F0_UNUSABLE")}`）はここでの `sanctioned_
     abstentions` に数え、not-fired（False）として fire rate に算入する
-    （従来どおり）。"""
+    （従来どおり）。
+
+    PR #354 round 5 finding #2（2026-09-09）: 上記の path (A)（行丸ごと
+    skip）とは別に、path (B)（record は存在するが `missing_reason`/
+    `ineligible` を持つ）の negative record を `fixtures.controls.
+    abstained()` で宣言済み/未宣言に弁別する。`detected()` は両者を
+    区別なく非発火へ写像するため、従来は未宣言の欠落・ineligible も
+    `negative_rate == 0.0` に埋もれて `PASS` まで抜け得た
+    （`campaign.selection_stage.negative_control_undeclared_missing` が
+    selection 側で閉じていた穴の diagnose 側対応）。1 件でも未宣言なら
+    `verdict="FAIL_NEGATIVE"`, `verdict_reason="UNDECLARED_NEGATIVE_MISS"`
+    （`UNDECLARED_NEGATIVE_MISS` 定数）。宣言済み棄権（`abstained()` が
+    `True`）は従来どおり non-fire → PASS-eligible のまま。"""
     positive_flags: list[bool] = []
     negative_outcomes_by_class: dict[str, list[CellOutcome]] = {}
     missing_by_reason: Counter[str] = Counter()
@@ -563,6 +614,7 @@ def evaluate_candidate(
     incomplete_classes: set[str] = set()
     sanctioned_abstentions = 0
     negative_flags_all: list[bool] = []
+    has_undeclared_negative_miss = False
 
     for cc, class_outcomes in sorted(negative_outcomes_by_class.items()):
         flags = [
@@ -582,12 +634,31 @@ def evaluate_candidate(
                 sanctioned_abstentions += 1
             else:
                 incomplete_classes.add(cc)
+        # PR #354 round 5 finding #2: `detected()` maps every missing_reason/
+        # ineligible record to non-fire unconditionally (declared or not), so
+        # `flags`/`negative_flags_all` alone cannot see an undeclared miss —
+        # apply the shared `fixtures.controls.abstained()` distinction here,
+        # per-record, mirroring `campaign.selection_stage.negative_control_
+        # undeclared_missing`. `row_all_skipped` outcomes are the synthetic
+        # F0-unusable-prepass-skip `CellOutcome` (`MeterOutput()` default:
+        # `missing_reason=None`, `ineligible=False`) so they never satisfy the
+        # `or` guard below and this loop cannot double-count path (A).
+        for o in class_outcomes:
+            if (o.output.missing_reason is not None or o.output.ineligible) and not abstained(
+                o.output, candidate
+            ):
+                has_undeclared_negative_miss = True
 
     positive_rate = _rate(positive_flags)
     negative_rate = _rate(negative_flags_all)
     all_ineligible = verdict_relevant_total > 0 and verdict_relevant_ineligible == verdict_relevant_total
     verdict, verdict_reason = _verdict(
-        candidate.claim_ceiling, positive_rate, negative_rate, all_ineligible, frozenset(incomplete_classes)
+        candidate.claim_ceiling,
+        positive_rate,
+        negative_rate,
+        all_ineligible,
+        frozenset(incomplete_classes),
+        has_undeclared_negative_miss,
     )
 
     report: dict[str, Any] = {
