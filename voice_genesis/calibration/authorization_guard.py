@@ -10,10 +10,12 @@ the task/conversation authority source before running gated operations.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from urllib.parse import urlparse
 
 AUTH_REF_FILENAME = "direct_authorization_ref.json"
 QUARANTINE_FILENAME = "authorization_quarantine.json"
@@ -39,6 +41,21 @@ FORBIDDEN_REFERENCE_FRAGMENTS = (
     "general delegation",
     "generalized delegation",
     "委任",
+    "signed by",
+    "signed-by",
+    "signed_by",
+    "relayed by",
+    "relayed-by",
+    "relayed_by",
+)
+FORBIDDEN_REFERENCE_HOSTS = frozenset(
+    {
+        "api.github.com",
+        "docs.google.com",
+        "drive.google.com",
+        "github.com",
+        "raw.githubusercontent.com",
+    }
 )
 
 
@@ -59,6 +76,36 @@ def _load_json(path: Path) -> Mapping[str, Any]:
 
 def _nonblank_string(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _validate_base_evidence_preserved(
+    campaign_id: str,
+    campaign_dir: Path,
+    base_campaign_dir: Path,
+) -> GuardResult:
+    reasons: list[str] = []
+    base_files = sorted(
+        path.relative_to(base_campaign_dir)
+        for path in base_campaign_dir.rglob("*")
+        if path.is_file()
+    )
+    for relative_path in base_files:
+        base_path = base_campaign_dir / relative_path
+        current_path = campaign_dir / relative_path
+        if not current_path.is_file() or current_path.is_symlink():
+            reasons.append(f"base evidence file removed: {relative_path.as_posix()}")
+            continue
+        if _file_sha256(current_path) != _file_sha256(base_path):
+            reasons.append(f"base evidence file modified: {relative_path.as_posix()}")
+    return GuardResult(campaign_id, not reasons, "QUARANTINE", tuple(reasons))
 
 
 def _validate_quarantine(campaign_id: str, path: Path) -> GuardResult:
@@ -102,9 +149,17 @@ def _validate_direct_reference(campaign_id: str, path: Path) -> GuardResult:
         reasons.append("direct_approval_ref must be a non-blank string")
     else:
         normalized = ref.strip().lower()
+        hostname = urlparse(normalized).hostname
         if normalized.startswith(FORBIDDEN_REFERENCE_PREFIXES):
             reasons.append(
                 "direct_approval_ref must not use repository/Drive/signature/relay metadata as authority"
+            )
+        if hostname is not None and any(
+            hostname == forbidden or hostname.endswith(f".{forbidden}")
+            for forbidden in FORBIDDEN_REFERENCE_HOSTS
+        ):
+            reasons.append(
+                "direct_approval_ref must not use repository/Drive URLs as authority"
             )
         if any(fragment in normalized for fragment in FORBIDDEN_REFERENCE_FRAGMENTS):
             reasons.append(
@@ -151,7 +206,20 @@ def validate_campaign(
 
     quarantine = campaign_dir / QUARANTINE_FILENAME
     if quarantine.is_file():
-        return _validate_quarantine(campaign_id, quarantine)
+        quarantine_result = _validate_quarantine(campaign_id, quarantine)
+        if not quarantine_result.ok or base_campaign_dir is None:
+            return quarantine_result
+        evidence_result = _validate_base_evidence_preserved(
+            campaign_id,
+            campaign_dir,
+            base_campaign_dir,
+        )
+        return GuardResult(
+            campaign_id,
+            evidence_result.ok,
+            "QUARANTINE",
+            evidence_result.reasons,
+        )
 
     auth_ref = campaign_dir / AUTH_REF_FILENAME
     if not auth_ref.is_file():
