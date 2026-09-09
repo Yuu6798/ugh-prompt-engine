@@ -507,3 +507,37 @@ def test_repo_e_use_table_v1_source_digests_match_gate1_decision_record_at_head(
         if r.source_id_or_url.startswith(e_use_table.GATE1_DELEGATION_SOURCE_ID_PREFIX)
     ]
     assert len(matching) == 9  # all USER_ACCEPTED_USE_BOUND rows currently in the table
+
+
+# ---------------------------------------------------------------------------
+# PR #354 round 1 finding #1/#2 (ADOPT): `StaleEUseTableError`/
+# `finite_positive_or_none()` single-source home. `campaign.holdout_stage`
+# and `campaign.selection_stage` both consume these without importing each
+# other (the latter already imports the former, so the reverse would cycle).
+# ---------------------------------------------------------------------------
+
+
+def test_holdout_stage_stale_e_use_table_error_is_the_same_class() -> None:
+    """`campaign.holdout_stage.StaleEUseTableError` must stay the exact same
+    class object as `e_use_table.StaleEUseTableError` (a re-export alias,
+    not a duplicate definition) so `except`/`isinstance` checks written
+    against either module's name catch the same exceptions."""
+    from voice_genesis.calibration.campaign import holdout_stage
+
+    assert holdout_stage.StaleEUseTableError is e_use_table.StaleEUseTableError
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (1.0, 1.0),
+        (0.5, 0.5),
+        (0.0, None),
+        (-1.0, None),
+        (float("inf"), None),
+        (float("-inf"), None),
+        (float("nan"), None),
+    ],
+)
+def test_finite_positive_or_none(value: float, expected: float | None) -> None:
+    assert e_use_table.finite_positive_or_none(value) == expected

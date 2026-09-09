@@ -2069,10 +2069,30 @@ def test_truth_floor_for_candidate_e_use_rows_none_is_none() -> None:
     assert selection_stage.truth_floor_for_candidate(candidate, None) is None
 
 
-def test_truth_floor_for_candidate_nonfinite_value_is_none() -> None:
+def test_truth_floor_for_candidate_nonfinite_value_raises() -> None:
+    """PR #354 round 1 finding #2 (P2, ADOPT): a matched absolute-mode row
+    whose declared `e_use_value` is non-finite is a broken pin, not "no
+    floor" — same fail-closed treatment as the zero/negative case below (was
+    `is None` before this fix; see finding #1's `StaleEUseTableError`)."""
     candidate = candidate_by_id("F0-B0-CURRENT")
     row = _e_use_row_for(candidate, mode="absolute", e_use_value=float("inf"))
-    assert selection_stage.truth_floor_for_candidate(candidate, (row,)) is None
+    with pytest.raises(selection_stage.StaleEUseTableError):
+        selection_stage.truth_floor_for_candidate(candidate, (row,))
+
+
+@pytest.mark.parametrize("bad_value", [0.0, -1.0, -0.5])
+def test_truth_floor_for_candidate_nonpositive_finite_value_raises(bad_value: float) -> None:
+    """PR #354 round 1 finding #2 (P2, ADOPT): before this fix, a zero/
+    negative finite absolute `e_use_value` passed `math.isfinite()` and was
+    used as `truth_floor` verbatim, leading to `RE[i] = AE[i]/max(|truth[i]|,
+    0)` => `ZeroDivisionError` (or a nonsensical negative floor) downstream
+    in `observables.error_terms()`. A declared-but-unusable absolute E_use is
+    treated as a broken pin (same fail-closed path as a stale/mutated
+    `e_use_table.json`), not silently downgraded to "no floor"."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    row = _e_use_row_for(candidate, mode="absolute", e_use_value=bad_value)
+    with pytest.raises(selection_stage.StaleEUseTableError):
+        selection_stage.truth_floor_for_candidate(candidate, (row,))
 
 
 def test_build_candidate_criteria_truth_floor_reaches_normalized_mae() -> None:

@@ -334,13 +334,19 @@ def test_c3a_f0_selection_passes_with_candidate_that_correctly_non_detects_on_si
 # ---------------------------------------------------------------------------
 
 
-def _f0_v11_campaign(tmp_path: Path):
+def _f0_v11_campaign(tmp_path: Path, *, frozen_inputs: Any | None = None):
     """Full canonical matrix (no `subset` override — the splitter's v1.1 §V2
     holdout sweep pinning needs the real population to satisfy coverage; a
     small hand-picked F0_CONTROL-only subset starves it). `measure_stage.
     run_measure_stage` is monkeypatched by the caller, so the extra
     non-F0_CONTROL rows never trigger a real render/measure and this test
-    stays fast despite the full 456-row matrix."""
+    stays fast despite the full 456-row matrix.
+
+    `frozen_inputs` (PR #354 round 1 finding #1 test use): forwarded to
+    `build_tiny_campaign()` unchanged (default `None` = no `frozen_inputs`
+    key at all, this fixture's original behaviour) — lets a caller declare
+    an `e_use_table_sha256` pin without writing a matching
+    `e_use_table.json`, to exercise the stale-pin fail-closed path."""
     from voice_genesis.calibration.fixtures.matrix import build_matrix
 
     all_rows = build_matrix()
@@ -348,7 +354,7 @@ def _f0_v11_campaign(tmp_path: Path):
         mr for mr in all_rows if mr.row.family == "F0_CONTROL" and mr.row.control_class is not None
     ]
     assert {mr.row.control_class for mr in control_rows} == {"SILENCE", "NOISE_ONLY", "TOO_SHORT"}
-    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, frozen_inputs=frozen_inputs)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
     return campaign, all_rows
 
@@ -6984,3 +6990,168 @@ def test_candidate_enumeration_follows_rehearsal_mode(
         rehearsal_family = cli._candidates_for_family(family)
         assert {c.candidate_id for c in rehearsal_family} <= pool_ids, family
         assert len(rehearsal_family) <= 2, family
+
+
+# ---------------------------------------------------------------------------
+# PR #354 round 1 finding #1 (P1, ADOPT) "Reject stale E_use tables during
+# selection": `_try_load_e_use_rows_for_selection()` must fail closed
+# (propagate `StaleEUseTableError`) when the frozen manifest declares an
+# E_use pin (`frozen_inputs.e_use_table_sha256`) but the table is
+# missing/mutated/malformed — it must only degrade to `None` (legacy
+# `zero_guard` ranking) when no pin was ever declared (tiny/legacy
+# campaigns, `build_tiny_campaign()`'s default).
+# ---------------------------------------------------------------------------
+
+
+def _write_pinned_e_use_table(campaign_dir: Path, rows: list) -> str:
+    """Serialize `rows` (`EUseEvidenceRow`) to `<campaign_dir>/e_use_table.json`
+    the same way `_build_absolute_gate_campaign()` does, returning the
+    sha256 to pass as `frozen_inputs={"e_use_table_sha256": ...}`."""
+    from voice_genesis.calibration import e_use_table as e_use_table_module
+
+    serialized = (
+        json.dumps(
+            [e_use_table_module.row_to_dict(r) for r in rows],
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    (campaign_dir / "e_use_table.json").write_text(serialized, encoding="utf-8")
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _e_use_row_for_selection_test() -> Any:
+    from voice_genesis.calibration.gates import EUseEvidenceRow
+    from voice_genesis.calibration.vocab import EvidenceClass
+
+    return EUseEvidenceRow(
+        construct_id="fundamental_frequency",
+        unit="hz",
+        domain="d",
+        intended_use="test",
+        maximum_claim="test",
+        e_use_value=2.0,
+        derivation_rule="test",
+        evidence_class=EvidenceClass.USER_ACCEPTED_USE_BOUND,
+        source_id_or_url="test",
+        source_checked_at="2026-09-09",
+        source_hash_or_version="test",
+        applicability_argument="test",
+        review_status="APPROVED_BY_DELEGATION",
+    )
+
+
+def test_try_load_e_use_rows_for_selection_no_pin_returns_none(tmp_path: Path) -> None:
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    assert cli._try_load_e_use_rows_for_selection(campaign) is None
+
+
+def test_try_load_e_use_rows_for_selection_pinned_valid_returns_rows(
+    tmp_path: Path,
+) -> None:
+    """pin declared + `e_use_table.json` present and byte-identical to the
+    pin -> the parsed rows, not `None` (the `truth_floor_for_candidate()`
+    input this WP §前提7 wires up)."""
+    row = _e_use_row_for_selection_test()
+    # the pin has to be computed from the exact bytes that will be written,
+    # and `build_tiny_campaign()` needs the pin *before* freezing — write
+    # once to compute the sha256, then rebuild the (now pinned) campaign and
+    # rewrite the same bytes into its fresh campaign_dir.
+    scratch_dir = tmp_path / "scratch"
+    scratch_dir.mkdir()
+    e_use_sha = _write_pinned_e_use_table(scratch_dir, [row])
+
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, frozen_inputs={"e_use_table_sha256": e_use_sha}
+    )
+    _write_pinned_e_use_table(campaign_dir, [row])
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    rows = cli._try_load_e_use_rows_for_selection(campaign)
+    assert rows is not None
+    assert len(rows) == 1
+    assert rows[0].construct_id == "fundamental_frequency"
+    assert rows[0].e_use_value == 2.0
+
+
+def test_try_load_e_use_rows_for_selection_pinned_missing_file_raises(
+    tmp_path: Path,
+) -> None:
+    """pin declared but `e_use_table.json` was never written (or was
+    deleted post-freeze) -> `StaleEUseTableError` propagates (fail closed);
+    it is not swallowed into `None` the way a legitimately undeclared pin
+    is."""
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, frozen_inputs={"e_use_table_sha256": "0" * 64}
+    )
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    assert not (campaign_dir / "e_use_table.json").exists()
+
+    with pytest.raises(holdout_stage.StaleEUseTableError):
+        cli._try_load_e_use_rows_for_selection(campaign)
+
+
+def test_try_load_e_use_rows_for_selection_pinned_mutated_bytes_raises(
+    tmp_path: Path,
+) -> None:
+    """pin declared and the file exists, but its bytes were mutated after
+    freeze (sha256 mismatch) -> `StaleEUseTableError` propagates."""
+    row = _e_use_row_for_selection_test()
+    scratch_dir = tmp_path / "scratch"
+    scratch_dir.mkdir()
+    e_use_sha = _write_pinned_e_use_table(scratch_dir, [row])
+
+    campaign_dir, secret_root = build_tiny_campaign(
+        tmp_path, frozen_inputs={"e_use_table_sha256": e_use_sha}
+    )
+    _write_pinned_e_use_table(campaign_dir, [row])
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    # mutate the on-disk table after freeze -> bytes no longer match the pin.
+    (campaign_dir / "e_use_table.json").write_text("[]\n", encoding="utf-8")
+
+    with pytest.raises(holdout_stage.StaleEUseTableError):
+        cli._try_load_e_use_rows_for_selection(campaign)
+
+
+def test_run_c3a_refuses_when_e_use_pin_declared_and_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """end-to-end (P1 ADOPT): a C3a invocation on a campaign whose manifest
+    declares an E_use pin but whose `e_use_table.json` is missing must
+    refuse the stage — `StaleEUseTableError` propagates out of `_run_c3a`
+    and no `f0_selection_frozen` ledger event is ever written (the concealed
+    fallback to `zero_guard` ranking + `SELECTION_FROZEN` this finding
+    closes)."""
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+
+    campaign, subset = _f0_v11_campaign(
+        tmp_path, frozen_inputs={"e_use_table_sha256": "0" * 64}
+    )
+    assert not (Path(campaign.campaign_dir) / "e_use_table.json").exists()
+
+    only_b0 = (candidate_by_id("F0-B0-CURRENT"),)
+    monkeypatch.setattr(
+        cli,
+        "active_candidates_for_meter",
+        lambda meter, _orig=cli.active_candidates_for_meter: (
+            only_b0 if meter is MeterId.F0_CONTROL else _orig(meter)
+        ),
+    )
+    monkeypatch.setattr(
+        measure_stage,
+        "run_measure_stage",
+        lambda campaign_arg, instances, candidates_arg, **kwargs: _fabricate_f0_v11_records(
+            subset, instances, candidates_arg, silence_and_too_short_fire=False
+        ),
+    )
+
+    with pytest.raises(holdout_stage.StaleEUseTableError):
+        cli._run_c3a(campaign, subset, 1)
+
+    f0_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "f0_selection_frozen"
+    ]
+    assert f0_events == []

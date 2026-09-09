@@ -2,7 +2,7 @@
 document_id: VG-METER-CAL-DEBT-DESIGN-v1.4
 project: VoiceGenesis
 document_class: CANONICAL_DESIGN_REVISION
-status: DRAFTING
+status: APPROVED_DESIGN_REVISION / NOT_PREREGISTERED / EXECUTION_NOT_AUTHORIZED
 design_revision: "1.4"
 revises: VG-METER-CAL-DEBT-DESIGN-v1.3
 base_document_path: voice_genesis/calibration/DESIGN_VG_METER_CAL_DEBT_v1.3.md
@@ -29,13 +29,15 @@ note_on_execution: 実行は v1.0 §18 の 3 承認 Gate（campaign 実行 / C0 
   に引き続き従う。本書の承認は設計改訂の承認であり実行授権ではない。
 ---
 
-# RUN10-CAL 設計 v1.4（起草中）
+# RUN10-CAL 設計 v1.4 — 棄権 2 経路の統一・DIRECTIONAL 極性 preregistration・記録の観測性是正
 
-**本書は起草中の骨子である。§Y0 は Design Memo（scratchpad/design_memo_v14.md）の
-「前提となる設計判断」を verbatim 転記したもの。§Y1（P1–P3 実測表）/ §Y2（棄権と極性の
-preregistration まとめ）/ §Y3（記録欠陥の是正まとめ）/ §Y4（答えた問い・答えていない
-問い・負債の terminal status）は後続の docs コミットで append する（append-only。
-本節を含め既に書いた内容の改変はしない）。**
+**本書は確定した統治文書である（PR #354 round 1 finding #4 是正: 旧文は
+`DRAFTING`/「起草中」のまま §Y1–§Y4 を「後続の docs コミットで append する」と
+予告していたが、§Y1（P1–P3 実測表）/ §Y2（棄権と極性の preregistration まとめ）/
+§Y3（記録欠陥の是正まとめ）/ §Y4（答えた問い・答えていない問い・負債の terminal
+status）はいずれも既に本書へ append 済みであり、`DESIGN_DOC_CHAIN` 先頭として
+参照されている）。§Y0 は Design Memo（scratchpad/design_memo_v14.md）の「前提と
+なる設計判断」を verbatim 転記したもの。**
 
 WP-A（コード + テスト）は本書 §Y0 の前提 1–7 を実装対象とし、既に
 `voice_genesis/calibration/{fixtures/controls.py, candidates/registry.py,
@@ -57,8 +59,6 @@ Design Memo（RUN10-CAL-v1.4）「前提となる設計判断」節の verbatim 
 7. **正規化 MAE の分母**: `observables.error_terms` の `re = ae / max(|truth|, zero_guard)` は真値 0 行で発散（2dde4014: TILT 第 1 順位要素 2e8〜7e9、順位が真値 0 行の絶対誤差だけで決まる縮退）。v1.4 は分母の floor を **construct の E_use（absolute mode）** に置換（`re = ae / max(|truth|, E_use)`）。relative mode（F0 の 20 cent）は従来の |truth|（真値 0 なし）。`selection_rule_sha` は変わる（v1.4 preregistration）。
 8. **APERIODICITY の微小段** 0→0.01→0.03→0.1 は Δtruth < 2(U_GT+U_num)=0.128 で構造的に解像不能。fixture 水準は凍結行列の一部であり v1.4 では変更しない（文書化のみ。v1.4 doc §Y4「答えていない問い」に登録）。
 9. **TILT 精度**（|e| が真値 0/−6 で 0.28、−12/−18/−24 で 14.5〜14.9 の段差）は **測定器を触る前に P1 で生成器/測定器を切り分ける**。P1 の結果が「測定器」なら測定器の再設計は v1.5（段階 1 へ戻る）、「生成器」なら fixture 修正 = 新 revision の行列。いずれも v1.4 では実装しない。
-
-（§Y1–§Y4 は後続の docs コミットで append する。）
 
 ## §Y1. 実測（WP-P、日付 = `date -u` 実測）
 

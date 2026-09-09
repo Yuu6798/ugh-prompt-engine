@@ -1084,26 +1084,46 @@ def _try_load_e_use_rows_for_selection(
     best-effort E_use 表ロード、C3a/C3b selection 専用（`selection_stage.
     truth_floor_for_candidate()` の入力）。
 
-    C4 の `holdout_stage.load_e_use_rows()` とは異なり、E_use 表欠落は C3
-    selection 自体の fail-closed 事由に **しない**——`_run_c4` 側の既存コメント
-    が明記するとおり「多くの tiny test campaign は e_use_table.json /
-    frozen_inputs.e_use_table_sha256 pin を持たない」ため、`load_e_use_rows()`
-    をそのまま C3 で呼ぶと欠落 campaign すべてで `StaleEUseTableError` の
-    ledger `stop_event` 書き込み + 例外送出が発生してしまう（正規化 MAE の
-    分母 floor は selection のランキング精度改善であり、C4 の gate 入力の
-    ような fail-closed 対象ではない）。
+    C4 の `holdout_stage.load_e_use_rows()` とは異なり、**pin を宣言してい
+    ない** campaign での E_use 表欠落は C3 selection 自体の fail-closed 事由
+    に **しない**——`_run_c4` 側の既存コメントが明記するとおり「多くの tiny
+    test campaign は e_use_table.json / frozen_inputs.e_use_table_sha256 pin
+    を持たない」ため、`load_e_use_rows()` をそのまま C3 で呼ぶと欠落
+    campaign すべてで `StaleEUseTableError` の ledger `stop_event` 書き込み +
+    例外送出が発生してしまう（正規化 MAE の分母 floor は selection の
+    ランキング精度改善であり、C4 の gate 入力のような fail-closed 対象では
+    ない）。
+
+    PR #354 round 1 finding #1 (P1, ADOPT): 上記の「pin 未宣言 = legacy/tiny
+    campaign」という前提は、**pin が宣言されている**（`frozen_inputs.
+    e_use_table_sha256` が非空文字列）のに検証/パースが失敗するケース
+    （ファイル欠落・改竄・破損 JSON）まではカバーしない——旧実装はこの区別を
+    せず `StaleEUseTableError` を一律 `None` へ握り潰していたため、凍結後に
+    pin 済み `e_use_table.json` が壊れていても C3a/C3b は気づかず従来の
+    `zero_guard` ランキングへ静かにフォールバックし、`SELECTION_FROZEN` を
+    発行し得た（壊れた pin の隠蔽）。本関数は now: pin が宣言されている場合は
+    `StaleEUseTableError` をそのまま**伝播**させる（C4 の
+    `holdout_stage.load_e_use_rows()` と同じ fail-closed 事由——新規
+    `vocab.BlockedCode` は追加せず、呼び出し元 `_run_c3a`/`_run_c3b` が
+    ledger `f0_selection_frozen`/`selection_frozen` を書く前に例外で
+    中断させる）。pin が宣言されていない場合のみ、従来どおり `None` を返す
+    （呼び出し側は `truth_floor_for_candidate()` に `None` を渡し、legacy の
+    `zero_guard` 挙動を保つ）。
 
     本関数は `holdout_stage.load_e_use_rows()` が内部で使う純粋な
     読み込み/検証/パース関数（`_read_and_verify_e_use_table_bytes`/
     `_parse_e_use_table_bytes`。ledger 書き込みを一切行わない）を直接呼ぶ
     ことで、パースロジックを複製せずに ledger 書き込みなしの
-    best-effort 版を実現する。読み込み・検証・パースのいずれかが失敗すれば
-    `None`（呼び出し側は `truth_floor_for_candidate()` に `None` を渡し、
-    従来の `zero_guard` 挙動を保つ）。"""
+    best-effort 版を実現する。"""
+    frozen_inputs = campaign.manifest.get("frozen_inputs")
+    pin = frozen_inputs.get("e_use_table_sha256") if isinstance(frozen_inputs, Mapping) else None
+    pin_declared = isinstance(pin, str) and bool(pin)
     try:
         path, data = holdout_stage._read_and_verify_e_use_table_bytes(campaign)
         rows = holdout_stage._parse_e_use_table_bytes(path, data)
     except holdout_stage.StaleEUseTableError:
+        if pin_declared:
+            raise
         return None
     return tuple(rows)
 

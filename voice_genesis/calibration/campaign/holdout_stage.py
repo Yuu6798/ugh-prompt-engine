@@ -50,8 +50,9 @@ from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.campaign.time_budget import SliceStatus, TimeBudget
 from voice_genesis.calibration.candidates.registry import Candidate, candidate_by_id
 from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
-from voice_genesis.calibration.e_use_table import row_from_dict
+from voice_genesis.calibration.e_use_table import finite_positive_or_none, row_from_dict
 from voice_genesis.calibration.e_use_table import find_row as find_e_use_row
+from voice_genesis.calibration.e_use_table import StaleEUseTableError as _StaleEUseTableError
 from voice_genesis.calibration.fixtures import controls as fixture_controls
 from voice_genesis.calibration.fixtures.matrix import FixtureRow, MatrixRow
 from voice_genesis.calibration.gates import (
@@ -248,15 +249,16 @@ def absolute_e_use_value(row: EUseEvidenceRow, truth: float) -> float | None:
     `E_use[i]` を展開する（`gates.py` の `EUseEvidenceRow` docstring:
     relative 行は `e_use_value * declared_truth` の展開を呼び出し側の責務と
     する）。`row.e_use_value is None`（`UNJUSTIFIED`）、または展開結果が
-    有限正でなければ `None`（§10.2 gate3 前提と同じ `> 0` 基準）。符号付き
-    construct（例: TILT の負の slope）でも E_use は正の許容誤差量である
-    ため `abs(truth)` を使う。"""
+    有限正でなければ `None`（§10.2 gate3 前提と同じ `> 0` 基準——判定自体は
+    `e_use_table.finite_positive_or_none()` の単一 source を呼ぶ。PR #354
+    round 1 finding #2: この判定ロジックを `selection_stage.
+    truth_floor_for_candidate()` と複製しない）。符号付き construct（例:
+    TILT の負の slope）でも E_use は正の許容誤差量であるため `abs(truth)`
+    を使う。"""
     if row.e_use_value is None:
         return None
     value = row.e_use_value * abs(truth) if row.e_use_mode == "relative" else row.e_use_value
-    if not (math.isfinite(value) and value > 0.0):
-        return None
-    return float(value)
+    return finite_positive_or_none(value)
 
 
 class GateInputError(RuntimeError):
@@ -1471,11 +1473,15 @@ def evaluate_m6_identity(
 # ---------------------------------------------------------------------------
 
 
-class StaleEUseTableError(RuntimeError):
-    """round 20 採用 (2): `load_e_use_rows()` が読んだ `e_use_table.json` の
-    バイト列が、凍結 manifest の `frozen_inputs.e_use_table_sha256` pin と
-    一致しない、または pin/ファイル自体が欠落している場合の fail-closed
-    error（凍結後の改竄・欠落・pin 未設定のいずれも同じ経路で検出する）。"""
+#: round 20 採用 (2): `load_e_use_rows()` が読んだ `e_use_table.json` の
+#: バイト列が、凍結 manifest の `frozen_inputs.e_use_table_sha256` pin と
+#: 一致しない、または pin/ファイル自体が欠落している場合の fail-closed
+#: error（凍結後の改竄・欠落・pin 未設定のいずれも同じ経路で検出する）。
+#: PR #354 round 1 採用 (P1/P2): クラス定義自体は `e_use_table.py`
+#: （`campaign.selection_stage` も import できる循環フリーの場所）へ移動し、
+#: ここは後方互換のための再エクスポート（`holdout_stage.StaleEUseTableError`
+#: は従来どおり有効・同一クラス）。
+StaleEUseTableError = _StaleEUseTableError
 
 
 def _read_and_verify_e_use_table_bytes(campaign: FrozenCampaign) -> tuple[Path, bytes]:

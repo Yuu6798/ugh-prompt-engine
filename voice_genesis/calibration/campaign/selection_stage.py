@@ -57,6 +57,7 @@ from voice_genesis.calibration.campaign.state import FrozenCampaign
 from voice_genesis.calibration.candidates import adapter
 from voice_genesis.calibration.candidates.registry import Candidate, active_candidates
 from voice_genesis.calibration.canonical import manifest_sha
+from voice_genesis.calibration.e_use_table import StaleEUseTableError, finite_positive_or_none
 from voice_genesis.calibration.e_use_table import find_row as find_e_use_row
 from voice_genesis.calibration.fixtures import controls as fixture_controls
 from voice_genesis.calibration.fixtures.matrix import FixtureRow
@@ -899,7 +900,22 @@ def truth_floor_for_candidate(
       であり、instance ごとの truth に対する絶対展開が別途必要——本関数は
       展開しない。§前提 7 は relative mode を変更しない）。
     - `evidence_class == UNJUSTIFIED`（`e_use_value` が `None`）。
-    - `e_use_value` が非有限。
+
+    PR #354 round 1 finding #2 (P2, ADOPT): 一致行が `e_use_mode ==
+    "absolute"` かつ `e_use_value is not None`（=値が宣言されている）のに
+    その値が有限正でない（0/負/非有限）場合はもはや `None` を返さない——
+    `zero_guard` へ静かにフォールバックすると `RE[i] = AE[i]/max(|truth[i]|,
+    0)` の `ZeroDivisionError` を招く縮退経路だった（round 1 finding #2 実測:
+    `ae / max(0, 0)`）。「宣言されたが使えない E_use」は finding #1 の
+    stale/mutated pin と同じ「broken pin」事由であるため、判定は
+    `e_use_table.finite_positive_or_none()`（`holdout_stage.
+    absolute_e_use_value()` と共有する単一 source）に一本化した上で、
+    失敗時は `StaleEUseTableError` を送出して fail-closed する（呼び出し元
+    ——`campaign.cli` の C3a/C3b 各 call site——はこれを finding #1 と同じ
+    「pin が壊れている」経路として伝播させる。新規 `vocab.BlockedCode` は
+    追加しない）。「値が一致行に存在しない/relative/UNJUSTIFIED」は本関数の
+    対象外（宣言自体が無い legitimate ケースであり、値の妥当性検査より前で
+    `None` を返す——挙動不変）。
 
     正本はここ 1 箇所——`build_candidate_criteria()` はこの関数の戻り値を
     そのまま `observables.error_terms()` へ渡すのみで、E_use 行の探索・
@@ -911,9 +927,17 @@ def truth_floor_for_candidate(
     )
     if row is None or row.e_use_mode != "absolute" or row.e_use_value is None:
         return None
-    if not math.isfinite(row.e_use_value):
-        return None
-    return float(row.e_use_value)
+    floor = finite_positive_or_none(row.e_use_value)
+    if floor is None:
+        raise StaleEUseTableError(
+            "truth_floor_for_candidate: "
+            f"candidate={candidate.candidate_id!r} matched an absolute E_use row "
+            f"(construct={row.construct_id!r}, unit={row.unit!r}, domain={row.domain!r}) whose "
+            f"e_use_value={row.e_use_value!r} is not finite-positive — a declared but unusable "
+            "E_use is a broken pin (same fail-closed treatment as a stale/mutated "
+            "e_use_table.json; see finding #1)"
+        )
+    return floor
 
 
 def build_candidate_criteria(
