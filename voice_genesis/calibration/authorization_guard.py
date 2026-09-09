@@ -205,6 +205,22 @@ def validate_campaign(
         return GuardResult(campaign_id, True, "NO_C0_MANIFEST", ())
 
     quarantine = campaign_dir / QUARANTINE_FILENAME
+    base_quarantine = (
+        base_campaign_dir / QUARANTINE_FILENAME
+        if base_campaign_dir is not None
+        else None
+    )
+    if (
+        base_quarantine is not None
+        and base_quarantine.is_file()
+        and not quarantine.is_file()
+    ):
+        return GuardResult(
+            campaign_id,
+            False,
+            "QUARANTINE",
+            ("an existing quarantine marker must be preserved",),
+        )
     if quarantine.is_file():
         quarantine_result = _validate_quarantine(campaign_id, quarantine)
         if not quarantine_result.ok or base_campaign_dir is None:
