@@ -2,7 +2,7 @@
 
 ## Phase
 
-**2026-09-10 RUN10-CAL = CLOSED_FAILED（User 裁定・canonical）:** RUN10-CAL（VG-METER-CAL-DEBT、設計 v1.0〜v1.4、campaign 862dec28 / 410b25f2 / a4ed65c1 / 2dde4014）を**失敗タスクとして終端**する。`debt_discharged=false` のまま確定。理由（User 逐語）=「測定、検証系をオーバーエンジニアリングしすぎたことで生成の進捗が得られずスタックした」。今後の開発指針（User 逐語）= (1)「生成→実測→検証→修正→再生成 のサイクルを厳守すること」(2)「レビューによる機能追加は時系列を先立って行わない。」(3)「もし行う場合は 1 の追加機能で 3 のメリットが得られる改善レビューに限定する。」(4)「実コード破壊、クリティカルバグ、将来汚染も同じ時系列の中で判断する 3 原則で、生成物の開発中に 3 原則にあたるからと測定器や検証器の改善や機能追加を行わないこと。」波及 = RUN11 入場は不許可のまま / RUN10 Phase B gate は不通過のまま / meter 依存の過去主張は未校正扱い。再開・再 freeze・campaign 実行はしない。`voice_genesis/calibration/` のコード・campaigns・設計 v1.x は証拠保全のため変更しない。Meter Bench（PR #358 / ブランチ `claude/voicegenesis-meter-bench-v0-v1ulhr`）は同指針により中断・close 済み（ブランチは残置）。再入条件 = 計器が生成→実測のサイクル内で動くと示されたとき、新 run ID で。詳細 = `docs/run10_cal_closeout.md`。
+**2026-09-10 RUN10-CAL = CLOSED_FAILED（User 裁定・canonical）:** RUN10-CAL（VG-METER-CAL-DEBT、設計 v1.0〜v1.4、凍結済み campaign 6 件 = 完走 2 / 部分実行 4・計算 209,853.6 s ≈ 58.3 時間。内訳は `docs/run10_cal_closeout.md` が正本）を**失敗タスクとして終端**する。`debt_discharged=false` のまま確定。理由（User 逐語）=「測定、検証系をオーバーエンジニアリングしすぎたことで生成の進捗が得られずスタックした」。今後の開発指針（User 逐語）= (1)「生成→実測→検証→修正→再生成 のサイクルを厳守すること」(2)「レビューによる機能追加は時系列を先立って行わない。」(3)「もし行う場合は 1 の追加機能で 3 のメリットが得られる改善レビューに限定する。」(4)「実コード破壊、クリティカルバグ、将来汚染も同じ時系列の中で判断する 3 原則で、生成物の開発中に 3 原則にあたるからと測定器や検証器の改善や機能追加を行わないこと。」波及 = RUN11 入場は不許可のまま / RUN10 Phase B gate は不通過のまま / meter 依存の過去主張は未校正扱い。再開・再 freeze・campaign 実行はしない。`voice_genesis/calibration/` のコード・campaigns・設計 v1.x は証拠保全のため変更しない。Meter Bench（PR #358 / ブランチ `claude/voicegenesis-meter-bench-v0-v1ulhr`）は同指針により中断・close 済み（ブランチは残置）。再入条件 = 計器が生成→実測のサイクル内で動くと示されたとき、新 run ID で。詳細 = `docs/run10_cal_closeout.md`。
 
 ## Next-Issue Queue
 
