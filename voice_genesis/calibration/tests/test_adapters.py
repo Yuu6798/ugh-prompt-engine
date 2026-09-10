@@ -118,6 +118,54 @@ def test_tilt_theilsen_recovers_constructed_slope() -> None:
     assert out.values["tilt_db_per_oct"] == pytest.approx(-12.0, abs=0.5)
 
 
+@pytest.mark.parametrize("f0_error_pct", [0.0, 1.0, -1.0, 2.0, -2.0])
+def test_tilt_peak_survives_an_f0_error_that_breaks_the_fixed_bin_variant(
+    f0_error_pct: float,
+) -> None:
+    """リセット設計 v0 §2: 固定 bin 読みは f0 誤差を k 倍に増幅するが、
+    ピーク探索版は同じ誤差でも slope を取り戻す。
+
+    `harmonic_amplitudes_db()`（既存・不変）と `harmonic_amplitudes_db_peak()`
+    （追加）を同一信号・同一パラメータで比較する。
+    """
+    f0 = 180.0
+    sig = _harmonics_with_tilt(f0, SR, 0.5, slope_db_per_oct=-12.0, k_max=8)
+    measured_f0 = f0 * (1.0 + f0_error_pct / 100.0)
+    params = {"f0_hz": measured_f0, "k": 8, "window": "hann"}
+
+    peak = tilt_harmonic.measure_ols_peak(sig, SR, params)
+    assert peak.missing_reason is None
+    assert peak.values["tilt_db_per_oct"] == pytest.approx(-12.0, abs=1.0)
+
+    fixed = tilt_harmonic.measure_ols(sig, SR, params)
+    if f0_error_pct == 0.0:
+        assert fixed.values["tilt_db_per_oct"] == pytest.approx(-12.0, abs=1.0)
+    else:
+        assert abs(fixed.values["tilt_db_per_oct"] + 12.0) > 1.0, (
+            "f0 誤差ありで固定 bin 版が許容内に収まるなら、この回帰テストは "
+            "ピーク探索の効き目を測っていない"
+        )
+
+
+def test_tilt_peak_leaves_the_fixed_bin_helper_untouched() -> None:
+    """既存 API は不変（歴史 campaign が実装を pin している）。"""
+    f0 = 180.0
+    sig = _harmonics_with_tilt(f0, SR, 0.5, slope_db_per_oct=-6.0, k_max=8)
+    exact = tilt_harmonic.harmonic_amplitudes_db(sig, SR, f0, 8, "hann")
+    peak = tilt_harmonic.harmonic_amplitudes_db_peak(sig, SR, f0, 8, "hann")
+    assert all(a is not None for a in exact) and all(a is not None for a in peak)
+    # 誤差ゼロなら両者はほぼ一致する（ピーク探索は同じ bin に着地する）
+    assert exact == pytest.approx(peak, abs=0.5)
+
+
+def test_tilt_peak_search_radius_stays_inside_the_harmonic_spacing() -> None:
+    """`PEAK_SEARCH_TOL * k < 0.5`: 探索半径が倍音間隔の半分を超えると隣接
+    倍音を拾いうる。registry の最大 K に対して余裕があることを固定する。"""
+    from voice_genesis.calibration.candidates.registry import M2T_K
+
+    assert tilt_harmonic.PEAK_SEARCH_TOL * max(M2T_K) < 0.5
+
+
 def test_tilt_missing_when_fewer_than_k_harmonics_available() -> None:
     """K 本未満の倍音しか取れない（Nyquist を超える）場合は縮退せず missing。"""
     f0 = 9000.0  # k=3 で Nyquist(11025Hz) 超過 → K=8 は満たせない

@@ -29,14 +29,15 @@ preregistration）: **M2_SPECTRAL_TILT / M2_APERIODICITY / M3_FORMANTS**。
 
 ## いま動く計器
 
-**0 本**。現況表は
+**1 本 / claim-critical 3 本**。現況表は
 [`voice_genesis/meter_bench/results/`](../meter_bench/results/)（meter ごと
 1 ファイル・最新のみ commit）が唯一の正本で、本節はその転記にすぎない。
 
 | meter | Bench | 根拠 |
 |---|---|---|
-| `M2_SPECTRAL_TILT` | **FAIL** | 13 候補すべて不合格。f0 誤差 0 %の列だけが通り、±1〜3 % で 5〜27 dB/oct 外す（`results/M2_SPECTRAL_TILT.json`） |
-| その他 6 meter | 未計測 | case 未実装（P3/P4） |
+| `M2_SPECTRAL_TILT` | **PASS** | ピーク探索版 12 候補のうち 10 が 86 case 全通過（worst 0.32〜0.86 dB/oct）。凍結 13 候補は全滅のまま（`results/M2_SPECTRAL_TILT.json`） |
+| `M2_APERIODICITY` / `M3_FORMANTS` | 未計測 | case 未実装（P3/P4）。claim-critical のため残 2 本 |
+| その他 4 meter | 未計測 | case 未実装（P3/P4） |
 
 **Bench の PASS は校正証拠ではない**（`claimable` は定数 false）。PASS が意味
 するのは「確定 campaign に計算資源を使ってよい」の一点のみ。校正の主張は

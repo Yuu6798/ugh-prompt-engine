@@ -1,7 +1,14 @@
-"""candidates/registry.py の 99 候補宣言の検証（設計正本 §8, memo §2.6）。"""
+"""candidates/registry.py の候補宣言の検証（設計正本 §8, memo §2.6）。
+
+凍結空間は 99 候補（設計正本 §8）。RUN10-CAL リセット設計 v0 §2 が TILT の
+ピーク探索版 12 候補を **追加のみ** で足したため現在の総数は 111 で、
+凍結 99 の宣言（id・parameters・implementation_ref・tier・ceiling）は不変。
+"""
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import Counter
 
 import pytest
@@ -19,8 +26,50 @@ _CEILING_RANK = {
 }
 
 
-def test_total_count_is_99() -> None:
-    assert len(reg.ALL_CANDIDATES) == 99
+FROZEN_SPACE_COUNT = 99
+"""設計正本 §8 が凍結した候補数。以後の追加はここへ加算して数える。"""
+
+RESET_V0_PEAK_IDS = frozenset(
+    f"M2T-PEAK-{estimator}-K{k}-WIN{window}"
+    for estimator in ("OLS", "THEILSEN")
+    for k in (4, 6, 8)
+    for window in ("HANN", "BLACKMAN_HARRIS")
+)
+"""リセット設計 v0 §2 の追加分（12 件）。"""
+
+TOTAL_COUNT = FROZEN_SPACE_COUNT + len(RESET_V0_PEAK_IDS)
+
+FROZEN_SPACE_ID_SHA256 = "ebcd0cc3c67886f9232af1d75fecb34c1422e1f7ab655e0a69f069b9ae7dd34a"
+"""凍結 99 candidate_id を昇順 JSON 配列（区切り最小）にした sha256。追加分を
+除いた集合がこの pin と一致することで、追加が既存 id を書き換えていない
+（rename / 削除がない）ことを機械的に固定する。"""
+
+_FROZEN_99_IDS = {c.candidate_id for c in reg.ALL_CANDIDATES} - RESET_V0_PEAK_IDS
+
+
+def test_frozen_99_ids_match_the_committed_pin() -> None:
+    payload = json.dumps(sorted(_FROZEN_99_IDS), separators=(",", ":")).encode("utf-8")
+    assert len(_FROZEN_99_IDS) == FROZEN_SPACE_COUNT
+    assert hashlib.sha256(payload).hexdigest() == FROZEN_SPACE_ID_SHA256
+
+
+def test_total_count_is_the_frozen_space_plus_declared_additions() -> None:
+    assert len(reg.ALL_CANDIDATES) == TOTAL_COUNT
+    added = {c.candidate_id for c in reg.ALL_CANDIDATES} - _FROZEN_99_IDS
+    assert added == set(RESET_V0_PEAK_IDS)
+
+
+def test_frozen_99_candidates_are_unchanged_by_additions() -> None:
+    """追加は既存候補の宣言を一切動かさない（歴史 campaign が pin している）。"""
+    frozen = {c.candidate_id: c for c in reg.ALL_CANDIDATES if c.candidate_id in _FROZEN_99_IDS}
+    assert len(frozen) == FROZEN_SPACE_COUNT
+    for candidate_id, candidate in frozen.items():
+        assert not candidate.candidate_id.startswith("M2T-PEAK-"), candidate_id
+    peak = [c for c in reg.ALL_CANDIDATES if c.candidate_id in RESET_V0_PEAK_IDS]
+    assert all(
+        c.implementation_ref.endswith(("measure_ols_peak", "measure_theilsen_peak")) for c in peak
+    )
+    assert all(c.complexity_rank >= 13 for c in peak), "追加分は既存 rank の後ろへ連番で並ぶ"
 
 
 @pytest.mark.parametrize(
@@ -28,7 +77,7 @@ def test_total_count_is_99() -> None:
     [
         (vocab.MeterId.F0_CONTROL, 5),
         (vocab.MeterId.M3_FORMANTS, 43),
-        (vocab.MeterId.M2_SPECTRAL_TILT, 13),
+        (vocab.MeterId.M2_SPECTRAL_TILT, 13 + len(RESET_V0_PEAK_IDS)),
         (vocab.MeterId.M2_APERIODICITY, 24),
         (vocab.MeterId.M4_RESONANCE, 5),
         (vocab.MeterId.M5_TRANSITION, 7),
@@ -41,7 +90,7 @@ def test_per_meter_counts(meter: vocab.MeterId, expected: int) -> None:
 
 def test_meter_counts_cover_all_candidates_exactly() -> None:
     counts = Counter(c.meter for c in reg.ALL_CANDIDATES)
-    assert sum(counts.values()) == 99
+    assert sum(counts.values()) == TOTAL_COUNT
     assert set(counts.keys()) == set(vocab.MeterId)
 
 
@@ -109,13 +158,19 @@ _V1_3_DECLARED_PREDICATE_IDS = frozenset(
 
 
 def test_detection_predicate_declared_exactly_by_the_tilt_harmonic_twelve() -> None:
-    """v1.3 §X1 preregistration: TILT harmonic 12 候補（OLS 6 + THEILSEN 6）
-    だけが `hnr_acf_db >= -5.0` を宣言し、他の 87 候補（`M2T-B0-CURRENT-HYBRID`
-    = ceiling NONE を含む）は未宣言のまま。"""
+    """v1.3 §X1 preregistration: 凍結 99 候補の中では TILT harmonic 12 候補
+    （OLS 6 + THEILSEN 6）だけが `hnr_acf_db >= -5.0` を宣言し、他の 87 候補
+    （`M2T-B0-CURRENT-HYBRID` = ceiling NONE を含む）は未宣言のまま——この
+    preregistration は追加後も凍結空間について逐語で成り立つ。
+
+    リセット設計 v0 §2 のピーク探索 12 候補も同じ predicate を引き継ぐ
+    （負例で非発火する条件は倍音振幅の取得方式に依存しないため）。
+    """
     declared = {c.candidate_id for c in reg.ALL_CANDIDATES if c.detection_predicate is not None}
-    assert declared == set(_V1_3_DECLARED_PREDICATE_IDS)
-    assert len(declared) == 12
+    assert declared & _FROZEN_99_IDS == set(_V1_3_DECLARED_PREDICATE_IDS)
+    assert len(declared & _FROZEN_99_IDS) == 12
     assert "M2T-B0-CURRENT-HYBRID" not in declared
+    assert declared == set(_V1_3_DECLARED_PREDICATE_IDS) | set(RESET_V0_PEAK_IDS)
 
 
 def test_declared_detection_predicate_field_and_threshold() -> None:

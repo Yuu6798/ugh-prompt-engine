@@ -2,7 +2,7 @@
 
 ## Phase
 
-**2026-09-10 RUN10-CAL リセット（canonical）:** 計器（meter）が正解付き合成音に対して正しい値を返せていないため、判定装置である campaign 基盤（Tier F）を凍結し、計器を直す層 `voice_genesis/meter_bench/`（Meter Bench）へ移る。進捗の単位は「Bench PASS した meter の本数」で現在 **0/3**（claim-critical = M2_SPECTRAL_TILT / M2_APERIODICITY / M3_FORMANTS）。**即時停止**: 新 campaign / 再 freeze / 設計 v1.5 以降 / D 台帳追記（D117 で凍結）/ Tier F へのコード変更 — claim-critical 3 meter が Bench PASS するまで再開しない。Bench の PASS は校正証拠ではない（`claimable: false`）＝「確定 campaign に計算資源を使ってよい」の一点のみを意味する。2026-09-09 authorization correction（campaign `RUN10-CAL-20260908-2dde4014` と PR #352 は `QUARANTINED` / `claimable=false` / `debt_discharge_eligible=false` / `run11_eligible=false`、観測は evidence-only）は引き続き有効。正本 = `voice_genesis/calibration/README.md` 冒頭 60 行 + `VOICEGENESIS_EXECUTION_BOUNDARY_CORRECTION_2026-09-09.md`。
+**2026-09-10 RUN10-CAL リセット（canonical）:** 計器（meter）が正解付き合成音に対して正しい値を返せていないため、判定装置である campaign 基盤（Tier F）を凍結し、計器を直す層 `voice_genesis/meter_bench/`（Meter Bench）へ移る。進捗の単位は「Bench PASS した meter の本数」で現在 **1/3**（M2_SPECTRAL_TILT のみ PASS。claim-critical = M2_SPECTRAL_TILT / M2_APERIODICITY / M3_FORMANTS）。**即時停止**: 新 campaign / 再 freeze / 設計 v1.5 以降 / D 台帳追記（D117 で凍結）/ Tier F へのコード変更 — claim-critical 3 meter が Bench PASS するまで再開しない。Bench の PASS は校正証拠ではない（`claimable: false`）＝「確定 campaign に計算資源を使ってよい」の一点のみを意味する。2026-09-09 authorization correction（campaign `RUN10-CAL-20260908-2dde4014` と PR #352 は `QUARANTINED` / `claimable=false` / `debt_discharge_eligible=false` / `run11_eligible=false`、観測は evidence-only）は引き続き有効。正本 = `voice_genesis/calibration/README.md` 冒頭 60 行 + `VOICEGENESIS_EXECUTION_BOUNDARY_CORRECTION_2026-09-09.md`。
 
 ## Next-Issue Queue
 

@@ -115,6 +115,85 @@ def harmonic_amplitudes_db(
     return out
 
 
+#: `harmonic_amplitudes_db_peak()` のピーク探索半径（`k*f0` に対する相対幅）。
+#: RUN10-CAL リセット設計 v0 §2 が既定値として指定する 0.03。
+#: 安全条件は `PEAK_SEARCH_TOL * k < 0.5`（半径が倍音間隔の半分未満 = 隣接倍音を
+#: 拾わない）で、`registry.M2T_K` の最大 8 に対し 0.24 < 0.5 と余裕がある。
+#: **既知の限界**: 探索半径は計器へ渡された `f0_hz` 基準で `k*f0_hz*tol` のため、
+#: f0 が真値より `p` だけ低いとき真の第 k 倍音は `k*f0_hz*p/(1-p)` 離れる——
+#: `p = tol` ちょうどで境界を僅かに超える（3% 誤差 → 3.093% の隔たり）。
+#: Meter Bench 実測でこれが顕在化するのは K8 × `err-3pct` × f0=440Hz の 4 case
+#: だけ: 半径は bin 単位へ `ceil` で切り上げるため f0=110/220Hz では窓が僅かに
+#: 足りて第 8 倍音が入る（110Hz: 必要 26.4Hz vs 半径 26.7Hz）が、440Hz では
+#: 足りない（必要 105.6Hz vs 半径 102.7Hz）。第 8 倍音 1 点を取り違えると最小
+#: 二乗がそこへ引きずられて 12〜13 dB/oct 外れる一方、中央値ベースの Theil-Sen
+#: は K8 でも許容内（worst 0.39〜0.70 dB/oct）に留まり、K4/K6 は回帰が第 8 倍音を
+#: 含まないため OLS も許容内。**ここは緩めない** — 半径を広げれば通る候補は
+#: 増えるが、それは「宣言 f0 不確かさ ≥ 探索半径」という設計条件を先に立てる
+#: べき論点であり、次の memo の仕事。
+PEAK_SEARCH_TOL: float = 0.03
+
+
+def harmonic_amplitudes_db_peak(
+    signal: np.ndarray,
+    sr: int,
+    f0_hz: float,
+    k_max: int,
+    window_name: str,
+    tol: float = PEAK_SEARCH_TOL,
+) -> list[float | None]:
+    """`harmonic_amplitudes_db()` のピーク探索版（RUN10-CAL リセット設計 v0 §2）。
+
+    既存の `harmonic_amplitudes_db()` は `k*f0` の bin を**固定で読む**ため、
+    渡された `f0_hz` の誤差が次数 `k` 倍に増幅されて振幅を取り違える
+    （Meter Bench 実測: f0 誤差 ±1〜3% で slope を 5〜27 dB/oct 外す）。本関数は
+    `k*f0` の周囲 `±ceil(k*f0*tol/bin_hz)` bin を探索して局所ピークを取り、
+    その頂点で放物線補間する。
+
+    リセット設計 v0 §2 の式との差分は 1 点のみ: 設計は `_parabolic_interp_db
+    (log_mag_db, idx)`（整数 bin = 補間なし）と書くが、それでは窓のスキャロップ
+    損失（ピークが bin 間に落ちたときの振幅の目減り）が補正されず、実測の worst
+    が 1.58〜14.36 dB/oct で許容 1.0 を満たさない。3 点放物線の**頂点位置** `d`
+    を求めてから `idx + d` で評価すると worst 0.40〜0.86（K4/K6）へ下がる。
+
+    `harmonic_amplitudes_db()` は一切変更しない（歴史 campaign が registry sha と
+    実装を pin しているため、変更ではなく追加）。取得できない倍音は None。
+    """
+    if not np.isfinite(f0_hz) or f0_hz <= 0:
+        return [None] * k_max
+    analysis = _analysis_window(np.asarray(signal, dtype=float))
+    window = _WINDOWS[window_name](len(analysis))
+    spec = np.abs(np.fft.rfft(analysis * window))
+    log_mag_db = 20.0 * np.log10(spec + 1e-12)
+    freqs = np.fft.rfftfreq(len(analysis), d=1.0 / sr)
+    bin_hz = freqs[1] - freqs[0] if len(freqs) > 1 else 1.0
+
+    out: list[float | None] = []
+    for k in range(1, k_max + 1):
+        target_hz = k * f0_hz
+        if target_hz >= sr / 2.0 * 0.98:
+            out.append(None)
+            continue
+        center = int(round(target_hz / bin_hz))
+        half = max(1, int(np.ceil(target_hz * tol / bin_hz)))
+        lo, hi = center - half, center + half + 1
+        if lo <= 0 or hi >= len(log_mag_db) - 1:
+            out.append(None)
+            continue
+        idx = lo + int(np.argmax(log_mag_db[lo:hi]))
+        out.append(_parabolic_interp_db(log_mag_db, idx + _vertex_offset(log_mag_db, idx)))
+    return out
+
+
+def _vertex_offset(log_mag_db: np.ndarray, idx: int) -> float:
+    """`idx` 近傍 3 点が張る放物線の頂点の bin オフセット（[-0.5, 0.5] へクランプ）。"""
+    y0, y1, y2 = log_mag_db[idx - 1], log_mag_db[idx], log_mag_db[idx + 1]
+    denominator = y0 - 2.0 * y1 + y2
+    if denominator == 0.0:
+        return 0.0
+    return float(np.clip(0.5 * (y0 - y2) / denominator, -0.5, 0.5))
+
+
 def _regression_inputs(amplitudes_db: list[float | None]) -> tuple[np.ndarray, np.ndarray] | None:
     xs, ys = [], []
     for k, amp_db in enumerate(amplitudes_db, start=1):
@@ -138,6 +217,28 @@ def tilt_ols_db_per_oct(signal: np.ndarray, sr: int, f0_hz: float, *, k: int, wi
 def tilt_theilsen_db_per_oct(signal: np.ndarray, sr: int, f0_hz: float, *, k: int, window: str) -> float | None:
     amps = harmonic_amplitudes_db(signal, sr, f0_hz, k, window)
     inputs = _regression_inputs(amps)
+    if inputs is None:
+        return None
+    xs, ys = inputs
+    slope, _intercept, _lo, _hi = theilslopes(ys, xs)
+    return float(slope)
+
+
+def tilt_ols_peak_db_per_oct(
+    signal: np.ndarray, sr: int, f0_hz: float, *, k: int, window: str
+) -> float | None:
+    inputs = _regression_inputs(harmonic_amplitudes_db_peak(signal, sr, f0_hz, k, window))
+    if inputs is None:
+        return None
+    xs, ys = inputs
+    slope, _intercept = np.polyfit(xs, ys, 1)
+    return float(slope)
+
+
+def tilt_theilsen_peak_db_per_oct(
+    signal: np.ndarray, sr: int, f0_hz: float, *, k: int, window: str
+) -> float | None:
+    inputs = _regression_inputs(harmonic_amplitudes_db_peak(signal, sr, f0_hz, k, window))
     if inputs is None:
         return None
     xs, ys = inputs
@@ -169,3 +270,13 @@ def measure_ols(signal: np.ndarray, sr: int, params: Mapping[str, object]) -> Me
 
 def measure_theilsen(signal: np.ndarray, sr: int, params: Mapping[str, object]) -> MeterOutput:
     return _measure(signal, sr, params, tilt_theilsen_db_per_oct)
+
+
+def measure_ols_peak(signal: np.ndarray, sr: int, params: Mapping[str, object]) -> MeterOutput:
+    return _measure(signal, sr, params, tilt_ols_peak_db_per_oct)
+
+
+def measure_theilsen_peak(
+    signal: np.ndarray, sr: int, params: Mapping[str, object]
+) -> MeterOutput:
+    return _measure(signal, sr, params, tilt_theilsen_peak_db_per_oct)

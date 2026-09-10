@@ -1,5 +1,12 @@
-"""RUN10-CAL candidate measurement space — 99 候補の宣言的定義
+"""RUN10-CAL candidate measurement space — 候補の宣言的定義
 （設計正本 §8 + IMPLEMENTATION_MAP_v1.md §2.6 が凍結したグリッド）。
+
+凍結空間は **99 候補**。RUN10-CAL リセット設計 v0 §2 が TILT のピーク探索版
+12 候補（`M2T-PEAK-*`）を **追加のみ** で足したため `ALL_CANDIDATES` の現在の
+総数は 111 で、凍結 99 の宣言（candidate_id / parameters / implementation_ref /
+tier / ceiling）は 1 件も動いていない（`tests/test_registry.py` の
+`FROZEN_SPACE_ID_SHA256` pin が rename / 削除を機械的に拒否する）。既存候補の
+改変ではなく追加とするのは、歴史 campaign が registry sha を pin しているため。
 
 本モジュールはデータ定義のみを持つ（実測・selection・freeze は一切行わない
 = 設計正本 §0 授権境界）。`ALL_CANDIDATES` が唯一の正本リストであり、
@@ -395,6 +402,37 @@ def _build_m2_tilt() -> list[Candidate]:
             )
         )
         rank += 1
+    # RUN10-CAL リセット設計 v0 §2: 倍音振幅取得をピーク探索版
+    # （`tilt_harmonic.harmonic_amplitudes_db_peak`）へ差し替えた 12 候補を
+    # **追加**する。既存 12 候補の `implementation_ref` / parameters は不変
+    # （歴史 campaign が registry sha を pin しているため、変更ではなく追加）。
+    # grid は既存 harmonic 系と同一（K × window × {OLS, THEILSEN}）で、選抜の
+    # 裁量を残さない。`detection_predicate` は既存 harmonic 系と同じ
+    # `hnr_acf_db >= -5.0`（v1.3 §X1 の宣言そのものを引き継ぐ — 負例で
+    # 非発火する条件は倍音振幅の取得方式に依存しない）。
+    for estimator, func in (("OLS", "measure_ols_peak"), ("THEILSEN", "measure_theilsen_peak")):
+        for k, window in itertools.product(M2T_K, M2T_WINDOW):
+            out.append(
+                Candidate(
+                    candidate_id=f"M2T-PEAK-{estimator}-K{k}-WIN{window.upper()}",
+                    meter=vocab.MeterId.M2_SPECTRAL_TILT,
+                    construct="source_spectral_tilt",
+                    unit="db_per_oct",
+                    algorithm_family=f"HARMONIC_PEAK_{estimator}",
+                    parameters=_params(k=k, window=window),
+                    domain=(
+                        "k*f0 近傍のピーク探索 + 頂点放物線補間 → 20*log10(A_k) vs "
+                        "log2(k) 回帰。H1-H2 フォールバックなし。"
+                    ),
+                    missing_rule=f"K={k} 本未満の倍音取得 → 縮退せず OUTPUT_MISSING（設計正本 §8）。",
+                    independence_tier=vocab.IndependenceTier.INDEPENDENT_ANALYTIC,
+                    claim_ceiling=vocab.ClaimCeiling.ABSOLUTE,
+                    complexity_rank=rank,
+                    implementation_ref=f"candidates.impl.tilt_harmonic:{func}",
+                    detection_predicate=_M2T_HARMONIC_DETECTION_PREDICATE,
+                )
+            )
+            rank += 1
     return out
 
 
