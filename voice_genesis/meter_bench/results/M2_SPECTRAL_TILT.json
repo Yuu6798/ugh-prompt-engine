@@ -1,9 +1,9 @@
 {
  "schema": "meter-bench/0",
  "meter": "M2_SPECTRAL_TILT",
- "git_sha": "7022ef190308017024ee4cedd4d42ffc3e725557-dirty",
+ "git_sha": "f9f3f4543186458e047b5981afa4fd8202c7ecc7",
  "claimable": false,
- "generated_at": "2026-09-10T02:57:10+00:00",
+ "generated_at": "2026-09-10T02:59:44+00:00",
  "criteria": {
   "check": "abs_error",
   "tol": 1.0,
