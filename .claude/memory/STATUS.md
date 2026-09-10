@@ -43,6 +43,7 @@
 ## Recently Merged
 
 | PR | Title | Date | Phase |
+| #359 | **RUN10-CAL closeout（CLOSED_FAILED）+ 開発サイクル原則を CLAUDE.md へ収載**（docs のみ・コード無変更）。`docs/run10_cal_closeout.md` = 終端理由（User 逐語）/ 凍結済み campaign 6 件の全数会計（完走 2・うち 1 隔離 / 部分実行 4・計 209,853.6 s ≈ 58.3 時間）/ meter 別判定 / 波及 / 再入条件。CLAUDE.md に「開発サイクルと機能追加の原則」節（User 逐語 4 項）。Codex 4 巡（採用 5 = 全て自分の記述の事実誤り / 見送り 1 = AGENTS.md 改訂、境界宣言つき未 resolve）。CI 17/17 | 2026-09-10 | RUN10-CAL CLOSED_FAILED |
 | #354 | **RUN10-CAL 設計 v1.4 — 棄権意味論の統一 + DIRECTIONAL 極性の preregistration + gate_detail 永続化 + 正規化 MAE floor**（2026-09-09 execution-boundary correction 適合: 新設 §Y-0 が根拠を unarmed census / fixture-only probe / コード読解 / 合成 ledger テスト / 非隔離 862dec28 の 5 種に限定し、隔離 campaign の観測は §Y1.1b に evidence-only として分離保存）。台帳 D113–D117、Codex 7 巡・未 resolve 0。**負債は返済していない**（canonical terminal status = 862dec28、`debt_discharged=false`） | 2026-09-09 | RUN10-CAL v1.4 |
 | #353 | **VoiceGenesis execution-boundary correction（User 作成・マージ）**: campaign `RUN10-CAL-20260908-2dde4014` を `QUARANTINED` / `claimable=false` / `debt_discharge_eligible=false` / `run11_eligible=false` と宣言（task-scoped authorization 未確立。**generalized delegation は authorization ではない**）。`authorization_guard.py` + CI workflow + `authorization_quarantine.json` + canonical 訂正文書を追加 | 2026-09-09 | execution boundary |
 | #352 | **RUN10-CAL v1.3 Campaign実行記録（authorization correction適用）**: `RUN10-CAL-20260908-2dde4014`は`CAMPAIGN_CLOSED`だが、task-scoped authorization未確認のため全観測をevidence-onlyへ隔離。`debt_discharged=false`、科学的主張・負債返済・Run11への利用不可 | 2026-09-09 | RUN10-CAL v1.3 / QUARANTINED |
