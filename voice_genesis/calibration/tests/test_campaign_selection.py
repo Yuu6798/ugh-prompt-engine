@@ -1969,7 +1969,12 @@ def test_candidate_space_sha_changes_because_v1_3_declares_predicates() -> None:
     from voice_genesis.calibration.candidates.registry import ALL_CANDIDATES
 
     declared = [c for c in ALL_CANDIDATES if c.detection_predicate is not None]
-    assert len(declared) == 12, [c.candidate_id for c in declared]
+    frozen_declared = [c for c in declared if "-PEAK-" not in c.candidate_id]
+    assert len(frozen_declared) == 12, [c.candidate_id for c in frozen_declared]
+    # リセット設計 v0 §2 のピーク探索版 12 候補も同じ predicate を引き継ぐ
+    # （負例で非発火する条件は倍音振幅の取得方式に依存しない）。宣言の総数は
+    # 24 だが、v1.3 §X1 の preregistration は凍結 99 について逐語で成り立つ。
+    assert len(declared) == 24, [c.candidate_id for c in declared]
 
     stripped_pool = tuple(
         dataclasses.replace(c, detection_predicate=None) for c in ALL_CANDIDATES
