@@ -96,6 +96,10 @@ CLAUDE.md の索引表は 400 行キャップのためここから辿る。
   VoiceGenesis 経路で輸送できるかの独立 PoC。段 S0–S5 の失敗局在化、
   Trait Sidecar、候補 D/E/A の first-pass 選択、sentinel 非回帰、
   calibration/holdout 分離。**AF-T0 が PASS しても AF-P0 の判定は変わらない**
+- [RUN10-CAL closeout](run10_cal_closeout.md) — RUN10-CAL / VG-METER-CAL-DEBT の失敗終端
+  （2026-09-10 User 裁定、**CLOSED_FAILED**）。理由 = 測定・検証系の過剰設計で生成が
+  進まずスタック。`debt_discharged=false` 確定・claim-critical 3 meter は未校正・
+  RUN11 入場は不許可のまま。meter 別判定・波及・再入条件・今後の開発指針
 
 ## Orchestration
 
