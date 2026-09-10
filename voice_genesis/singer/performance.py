@@ -142,6 +142,14 @@ def build_amplitude_envelope(segments: List[TimelineSegment], total_samples: int
             fade = np.linspace(1.0, 0.55, decay_len)
             amp[last_seg.end_sample - decay_len:last_seg.end_sample] *= fade
 
+        # The phrase is followed by either a breath interval or the end of the
+        # rendered buffer.  Close the envelope to zero so the waveform is not
+        # cut while still active at that boundary.
+        release_len = min(attack_release, note_len // 4) if note_len >= 4 else 0
+        if release_len > 0:
+            release = np.linspace(1.0, 0.0, release_len)
+            amp[last_seg.end_sample - release_len:last_seg.end_sample] *= release
+
     # ノート attack: フレーズ先頭（ブレス直後の無音からの立ち上がり）のみ
     # フェードインする。フレーズ内部（レガート接続）のノート境界には適用
     # しない——ここでフェードを入れると legato の滑らかさを損なうため。
