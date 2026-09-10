@@ -1,5 +1,9 @@
 # voice_genesis/calibration — RUN10-CAL
 
+> **2026-09-10 リセット提案**: [`DESIGN_METER_BENCH_RESET_v0.md`](DESIGN_METER_BENCH_RESET_v0.md)
+> — 計器開発（Meter Bench）と確定 campaign を分離し、本基盤を凍結する Design Memo。
+> 採択されるまで本 README の既存記述が正。
+
 campaign_id: `RUN10-CAL`
 
 ## 目的
