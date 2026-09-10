@@ -35,7 +35,7 @@ preregistration）: **M2_SPECTRAL_TILT / M2_APERIODICITY / M3_FORMANTS**。
 
 | meter | Bench | 根拠 |
 |---|---|---|
-| `M2_SPECTRAL_TILT` | **PASS** | ピーク探索版 12 候補のうち 10 が 86 case 全通過（worst 0.32〜0.86 dB/oct）。凍結 13 候補は全滅のまま（`results/M2_SPECTRAL_TILT.json`） |
+| `M2_SPECTRAL_TILT` | **PASS** | ピーク探索版 12 候補（`M2T-HARMONIC-*-PEAK-*`）のうち 10 が 86 case 全通過（worst 0.32〜0.86 dB/oct）。凍結 13 候補は全滅のまま（`results/M2_SPECTRAL_TILT.json`） |
 | `M2_APERIODICITY` / `M3_FORMANTS` | 未計測 | case 未実装（P3/P4）。claim-critical のため残 2 本 |
 | その他 4 meter | 未計測 | case 未実装（P3/P4） |
 

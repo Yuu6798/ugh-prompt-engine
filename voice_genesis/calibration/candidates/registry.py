@@ -2,7 +2,7 @@
 （設計正本 §8 + IMPLEMENTATION_MAP_v1.md §2.6 が凍結したグリッド）。
 
 凍結空間は **99 候補**。RUN10-CAL リセット設計 v0 §2 が TILT のピーク探索版
-12 候補（`M2T-PEAK-*`）を **追加のみ** で足したため `ALL_CANDIDATES` の現在の
+12 候補（`M2T-HARMONIC-*-PEAK-*`）を **追加のみ** で足したため `ALL_CANDIDATES` の現在の
 総数は 111 で、凍結 99 の宣言（candidate_id / parameters / implementation_ref /
 tier / ceiling）は 1 件も動いていない（`tests/test_registry.py` の
 `FROZEN_SPACE_ID_SHA256` pin が rename / 削除を機械的に拒否する）。既存候補の
@@ -344,6 +344,14 @@ _M2T_HARMONIC_DETECTION_PREDICATE = DetectionPredicate(
 )
 
 
+#: harmonic 系 TILT 候補の宣言済み適用域。既存 12 候補と、リセット設計 v0 §2 が
+#: 追加するピーク探索版 12 候補が **同一の文字列** を使う（`e_use_table` は
+#: `(construct, unit, domain)` ごとに 1 行を要求するため、文字列が割れると
+#: Gate 1 承認済みの E_use 表に行を足すことになる）。値は v1.0 からの逐語。
+_M2T_OLS_DOMAIN = "20*log10(A_k) vs log2(k) 線形回帰。H1-H2 フォールバックなし。"
+_M2T_THEILSEN_DOMAIN = "Theil-Sen（中央値ベース）勾配。H1-H2 フォールバックなし。"
+
+
 def _build_m2_tilt() -> list[Candidate]:
     out: list[Candidate] = []
     rank = 0
@@ -373,7 +381,7 @@ def _build_m2_tilt() -> list[Candidate]:
                 unit="db_per_oct",
                 algorithm_family="HARMONIC_OLS",
                 parameters=_params(k=k, window=window),
-                domain="20*log10(A_k) vs log2(k) 線形回帰。H1-H2 フォールバックなし。",
+                domain=_M2T_OLS_DOMAIN,
                 missing_rule=f"K={k} 本未満の倍音取得 → 縮退せず OUTPUT_MISSING（設計正本 §8）。",
                 independence_tier=vocab.IndependenceTier.INDEPENDENT_ANALYTIC,
                 claim_ceiling=vocab.ClaimCeiling.ABSOLUTE,
@@ -392,7 +400,7 @@ def _build_m2_tilt() -> list[Candidate]:
                 unit="db_per_oct",
                 algorithm_family="HARMONIC_THEILSEN",
                 parameters=_params(k=k, window=window),
-                domain="Theil-Sen（中央値ベース）勾配。H1-H2 フォールバックなし。",
+                domain=_M2T_THEILSEN_DOMAIN,
                 missing_rule=f"K={k} 本未満の倍音取得 → 縮退せず OUTPUT_MISSING（設計正本 §8）。",
                 independence_tier=vocab.IndependenceTier.INDEPENDENT_ANALYTIC,
                 claim_ceiling=vocab.ClaimCeiling.ABSOLUTE,
@@ -407,23 +415,38 @@ def _build_m2_tilt() -> list[Candidate]:
     # **追加**する。既存 12 候補の `implementation_ref` / parameters は不変
     # （歴史 campaign が registry sha を pin しているため、変更ではなく追加）。
     # grid は既存 harmonic 系と同一（K × window × {OLS, THEILSEN}）で、選抜の
-    # 裁量を残さない。`detection_predicate` は既存 harmonic 系と同じ
-    # `hnr_acf_db >= -5.0`（v1.3 §X1 の宣言そのものを引き継ぐ — 負例で
-    # 非発火する条件は倍音振幅の取得方式に依存しない）。
-    for estimator, func in (("OLS", "measure_ols_peak"), ("THEILSEN", "measure_theilsen_peak")):
+    # 裁量を残さない。
+    #
+    # **`algorithm_family` と `domain` は兄弟候補のものを逐語で再利用する**
+    # （リセット設計 v0 §3 Tier F: campaign 基盤は変更禁止）。新しい family 名
+    # や domain 文字列を作ると、Tier F 側の 3 箇所が黙って fail-open する:
+    #   1. `measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY` に対応
+    #      エントリが無く `primary_output_value()` が常に None を返す
+    #   2. `measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES` から漏れ、F0 が
+    #      unusable な instance でも `measure()` が呼ばれてしまう
+    #      （ピーク探索版も注入 f0 を読むので、この集合に属するのが正しい）
+    #   3. `e_use_table` は `(construct, unit, domain)` ごとに 1 行を要求する
+    #      ため、新 domain は Gate 1 承認済みの E_use 表に行を足す羽目になる
+    # 取得方式の違いは `candidate_id` の `-PEAK-` トークンと
+    # `implementation_ref` が担う（family は「同じ construct を同じ単位・同じ
+    # 適用域で測る系列」であって実装の別名ではない）。`detection_predicate` も
+    # 同じ `hnr_acf_db >= -5.0`（v1.3 §X1 の宣言を引き継ぐ — 負例で非発火する
+    # 条件は倍音振幅の取得方式に依存しない）。
+    _PEAK_VARIANTS = (
+        ("OLS", "HARMONIC_OLS", "measure_ols_peak", _M2T_OLS_DOMAIN),
+        ("THEILSEN", "HARMONIC_THEILSEN", "measure_theilsen_peak", _M2T_THEILSEN_DOMAIN),
+    )
+    for estimator, family, func, domain in _PEAK_VARIANTS:
         for k, window in itertools.product(M2T_K, M2T_WINDOW):
             out.append(
                 Candidate(
-                    candidate_id=f"M2T-PEAK-{estimator}-K{k}-WIN{window.upper()}",
+                    candidate_id=f"M2T-HARMONIC-{estimator}-PEAK-K{k}-WIN{window.upper()}",
                     meter=vocab.MeterId.M2_SPECTRAL_TILT,
                     construct="source_spectral_tilt",
                     unit="db_per_oct",
-                    algorithm_family=f"HARMONIC_PEAK_{estimator}",
+                    algorithm_family=family,
                     parameters=_params(k=k, window=window),
-                    domain=(
-                        "k*f0 近傍のピーク探索 + 頂点放物線補間 → 20*log10(A_k) vs "
-                        "log2(k) 回帰。H1-H2 フォールバックなし。"
-                    ),
+                    domain=domain,
                     missing_rule=f"K={k} 本未満の倍音取得 → 縮退せず OUTPUT_MISSING（設計正本 §8）。",
                     independence_tier=vocab.IndependenceTier.INDEPENDENT_ANALYTIC,
                     claim_ceiling=vocab.ClaimCeiling.ABSOLUTE,

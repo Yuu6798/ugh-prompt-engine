@@ -30,7 +30,7 @@ FROZEN_SPACE_COUNT = 99
 """設計正本 §8 が凍結した候補数。以後の追加はここへ加算して数える。"""
 
 RESET_V0_PEAK_IDS = frozenset(
-    f"M2T-PEAK-{estimator}-K{k}-WIN{window}"
+    f"M2T-HARMONIC-{estimator}-PEAK-K{k}-WIN{window}"
     for estimator in ("OLS", "THEILSEN")
     for k in (4, 6, 8)
     for window in ("HANN", "BLACKMAN_HARRIS")
@@ -64,12 +64,52 @@ def test_frozen_99_candidates_are_unchanged_by_additions() -> None:
     frozen = {c.candidate_id: c for c in reg.ALL_CANDIDATES if c.candidate_id in _FROZEN_99_IDS}
     assert len(frozen) == FROZEN_SPACE_COUNT
     for candidate_id, candidate in frozen.items():
-        assert not candidate.candidate_id.startswith("M2T-PEAK-"), candidate_id
+        assert "-PEAK-" not in candidate_id, candidate_id
+        assert not candidate.implementation_ref.endswith("_peak"), candidate_id
     peak = [c for c in reg.ALL_CANDIDATES if c.candidate_id in RESET_V0_PEAK_IDS]
     assert all(
         c.implementation_ref.endswith(("measure_ols_peak", "measure_theilsen_peak")) for c in peak
     )
     assert all(c.complexity_rank >= 13 for c in peak), "追加分は既存 rank の後ろへ連番で並ぶ"
+
+
+def test_peak_variants_reuse_the_sibling_family_and_domain() -> None:
+    """リセット設計 v0 §3 Tier F: 新しい `algorithm_family` / `domain` を作ると
+    campaign 基盤側（primary output 表 / F0 依存集合 / E_use 表）が黙って
+    fail-open するため、ピーク探索版は兄弟候補の宣言を逐語で共有する。"""
+    from voice_genesis.calibration.campaign import measure_stage
+
+    peak = [c for c in reg.ALL_CANDIDATES if c.candidate_id in RESET_V0_PEAK_IDS]
+    fixed_bin = {
+        c.algorithm_family: c
+        for c in reg.candidates_for_meter(vocab.MeterId.M2_SPECTRAL_TILT)
+        if c.candidate_id in _FROZEN_99_IDS and c.algorithm_family.startswith("HARMONIC_")
+    }
+    assert set(fixed_bin) == {"HARMONIC_OLS", "HARMONIC_THEILSEN"}
+    for candidate in peak:
+        sibling = fixed_bin[candidate.algorithm_family]
+        assert (candidate.construct, candidate.unit, candidate.domain) == (
+            sibling.construct,
+            sibling.unit,
+            sibling.domain,
+        ), candidate.candidate_id
+        assert (
+            measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY[candidate.algorithm_family]
+            == "tilt_db_per_oct"
+        )
+        assert candidate.algorithm_family in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+
+
+def test_e_use_table_needs_no_new_row_for_the_additions() -> None:
+    """`(construct, unit, domain)` の一意タプル集合が追加前後で変わらない
+    （Gate 1 承認済み `config/e_use_table_v1.json` へ行を足さない）。"""
+    tuples = {(c.construct, c.unit, c.domain) for c in reg.ALL_CANDIDATES}
+    frozen_tuples = {
+        (c.construct, c.unit, c.domain)
+        for c in reg.ALL_CANDIDATES
+        if c.candidate_id in _FROZEN_99_IDS
+    }
+    assert tuples == frozen_tuples
 
 
 @pytest.mark.parametrize(
@@ -413,9 +453,18 @@ def test_m3_burg_grid_matches_frozen_spec() -> None:
 
 
 def test_m2t_harmonic_grids_match_frozen_spec() -> None:
-    ols_ids = [c.candidate_id for c in reg.ALL_CANDIDATES if c.algorithm_family == "HARMONIC_OLS"]
+    """凍結グリッドの検査。リセット設計 v0 §2 のピーク探索版は同じ
+    `algorithm_family` を共有する（Tier F の primary output 表 / F0 依存集合を
+    そのまま使うため）ので、凍結 99 側だけを取り出して数える。"""
+    ols_ids = [
+        c.candidate_id
+        for c in reg.ALL_CANDIDATES
+        if c.algorithm_family == "HARMONIC_OLS" and c.candidate_id in _FROZEN_99_IDS
+    ]
     ts_ids = [
-        c.candidate_id for c in reg.ALL_CANDIDATES if c.algorithm_family == "HARMONIC_THEILSEN"
+        c.candidate_id
+        for c in reg.ALL_CANDIDATES
+        if c.algorithm_family == "HARMONIC_THEILSEN" and c.candidate_id in _FROZEN_99_IDS
     ]
     assert len(ols_ids) == 6
     assert len(ts_ids) == 6
@@ -426,6 +475,9 @@ def test_m2t_harmonic_grids_match_frozen_spec() -> None:
     }
     assert set(_param_sets(ols_ids)) == expected
     assert set(_param_sets(ts_ids)) == expected
+    # 追加分も同じグリッドを張る（選抜の裁量を残さない）
+    peak_ids = [c.candidate_id for c in reg.ALL_CANDIDATES if c.candidate_id in RESET_V0_PEAK_IDS]
+    assert set(_param_sets(peak_ids)) == expected
 
 
 def test_m2a_hnr_acf_grid_matches_frozen_spec() -> None:
