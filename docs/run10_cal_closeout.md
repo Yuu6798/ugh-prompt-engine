@@ -5,18 +5,21 @@
 **対象:** RUN10-CAL / VG-METER-CAL-DEBT（設計 v1.0〜v1.4）。凍結済み campaign は
 `voice_genesis/calibration/campaigns/` にある **6 件すべて**（下表）。
 
-| campaign | 到達段階 | 終端 | `compute_used`(s) |
+| campaign | 到達した最終マイルストーン | 終端 | `compute_used`(s) |
 |---|---|---|---|
-| `20260903-9bcbbf86` | C1 fixture_valid まで | `campaign_closed` 未記帳 | 12,380.9 |
-| `20260903-591cadcd` | selection_frozen + gate3_accepted まで | 同上 | 44,437.4 |
-| `20260904-862dec28` | close まで | **`CAMPAIGN_CLOSED`** | 33,797.9 |
-| `20260905-410b25f2` | selection_frozen まで | `campaign_closed` 未記帳 | 50,678.4 |
-| `20260906-a4ed65c1` | split_frozen + render 開始のみ | 同上 | 3,412.1 |
-| `20260908-2dde4014` | close まで | **`CAMPAIGN_CLOSED`**・ただし authorization 未確立で `QUARANTINED` | 65,146.9 |
+| `20260903-9bcbbf86` | `fixture_valid`（C1） | `campaign_closed` 未記帳 | 12,380.9 |
+| `20260903-591cadcd` | `holdout_unseal` | `campaign_closed` 未記帳 | 44,437.4 |
+| `20260904-862dec28` | `campaign_closed` | **`CAMPAIGN_CLOSED`** | 33,797.9 |
+| `20260905-410b25f2` | `holdout_unseal` | `campaign_closed` 未記帳 | 50,678.4 |
+| `20260906-a4ed65c1` | `split_frozen`（render 1,049 件で停止） | `campaign_closed` 未記帳 | 3,412.1 |
+| `20260908-2dde4014` | `campaign_closed` | **`CAMPAIGN_CLOSED`**・ただし authorization 未確立で `QUARANTINED` | 65,146.9 |
 
-完走 2（うち 1 は隔離）/ 部分実行 4。合計 **209,853.6 s ≈ 58.3 時間**。各値は
-`campaigns/<id>/counters.json` の `compute_used`、到達段階は同 `ledger.jsonl` の
-event kind から再現できる。
+完走 2（うち 1 は隔離）/ 部分実行 4。合計 **209,853.6 s ≈ 58.3 時間**。
+
+再現手順: 計算量は `campaigns/<id>/counters.json` の `compute_used`。マイルストーンは
+同ディレクトリの ledger 各行の `payload.kind` — **ledger は 2 形式ある**。
+`862dec28` / `2dde4014` は非圧縮の `ledger.jsonl`、残る 4 件は `ledger.jsonl.gz`
+（+ 展開前バイトの `ledger.jsonl.sha256`）なので `gzip` で展開してから読む。
 
 **証拠保全:** `voice_genesis/calibration/` 配下のコード・`campaigns/**`・設計 v1.x は
 **変更しない**。本記録は終端の宣言であって、実測記録の書き換えではない。
