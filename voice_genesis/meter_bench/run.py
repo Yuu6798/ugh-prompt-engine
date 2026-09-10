@@ -202,11 +202,13 @@ def _git(*args: str) -> str | None:
 
 def git_sha() -> str:
     """実行時 HEAD。作業ツリーが汚れていれば `-dirty` を付ける（その JSON が
-    どの commit の tree でも再現できないことを隠さない）。"""
+    どの commit の tree でも再現できないことを隠さない）。`results/` 自身は
+    この run の出力先なので除外する — 見たいのは「測ったコードが commit 済みか」。"""
     head = _git("rev-parse", "HEAD")
     if head is None or not head.strip():
         return "unknown"
-    dirty = _git("status", "--porcelain")
+    excluded = f":(exclude){RESULTS_DIR.relative_to(REPO_ROOT).as_posix()}"
+    dirty = _git("status", "--porcelain", "--", ".", excluded)
     return head.strip() + ("-dirty" if dirty else "")
 
 
