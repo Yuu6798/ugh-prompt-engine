@@ -18,8 +18,10 @@
 
 再現手順: 計算量は `campaigns/<id>/counters.json` の `compute_used`。マイルストーンは
 同ディレクトリの ledger 各行の `payload.kind` — **ledger は 2 形式ある**。
-`862dec28` / `2dde4014` は非圧縮の `ledger.jsonl`、残る 4 件は `ledger.jsonl.gz`
-（+ 展開前バイトの `ledger.jsonl.sha256`）なので `gzip` で展開してから読む。
+`862dec28` / `2dde4014` は非圧縮の `ledger.jsonl`、残る 4 件は `ledger.jsonl.gz` なので
+`gzip` で展開してから読む。併置の `ledger.jsonl.sha256` は **展開後の `ledger.jsonl`**
+に対する sha256（`.gz` のバイトではない。`tools/archive_aborted_ledger.py` と同じ規約）
+なので、照合も展開後に行う。
 
 **証拠保全:** `voice_genesis/calibration/` 配下のコード・`campaigns/**`・設計 v1.x は
 **変更しない**。本記録は終端の宣言であって、実測記録の書き換えではない。
