@@ -2,8 +2,22 @@
 
 **日付:** 2026-09-10（User 裁定同日）
 **状態:** **CLOSED_FAILED** — meter 校正は不成立。`debt_discharged = false` のまま確定する。
-**対象:** RUN10-CAL / VG-METER-CAL-DEBT（設計 v1.0〜v1.4、campaign `862dec28` / `410b25f2` /
-`a4ed65c1` / `2dde4014`）。
+**対象:** RUN10-CAL / VG-METER-CAL-DEBT（設計 v1.0〜v1.4）。凍結済み campaign は
+`voice_genesis/calibration/campaigns/` にある **6 件すべて**（下表）。
+
+| campaign | 到達段階 | 終端 | `compute_used`(s) |
+|---|---|---|---|
+| `20260903-9bcbbf86` | C1 fixture_valid まで | `campaign_closed` 未記帳 | 12,380.9 |
+| `20260903-591cadcd` | selection_frozen + gate3_accepted まで | 同上 | 44,437.4 |
+| `20260904-862dec28` | close まで | **`CAMPAIGN_CLOSED`** | 33,797.9 |
+| `20260905-410b25f2` | selection_frozen まで | `campaign_closed` 未記帳 | 50,678.4 |
+| `20260906-a4ed65c1` | split_frozen + render 開始のみ | 同上 | 3,412.1 |
+| `20260908-2dde4014` | close まで | **`CAMPAIGN_CLOSED`**・ただし authorization 未確立で `QUARANTINED` | 65,146.9 |
+
+完走 2（うち 1 は隔離）/ 部分実行 4。合計 **209,853.6 s ≈ 58.3 時間**。各値は
+`campaigns/<id>/counters.json` の `compute_used`、到達段階は同 `ledger.jsonl` の
+event kind から再現できる。
+
 **証拠保全:** `voice_genesis/calibration/` 配下のコード・`campaigns/**`・設計 v1.x は
 **変更しない**。本記録は終端の宣言であって、実測記録の書き換えではない。
 
@@ -11,7 +25,7 @@
 
 > 測定、検証系をオーバーエンジニアリングしすぎたことで生成の進捗が得られずスタックした
 
-計器（meter）が正しい値を返すかを判定する装置を 3 campaign（計算 約 40 時間）ぶん回し、
+計器（meter）が正しい値を返すかを判定する装置を **6 campaign・計算 58.3 時間**ぶん回し、
 その装置の堅牢化にコードと設計文書を積み増したが、**生成の進捗は得られなかった**。
 装置の完成度ではなく、生成が進まなかったことが終端の理由である。
 
