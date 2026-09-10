@@ -239,6 +239,10 @@ testpaths = [
     # （svp_rpe / voice_genesis.harness 非依存。DESIGN_VG_METER_CAL_DEBT_v1.0.md /
     # IMPLEMENTATION_MAP_v1.md 参照）。
     "voice_genesis/calibration/tests",
+    # Meter Bench（計器開発層 = RUN10-CAL リセット設計 v0 §1）。campaign 基盤を
+    # import しない小さな台で、依存は numpy/scipy/PyYAML/stdlib のみ。
+    # 決定論テスト（フル Bench を 2 回回す）は slow マーカー付き。
+    "voice_genesis/meter_bench/tests",
 ]
 pythonpath = ["src", "."]
 markers = [

@@ -1,0 +1,34 @@
+# Meter Bench 許容値 v0（RUN10-CAL リセット設計 v0 §1）。
+# **v0 値は提案値であり校正基準ではない**。Bench 実測を根拠に PR で改訂する。
+# 「緩めて PASS させる」変更は禁止。全 meter の負例は no_fire 固定のため
+# meter 別の宣言を持たない。check は 3 種のみ（`cases.CHECKS`）、unit は
+# abs_error の比較単位（`cases.SCALES`）。
+schema: meter-bench-criteria/0
+meters:
+  M2_SPECTRAL_TILT:
+    check: abs_error
+    tol: 1.0
+    unit: absolute
+    unit_label: db_per_oct
+  M2_APERIODICITY:
+    check: monotone
+    tau_min: 0.9
+    note: noise_fraction 0->0.6 の 6 点（case は P3）
+  F0_CONTROL:
+    check: abs_error
+    tol: 10.0
+    unit: cents
+    unit_label: cents
+    note: case は P3
+  M3_FORMANTS:
+    check: abs_error
+    tol: 0.05
+    unit: relative
+    unit_label: fraction_of_truth (F1/F2 各 5%)
+    note: case は P4
+  M5_TRANSITION:
+    check: abs_error
+    tol: 0.010
+    unit: absolute
+    unit_label: seconds (join_time 10 ms)
+    note: case は P4
