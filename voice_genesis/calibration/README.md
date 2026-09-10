@@ -1,8 +1,98 @@
-# voice_genesis/calibration — RUN10-CAL
+# voice_genesis/calibration — VoiceGenesis の計器
+
+## 何を示したいか
+
+VoiceGenesis の meter が、**正解が分かっている合成音に対して正しい値を返す**
+こと。それが言えて初めて、個体や遺伝を測った数字に意味が生まれる。
+
+## 必要な計器
+
+claim-critical 3 本（`vocab.CLAIM_CRITICAL_SET`、縮小・追加は User 裁定 +
+preregistration）: **M2_SPECTRAL_TILT / M2_APERIODICITY / M3_FORMANTS**。
+上流 control として `F0_CONTROL`、周辺に `M4_RESONANCE` / `M5_TRANSITION` /
+`M6_IDENTITY`。
+
+## 各計器の「動く」の定義
+
+正本 = [`voice_genesis/meter_bench/criteria.yaml`](../meter_bench/criteria.yaml)。
+**v0 は提案値**であり、Bench 実測を根拠に PR で改訂する（緩めて PASS させる
+変更は禁止）。
+
+| meter | 判定式 | 許容 |
+|---|---|---|
+| `M2_SPECTRAL_TILT` | `abs_error` | 1.0 dB/oct |
+| `M2_APERIODICITY` | `monotone` | tau >= 0.9（noise_fraction 0→0.6 の 6 点） |
+| `F0_CONTROL` | `abs_error` | 10 cents |
+| `M3_FORMANTS` | `abs_error` | F1/F2 各 5 % |
+| `M5_TRANSITION` | `abs_error` | join_time 10 ms |
+| 全 meter 負例 | `no_fire` | NOISE_ONLY / SILENCE |
+
+## いま動く計器
+
+**0 本**。現況表は
+[`voice_genesis/meter_bench/results/`](../meter_bench/results/)（meter ごと
+1 ファイル・最新のみ commit）が唯一の正本で、本節はその転記にすぎない。
+
+| meter | Bench | 根拠 |
+|---|---|---|
+| `M2_SPECTRAL_TILT` | **FAIL** | 13 候補すべて不合格。f0 誤差 0 %の列だけが通り、±1〜3 % で 5〜27 dB/oct 外す（`results/M2_SPECTRAL_TILT.json`） |
+| その他 6 meter | 未計測 | case 未実装（P3/P4） |
+
+**Bench の PASS は校正証拠ではない**（`claimable` は定数 false）。PASS が意味
+するのは「確定 campaign に計算資源を使ってよい」の一点のみ。校正の主張は
+下の歴史文書が規定する campaign 基盤の Gate だけが行う。
+
+## 三層
+
+| 層 | 目的 | 手段 | 統治 |
+|---|---|---|---|
+| 1 計器開発 | 計器を直す | [Meter Bench](../meter_bench/) | なし（pytest と JSON） |
+| 2 計器受入 | 「動く」と宣言 | Bench の固定 case + `criteria.yaml` | PR レビューのみ |
+| 3 確定 | holdout で返済 | 本ディレクトリの campaign 基盤（**凍結**） | 既存 Gate・操作別直接承認 |
+
+計器が壊れている段階で層 3 を回しても、判定装置が「壊れている」と言い続ける
+だけで計器は直らない。層 1 が先。
+
+## 統治予算（リセット設計 v0 §4）
+
+1. 科学的発見 1 件につき設計改訂は 1 版まで。手続き上の失敗には規約の追加でなく削除で応える。
+2. レビューは PR あたり 10 巡で打ち切る。残りは境界宣言にまとめて次 PR へ。
+3. `meter_bench/` は tests 込み 800 行上限。承認・nonce・台帳・封印を持ち込まない。
+4. 確定 campaign は「3 meter が同一 git sha で Bench PASS」のときのみ、その集合につき 1 回。
+5. Bench の PASS は校正証拠ではない（`claimable: false`）。
+6. D 台帳は D117 で凍結。以後の発見は Bench 結果 JSON と PR 本文に書く。
+7. 進捗の単位は「Bench PASS した meter の本数」。完走・マージ数・巡数は進捗と報告しない。
+
+## 凍結範囲（Tier）
+
+| Tier | 対象 | 扱い |
+|---|---|---|
+| **K** 保持・開発 | `candidates/impl/*`・`candidates/adapter.py`・`candidates/registry.py`（**追加のみ**）・`fixtures/generators/*`・`fixtures/axes.py`・`fixtures/matrix.py`・`fixtures/controls.py`・`vocab.py`・`streams.py`・`../meter_bench/` | 開発してよい |
+| **F** 凍結 | `campaign/*`（`diagnose.py` 含む）・`c0_freeze.py`・`c0_validate.py`・`provenance.py`・`approvals.py`・`splitter.py`・`gates.py`・`selection.py`・`e_use_table.py`・`cost_caps.py`・`authorization_guard.py`・`tools/*`・`.github/workflows/vg-campaign-authorization-guard.yml` | **変更禁止**。例外は (a) 確定 campaign で踏んだ実バグ (b) セキュリティ。新 Gate / 承認種別 / 台帳形式の追加禁止・ファイル移動禁止 |
+| **R** 歴史文書 | `DESIGN_VG_METER_CAL_DEBT_v1.0`〜`v1.4`・`GATE_REVIEW_BRIEF_v1.md`・`IMPLEMENTATION_MAP_v1.md`・`approvals/records/*`・`campaigns/**` | 編集しない（リンクのみ） |
+
+即時停止（claim-critical 3 meter が Bench PASS するまで再開しない）: 新 campaign /
+再 freeze / 設計 v1.5 以降 / D 台帳追記（D117 で凍結）/ Tier F へのコード変更。
+
+## 設計文書
+
+- リセット設計 v0（2026-09-10）— 本 README 冒頭と `meter_bench/` の正本。
+- 以下は **歴史文書**（確定 campaign 基盤の仕様）。read-only 基底
+  [`DESIGN_VG_METER_CAL_DEBT_v1.0.md`](DESIGN_VG_METER_CAL_DEBT_v1.0.md) から
+  [`v1.4`](DESIGN_VG_METER_CAL_DEBT_v1.4.md) まで、および
+  [`IMPLEMENTATION_MAP_v1.md`](IMPLEMENTATION_MAP_v1.md) /
+  [`GATE_REVIEW_BRIEF_v1.md`](GATE_REVIEW_BRIEF_v1.md)。
+
+---
+
+# 歴史文書（確定 campaign 基盤の仕様）
+
+以下は Tier F/R の仕様であり、**現行の作業指示ではない**。層 3（確定 campaign）
+を再び回すときにだけ読む。冒頭の三層・Tier 表と食い違う記述があれば冒頭が勝つ。
 
 campaign_id: `RUN10-CAL`
 
-## 目的
+### 目的
 
 VoiceGenesis の meter（M2 spectral tilt / M2 aperiodicity / M3 formants / M4
 resonance / M5 transition / M6 identity / F0 control）を、正解付き合成 fixture
@@ -21,7 +111,7 @@ resonance / M5 transition / M6 identity / F0 control）を、正解付き合成 
 - [`IMPLEMENTATION_MAP_v1.md`](IMPLEMENTATION_MAP_v1.md) — 実装マップ
   (Design Memo)。モジュール → 設計正本 §番号の対応表。
 
-## 授権境界（§0）
+### 授権境界（§0）
 
 設計正本は `execution_authorized: false` / `meter_changes_authorized: false` /
 `run11_measurement_entry_authorized: false`。本パッケージ（Phase A: framework
@@ -38,7 +128,7 @@ core）は **インフラ実装のみ** であり、以下は一切含まない:
 `c0_validate.py`（Phase C）は dry-run 検証のみを行う（書込なし・secret 生成
 なし）。武装版 freeze スクリプトは §18 Gate 2 承認後の別 PR。
 
-## モジュール一覧（Phase A: framework core — 実装済み）
+### モジュール一覧（Phase A: framework core — 実装済み）
 
 | module | 内容 | 正本 § |
 |---|---|---|
@@ -54,7 +144,7 @@ core）は **インフラ実装のみ** であり、以下は一切含まない:
 | `m6_identity.py` | `u_X[j]`・sum-of-norms pairwise uncertainty・`T_null`・`distinct()`・CLAIM_CRITICAL_SET 全 member ABSOLUTE 必須（部分構成での distance 出力禁止） | §12 |
 | `provenance.py` | §13 provenance schema（nested frozen dataclass）+ append-only JSONL ledger（fcntl 排他 + fsync、entry_sha 連鎖、truncated tail / tamper 区別）+ leakage 検査 | §7, §13 |
 
-## fixtures（Phase B — 実装済み）
+### fixtures（Phase B — 実装済み）
 
 456 logical cell の明示列挙（IMPLEMENTATION_MAP §2.7 FROZEN spec の機械転記。
 行選択の裁量なし）。
@@ -73,7 +163,7 @@ sub-count 全一致) / row_id 全 456 一意 / Phase A `splitter.realize_split` 
 matrix 全体へ適用すると 228/114/114（family 別も §5.2 の 50/25/25 目標に
 厳密一致）。
 
-## candidates（Phase C — 実装済み）
+### candidates（Phase C — 実装済み）
 
 99 候補の宣言的定義（設計正本 §8 + `IMPLEMENTATION_MAP_v1.md` §2.6 が凍結した
 パラメタグリッド）+ dry-run C0 manifest 検証器。実測 campaign・selection・
@@ -100,7 +190,7 @@ Phase C の B0 wrapper には適用されない。タスク境界で明示的に
 例外）。`candidates/impl/f0_pyin.py` は `librosa` に依存する
 （`IMPLEMENTATION_MAP_v1.md` §1 が宣言する campaign 依存の一部）。
 
-## Phase D — 未武装の実行基盤（D1: freeze producer + 承認 Gate — 実装済み）
+### Phase D — 未武装の実行基盤（D1: freeze producer + 承認 Gate — 実装済み）
 
 §18 の 3 承認 Gate が通ればコード変更なしで C0 freeze と campaign 実行に入れる
 状態まで基盤を用意する。本 Phase 自身は freeze も実測も行わない（既定 =
@@ -120,7 +210,7 @@ IMPLEMENTATION_MAP §0）。
 `voice_genesis/calibration/campaigns/*/measurements/`・
 `voice_genesis/calibration/campaigns/.staging-*/` を追加した。
 
-## campaign（Phase D2 — 未武装の campaign runner、実装済み）
+### campaign（Phase D2 — 未武装の campaign runner、実装済み）
 
 `c0_freeze.armed_freeze()` が公開した凍結 campaign dir を読み込み、手続 Gate
 単位（C1 fixtures → C2 baseline → C3a F0 selection → C3b selection → unseal →
@@ -144,16 +234,16 @@ dry-run（`plan`、または `--armed` を渡さない全サブコマンド）�
 | `campaign/cli.py` + `campaign/__main__.py` | `python -m voice_genesis.calibration.campaign <plan\|c1-fixtures\|c2-baseline\|c3a-f0-selection\|c3b-selection\|unseal\|c4-holdout\|close> --campaign-dir ... --secret-dir ... [--armed] [--workers N] [--reveal-split-secret]`。`plan` は常に副作用ゼロで設計値 vs realized split の work unit 件数を報告。他サブコマンドは `--armed` 無しなら当該 stage の計画のみ表示、`--armed` ありなら三要素武装判定（`approvals.check_armed(GATE1)`）→ 未武装なら `AUTHORIZATION_REQUIRED`（副作用ゼロ）→ 武装済みなら該当 stage 関数を実行。`c4-holdout` の E_use 拘束 absolute/directional gate 組立の完全な CLI 配線は本 D2 infra の範囲外とした（`[UNDERSPEC-CAL-D17]`。`holdout_stage.evaluate_absolute_meter`/`evaluate_directional_meter` は実 gate 配線込みでテストで直接検証する）。`main()` は `campaign.caps.load_cap_counters()` 直後・stage dispatch 前に frozen cap 超過を再チェックし、breach していれば dispatch 前に `COST_CAP_EXCEEDED` で拒否する（idempotent stop_event。`[UNDERSPEC-CAL-D26]`）。同じ箇所で `campaign.caps.cost_caps_from_manifest()` の `cost_caps.BudgetAccountingUndeclaredError` を捕捉し `BUDGET_ACCOUNTING_UNDECLARED` で dispatch を拒否する（`[UNDERSPEC-CAL-D27]`） | §18, memo §6.1, §6.4 |
 | `tools/archive_aborted_ledger.py` | 破棄（abort）裁定済み campaign の `ledger.jsonl` を原子的に gzip 保全する運用ツール（同一ディレクトリ内固定名 staging → 伸長+chain 検証 → `os.fsync`+`os.rename` で公開 → 原本削除。中断回復込みの単一入口 `ensure_archived()`）。詳細は下記「運用」節と `tools/archive_aborted_ledger.py` の docstring を参照 | v1.1 §V4 |
 
-## 運用
+### 運用
 
-### C-1 診断（探索ステージ、v1.2 §W2(a)）
+#### C-1 診断（探索ステージ、v1.2 §W2(a)）
 
 armed campaign 投入前に freeze/封印/ledger なしで正例発火・負例不発火を安く
 確認する（claim 不可）:
 
     python -m voice_genesis.calibration.campaign.diagnose --family <FAMILY> [--f0-candidate <id>]
 
-### Gate 1 `max_claim_scope`（v1.3 §X2 — FORMANT 除外後の 3 要素）
+#### Gate 1 `max_claim_scope`（v1.3 §X2 — FORMANT 除外後の 3 要素）
 
 Gate 1 承認 JSON（`~/.vg_cal/approvals/gate1_campaign_execution.json`、checkout 外）
 の `max_claim_scope` は v1.3 以降 **3 要素**とする:
@@ -172,7 +262,7 @@ design_revision >= 1.3 の本番（非 rehearsal）freeze で `formant_frequency
 scope から外れた効果は `selection_stage.claim_scope_report()` の capping
 （FORMANT 候補は ABSOLUTE 到達が構造的に不可能になる）。
 
-### rehearsal 経路（縮小行列での疎通試験、v1.2 §W2(c)）
+#### rehearsal 経路（縮小行列での疎通試験、v1.2 §W2(c)）
 
 `--rehearsal` を `c0_freeze`/`campaign` の両 CLI に付けると 456→58 行の縮小
 行列へ切替わり claim を生まない疎通試験になる（`debt_discharged` は常に
@@ -180,7 +270,7 @@ scope から外れた効果は `selection_stage.claim_scope_report()` の cappin
 
     python -m voice_genesis.calibration.c0_freeze --rehearsal --armed ...
 
-### 破棄 campaign ledger の圧縮保全（v1.1 §V4）
+#### 破棄 campaign ledger の圧縮保全（v1.1 §V4）
 
 破棄（abort）裁定済み campaign の `ledger.jsonl` は
 `voice_genesis/calibration/tools/archive_aborted_ledger.py` で原子的に
@@ -204,7 +294,7 @@ gzip 保全する:
 `RUN10-CAL-20260903-591cadcd`
 （sha256=`c02f513b086ade0b2e23e2153adb009bf51204dfb3bfb9d61ff8a3828e969580`）。
 
-## UNDERSPEC 台帳
+### UNDERSPEC 台帳
 
 設計正本が数値・グリッド・エンコーディングを確定していない箇所について、
 実装マップ §3 の規約（最も単純で安全な選択を採り docstring にタグ記録）に
@@ -427,7 +517,7 @@ truncated/tamper 区別、`gates.py` の DIRECTIONAL resolvability 単位健全�
 規則、`observables.py` の `u_rep` singleton 除外、`m6_identity.py` の
 CLAIM_CRITICAL_SET 全 member ABSOLUTE 必須化。
 
-## テスト
+### テスト
 
 ```bash
 python -m pytest voice_genesis/calibration/tests -q
