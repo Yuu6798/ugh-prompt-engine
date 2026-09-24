@@ -85,8 +85,38 @@ def _load_packaged_config(name: str) -> Optional[dict[str, Any]]:
     return data
 
 
-def _local_config_paths(name: str) -> list[Path]:
+def resolve_config_path(name: str, *, subdir: Optional[str] = None) -> Optional[Path]:
+    """local→packaged の順で `name`（任意で `subdir` 配下）の config ファイルを
+    探し、そのファイルシステム上の `Path` を返す（見つからなければ `None`）。
+
+    `load_config`/`resolve_config_bytes` と同じ探索順序・候補パスを、
+    パース結果でなく Path として返すバリアント。`recast/loader.py` の
+    named-config 参照解決（`capability_profiles` / `mode_overrides`）が使う。
+    """
+    for candidate in _local_config_paths(name, subdir=subdir):
+        if candidate.is_file():
+            return candidate
+    return _packaged_config_path(name, subdir=subdir)
+
+
+def _packaged_config_path(name: str, *, subdir: Optional[str] = None) -> Optional[Path]:
+    package = f"svp_rpe.config.{subdir}" if subdir else "svp_rpe.config"
+    try:
+        resource = files(package).joinpath(f"{name}.yaml")
+    except ModuleNotFoundError:
+        return None
+    if not resource.is_file():
+        return None
+    return Path(str(resource))
+
+
+def _local_config_paths(name: str, *, subdir: Optional[str] = None) -> list[Path]:
+    repo_root_config = Path(__file__).resolve().parents[3] / "config"
+    cwd_config = Path.cwd() / "config"
+    if subdir:
+        repo_root_config = repo_root_config / subdir
+        cwd_config = cwd_config / subdir
     return [
-        Path(__file__).resolve().parents[3] / "config" / f"{name}.yaml",
-        Path.cwd() / "config" / f"{name}.yaml",
+        repo_root_config / f"{name}.yaml",
+        cwd_config / f"{name}.yaml",
     ]

@@ -10,6 +10,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from svp_rpe.rpe.models import SemanticLabel
+from svp_rpe.utils.config_loader import _local_config_paths
 
 
 class ProfileModel(BaseModel):
@@ -273,10 +274,11 @@ def _load_packaged_profile(domain: str) -> Optional[dict[str, Any]]:
 
 
 def _local_profile_paths(domain: str) -> list[Path]:
-    return [
-        Path(__file__).resolve().parents[3] / "config" / "domain_profiles" / f"{domain}.yaml",
-        Path.cwd() / "config" / "domain_profiles" / f"{domain}.yaml",
-    ]
+    # `utils/config_loader._local_config_paths` と同じ探索順序・候補パス
+    # （repo checkout → cwd、いずれも `config/domain_profiles/<domain>.yaml`）を
+    # `subdir="domain_profiles"` で再利用する（3 箇所重複していた config
+    # ディレクトリ解決ロジックの一本化）。
+    return _local_config_paths(domain, subdir="domain_profiles")
 
 
 def _render_templates(rules: Iterable[TemplateRule], context: Mapping[str, Any]) -> List[str]:

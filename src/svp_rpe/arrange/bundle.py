@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from svp_rpe.arrange.models import ArrangementChange, ArrangementSpec
 from svp_rpe.arrange.resolver import resolve_arrangement
 from svp_rpe.compose.models import CompositionScore
+from svp_rpe.utils.hashing import file_sha256
 
 BUNDLE_SCHEMA_VERSION = "arrangement-bundle/0.2"
 DIFF_SCHEMA_VERSION = "arrangement-diff/0.1"
@@ -98,8 +99,13 @@ class CompiledArrangement:
 
 
 def sha256_file(path: Path) -> str:
-    """ファイルの raw bytes に対する SHA-256（小文字 hex）。"""
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    """ファイルの raw bytes に対する SHA-256（小文字 hex）。
+
+    `utils.hashing.file_sha256` の薄いラッパー。`use_cache=False` で
+    (path, size, mtime) memo を迂回し、常に実バイトを読み直す（同じ hex digest
+    を返すが、prod pin 計算での staleness リスクを避ける）。
+    """
+    return file_sha256(path, use_cache=False)
 
 
 def compute_content_digest(artifact_hashes: dict[str, str]) -> str:

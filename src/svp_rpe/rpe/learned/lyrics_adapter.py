@@ -55,8 +55,7 @@ caller should either.
 from __future__ import annotations
 
 import importlib
-import importlib.metadata as _pkg_metadata
-import sys
+import importlib.metadata as _pkg_metadata  # noqa: F401 (test monkeypatch 互換のため module 属性として維持)
 from typing import Any, Optional
 
 import librosa
@@ -64,6 +63,7 @@ import numpy as np
 
 from svp_rpe.io.source_separator import separate_stems
 from svp_rpe.rpe.learned import LearnedModelIncompatible, LearnedModelUnavailable
+from svp_rpe.rpe.learned.version_probe import detect_installed_version
 from svp_rpe.rpe.models import (
     LearnedLyricsSegment,
     LearnedLyricsTranscription,
@@ -178,15 +178,7 @@ def _detect_lyrics_version() -> Optional[str]:
     Same fallback chain as the other `rpe/learned` adapters: imported
     package `__version__` first, then `importlib.metadata`, then `None`.
     """
-    root = sys.modules.get(_MODULE_NAME)
-    if root is not None:
-        candidate = getattr(root, "__version__", None)
-        if isinstance(candidate, str) and candidate:
-            return candidate
-    try:
-        return _pkg_metadata.version(_MODULE_NAME)
-    except _pkg_metadata.PackageNotFoundError:
-        return None
+    return detect_installed_version(_MODULE_NAME)
 
 
 def _upstream_model_mapping() -> Optional[dict[str, str]]:

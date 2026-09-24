@@ -61,9 +61,16 @@ def _update_builds_latest_pointer(latest_path: Path, content_digest: str, *, roo
     `latest.json` is the one file this scheme ever overwrites — everything
     under `<root>/builds/<digest>/` is immutable once published (Design
     Memo §4).
+
+    Thin wrapper — the tempfile+`os.replace` mechanics are consolidated in
+    `svp_rpe.utils.atomic_io.atomic_write_text` (same convention: tempfile
+    in `latest_path`'s own directory, `prefix=f"{latest_path.name}."` —
+    `"latest.json."`, matching the historical hardcoded prefix — `suffix`
+    `".tmp"`, `os.replace`, and best-effort staging cleanup on any
+    `BaseException`). `root` always equals `latest_path.parent` at every
+    call site, which `atomic_write_text` derives itself.
     """
-    import os
-    import tempfile
+    from svp_rpe.utils.atomic_io import atomic_write_text
 
     payload = json.dumps(
         {"schema_version": BUILDS_LATEST_SCHEMA_VERSION, "content_digest": content_digest},
@@ -71,17 +78,7 @@ def _update_builds_latest_pointer(latest_path: Path, content_digest: str, *, roo
         indent=2,
     )
     root.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=root, prefix="latest.json.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(payload)
-        os.replace(tmp_name, latest_path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    atomic_write_text(latest_path, payload)
 
 
 def _reject_builds_root_input_collision(

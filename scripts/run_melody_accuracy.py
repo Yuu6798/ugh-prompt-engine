@@ -2712,6 +2712,7 @@ from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
 # そのまま使う。
 from svp_rpe.utils.atomic_io import atomic_write_bytes as _cell_store_atomic_write_bytes  # noqa: E402
 from svp_rpe.utils.atomic_io import atomic_write_text as _cell_store_atomic_write_text  # noqa: E402
+from svp_rpe.utils.yaml_strict import make_no_dup_safe_loader  # noqa: E402
 
 
 def _runtime_input_paths() -> "set[Path]":
@@ -3127,26 +3128,15 @@ RouteRunner = Callable[[str, MelodyRoute], Tuple[MelodyObservation, Dict[str, An
 # ---------------------------------------------------------------------------
 
 
-class _NoDupSafeLoader(yaml.SafeLoader):
-    """重複 mapping キーを拒否する SafeLoader。"""
+def _dup_key_error(key: Any) -> ValueError:
+    return ValueError(
+        f"duplicate YAML mapping key {key!r}; stale/手書きファイルが "
+        "last-wins で block を隠す穴を弾く (fail-closed)"
+    )
 
 
-def _no_dup_construct_mapping(loader: "yaml.SafeLoader", node: Any, deep: bool = False) -> Dict[Any, Any]:
-    mapping: Dict[Any, Any] = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        if key in mapping:
-            raise ValueError(
-                f"duplicate YAML mapping key {key!r}; stale/手書きファイルが "
-                "last-wins で block を隠す穴を弾く (fail-closed)"
-            )
-        mapping[key] = loader.construct_object(value_node, deep=deep)
-    return mapping
-
-
-_NoDupSafeLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dup_construct_mapping
-)
+# 重複 mapping キーを拒否する SafeLoader。
+_NoDupSafeLoader = make_no_dup_safe_loader(_dup_key_error)
 
 
 def _yaml_load_no_dup_keys(data: "bytes | str", *, what: str) -> Any:

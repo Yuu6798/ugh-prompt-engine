@@ -16,7 +16,6 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
-from importlib.resources import files
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -33,6 +32,7 @@ from svp_rpe.recast.models import (
     RecastProject,
     RecastReferenceError,
 )
+from svp_rpe.utils.config_loader import resolve_config_path
 
 # capability_profile / mode_overrides の名前参照規約: スラッシュ・拡張子を含まない
 # 裸の識別子。マッチしない値（`foo.yaml` / `sub/foo` 等）は相対パス参照として扱う。
@@ -205,29 +205,11 @@ def _resolve_mode_overrides(
 
 
 def _find_named_config(name: str, *, subdir: str) -> Optional[Path]:
-    for candidate in _local_config_paths(name, subdir=subdir):
-        if candidate.is_file():
-            return candidate
-    return _packaged_config_path(name, subdir=subdir)
-
-
-def _local_config_paths(name: str, *, subdir: str) -> list[Path]:
-    # svp_rpe/recast/loader.py -> parents[3] == repo root (utils/config_loader.py と同じ深さ)。
-    repo_root = Path(__file__).resolve().parents[3]
-    return [
-        repo_root / "config" / subdir / f"{name}.yaml",
-        Path.cwd() / "config" / subdir / f"{name}.yaml",
-    ]
-
-
-def _packaged_config_path(name: str, *, subdir: str) -> Optional[Path]:
-    try:
-        resource = files(f"svp_rpe.config.{subdir}").joinpath(f"{name}.yaml")
-    except ModuleNotFoundError:
-        return None
-    if not resource.is_file():
-        return None
-    return Path(str(resource))
+    # `utils/config_loader.resolve_config_path` と同じ local→packaged 探索順序・
+    # 候補パスを共有する（3 箇所重複していた config ディレクトリ解決ロジックの
+    # 一本化。旧実装との等価性は search order / candidate paths が完全一致する
+    # ことを確認済み）。
+    return resolve_config_path(name, subdir=subdir)
 
 
 def load_mode_overrides(path: Path | str) -> ModeOverridesConfig:

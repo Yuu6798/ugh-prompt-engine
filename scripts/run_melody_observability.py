@@ -74,6 +74,7 @@ from svp_rpe.melody.observability import (  # noqa: E402
 )
 from svp_rpe.melody.routing import select_routes  # noqa: E402
 from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
+from svp_rpe.utils.yaml_strict import make_no_dup_safe_loader  # noqa: E402
 
 REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "registry.yaml"
 
@@ -113,27 +114,16 @@ def _load_registry(registry_path: "Path | None" = None) -> "tuple[Dict[str, Any]
     return registry, hashlib.sha256(data).hexdigest()
 
 
-class _NoDupSafeLoader(yaml.SafeLoader):
-    """重複 mapping キーを拒否する SafeLoader（#60。JSON 側 #46 と対称）。"""
+def _dup_key_error(key: Any) -> ValueError:
+    return ValueError(
+        f"duplicate YAML mapping key {key!r}; stale/手書き registry が "
+        "last-wins で pre-registration block（m1_real_go_bar/observation_gate 等）を "
+        "隠す穴を弾く (fail-closed)"
+    )
 
 
-def _no_dup_construct_mapping(loader: "yaml.SafeLoader", node: Any, deep: bool = False) -> Dict[Any, Any]:
-    mapping: Dict[Any, Any] = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        if key in mapping:
-            raise ValueError(
-                f"duplicate YAML mapping key {key!r}; stale/手書き registry が "
-                "last-wins で pre-registration block（m1_real_go_bar/observation_gate 等）を "
-                "隠す穴を弾く (fail-closed)"
-            )
-        mapping[key] = loader.construct_object(value_node, deep=deep)
-    return mapping
-
-
-_NoDupSafeLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dup_construct_mapping
-)
+# 重複 mapping キーを拒否する SafeLoader（#60。JSON 側 #46 と対称）。
+_NoDupSafeLoader = make_no_dup_safe_loader(_dup_key_error)
 
 
 def _yaml_load_no_dup_keys(data: "bytes | str", *, what: str) -> Any:

@@ -30,13 +30,12 @@ Upstream API note (essentia >= 2.1b6):
 from __future__ import annotations
 
 import importlib
-import importlib.metadata as _pkg_metadata
-import sys
 from typing import Any, List, Optional, Tuple
 
 import numpy as np
 
 from svp_rpe.rpe.learned import LearnedModelIncompatible, LearnedModelUnavailable
+from svp_rpe.rpe.learned.version_probe import detect_installed_version
 from svp_rpe.rpe.models import LearnedModelInfo
 from svp_rpe.utils.clamp import clamp
 
@@ -91,15 +90,7 @@ def ensure_melodia_available() -> None:
 
 
 def _detect_essentia_version() -> Optional[str]:
-    root = sys.modules.get(_MODULE_NAME)
-    if root is not None:
-        candidate = getattr(root, "__version__", None)
-        if isinstance(candidate, str) and candidate:
-            return candidate
-    try:
-        return _pkg_metadata.version(_MODULE_NAME)
-    except _pkg_metadata.PackageNotFoundError:
-        return None
+    return detect_installed_version(_MODULE_NAME)
 
 
 def melodia_implementation_files() -> "tuple[list, object]":

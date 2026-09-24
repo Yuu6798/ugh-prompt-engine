@@ -177,6 +177,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from svp_rpe.utils.atomic_io import atomic_write_bytes  # noqa: E402
+from svp_rpe.utils.yaml_strict import make_no_dup_safe_loader  # noqa: E402
 
 DEFAULT_RUN1_PATH = ROOT / "docs" / "measurements" / "m3d_2026-08" / "run1.json"
 DEFAULT_MANIFEST_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m3d_pairs_manifest.yaml"
@@ -228,30 +229,20 @@ def _generator_script_sha256() -> str:
     return hashlib.sha256(GENERATOR_SCRIPT_PATH.read_bytes()).hexdigest()
 
 
-class _NoDupSafeLoader(yaml.SafeLoader):
-    """重複 mapping キーを拒否する SafeLoader（``scripts/build_m3d_pairs.py`` の
-    ``_NoDupSafeLoader`` と同型）。本スクリプトは既存ハーネス（``scripts/
-    run_melody_comparison.py``）/builder（``scripts/build_m3d_pairs.py``）を
-    import しない設計（DD1・Codex レビュー #255 第 13 巡）のため、両者が
-    それぞれ独立複製している流儀にならい、本スクリプト内でも独立複製する。"""
+def _dup_key_error(key: Any) -> ValueError:
+    return ValueError(
+        f"duplicate YAML mapping key {key!r}; last-wins で入力の一部を "
+        "隠す穴を弾く (fail-closed)"
+    )
 
 
-def _no_dup_construct_mapping(loader: "yaml.SafeLoader", node: Any, deep: bool = False) -> Dict[Any, Any]:
-    mapping: Dict[Any, Any] = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        if key in mapping:
-            raise ValueError(
-                f"duplicate YAML mapping key {key!r}; last-wins で入力の一部を "
-                "隠す穴を弾く (fail-closed)"
-            )
-        mapping[key] = loader.construct_object(value_node, deep=deep)
-    return mapping
-
-
-_NoDupSafeLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dup_construct_mapping
-)
+# 重複 mapping キーを拒否する SafeLoader。walk ロジック自体は
+# `svp_rpe.utils.yaml_strict`（7 サイト重複の一本化先）を共有するが、本スクリプトは
+# 既存ハーネス（``scripts/run_melody_comparison.py``）/builder（``scripts/
+# build_m3d_pairs.py``）は import しない設計のまま（DD1・Codex レビュー #255 第 13
+# 巡）——ここでのエラーメッセージ/例外型（`ValueError`）はそれらと独立に本スクリプト
+# 固有のものを維持する。
+_NoDupSafeLoader = make_no_dup_safe_loader(_dup_key_error)
 
 
 def _json_loads_no_dup_keys(data: bytes, *, what: str) -> Any:

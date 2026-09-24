@@ -16,6 +16,7 @@ from svp_rpe.cli._app import (
     app,
     console,
 )
+from svp_rpe.cli._clap_options import ClapAmodelOption, ClapCheckpointOption
 
 
 @app.command()
@@ -46,24 +47,8 @@ def extract(
             "LearnedAudioAnnotations.semantic_axis_sections."
         ),
     ),
-    clap_checkpoint: Optional[str] = typer.Option(
-        None,
-        "--clap-checkpoint",
-        help=(
-            "Local path to a CLAP checkpoint to pin (e.g. the "
-            "fixture-provenance music_audioset_epoch_15_esc_90.14.pt). "
-            "Default None keeps upstream's default checkpoint download."
-        ),
-    ),
-    clap_amodel: Optional[str] = typer.Option(
-        None,
-        "--clap-amodel",
-        help=(
-            "Audio-tower architecture matching the checkpoint family (the "
-            "music_* checkpoints require HTSAT-base). Default None = "
-            "upstream default HTSAT-tiny family."
-        ),
-    ),
+    clap_checkpoint: ClapCheckpointOption = None,
+    clap_amodel: ClapAmodelOption = None,
     lyrics: bool = typer.Option(
         False,
         "--lyrics",
