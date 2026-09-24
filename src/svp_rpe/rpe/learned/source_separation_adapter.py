@@ -237,6 +237,18 @@ def _read_metadata_snapshot(remote_dir: Path, model: str) -> _MetadataSnapshot:
     return _MetadataSnapshot(entries=tuple(entries))
 
 
+def _bag_metadata_file(remote_dir: Path, model: str) -> Optional[Path]:
+    """bag モデルの定義 YAML（`htdemucs_ft.yaml`）。単体モデルなら None。
+
+    bag YAML は **実行時のモデル入力**である: 使用する checkpoint signature を選び、
+    `weights`（ソース別重み付け）や `segment` など `BagOfModels` 構築時に読まれる
+    フィールドを持つ。同じ `.th` でも bag メタデータが違えば別の vocals stem が出る
+    ため、`separation_weights_sha256` の hash 対象に含める（Codex #217）。
+    """
+    bag_yaml = remote_dir / f"{model}.yaml"
+    return bag_yaml if bag_yaml.is_file() else None
+
+
 def _expected_weight_filenames(
     model: str, snapshot: "Optional[_MetadataSnapshot]" = None
 ) -> List[str]:

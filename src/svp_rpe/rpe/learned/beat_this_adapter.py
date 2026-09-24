@@ -16,13 +16,13 @@ See docs/learned_models_policy.md for the full policy.
 from __future__ import annotations
 
 import importlib
-import importlib.metadata as _pkg_metadata  # noqa: F401 (test monkeypatch 互換のため module 属性として維持)
+import importlib.metadata as _pkg_metadata
+import sys
 from typing import Any, Iterable, Optional
 
 import numpy as np
 
 from svp_rpe.rpe.learned import LearnedModelUnavailable
-from svp_rpe.rpe.learned.version_probe import detect_installed_version
 from svp_rpe.rpe.models import (
     LearnedAudioAnnotations,
     LearnedModelInfo,
@@ -69,7 +69,15 @@ def _detect_beat_this_version() -> Optional[str]:
     None when neither path resolves — provenance is still emitted, just
     without a version string.
     """
-    return detect_installed_version(_BEAT_THIS_PACKAGE)
+    root = sys.modules.get(_BEAT_THIS_PACKAGE)
+    if root is not None:
+        candidate = getattr(root, "__version__", None)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    try:
+        return _pkg_metadata.version(_BEAT_THIS_PACKAGE)
+    except _pkg_metadata.PackageNotFoundError:
+        return None
 
 
 def extract_beat_this_annotations(

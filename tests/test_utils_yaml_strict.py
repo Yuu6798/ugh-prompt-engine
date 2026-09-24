@@ -1,8 +1,10 @@
 """tests/test_utils_yaml_strict.py — `utils/yaml_strict` の単体テスト。
 
 `melody/representation.py` と 6 本の `scripts/*.py` で独立複製されていた
-「重複 mapping キーを拒否する SafeLoader」構築ロジックを一本化した
-`make_no_dup_safe_loader` / `safe_load_no_duplicate_keys` を直接検証する。
+「重複 mapping キーを拒否する SafeLoader」構築ロジックのうち、
+`melody/representation.py` 側だけを一本化した `make_no_dup_safe_loader` /
+`safe_load_no_duplicate_keys` を直接検証する（`scripts/*.py` 側は generator
+provenance closure に参加するため意図的に独立のまま残す）。
 """
 from __future__ import annotations
 

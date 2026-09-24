@@ -33,12 +33,12 @@ Performance note:
 from __future__ import annotations
 
 import importlib
-import importlib.metadata as _pkg_metadata  # noqa: F401 (test monkeypatch 互換のため module 属性として維持)
+import importlib.metadata as _pkg_metadata
+import sys
 from pathlib import Path
 from typing import Any, Iterable, Optional, Union
 
 from svp_rpe.rpe.learned import LearnedModelIncompatible, LearnedModelUnavailable
-from svp_rpe.rpe.learned.version_probe import detect_installed_version
 from svp_rpe.rpe.models import (
     LearnedAudioAnnotations,
     LearnedModelInfo,
@@ -84,10 +84,18 @@ def _detect_basic_pitch_version() -> Optional[str]:
 
     Same fallback chain as the other adapters: imported package
     `__version__` first, then importlib.metadata, then None.
-    PyPI distribution name is "basic-pitch" (hyphen), which differs from the
-    importable module name `_BASIC_PITCH_PACKAGE` ("basic_pitch").
     """
-    return detect_installed_version(_BASIC_PITCH_PACKAGE, dist_name="basic-pitch")
+    root = sys.modules.get(_BASIC_PITCH_PACKAGE)
+    if root is not None:
+        candidate = getattr(root, "__version__", None)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    try:
+        # PyPI distribution name is "basic-pitch" (hyphen). importlib.metadata
+        # accepts either form — it normalises hyphens / underscores per PEP 503.
+        return _pkg_metadata.version("basic-pitch")
+    except _pkg_metadata.PackageNotFoundError:
+        return None
 
 
 def basic_pitch_weight_files() -> "tuple[list[Path], Optional[Path]]":

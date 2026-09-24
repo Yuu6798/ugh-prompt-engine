@@ -15,14 +15,7 @@ from svp_rpe.eval.delta_e_alignment import delta_e_profile_alignment
 from svp_rpe.eval.semantic_similarity import por_lexical_similarity
 from svp_rpe.keys import weighted_key_score
 from svp_rpe.rpe.models import RPEBundle
-from svp_rpe.semantic_ci.core import (
-    _condition_key,
-    _feature_bounds,
-    _label_aliases,
-    _labels_from_rule,
-    _normalize_label,
-    neutral_band_bounds,
-)
+from svp_rpe.semantic_ci.core import neutral_band_bounds
 from svp_rpe.semantic_ci.models import ObservedRPE
 from svp_rpe.semantic_ci.observed_adapter import rpe_bundle_to_observed
 from svp_rpe.sentinels import is_todo_sentinel
@@ -519,6 +512,33 @@ def _semantic_rules_for_feature(feature_name: str) -> list[dict[str, Any]]:
     return rules
 
 
+def _feature_bounds(feature_name: str, condition: Mapping[str, Any]) -> Optional[dict[str, float]]:
+    bounds: dict[str, float] = {}
+    saw_feature = False
+    for raw_key, raw_value in condition.items():
+        condition_feature, operator = _condition_key(raw_key)
+        if condition_feature != feature_name:
+            continue
+        saw_feature = True
+        if operator == ">=":
+            bounds["min"] = float(raw_value)
+        elif operator == "<=":
+            bounds["max"] = float(raw_value)
+    return bounds if saw_feature else None
+
+
+def _labels_from_rule(rule: Mapping[str, Any]) -> list[str]:
+    labels: list[str] = []
+    for item in rule.get("labels", []):
+        if isinstance(item, str):
+            labels.append(item)
+        else:
+            label = item.get("label")
+            if label:
+                labels.append(str(label))
+    return labels
+
+
 def _condition_matches_observed(condition: Mapping[str, Any], metrics: Mapping[str, Any]) -> bool:
     for raw_key, expected in condition.items():
         feature_name, operator = _condition_key(raw_key)
@@ -541,6 +561,28 @@ def _condition_matches_observed(condition: Mapping[str, Any], metrics: Mapping[s
 
 def _condition_feature_names(condition: Mapping[str, Any]) -> set[str]:
     return {_condition_key(raw_key)[0] for raw_key in condition}
+
+
+def _label_aliases(label: str) -> set[str]:
+    aliases = {label}
+    try:
+        config = load_config("synonym_map")
+    except FileNotFoundError:
+        return aliases
+
+    for group in config.get("groups", []):
+        normalized_group = {_normalize_label(str(item)) for item in group}
+        if label in normalized_group:
+            aliases.update(normalized_group)
+    return aliases
+
+
+def _condition_key(raw_key: str) -> tuple[str, str]:
+    if raw_key.endswith("_min"):
+        return raw_key[: -len("_min")], ">="
+    if raw_key.endswith("_max"):
+        return raw_key[: -len("_max")], "<="
+    return raw_key, "=="
 
 
 def _parse_numeric_range(target: Any) -> Optional[tuple[float, float]]:
@@ -577,6 +619,10 @@ def _numeric_metric(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _normalize_label(value: str) -> str:
+    return value.strip().lower()
 
 
 def _normalize_transition(value: str) -> str:

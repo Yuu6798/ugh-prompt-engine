@@ -165,7 +165,6 @@ import build_melody_bench as bmb  # noqa: E402
 import run_melody_comparison as harness  # noqa: E402
 from make_melody_pairs import make_variants  # noqa: E402
 from svp_rpe.utils.hashing import file_sha256  # noqa: E402
-from svp_rpe.utils.yaml_strict import make_no_dup_safe_loader  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 # 既定パス
@@ -378,12 +377,23 @@ def _repo_rel(path: "str | Path") -> str:
     return Path(os.path.relpath(resolved, ROOT)).as_posix()
 
 
-def _dup_key_error(key: Any) -> BuildM3dPairsError:
-    return BuildM3dPairsError(f"duplicate YAML mapping key {key!r} (fail-closed)")
+class _NoDupSafeLoader(yaml.SafeLoader):
+    """重複 mapping キーを拒否する SafeLoader（`run_melody_comparison.py` と同型）。"""
 
 
-# 重複 mapping キーを拒否する SafeLoader（`run_melody_comparison.py` と同型）。
-_NoDupSafeLoader = make_no_dup_safe_loader(_dup_key_error)
+def _no_dup_construct_mapping(loader: "yaml.SafeLoader", node: Any, deep: bool = False) -> Dict[Any, Any]:
+    mapping: Dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise BuildM3dPairsError(f"duplicate YAML mapping key {key!r} (fail-closed)")
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_NoDupSafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dup_construct_mapping
+)
 
 
 def _yaml_load_no_dup_keys(data: bytes) -> Any:

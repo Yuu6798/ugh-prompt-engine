@@ -36,13 +36,14 @@ same-machine 決定論契約（TF カーネル選択でクロスマシンの浮�
 from __future__ import annotations
 
 import importlib
+import importlib.metadata as _pkg_metadata
+import sys
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 import numpy as np
 
 from svp_rpe.rpe.learned import LearnedModelIncompatible, LearnedModelUnavailable
-from svp_rpe.rpe.learned.version_probe import detect_installed_version
 from svp_rpe.rpe.models import LearnedModelInfo
 
 __all__ = [
@@ -102,7 +103,15 @@ def ensure_crepe_available() -> None:
 
 
 def _detect_crepe_version() -> Optional[str]:
-    return detect_installed_version(_MODULE_NAME)
+    root = sys.modules.get(_MODULE_NAME)
+    if root is not None:
+        candidate = getattr(root, "__version__", None)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    try:
+        return _pkg_metadata.version(_MODULE_NAME)
+    except _pkg_metadata.PackageNotFoundError:
+        return None
 
 
 def crepe_weight_files(capacity: str = _DEFAULT_CAPACITY) -> List[Path]:

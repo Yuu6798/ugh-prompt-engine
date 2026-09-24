@@ -106,7 +106,6 @@ import svp_rpe.melody.extractors as _m3_extractors_module  # noqa: E402
 import svp_rpe.melody.observability as _m3_observability_module  # noqa: E402
 import svp_rpe.melody.representation as _m3_representation_module  # noqa: E402
 import svp_rpe.melody.routing as _m3_routing_module  # noqa: E402
-from svp_rpe.utils.yaml_strict import make_no_dup_safe_loader  # noqa: E402
 # レビュー対応 2026-07-30（第 18 ラウンド）: `svp_rpe.rpe.learned.crepe_adapter` の
 # トップレベル import は軽量（numpy + stdlib + 兄弟パッケージのみ）——`crepe`
 # 本体は `importlib.import_module("crepe")` で関数内遅延 import されるため、
@@ -198,15 +197,26 @@ def _atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
-def _dup_key_error(key: Any) -> ValueError:
-    return ValueError(
-        f"duplicate YAML mapping key {key!r}; last-wins で pre-registration block を "
-        "隠す穴を弾く (fail-closed)"
-    )
+class _NoDupSafeLoader(yaml.SafeLoader):
+    """重複 mapping キーを拒否する SafeLoader（`representation.py` / M1 harness と同型）。"""
 
 
-# 重複 mapping キーを拒否する SafeLoader（`representation.py` / M1 harness と同型）。
-_NoDupSafeLoader = make_no_dup_safe_loader(_dup_key_error)
+def _no_dup_construct_mapping(loader: "yaml.SafeLoader", node: Any, deep: bool = False) -> Dict[Any, Any]:
+    mapping: Dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise ValueError(
+                f"duplicate YAML mapping key {key!r}; last-wins で pre-registration block を "
+                "隠す穴を弾く (fail-closed)"
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_NoDupSafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dup_construct_mapping
+)
 
 
 def _yaml_load_no_dup_keys(data: bytes, *, what: str) -> Any:

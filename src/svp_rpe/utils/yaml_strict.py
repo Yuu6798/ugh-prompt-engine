@@ -2,9 +2,20 @@
 
 `_no_dup_construct_mapping`（mapping ノードを walk し、同一キーが 2 度現れたら
 fail-closed で拒否する `construct_mapping` 実装）+ それを ``DEFAULT_MAPPING_TAG``
-へ ``add_constructor`` する ``_NoDupSafeLoader`` サブクラス定義が、
-``melody/representation.py`` と 6 本の ``scripts/*.py`` に独立複製されていたため
-ここへ一本化する。
+へ ``add_constructor`` する ``_NoDupSafeLoader`` サブクラス定義は、元々
+``melody/representation.py`` と 6 本の ``scripts/*.py`` に独立複製されていた。
+現在ここへ一本化しているのは ``melody/representation.py`` のみで、
+``scripts/*.py`` 側の複製は意図的に独立のまま残す。
+
+**``scripts/*.py`` を dedup しない理由**: これらのスクリプトは generator
+provenance closure（自身の `.py` bytes や、AST import 走査で辿る first-party
+コード一式の sha256）を自己計算し、その digest を実測結果に埋め込む
+（`generator_code_sha256` / `generator_script_sha256`）。一部は committed な
+測定記録（`docs/measurements/**/*.json`）にその digest を pin 済み。ここで
+本モジュールを import させると (1) 既存 pin と bytes が食い違い記録が壊れるか、
+(2) 新規 import が closure 探索に混入して hash が不完全に変わるかのいずれかに
+なる。したがって dedup は「provenance closure に参加しないコード」に限定する
+（本モジュール自身と ``melody/representation.py`` はそれに該当する）。
 
 各呼び出しサイトの duplicate-key エラーメッセージ・例外型はサイトごとに異なる
 （登録簿名の埋め込み・``ValueError``/``GenerationError``/``BuildM3dPairsError``
@@ -73,7 +84,8 @@ def make_no_dup_safe_loader(
 def safe_load_no_duplicate_keys(data: "str | bytes", *, context: str) -> Any:
     """重複 mapping キーを拒否しつつ YAML を parse する汎用ヘルパー。
 
-    既存 7 サイトはそれぞれ固有のエラーメッセージ/例外型を持つため
+    既存の呼び出しサイト（``melody/representation.py`` と、独立複製のまま残る
+    6 本の ``scripts/*.py``）はそれぞれ固有のエラーメッセージ/例外型を持つため
     ``make_no_dup_safe_loader`` を直接使うが、本関数は「サイト固有の文言を
     必要としない新規呼び出し元」向けの簡易版（``ValueError`` + ``context`` を
     埋め込んだ汎用メッセージ）。
