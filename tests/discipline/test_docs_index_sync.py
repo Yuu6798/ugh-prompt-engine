@@ -9,10 +9,15 @@ CLAUDE.md「設計ドキュメント索引」節とドキュメント管理ポ�
 2. 同様に全件 `docs/README.md` の索引（`(x.md)` / `(./x.md)` 形式のリンク）
    に掲載されていること
 3. どちらの索引にも実在しない docs ファイルへのリンクがないこと
+4. CLAUDE.md の行は表示パス（バッククォート内）とリンク先（`()` 内）が
+   一致していること（表示だけ正しくリンク先が別ファイルを指す drift を防ぐ。
+   `docs/README.md` のリンクは表示テキストが自由文で機械的な表示/リンク先の
+   対応がないため、リンク先そのものを直接検証しており本項の対象外）
 """
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 import pytest
 
@@ -22,17 +27,52 @@ CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 DOCS_README = REPO_ROOT / "docs" / "README.md"
 DOCS_DIR = REPO_ROOT / "docs"
 
-# CLAUDE.md 索引表の行: `| [`docs/x.md`](docs/x.md) | 内容 |`
-_CLAUDE_MD_ROW_RE = re.compile(r"\[`docs/([A-Za-z0-9_.]+\.md)`\]\(docs/[A-Za-z0-9_.]+\.md\)")
+# CLAUDE.md 索引表の行: `| [`docs/x.md`](docs/y.md) | 内容 |`
+# group 1 = 表示パス（バッククォート内）, group 2 = リンク先（`()` 内）。
+# 両者は本来常に同一ファイルを指すべきだが、別々に捕捉することで
+# 「表示は正しいがリンク先が別ファイル」という drift を検出できるようにする。
+_CLAUDE_MD_ROW_RE = re.compile(
+    r"\[`docs/([A-Za-z0-9_.]+\.md)`\]\(docs/([A-Za-z0-9_.]+\.md)\)"
+)
 
 # docs/README.md のリンク: `(x.md)` または `(./x.md)`。`../` や `sub/x.md` は
 # docs/ 直下ではない参照（AGENTS.md や voice_genesis/ 配下など）なので、
 # スラッシュを含まないファイル名のみを対象にする。
+# 表示テキストは `[Example A](x.md)` のように自由文のプローズであり
+# `docs/x.md` 形式の表示/リンク先の対応が存在しないため、このリンクは
+# リンク先 `(x.md)` そのものを直接抽出・検証している（表示側と比較する
+# 余地がない = 本ファイルの display/destination mismatch チェックの対象外）。
 _DOCS_README_LINK_RE = re.compile(r"\]\((?:\./)?([A-Za-z0-9_.]+\.md)\)")
 
 
+@dataclass(frozen=True)
+class ClaudeMdRow:
+    """CLAUDE.md 索引表の 1 行から抽出した表示パス / リンク先 / 元テキスト。"""
+
+    display: str
+    destination: str
+    row_text: str
+
+
+def _parse_claude_md_rows(text: str) -> list[ClaudeMdRow]:
+    rows = []
+    for line in text.splitlines():
+        match = _CLAUDE_MD_ROW_RE.search(line)
+        if match:
+            rows.append(
+                ClaudeMdRow(display=match.group(1), destination=match.group(2), row_text=line.strip())
+            )
+    return rows
+
+
 def _claude_md_index_docs(text: str) -> set[str]:
-    return set(_CLAUDE_MD_ROW_RE.findall(text))
+    """索引表に掲載されている docs ファイル名（表示パス基準）の集合。"""
+    return {row.display for row in _parse_claude_md_rows(text)}
+
+
+def _claude_md_index_targets(text: str) -> set[str]:
+    """索引表の実際のリンク先（クリック時の遷移先）の集合。"""
+    return {row.destination for row in _parse_claude_md_rows(text)}
 
 
 def _docs_readme_index_docs(text: str) -> set[str]:
@@ -65,6 +105,14 @@ def _assert_no_broken_links(
     )
 
 
+def _assert_claude_md_targets_match_display(text: str, *, source: str) -> None:
+    mismatches = [row for row in _parse_claude_md_rows(text) if row.display != row.destination]
+    assert not mismatches, (
+        f"{source} に表示パスとリンク先が食い違う行がある（クリック先が表示と別ファイルを指す）:\n"
+        + "\n".join(f"  {row.row_text}" for row in mismatches)
+    )
+
+
 def test_claude_md_index_covers_all_docs():
     _assert_all_docs_indexed(
         CLAUDE_MD.read_text(encoding="utf-8"),
@@ -85,12 +133,20 @@ def test_docs_readme_index_covers_all_docs():
 
 def test_claude_md_index_has_no_broken_links():
     # docs/README.md 自身も docs/ 直下の実在ファイルなのでリンク先として許容する。
+    # ここでは表示パスではなく実際のクリック先（destination）を検証する。
     existing = _real_docs_files() | {"README.md"}
     _assert_no_broken_links(
         CLAUDE_MD.read_text(encoding="utf-8"),
         existing,
         source="CLAUDE.md の設計ドキュメント索引表",
-        extractor=_claude_md_index_docs,
+        extractor=_claude_md_index_targets,
+    )
+
+
+def test_claude_md_index_targets_match_display():
+    _assert_claude_md_targets_match_display(
+        CLAUDE_MD.read_text(encoding="utf-8"),
+        source="CLAUDE.md の設計ドキュメント索引表",
     )
 
 
@@ -135,3 +191,9 @@ def test_parser_detects_broken_link_fixture():
             source="fixture",
             extractor=_claude_md_index_docs,
         )
+
+
+def test_parser_detects_mismatched_target_fixture():
+    text = (FIXTURES / "docs_index_mismatched_target.md").read_text(encoding="utf-8")
+    with pytest.raises(AssertionError, match="表示パスとリンク先が食い違う"):
+        _assert_claude_md_targets_match_display(text, source="fixture")

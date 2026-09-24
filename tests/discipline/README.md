@@ -16,7 +16,9 @@ AGENTS.md §8）を CI 失敗に変換する実行可能チェック群。semant
   限定し、詳細は docs/README.md 索引経由の docs/*.md へ）。
 - `test_docs_index_sync.py`: `docs/*.md` 全件が CLAUDE.md の設計ドキュメント
   索引表と docs/README.md の索引の両方に掲載され、かつ双方に実在しない
-  docs ファイルへのリンクがないことを検証する。
+  docs ファイルへのリンクがないことを検証する。CLAUDE.md の行はさらに
+  表示パス（バッククォート内）とリンク先（`()` 内）が一致することも検証し、
+  表示は正しいがクリック先が別ファイルを指す drift を検出する。
 - `test_ci_m2_shards.py`: M2 の shard matrix と shell 側の分割数を一致させ、
   末尾 shard の静かな未実行を防ぐ。
 - `test_ci_foundry_coverage.py`: Foundry の全 `test_*.py` を通常 CI 対象か
