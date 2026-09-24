@@ -24,7 +24,6 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import yaml
 
 from svp_rpe.melody.observability import MelodyNote
-from svp_rpe.utils.yaml_strict import make_no_dup_safe_loader
 
 __all__ = [
     "RepresentationConfig",
@@ -479,15 +478,26 @@ def _validate_separation_margin_values(config: "SeparationMarginConfig") -> None
         )
 
 
-def _dup_key_error(key: Any) -> ValueError:
-    return ValueError(
-        f"duplicate YAML mapping key {key!r} in m3_comparison_registry.yaml; "
-        "last-wins で pre-registration block を隠す穴を弾く (fail-closed)"
-    )
+class _NoDupSafeLoader(yaml.SafeLoader):
+    """重複 mapping キーを拒否する SafeLoader（`scripts/run_melody_observability.py` と同型）。"""
 
 
-# 重複 mapping キーを拒否する SafeLoader（`scripts/run_melody_observability.py` と同型）。
-_NoDupSafeLoader = make_no_dup_safe_loader(_dup_key_error)
+def _no_dup_construct_mapping(loader: "yaml.SafeLoader", node: Any, deep: bool = False) -> Dict[Any, Any]:
+    mapping: Dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise ValueError(
+                f"duplicate YAML mapping key {key!r} in m3_comparison_registry.yaml; "
+                "last-wins で pre-registration block を隠す穴を弾く (fail-closed)"
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_NoDupSafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dup_construct_mapping
+)
 
 
 def load_m3_registry(path: "str | Path") -> Tuple[M3ComparisonConfig, str]:
