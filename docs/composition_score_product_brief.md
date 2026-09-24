@@ -759,7 +759,7 @@ CompositionScoreを新設し、内部でTargetSVPへ変換する。
    - max_chars compression
    - dropped_elements tracking
 
-5. `src/svp_rpe/cli.py`
+5. `src/svp_rpe/cli/compose_cmd.py`
    - `svprpe compose score.yaml`
    - `--output`
    - `--format text|json`

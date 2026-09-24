@@ -800,6 +800,20 @@ printed — a single failure never hides the rest (exit `1` if *any* check
 fails, across the root or any build). The run ends with a summary line:
 `builds N, checked M, failed K`.
 
+### `svprpe recast`
+
+`RecastProject`（既存 `CompositionScore`/`IdentityManifest`/`ArrangementSpec`/
+`InputCapabilityProfile` sidecar への参照 + 実行方針のみのワークスペース定義、
+`recast-project/0.1`）を state machine で駆動するサブアプリ。ここでは
+サブコマンド一覧のみ挙げる — 各コマンドの引数・出力・状態遷移の一次資料は
+[`recast_workspace.md`](recast_workspace.md) §4「CLI フロー」。
+
+- `svprpe recast init` — 音源から project 雛形を生成（対話式 `semantic.core`/`avoid`）
+- `svprpe recast plan` — 受付: 診断表 + `recast_plan.json` + state 記録
+- `svprpe recast run` — 執行: manual バックエンドは注文書一式、local バックエンドは実生成
+- `svprpe recast ingest` — manual 執行後の収蔵（+ observe → report 自動継続）
+- `svprpe recast status` — 全 (variant, backend) の到達状態 + 次の一手
+
 ### `svprpe measure <audio>`
 
 Measure the seven required `CompositionScore.physical` fields from one audio file.

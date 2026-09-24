@@ -107,6 +107,8 @@ src/svp_rpe/                # Main package (src layout)
 ├── calibration/            # ジャンル/楽器語彙コーパス校正 (genre-calibrate / genre-audit)
 ├── arrange/                # ArrangementSpec: 決定論的 override/resolve/compile + sidecar (AR 系列)
 ├── recast/                 # RecastProject: 既存 sidecar への参照+実行方針ワークスペース定義
+├── authoring/              # L0a 著述契約: spec loader / 記号検証ゲート / 信頼軸表導出
+├── intent/                 # Intent Graph v0: 充足/不足のポインタ台帳 (models/loader/frontier)
 ├── batch/                  # 複数ファイルの一括処理
 ├── config/                 # config/*.yaml のパッケージ同梱コピー
 └── utils/                  # config loader・clamp・atomic write・hashing 等の共通ユーティリティ
@@ -131,19 +133,16 @@ examples/                   # sample_input/ + expected_output/ + composition/rou
 ## Development
 
 ```bash
-# Lint
+pip install -e ".[dev]"
 ruff check .
-
-# Test
-pytest -q --tb=short
-
-# CLI help
+pytest -q --tb=short              # 全件（音声合成+抽出を含むため数分）
+pytest -m "not slow" -q           # 日常の反復用の高速サブセット（重い統合/コーパス/property を除外）
 svprpe --help
 ```
 
 ## Documentation
 
-全 42 件の設計ドキュメント索引（カテゴリ別）は [`docs/README.md`](docs/README.md)
+設計ドキュメントの全件索引（カテゴリ別）は [`docs/README.md`](docs/README.md)
 を参照。ここには核心 doc のみ抜粋する。
 
 - [Architecture](docs/architecture.md) — Two-part design (measurement three-layer + score track), module overview
