@@ -39,14 +39,20 @@ def sine_wave_stereo(tmp_path):
     return str(path)
 
 
-def assert_no_outcome_keys(value):
-    """audit 哲学の横断不変条件: verdict / passed / loss キーが存在しないこと。"""
+#: 各テストファイルの private コピー（roundtrip_preservation / roundtrip_repetition /
+#: roundtrip_corpus / identity_rank / genre_misfire_audit）で禁止されていたキーの和集合。
+DEFAULT_FORBIDDEN_OUTCOME_KEYS: frozenset[str] = frozenset(
+    {"verdict", "passed", "pass", "failed", "fail", "ok", "loss", "threshold"}
+)
+
+
+def assert_no_outcome_keys(value, forbidden: frozenset[str] = DEFAULT_FORBIDDEN_OUTCOME_KEYS):
+    """audit 哲学の横断不変条件: verdict / passed / loss 等の outcome キーが存在しないこと。"""
     if isinstance(value, dict):
-        assert "verdict" not in value
-        assert "passed" not in value
-        assert "loss" not in value
+        for key in forbidden:
+            assert key not in value
         for item in value.values():
-            assert_no_outcome_keys(item)
+            assert_no_outcome_keys(item, forbidden)
     elif isinstance(value, list):
         for item in value:
-            assert_no_outcome_keys(item)
+            assert_no_outcome_keys(item, forbidden)

@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 import pytest
+from _shared_helpers import copy_demo_project as _copy_demo_project
 from typer.testing import CliRunner
 
 from svp_rpe.cli import app
@@ -14,20 +14,7 @@ from svp_rpe.recast.backend import resolve_invoker, run_context_from_plan_artifa
 from svp_rpe.recast.plan import build_recast_plan_artifacts
 from svp_rpe.recast.state import load_recast_state
 
-DEMO_PROJECT = Path("examples/recast/demo_project")
-
 runner = CliRunner()
-
-
-def _copy_demo_project(tmp_path: Path) -> Path:
-    dest = tmp_path / "demo_project"
-    dest.mkdir()
-    shutil.copy(DEMO_PROJECT / "project.yaml", dest / "project.yaml")
-    shutil.copy(DEMO_PROJECT / "composition_score.yaml", dest / "composition_score.yaml")
-    shutil.copy(DEMO_PROJECT / "identity.yaml", dest / "identity.yaml")
-    shutil.copytree(DEMO_PROJECT / "identity", dest / "identity")
-    shutil.copytree(DEMO_PROJECT / "arrangements", dest / "arrangements")
-    return dest / "project.yaml"
 
 
 def _add_deterministic_variant(project_path: Path) -> None:

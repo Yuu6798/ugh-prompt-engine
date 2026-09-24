@@ -41,6 +41,7 @@ def _fake_stem_bundle(source_path: str = "fixture.wav") -> StemBundle:
     )
 
 
+@pytest.mark.slow
 def test_empty_stem_rpe_is_omitted_from_model_dump(sine_wave_mono: str) -> None:
     audio = load_audio(sine_wave_mono)
     physical, _, _ = extract_physical(audio)
@@ -49,6 +50,7 @@ def test_empty_stem_rpe_is_omitted_from_model_dump(sine_wave_mono: str) -> None:
     assert "stem_rpe" not in physical.model_dump()
 
 
+@pytest.mark.slow
 def test_extract_physical_populates_non_recursive_stem_rpe(sine_wave_mono: str) -> None:
     audio = load_audio(sine_wave_mono)
     stem_bundle = _fake_stem_bundle(sine_wave_mono)

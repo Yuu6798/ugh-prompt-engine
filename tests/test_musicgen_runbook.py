@@ -9,7 +9,6 @@ audio and is marked `slow` per-test.
 """
 from __future__ import annotations
 
-import hashlib
 import importlib
 import json
 import runpy
@@ -19,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import soundfile as sf
+from _shared_helpers import sha256 as _sha256
 from pydantic import ValidationError
 
 from scripts.collect_musicgen_takes import (
@@ -293,10 +293,6 @@ def _write_wav(
     tone = (0.2 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
     y = _click_track(duration=seconds, bpm=bpm, sample_rate=sample_rate) + tone
     sf.write(str(path), y, sample_rate)
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _build_takes_manifest(audio_dir: Path) -> dict:

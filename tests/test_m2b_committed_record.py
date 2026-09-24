@@ -26,9 +26,10 @@ outcomes）は pinned reports への読み戻し照合で別途検証する。mi
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
+
+from _shared_helpers import sha256 as _sha256
 
 REPO = Path(__file__).resolve().parents[1]
 RECORD_DIR = REPO / "docs" / "measurements" / "m2b_2026-07"
@@ -39,10 +40,6 @@ SPECS = REPO / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_specs.yaml"
 # 確定実測 run7 の verdict bytes の凍結 digest。dated 凍結記録なので、これが
 # 変わる正当な事象は「新しい dated 記録の作成」のみ（一方向規則）。
 VERDICT_SHA256 = "7f0e314df07a2f14e0cb8c6deb059134ba3ce8bd35aaeaf02dffb06a55bf5c51"
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _pinned_report_paths(verdict: dict) -> list[Path]:

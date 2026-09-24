@@ -275,6 +275,7 @@ class TestStructureLabels:
 
 
 class TestComparison:
+    @pytest.mark.slow
     def test_compare_self(self, sine_wave_mono):
         audio = load_audio(sine_wave_mono)
         rpe = extract_rpe(audio)
@@ -472,6 +473,7 @@ class TestComputePhysicalDiffValleyMethodGate:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 class TestExtractorV2:
     def test_extract_physical_returns_tuple(self, sine_wave_mono):
         audio = load_audio(sine_wave_mono)

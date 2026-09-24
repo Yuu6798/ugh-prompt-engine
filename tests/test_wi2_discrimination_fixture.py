@@ -26,7 +26,8 @@ import re
 from pathlib import Path
 
 import pytest
-import yaml
+from _shared_helpers import load_json as _load_json
+from _shared_helpers import load_yaml as _load_yaml
 
 from svp_rpe.roundtrip.identity_rank import identity_rank_from_paths
 
@@ -47,14 +48,6 @@ PLAN_CONFIRMED_AT_UTC = "2026-07-21T06:27:42Z"
 RANKED_CELLS_AND_TAKES: tuple[tuple[str, int], ...] = tuple(
     (cell, take) for cell in ("A", "C", "D") for take in range(4)
 )
-
-
-def _load_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _load_yaml(path: Path) -> dict:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def _rank_report_path(cell: str, take: int) -> Path:

@@ -1,6 +1,8 @@
 """tests/test_svp_generator.py — SVP generation + evaluation tests."""
 from __future__ import annotations
 
+import pytest
+
 from svp_rpe.eval.scorer_integrated import score_integrated
 from svp_rpe.eval.scorer_rpe import score_rpe
 from svp_rpe.eval.scorer_ugher import score_ugher
@@ -13,6 +15,7 @@ from svp_rpe.svp.render_text import render_text
 from svp_rpe.svp.render_yaml import render_yaml
 
 
+@pytest.mark.slow
 class TestSVPGeneration:
     def test_generate_svp_from_audio(self, sine_wave_mono):
         audio = load_audio(sine_wave_mono)
@@ -56,6 +59,7 @@ class TestSVPGeneration:
         assert svp.analysis_rpe.por_core == rpe.semantic.por_core
 
 
+@pytest.mark.slow
 class TestEvaluation:
     def test_rpe_score_in_range(self, sine_wave_mono):
         audio = load_audio(sine_wave_mono)
@@ -95,6 +99,7 @@ class TestEvaluation:
         assert hasattr(integrated, "integrated_score")
 
 
+@pytest.mark.slow
 class TestFullPipeline:
     def test_end_to_end_deterministic(self, sine_wave_mono):
         """AC-04: Same input 2 runs → identical output."""

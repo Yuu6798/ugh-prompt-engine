@@ -48,6 +48,7 @@ class TestPhysicalFeatures:
         # Default method switched hybrid -> v2 (Metrics v2 rollout).
         assert diag.method == "v2"
 
+    @pytest.mark.slow
     def test_valley_depth_legacy_holds_hybrid_value_under_v2_default(self, sine_wave_mono):
         # PhysicalRPE.valley_depth_legacy must be populated with the pre-v2
         # hybrid value even though valley_depth/valley_depth_method default
@@ -70,6 +71,7 @@ class TestPhysicalFeatures:
         )
         assert rpe.valley_depth_legacy == pytest.approx(hybrid_diag.hybrid_value)
 
+    @pytest.mark.slow
     def test_valley_depth_legacy_mirrors_selected_value_for_explicit_legacy_method(
         self, sine_wave_mono
     ):
@@ -86,6 +88,7 @@ class TestPhysicalFeatures:
         assert rpe.valley_depth_legacy == rpe.valley_depth
         assert rpe.valley_depth_legacy == valley_diag.rms_percentile_value
 
+    @pytest.mark.slow
     def test_valley_depth_legacy_mirrors_selected_value_for_section_ar_method(
         self, sine_wave_mono
     ):
@@ -132,6 +135,7 @@ class TestStructure:
 
 
 class TestExtractor:
+    @pytest.mark.slow
     def test_extract_physical_returns_valid(self, sine_wave_mono):
         audio = load_audio(sine_wave_mono)
         rpe, valley_diag, section_features = extract_physical(audio)
@@ -170,6 +174,7 @@ class TestExtractor:
         rpe2 = extract_physical_from_file(sine_wave_mono)
         assert rpe1.model_dump() == rpe2.model_dump()
 
+    @pytest.mark.slow
     def test_stereo_has_stereo_profile(self, sine_wave_stereo):
         audio = load_audio(sine_wave_stereo)
         rpe, _, _ = extract_physical(audio)

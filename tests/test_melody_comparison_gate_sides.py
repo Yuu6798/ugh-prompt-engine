@@ -14,56 +14,19 @@
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import List
 
-import yaml
+from _melody_helpers import default_config as _default_config
+from _melody_helpers import default_thresholds as _default_thresholds
+from _melody_helpers import good_notes as _good_notes
+from _melody_helpers import note as _note
 
 from svp_rpe.melody.comparison import compare_melodies
-from svp_rpe.melody.observability import MelodyNote, MelodyObservation, ObservabilityThresholds
-from svp_rpe.melody.representation import M3ComparisonConfig, load_m3_registry
-
-ROOT = Path(__file__).resolve().parents[1]
-BENCH_DIR = ROOT / "tests" / "fixtures" / "melody_bench"
-M1_REGISTRY_PATH = BENCH_DIR / "registry.yaml"
-M3_REGISTRY_PATH = BENCH_DIR / "m3_comparison_registry.yaml"
-
-
-def _default_config() -> M3ComparisonConfig:
-    config, _ = load_m3_registry(M3_REGISTRY_PATH)
-    return config
-
-
-def _default_thresholds() -> ObservabilityThresholds:
-    mapping = yaml.safe_load(M1_REGISTRY_PATH.read_text(encoding="utf-8"))
-    return ObservabilityThresholds.from_registry(mapping["observation_gate"])
-
-
-def _note(pitch_midi: float, start_sec: float, end_sec: float, confidence: float = 0.9) -> MelodyNote:
-    return MelodyNote(
-        start_sec=start_sec, end_sec=end_sec, pitch_midi=pitch_midi, confidence=confidence
-    )
+from svp_rpe.melody.observability import MelodyNote, MelodyObservation
 
 
 def _observation_from_notes(notes: List[MelodyNote], route: str = "test_route") -> MelodyObservation:
     return MelodyObservation(route=route, source_model="test:fake", notes=tuple(notes))
-
-
-# registry.yaml: min_note_count=8 / min_phrase_count=2 を満たす 2 フレーズ・
-# 10 ノート（`tests/test_melody_comparison.py::_good_notes` と同型パターン）。
-def _good_notes() -> List[MelodyNote]:
-    phrase1_pitches = [60, 62, 64, 65, 67]
-    phrase2_pitches = [69, 67, 65, 64, 62]
-    notes: List[MelodyNote] = []
-    t = 0.0
-    for p in phrase1_pitches:
-        notes.append(_note(p, t, t + 0.25))
-        t += 0.3
-    t += 1.0  # フレーズ境界（phrase_gap_sec=0.6 を超えるギャップ）
-    for p in phrase2_pitches:
-        notes.append(_note(p, t, t + 0.25))
-        t += 0.3
-    return notes
 
 
 def _sparse_notes(count: int) -> List[MelodyNote]:

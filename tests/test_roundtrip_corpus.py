@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 import pytest
+from conftest import assert_no_outcome_keys as _assert_no_outcome_keys
 from pydantic import ValidationError
 
 from svp_rpe.perform import sha256_bytes
@@ -17,17 +17,6 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = ROOT / "examples" / "roundtrip" / "corpus" / "manifest.yaml"
 SNAPSHOT_PATH = ROOT / "examples" / "roundtrip" / "corpus" / "batch_report.json"
 SYNTH_AUDIO = ROOT / "examples" / "sample_input" / "synth_05_fast_bright_d_major.wav"
-
-
-def _assert_no_outcome_keys(value: Any) -> None:
-    if isinstance(value, dict):
-        for forbidden in ("verdict", "passed", "pass", "failed", "fail", "ok", "loss"):
-            assert forbidden not in value
-        for item in value.values():
-            _assert_no_outcome_keys(item)
-    elif isinstance(value, list):
-        for item in value:
-            _assert_no_outcome_keys(item)
 
 
 def test_manifest_loads_observation_logs_and_calibratable_take():

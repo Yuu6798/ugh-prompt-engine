@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import assert_no_outcome_keys as _assert_no_outcome_keys
 
 from svp_rpe.compose import load_composition_score
 from svp_rpe.compose.models import CompositionScore
@@ -46,17 +47,6 @@ def _grips(**classes: str) -> dict[str, GripRecord]:
 
 def _field(report, name: str):
     return next(item for item in report.fields if item.field == name)
-
-
-def _assert_no_outcome_keys(value: Any) -> None:
-    if isinstance(value, dict):
-        for forbidden in ("verdict", "passed", "pass", "failed", "fail", "ok", "loss"):
-            assert forbidden not in value
-        for item in value.values():
-            _assert_no_outcome_keys(item)
-    elif isinstance(value, list):
-        for item in value:
-            _assert_no_outcome_keys(item)
 
 
 def test_diagnose_roundtrip_branches_are_descriptive_only():

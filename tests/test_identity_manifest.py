@@ -1,13 +1,13 @@
 """IdentityManifest schema + hash 付き loader のテスト (AR2-1)。"""
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+from _shared_helpers import sha256_bytes as _sha256
 from pydantic import ValidationError
 
 from svp_rpe.arrange import (
@@ -34,8 +34,6 @@ ANCHOR_ARTIFACT_META = {
 }
 
 
-def _sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def _write_artifacts(tmp_path: Path) -> dict[str, bytes]:

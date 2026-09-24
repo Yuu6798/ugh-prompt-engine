@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import soundfile as sf
+from _audio_fixtures import write_wav as _write_wav
 
 from scripts.collect_clap_fixture import (
     collect_fixture,
@@ -27,13 +27,6 @@ from scripts.collect_clap_fixture import (
     split_fixture,
     write_fixture,
 )
-
-
-def _write_wav(path: Path, *, seconds: float = 0.05, sample_rate: int = 48000) -> None:
-    n_samples = max(1, int(round(seconds * sample_rate)))
-    t = np.linspace(0, seconds, n_samples, endpoint=False)
-    y = (0.2 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
-    sf.write(str(path), y, sample_rate)
 
 
 def _install_fake_clap(monkeypatch: pytest.MonkeyPatch) -> dict:

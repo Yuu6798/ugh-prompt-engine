@@ -9,6 +9,8 @@ from typing import Optional
 
 import pytest
 import yaml
+from _shared_helpers import DEMO_PROJECT
+from _shared_helpers import copy_demo_project as _copy_demo_project
 
 from svp_rpe.recast import RecastError, load_recast_project
 from svp_rpe.recast.loader import LoadedRecastProject, load_mode_overrides
@@ -24,7 +26,6 @@ from svp_rpe.recast.plan import (
 from svp_rpe.recast.run_paths import collect_protected_input_paths
 from svp_rpe.recast.state import load_recast_state, record_state
 
-DEMO_PROJECT = Path("examples/recast/demo_project")
 EXPECTED_PLAN = DEMO_PROJECT / "expected" / "recast_plan_edm_suno.json"
 # R8-2 (Codex round8 P2 対応): 凍結済みの実 M1 registry（`tests/fixtures/
 # melody_bench/registry.yaml`）をコピーのみで再利用する（バイト不変・
@@ -55,19 +56,6 @@ def _persist_state(
     )
 
 
-def _copy_demo_project(tmp_path: Path) -> Path:
-    """demo_project の入力一式（project/score/identity/arrangements）を
-    tmp_path 配下へコピーする（`expected/` snapshot は意図的に除外 —
-    テストが自由に破壊改変できる作業コピーに、比較専用の committed 期待値を
-    混ぜない）。project.yaml への path を返す。"""
-    dest = tmp_path / "demo_project"
-    dest.mkdir()
-    shutil.copy(DEMO_PROJECT / "project.yaml", dest / "project.yaml")
-    shutil.copy(DEMO_PROJECT / "composition_score.yaml", dest / "composition_score.yaml")
-    shutil.copy(DEMO_PROJECT / "identity.yaml", dest / "identity.yaml")
-    shutil.copytree(DEMO_PROJECT / "identity", dest / "identity")
-    shutil.copytree(DEMO_PROJECT / "arrangements", dest / "arrangements")
-    return dest / "project.yaml"
 
 
 # --- happy path --------------------------------------------------------------

@@ -7,6 +7,8 @@ import shutil
 from pathlib import Path
 
 import pytest
+from _shared_helpers import DEMO_PROJECT
+from _shared_helpers import copy_demo_project as _copy_demo_project
 
 from svp_rpe.recast import RecastError, load_recast_project
 from svp_rpe.recast.backend import (
@@ -20,20 +22,7 @@ from svp_rpe.recast.backends.manual import ManualInvoker
 from svp_rpe.recast.backends.musicgen import MusicgenInvoker
 from svp_rpe.recast.plan import build_recast_plan_artifacts
 
-DEMO_PROJECT = Path("examples/recast/demo_project")
 EXPECTED_ORDERS = DEMO_PROJECT / "expected" / "orders" / "edm@suno"
-
-
-def _copy_demo_project(tmp_path: Path) -> Path:
-    """`tests/test_recast_plan.py` と同じ working-copy 構築（`expected/` は除外）。"""
-    dest = tmp_path / "demo_project"
-    dest.mkdir()
-    shutil.copy(DEMO_PROJECT / "project.yaml", dest / "project.yaml")
-    shutil.copy(DEMO_PROJECT / "composition_score.yaml", dest / "composition_score.yaml")
-    shutil.copy(DEMO_PROJECT / "identity.yaml", dest / "identity.yaml")
-    shutil.copytree(DEMO_PROJECT / "identity", dest / "identity")
-    shutil.copytree(DEMO_PROJECT / "arrangements", dest / "arrangements")
-    return dest / "project.yaml"
 
 
 def _add_target_backend_variant(project_path: Path, *, variant_name: str, target_backend: str) -> None:

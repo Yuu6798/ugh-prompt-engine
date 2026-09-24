@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _shared_helpers import copy_demo_project as _copy_demo_project
 from typer.testing import CliRunner
 
 from svp_rpe.arrange.observe import observe_generated_artifact
@@ -31,7 +32,6 @@ from svp_rpe.recast.state import load_recast_state
 from svp_rpe.rpe.models import ChordEvent, PhysicalRPE, RPEBundle, SectionMarker, SpectralProfile
 from svp_rpe.rpe.semantic_rules import generate_semantic
 
-DEMO_PROJECT = Path("examples/recast/demo_project")
 E2E_PROJECT = Path("examples/recast/e2e_project")
 
 runner = CliRunner()
@@ -60,17 +60,6 @@ _BACKENDS_WITH_MANUAL_DETERMINISTIC_BLOCK = (
 _OBSERVATION_DISABLED_BLOCK = "observation:\n  enabled: false\n  anchors: []\n"
 _OBSERVATION_ENABLED_BLOCK = "observation:\n  enabled: true\n  anchors: []\n"
 _OBSERVATION_ENABLED_HARMONY_ONLY_BLOCK = "observation:\n  enabled: true\n  anchors: [harmony]\n"
-
-
-def _copy_demo_project(tmp_path: Path, *, label: str) -> Path:
-    dest = tmp_path / f"demo_project_{label}"
-    dest.mkdir()
-    shutil.copy(DEMO_PROJECT / "project.yaml", dest / "project.yaml")
-    shutil.copy(DEMO_PROJECT / "composition_score.yaml", dest / "composition_score.yaml")
-    shutil.copy(DEMO_PROJECT / "identity.yaml", dest / "identity.yaml")
-    shutil.copytree(DEMO_PROJECT / "identity", dest / "identity")
-    shutil.copytree(DEMO_PROJECT / "arrangements", dest / "arrangements")
-    return dest / "project.yaml"
 
 
 def _copy_e2e_project(tmp_path: Path, *, label: str) -> Path:

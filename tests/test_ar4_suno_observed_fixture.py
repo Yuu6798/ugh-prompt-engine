@@ -18,11 +18,11 @@
 """
 from __future__ import annotations
 
-import hashlib
-import json
 from pathlib import Path
 
-import yaml
+from _shared_helpers import load_json as _load_json
+from _shared_helpers import load_yaml as _load_yaml
+from _shared_helpers import sha256 as _sha256
 
 from svp_rpe.arrange.observe import ObservationReport
 
@@ -54,18 +54,6 @@ REPO_COMPOSITION_SCORE_PATH = REPO_ROOT / "composition_score.yaml"
 REPO_LYRICS_PATH = REPO_ROOT / "identity" / "lyrics.txt"
 REPO_MELODY_PATH = REPO_ROOT / "identity" / "melody_notes.json"
 REPO_CHORD_PATH = REPO_ROOT / "identity" / "chord_progression.json"
-
-
-def _load_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _load_yaml(path: Path) -> dict:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 # --- 0. 事前登録・provenance の周辺ファイルが存在し読める -----------------------------
