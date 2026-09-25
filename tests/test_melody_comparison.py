@@ -31,8 +31,6 @@ from svp_rpe.melody.representation import (
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH_DIR = ROOT / "tests" / "fixtures" / "melody_bench"
-M1_REGISTRY_PATH = BENCH_DIR / "registry.yaml"
-M3_REGISTRY_PATH = BENCH_DIR / "m3_comparison_registry.yaml"
 
 
 def _with_evidence_thresholds(

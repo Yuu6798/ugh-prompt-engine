@@ -47,12 +47,22 @@ DEFAULT_FORBIDDEN_OUTCOME_KEYS: frozenset[str] = frozenset(
 
 
 def assert_no_outcome_keys(value, forbidden: frozenset[str] = DEFAULT_FORBIDDEN_OUTCOME_KEYS):
-    """audit 哲学の横断不変条件: verdict / passed / loss 等の outcome キーが存在しないこと。"""
-    if isinstance(value, dict):
-        for key in forbidden:
-            assert key not in value
-        for item in value.values():
-            assert_no_outcome_keys(item, forbidden)
-    elif isinstance(value, list):
-        for item in value:
-            assert_no_outcome_keys(item, forbidden)
+    """audit 哲学の横断不変条件: verdict / passed / loss 等の outcome キーが存在しないこと。
+
+    失敗時は違反キーとその出現パス（例: `sections/0/verdict`）を assert
+    メッセージに含める（ネストが深い構造で "どこにあるか" を特定しやすくする）。
+    """
+
+    def _check(node: object, path: list[str]) -> None:
+        if isinstance(node, dict):
+            for key in forbidden:
+                assert key not in node, (
+                    f"outcome key {key!r} found at {'/'.join(path) or '<root>'}"
+                )
+            for k, v in node.items():
+                _check(v, [*path, str(k)])
+        elif isinstance(node, list):
+            for i, item in enumerate(node):
+                _check(item, [*path, f"[{i}]"])
+
+    _check(value, [])

@@ -55,7 +55,7 @@ def _builds_placeholder_package_dir(builds_root: str | Path) -> Path:
     return Path(builds_root) / "builds" / _BUILDS_LOCATOR_PLACEHOLDER_DIGEST
 
 
-def _update_builds_latest_pointer(latest_path: Path, content_digest: str, *, root: Path) -> None:
+def _update_builds_latest_pointer(latest_path: Path, content_digest: str) -> None:
     """Atomically (over)write `<root>/latest.json` to point at `content_digest`.
 
     `latest.json` is the one file this scheme ever overwrites — everything
@@ -67,8 +67,8 @@ def _update_builds_latest_pointer(latest_path: Path, content_digest: str, *, roo
     in `latest_path`'s own directory, `prefix=f"{latest_path.name}."` —
     `"latest.json."`, matching the historical hardcoded prefix — `suffix`
     `".tmp"`, `os.replace`, and best-effort staging cleanup on any
-    `BaseException`). `root` always equals `latest_path.parent` at every
-    call site, which `atomic_write_text` derives itself.
+    `BaseException`). `atomic_write_text` also mkdirs `latest_path.parent`
+    (== `root` at every call site), so no separate `root.mkdir` is needed.
     """
     from svp_rpe.utils.atomic_io import atomic_write_text
 
@@ -77,7 +77,6 @@ def _update_builds_latest_pointer(latest_path: Path, content_digest: str, *, roo
         ensure_ascii=False,
         indent=2,
     )
-    root.mkdir(parents=True, exist_ok=True)
     atomic_write_text(latest_path, payload)
 
 
@@ -531,7 +530,7 @@ def _publish_artifacts_to_builds_root(
         )
 
     try:
-        _update_builds_latest_pointer(latest_path, content_digest, root=root)
+        _update_builds_latest_pointer(latest_path, content_digest)
     except Exception as exc:
         raise ValueError(
             f"failed to update {latest_path} to point at content_digest "

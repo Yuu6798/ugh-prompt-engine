@@ -31,8 +31,10 @@ DOCS_DIR = REPO_ROOT / "docs"
 # group 1 = 表示パス（バッククォート内）, group 2 = リンク先（`()` 内）。
 # 両者は本来常に同一ファイルを指すべきだが、別々に捕捉することで
 # 「表示は正しいがリンク先が別ファイル」という drift を検出できるようにする。
+# ファイル名部分はスラッシュ・空白・括弧・バッククォートを含まなければ何でも許容する
+# （ハイフンを含むファイル名も対象。`[A-Za-z0-9_.]+` だとハイフンを取りこぼす）。
 _CLAUDE_MD_ROW_RE = re.compile(
-    r"\[`docs/([A-Za-z0-9_.]+\.md)`\]\(docs/([A-Za-z0-9_.]+\.md)\)"
+    r"\[`docs/([^`()/\s]+\.md)`\]\(docs/([^`()/\s]+\.md)\)"
 )
 
 # docs/README.md のリンク: `(x.md)` または `(./x.md)`。`../` や `sub/x.md` は
@@ -42,7 +44,7 @@ _CLAUDE_MD_ROW_RE = re.compile(
 # `docs/x.md` 形式の表示/リンク先の対応が存在しないため、このリンクは
 # リンク先 `(x.md)` そのものを直接抽出・検証している（表示側と比較する
 # 余地がない = 本ファイルの display/destination mismatch チェックの対象外）。
-_DOCS_README_LINK_RE = re.compile(r"\]\((?:\./)?([A-Za-z0-9_.]+\.md)\)")
+_DOCS_README_LINK_RE = re.compile(r"\]\((?:\./)?([^`()/\s]+\.md)\)")
 
 
 @dataclass(frozen=True)
@@ -55,8 +57,18 @@ class ClaudeMdRow:
 
 
 def _parse_claude_md_rows(text: str) -> list[ClaudeMdRow]:
+    r"""索引表の行のみを対象にパースする（プローズ中のリンクは対象外）。
+
+    `[\`docs/x.md\`](docs/x.md)` 形式のリンクは本文中の言及（例: CLAUDE.md
+    冒頭の「由来 = ...」や「モジュール単位の責務詳細は ...」）にも登場しうるが、
+    それらは索引表への掲載を意味しない。索引表の行（先頭が `| [` の行）のみを
+    対象にすることで、プローズ中のリンクだけがあり索引表には未掲載という
+    drift を正しく「未掲載」として検出できるようにする。
+    """
     rows = []
     for line in text.splitlines():
+        if not line.strip().startswith("| ["):
+            continue
         match = _CLAUDE_MD_ROW_RE.search(line)
         if match:
             rows.append(
@@ -183,14 +195,37 @@ def test_parser_detects_missing_doc_in_docs_readme_fixture():
 
 
 def test_parser_detects_broken_link_fixture():
+    # 本番の test_claude_md_index_has_no_broken_links はリンク先
+    # （_claude_md_index_targets）を検証するため、self-test も同じ抽出器で
+    # 揃える（表示パス側の _claude_md_index_docs では検証対象がずれる）。
     text = (FIXTURES / "docs_index_broken_link.md").read_text(encoding="utf-8")
     with pytest.raises(AssertionError, match="実在しない docs ファイルへのリンク"):
         _assert_no_broken_links(
             text,
             {"example_a.md"},
             source="fixture",
+            extractor=_claude_md_index_targets,
+        )
+
+
+def test_parser_detects_prose_only_link_fixture():
+    # プローズ中にのみ登場し索引表には掲載されていないリンクは「未掲載」と
+    # 判定されるべき（索引表の行以外を拾ってしまう回帰の防止）。
+    text = (FIXTURES / "docs_index_prose_only_link.md").read_text(encoding="utf-8")
+    with pytest.raises(AssertionError, match="未掲載の docs"):
+        _assert_all_docs_indexed(
+            text,
+            {"example_a.md", "example_b.md"},
+            source="fixture",
             extractor=_claude_md_index_docs,
         )
+
+
+def test_parser_matches_hyphenated_doc_name_fixture():
+    # ファイル名にハイフンを含むケースも索引表の行として正しく捕捉できること
+    # （`[A-Za-z0-9_.]+` だとハイフンを取りこぼしていた回帰の防止）。
+    text = (FIXTURES / "docs_index_hyphenated_name.md").read_text(encoding="utf-8")
+    assert _claude_md_index_docs(text) == {"example-hyphenated.md"}
 
 
 def test_parser_detects_mismatched_target_fixture():

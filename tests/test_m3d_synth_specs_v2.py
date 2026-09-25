@@ -30,7 +30,6 @@ from svp_rpe.melody.representation import build_sequences  # noqa: E402
 
 BENCH_DIR = ROOT / "tests" / "fixtures" / "melody_bench"
 SPECS_V2_PATH = BENCH_DIR / "m3d_synth_specs_v2.yaml"
-M3_REGISTRY_PATH = BENCH_DIR / "m3_comparison_registry.yaml"
 
 # prereg_v2 §4 の構造下限。
 _MIN_PHRASE_COUNT = 2

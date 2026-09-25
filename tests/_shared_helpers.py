@@ -26,9 +26,10 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-#: Recast デモプロジェクトの入力一式が置かれているディレクトリ（リポジトリルート
-#: からの相対パス。`pytest` はリポジトリルートから実行される前提）。
-DEMO_PROJECT = Path("examples/recast/demo_project")
+#: Recast デモプロジェクトの入力一式が置かれているディレクトリ。CWD 非依存に
+#: するため `__file__` を起点に解決する（`cd tests && pytest test_x.py` のように
+#: リポジトリルート以外から実行されても崩れない）。
+DEMO_PROJECT = Path(__file__).resolve().parents[1] / "examples" / "recast" / "demo_project"
 
 
 def copy_demo_project(tmp_path: Path, *, label: str | None = None) -> Path:
