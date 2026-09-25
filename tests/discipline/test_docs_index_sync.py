@@ -37,14 +37,22 @@ _CLAUDE_MD_ROW_RE = re.compile(
     r"\[`docs/([^`()/\s]+\.md)`\]\(docs/([^`()/\s]+\.md)\)"
 )
 
-# docs/README.md のリンク: `(x.md)` または `(./x.md)`。`../` や `sub/x.md` は
-# docs/ 直下ではない参照（AGENTS.md や voice_genesis/ 配下など）なので、
-# スラッシュを含まないファイル名のみを対象にする。
+# docs/README.md の索引エントリ行: `- [Title](x.md) — description` または
+# `* [Title](x.md) — description`（カテゴリ見出し `## ...` の下に並ぶ箇条書き）。
+# 行頭（strip 後）が `- [` / `* [` で始まる行のみをエントリ行として扱い、
+# その行内で最初に登場するリンクだけをエントリ本体とみなす。これにより
+# 「見出し直下の説明文（プローズ）の中だけに登場するリンク」や「あるエントリの
+# description テキスト中に埋め込まれた 2 個目以降のリンク」を索引エントリとして
+# 誤カウントしない（CLAUDE.md 側で 4a20395 で直したプローズ限定リンクの穴の
+# docs/README.md 版）。
+# リンク先は `(x.md)` または `(./x.md)`。`../` や `sub/x.md` は docs/ 直下では
+# ない参照（AGENTS.md や voice_genesis/ 配下など）なので、スラッシュを含まない
+# ファイル名のみを対象にする。
 # 表示テキストは `[Example A](x.md)` のように自由文のプローズであり
 # `docs/x.md` 形式の表示/リンク先の対応が存在しないため、このリンクは
 # リンク先 `(x.md)` そのものを直接抽出・検証している（表示側と比較する
 # 余地がない = 本ファイルの display/destination mismatch チェックの対象外）。
-_DOCS_README_LINK_RE = re.compile(r"\]\((?:\./)?([^`()/\s]+\.md)\)")
+_DOCS_README_LINK_RE = re.compile(r"^[-*]\s+\[[^\]]*\]\((?:\./)?([^`()/\s]+\.md)\)")
 
 
 @dataclass(frozen=True)
@@ -88,7 +96,20 @@ def _claude_md_index_targets(text: str) -> set[str]:
 
 
 def _docs_readme_index_docs(text: str) -> set[str]:
-    return set(_DOCS_README_LINK_RE.findall(text))
+    r"""索引エントリ行のみを対象にパースする（プローズ中や description 中の
+    2 個目以降のリンクは対象外）。
+
+    `- [Title](x.md) — ...` 形式の行頭リンクのみを 1 行 1 エントリとして
+    抽出する。見出し直下の説明文や、あるエントリの description テキスト中に
+    別ファイルへのリンクが埋め込まれていても、それらは索引エントリとしての
+    掲載を意味しないため拾わない。
+    """
+    docs = set()
+    for line in text.splitlines():
+        match = _DOCS_README_LINK_RE.match(line.strip())
+        if match:
+            docs.add(match.group(1))
+    return docs
 
 
 def _real_docs_files() -> set[str]:
@@ -219,6 +240,28 @@ def test_parser_detects_prose_only_link_fixture():
             source="fixture",
             extractor=_claude_md_index_docs,
         )
+
+
+def test_parser_detects_readme_prose_only_link_fixture():
+    # docs/README.md 版のプローズ限定リンクの穴（CLAUDE.md 側の同型の穴は
+    # 4a20395 で修正済み）。見出し直下の説明文にのみ登場するリンクは索引
+    # エントリ行として拾われず、「未掲載」として検出されるべき。
+    text = (FIXTURES / "docs_readme_index_prose_only_link.md").read_text(encoding="utf-8")
+    with pytest.raises(AssertionError, match="未掲載の docs"):
+        _assert_all_docs_indexed(
+            text,
+            {"example_a.md", "example_b.md"},
+            source="fixture",
+            extractor=_docs_readme_index_docs,
+        )
+
+
+def test_parser_ignores_second_link_in_readme_entry_description():
+    # エントリ行の description 部分に埋め込まれた 2 個目以降のリンクは、
+    # 独立した索引エントリとしてカウントしてはならない（そのエントリ行の
+    # 実体は先頭リンクのみ）。
+    text = (FIXTURES / "docs_readme_index_prose_only_link.md").read_text(encoding="utf-8")
+    assert _docs_readme_index_docs(text) == {"example_a.md"}
 
 
 def test_parser_matches_hyphenated_doc_name_fixture():
