@@ -6,26 +6,16 @@ import json
 import shutil
 from pathlib import Path
 
+from _shared_helpers import DEMO_PROJECT
+from _shared_helpers import copy_demo_project as _copy_demo_project
 from typer.testing import CliRunner
 
 from svp_rpe.cli import app
 from svp_rpe.recast.state import load_recast_state
 
-DEMO_PROJECT = Path("examples/recast/demo_project")
 EXPECTED_PLAN = DEMO_PROJECT / "expected" / "recast_plan_edm_suno.json"
 
 runner = CliRunner()
-
-
-def _copy_demo_project(tmp_path: Path) -> Path:
-    dest = tmp_path / "demo_project"
-    dest.mkdir()
-    shutil.copy(DEMO_PROJECT / "project.yaml", dest / "project.yaml")
-    shutil.copy(DEMO_PROJECT / "composition_score.yaml", dest / "composition_score.yaml")
-    shutil.copy(DEMO_PROJECT / "identity.yaml", dest / "identity.yaml")
-    shutil.copytree(DEMO_PROJECT / "identity", dest / "identity")
-    shutil.copytree(DEMO_PROJECT / "arrangements", dest / "arrangements")
-    return dest / "project.yaml"
 
 
 def test_recast_plan_succeeds_and_writes_plan_json(tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from conftest import assert_no_outcome_keys as _assert_no_outcome_keys
 from typer.testing import CliRunner
 
 import svp_rpe.calibration.audit as audit_module
@@ -34,15 +35,6 @@ def _manifest(samples: list[GenreSample]) -> GenreCorpusManifest:
     return GenreCorpusManifest(samples=samples)
 
 
-def _assert_no_outcome_keys(value: Any) -> None:
-    blocked = {"verdict", "pass", "fail", "passed", "failed", "ok"}
-    if isinstance(value, dict):
-        assert blocked.isdisjoint(value)
-        for child in value.values():
-            _assert_no_outcome_keys(child)
-    elif isinstance(value, list):
-        for child in value:
-            _assert_no_outcome_keys(child)
 
 
 def test_bright_low_heavy_orchestral_label_is_reported_as_mismatch() -> None:

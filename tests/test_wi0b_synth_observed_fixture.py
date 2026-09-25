@@ -37,14 +37,14 @@ audio hash"）: `observed/provenance.yaml` を新設し、上記 4 観測ファ�
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 import yaml
+from _shared_helpers import load_json as _load_json
+from _shared_helpers import sha256 as _sha256
 
 from svp_rpe.arrange.observe import ObservationReport
 from svp_rpe.rpe.models import RPEBundle
@@ -74,14 +74,6 @@ RENDERED_WAV_SHA256 = "4d8c83f67c1b2441e09fa84debdc47ec0131c1a13ee1b813b0ef55e87
 GENERATED_ARTIFACT_RELATIVE_PATH = (
     "examples/arrangement/midnight_signal/observed/wi0b_synth/faithful_take.wav"
 )
-
-
-def _load_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 # --- 0. 事前登録・runbook・結果ドキュメントが存在する ------------------------------

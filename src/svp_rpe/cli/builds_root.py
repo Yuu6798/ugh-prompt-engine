@@ -55,33 +55,29 @@ def _builds_placeholder_package_dir(builds_root: str | Path) -> Path:
     return Path(builds_root) / "builds" / _BUILDS_LOCATOR_PLACEHOLDER_DIGEST
 
 
-def _update_builds_latest_pointer(latest_path: Path, content_digest: str, *, root: Path) -> None:
+def _update_builds_latest_pointer(latest_path: Path, content_digest: str) -> None:
     """Atomically (over)write `<root>/latest.json` to point at `content_digest`.
 
     `latest.json` is the one file this scheme ever overwrites — everything
     under `<root>/builds/<digest>/` is immutable once published (Design
     Memo §4).
+
+    Thin wrapper — the tempfile+`os.replace` mechanics are consolidated in
+    `svp_rpe.utils.atomic_io.atomic_write_text` (same convention: tempfile
+    in `latest_path`'s own directory, `prefix=f"{latest_path.name}."` —
+    `"latest.json."`, matching the historical hardcoded prefix — `suffix`
+    `".tmp"`, `os.replace`, and best-effort staging cleanup on any
+    `BaseException`). `atomic_write_text` also mkdirs `latest_path.parent`
+    (== `root` at every call site), so no separate `root.mkdir` is needed.
     """
-    import os
-    import tempfile
+    from svp_rpe.utils.atomic_io import atomic_write_text
 
     payload = json.dumps(
         {"schema_version": BUILDS_LATEST_SCHEMA_VERSION, "content_digest": content_digest},
         ensure_ascii=False,
         indent=2,
     )
-    root.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=root, prefix="latest.json.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(payload)
-        os.replace(tmp_name, latest_path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    atomic_write_text(latest_path, payload)
 
 
 def _reject_builds_root_input_collision(
@@ -534,7 +530,7 @@ def _publish_artifacts_to_builds_root(
         )
 
     try:
-        _update_builds_latest_pointer(latest_path, content_digest, root=root)
+        _update_builds_latest_pointer(latest_path, content_digest)
     except Exception as exc:
         raise ValueError(
             f"failed to update {latest_path} to point at content_digest "

@@ -11,30 +11,26 @@ from pathlib import Path
 from typing import List
 
 import pytest
+import yaml
+from _melody_helpers import default_config as _default_config
+from _melody_helpers import default_thresholds as _default_thresholds
+from _melody_helpers import good_notes as _good_notes
+from _melody_helpers import note as _note
 
 import svp_rpe.melody.comparison as comparison_mod
 from svp_rpe.melody.comparison import MelodyComparisonReport, _derive_evidence, compare_melodies
 from svp_rpe.melody.observability import (
     MelodyNote,
     MelodyObservation,
-    ObservabilityThresholds,
 )
 from svp_rpe.melody.representation import (
     EvidenceThresholdsConfig,
     M3ComparisonConfig,
     build_sequences,
-    load_m3_registry,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH_DIR = ROOT / "tests" / "fixtures" / "melody_bench"
-M1_REGISTRY_PATH = BENCH_DIR / "registry.yaml"
-M3_REGISTRY_PATH = BENCH_DIR / "m3_comparison_registry.yaml"
-
-
-def _default_config() -> M3ComparisonConfig:
-    config, _ = load_m3_registry(M3_REGISTRY_PATH)
-    return config
 
 
 def _with_evidence_thresholds(
@@ -49,37 +45,6 @@ def _with_evidence_thresholds(
         evidence_thresholds=evidence_thresholds,
         separation_margin=config.separation_margin,
     )
-
-
-import yaml  # noqa: E402
-
-
-def _default_thresholds() -> ObservabilityThresholds:
-    mapping = yaml.safe_load(M1_REGISTRY_PATH.read_text(encoding="utf-8"))
-    return ObservabilityThresholds.from_registry(mapping["observation_gate"])
-
-
-def _note(pitch_midi: float, start_sec: float, end_sec: float, confidence: float = 0.9) -> MelodyNote:
-    return MelodyNote(
-        start_sec=start_sec, end_sec=end_sec, pitch_midi=pitch_midi, confidence=confidence
-    )
-
-
-# 観測ゲートを通す 2 フレーズ・10 ノートの旋律（registry.yaml の observation_gate
-# 閾値: min_note_count=8 / min_phrase_count=2 / max_octave_jump_rate=0.35 等を満たす）。
-def _good_notes() -> List[MelodyNote]:
-    phrase1_pitches = [60, 62, 64, 65, 67]
-    phrase2_pitches = [69, 67, 65, 64, 62]
-    notes: List[MelodyNote] = []
-    t = 0.0
-    for p in phrase1_pitches:
-        notes.append(_note(p, t, t + 0.25))
-        t += 0.3
-    t += 1.0  # フレーズ境界（phrase_gap_sec=0.6 を超えるギャップ）
-    for p in phrase2_pitches:
-        notes.append(_note(p, t, t + 0.25))
-        t += 0.3
-    return notes
 
 
 def _observation_from_notes(notes: List[MelodyNote], route: str = "test_route") -> MelodyObservation:

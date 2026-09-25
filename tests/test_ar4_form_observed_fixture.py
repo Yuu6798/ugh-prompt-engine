@@ -16,11 +16,12 @@ JSON/YAML を読み込んで整合性だけを検査する（torch 非依存・n
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 
 import yaml
+from _shared_helpers import load_json as _load_json
+from _shared_helpers import load_yaml as _load_yaml
 
 FIXTURE_DIR = Path("examples/arrangement/midnight_signal/observed/musicgen_form")
 
@@ -35,14 +36,6 @@ SPOT_CHECK_PATH = FIXTURE_DIR / "ar4f_determinism_spot_check.yaml"
 
 _VALID_ADHERENCE_STATUS = {"preserved", "not_observed"}
 _VALID_DETERMINATION = {"exact_match", "deferred", "no_sensor"}
-
-
-def _load_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _load_yaml(path: Path) -> dict:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def _parse_utc(value: str) -> datetime:

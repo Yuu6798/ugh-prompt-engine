@@ -275,6 +275,7 @@ class TestStructureLabels:
 
 
 class TestComparison:
+    @pytest.mark.slow
     def test_compare_self(self, sine_wave_mono):
         audio = load_audio(sine_wave_mono)
         rpe = extract_rpe(audio)
@@ -473,6 +474,7 @@ class TestComputePhysicalDiffValleyMethodGate:
 
 
 class TestExtractorV2:
+    @pytest.mark.slow
     def test_extract_physical_returns_tuple(self, sine_wave_mono):
         audio = load_audio(sine_wave_mono)
         phys, valley_diag, section_features = extract_physical(audio)
@@ -482,6 +484,7 @@ class TestExtractorV2:
         assert valley_diag.method == "v2"
         assert len(section_features) >= 1
 
+    @pytest.mark.slow
     def test_section_labels_not_generic(self, sine_wave_mono):
         audio = load_audio(sine_wave_mono)
         phys, _, _ = extract_physical(audio)
@@ -494,6 +497,7 @@ class TestExtractorV2:
         )
         assert has_named
 
+    @pytest.mark.slow
     def test_valley_method_switchable(self, sine_wave_mono):
         audio = load_audio(sine_wave_mono)
         for method in ("rms_percentile", "section_ar", "hybrid"):

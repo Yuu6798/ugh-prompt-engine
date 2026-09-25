@@ -34,6 +34,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import generate_synth_samples as g  # noqa: E402
 from svp_rpe.rpe.extractor import extract_physical_from_file  # noqa: E402
 from svp_rpe.rpe.models import PhysicalRPE  # noqa: E402
+from svp_rpe.utils.clamp import clamp  # noqa: E402
 
 SAMPLE_RATE: int = g.SAMPLE_RATE
 
@@ -54,7 +55,7 @@ KEYS: list[tuple[str, str]] = sorted(KEY_TEMPLATES)
 def harmonic_weights_for_level(level: float) -> tuple[float, ...]:
     """brightness_level ∈ [0,1] → 倍音重みベクトル。L が大きいほど高次倍音が増え
     spectral_centroid が上がる（= brightness ノブ）。"""
-    lvl = max(0.0, min(1.0, float(level)))
+    lvl = clamp(float(level))
     return (
         1.0,
         0.2 + 0.6 * lvl,

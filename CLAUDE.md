@@ -187,7 +187,7 @@ tests/ / docs/ / examples/     # pytest / design documents (index: docs/README.m
 | [`docs/architecture.md`](docs/architecture.md) | パイプライン三層設計、モジュール責務、config 役割、v0.2 既知の制限 |
 | [`docs/metrics.md`](docs/metrics.md) | RPE 物理指標の定義式、Pro baseline 値、UGHer 4 成分スコアリング、valley 3 戦略 |
 | [`docs/migration.md`](docs/migration.md) | RPE スキーマ移行ノート: SemanticRPE 1.0→2.0（`por_surface` を evidence-bearing `SemanticLabel` 化）、fail-fast 移行方針、RPE 再生成手順 |
-| [`docs/cli.md`](docs/cli.md) | CLI コマンドのリファレンス: extract / generate / compose / measure / transcribe / evaluate / compare / ci-check / run / batch / audit / roundtrip / roundtrip-corpus / roundtrip-rep / score-adherence / genre-calibrate / genre-audit / verify |
+| [`docs/cli.md`](docs/cli.md) | CLI コマンドのリファレンス（`svprpe` 全サブコマンド・`recast` サブアプリ含む） |
 | [`docs/semantic_ci_product_v1.md`](docs/semantic_ci_product_v1.md) | semantic CI V1: Target SVP → Expected RPE → fixture比較 → Repair SVP |
 | [`docs/roadmap.md`](docs/roadmap.md) | PoC (達成済み) と Pre-prototype マイルストーン (P1–P5)、推奨実行順 |
 | [`docs/roadmap_goal1.md`](docs/roadmap_goal1.md) | 目的1（定量観測）完成までのフェーズ Q0–Q5、完成定義、クリティカルパス |
@@ -342,8 +342,7 @@ svprpe --help
 
 ### Commit Messages
 
-- Conventional Commits 形式: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`
-- 日本語メッセージ可
+- Conventional Commits 形式（`feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`）。日本語メッセージ可
 
 ### Pull Request
 
@@ -354,11 +353,8 @@ Claude Code が例外的に PR を作成する場合はリンク発行で作成�
 Completion Summary 規約に従い、利用可能な GitHub CLI / connector を使ってよい。
 
 ```bash
-# 1. ブランチを push
 git push -u origin <branch-name>
-
-# 2. PR リンクを提示
-# https://github.com/Yuu6798/ugh-prompt-engine/compare/main...<branch-name>?expand=1
+# PR リンク: https://github.com/Yuu6798/ugh-prompt-engine/compare/main...<branch-name>?expand=1
 ```
 
 #### PR 本文の必須記述

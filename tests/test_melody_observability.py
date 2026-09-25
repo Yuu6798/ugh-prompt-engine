@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 import yaml
+from _melody_helpers import default_thresholds as _default_thresholds
 
 import scripts.build_melody_bench as bench
 from svp_rpe.melody.observability import (
@@ -60,11 +61,6 @@ def _reset_extractor_load_time_pins():
 # --------------------------------------------------------------------------- #
 # ヘルパー
 # --------------------------------------------------------------------------- #
-def _default_thresholds() -> ObservabilityThresholds:
-    registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
-    return ObservabilityThresholds.from_registry(registry["observation_gate"])
-
-
 def _frame_track_from_midi(
     midis, *, frames_per_note=6, hop_sec=0.05, confidence=0.9
 ):

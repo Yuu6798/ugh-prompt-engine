@@ -19,10 +19,10 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import librosa
-import numpy as np
 import pytest
 import soundfile as sf
 import yaml
+from _melody_helpers import write_tone_wav as _write_tone_wav
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -34,17 +34,6 @@ import run_melody_comparison as harness  # noqa: E402
 import screen_m3d_clips as sm  # noqa: E402
 
 REAL_SYNTH_SPECS_V2_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m3d_synth_specs_v2.yaml"
-
-_SAMPLE_RATE = 22050
-_TONE_DURATION_SEC = 0.35
-
-
-def _write_tone_wav(path: Path, *, freq: float) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    n = int(round(_SAMPLE_RATE * _TONE_DURATION_SEC))
-    t = np.linspace(0.0, _TONE_DURATION_SEC, n, endpoint=False)
-    y = (0.2 * np.sin(2.0 * np.pi * freq * t)).astype(np.float32)
-    sf.write(path, y, _SAMPLE_RATE, subtype="FLOAT")
 
 
 def _make_vocadito_pool(tmp_path: Path, n_clips: int) -> Tuple[Path, Path, Dict[str, str]]:

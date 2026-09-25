@@ -23,31 +23,12 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import run_melody_comparison as harness  # noqa: E402
+from _melody_helpers import good_notes as _good_notes  # noqa: E402
+from _melody_helpers import note as _note  # noqa: E402
 from svp_rpe.melody.observability import MelodyNote, MelodyObservation  # noqa: E402
 
 M3_REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m3_comparison_registry.yaml"
 M1_REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "registry.yaml"
-
-
-def _note(pitch_midi: float, start_sec: float, end_sec: float, confidence: float = 0.9) -> MelodyNote:
-    return MelodyNote(
-        start_sec=start_sec, end_sec=end_sec, pitch_midi=pitch_midi, confidence=confidence
-    )
-
-
-def _good_notes(shift: int = 0) -> List[MelodyNote]:
-    """観測ゲートを通す 2 フレーズ・10 ノートの旋律（`test_melody_comparison.py` と同型）。"""
-    phrase1 = [60, 62, 64, 65, 67]
-    phrase2 = [69, 67, 65, 64, 62]
-    notes: List[MelodyNote] = []
-    t = 0.0
-    for p in phrase1 + [None] + phrase2:  # type: ignore[list-item]
-        if p is None:
-            t += 1.0
-            continue
-        notes.append(_note(p + shift, t, t + 0.25))
-        t += 0.3
-    return notes
 
 
 def _different_notes() -> List[MelodyNote]:

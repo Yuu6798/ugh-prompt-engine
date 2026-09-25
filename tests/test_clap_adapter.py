@@ -26,36 +26,11 @@ import types
 
 import numpy as np
 import pytest
-import soundfile as sf
+from _audio_fixtures import write_wav as _write_wav
+from _rpe_factories import default_adapter_bundle as _make_bundle
 
-from svp_rpe.rpe.models import (
-    DeltaEProfile,
-    GrvAnchor,
-    LearnedAudioAnnotations,
-    PhysicalRPE,
-    RPEBundle,
-    SectionMarker,
-    SemanticLabel,
-    SemanticRPE,
-    SpectralProfile,
-)
+from svp_rpe.rpe.models import LearnedAudioAnnotations
 from svp_rpe.svp.generator import generate_svp
-
-# ---------------------------------------------------------------------------
-# WAV fixture helper
-# ---------------------------------------------------------------------------
-
-
-def _write_wav(path, *, seconds: float, sample_rate: int = 48000) -> None:
-    """Write a tiny real mono WAV file that `librosa.load` can decode.
-
-    A short sine burst rather than silence, so accidental all-zero
-    handling elsewhere can't mask a bug.
-    """
-    n_samples = max(1, int(round(seconds * sample_rate)))
-    t = np.linspace(0, seconds, n_samples, endpoint=False)
-    y = (0.2 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
-    sf.write(str(path), y, sample_rate)
 
 
 # ---------------------------------------------------------------------------
@@ -160,63 +135,6 @@ def _patch_tiny_clap_constants(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(clap_adapter, "_CLAP_SAMPLE_RATE", 1000)
     monkeypatch.setattr(clap_adapter, "_CLAP_WINDOW_SAMPLES", 1000)
     monkeypatch.setattr(clap_adapter, "_CLAP_MIN_PARTIAL_SAMPLES", 100)
-
-
-# ---------------------------------------------------------------------------
-# Helpers for building a baseline RPEBundle
-# ---------------------------------------------------------------------------
-
-
-def _make_bundle() -> RPEBundle:
-    return RPEBundle(
-        physical=PhysicalRPE(
-            duration_sec=180.0,
-            sample_rate=44100,
-            structure=[SectionMarker(label="section_01", start_sec=0.0, end_sec=180.0)],
-            rms_mean=0.3,
-            peak_amplitude=0.9,
-            crest_factor=3.0,
-            active_rate=0.85,
-            valley_depth=0.2,
-            thickness=2.0,
-            spectral_centroid=3000.0,
-            spectral_profile=SpectralProfile(
-                centroid=3000.0,
-                low_ratio=0.3,
-                mid_ratio=0.5,
-                high_ratio=0.2,
-                brightness=0.28,
-            ),
-            onset_density=4.5,
-        ),
-        semantic=SemanticRPE(
-            por_core="bright track",
-            por_surface=[
-                SemanticLabel(
-                    label="bright",
-                    layer="perceptual",
-                    confidence=0.9,
-                    evidence=["brightness=0.28"],
-                    source_rule="perc.brightness",
-                )
-            ],
-            grv_anchor=GrvAnchor(primary="bass-heavy"),
-            delta_e_profile=DeltaEProfile(
-                transition_type="flat",
-                intensity=0.3,
-                description="steady",
-            ),
-            cultural_context=["electronic"],
-            instrumentation_summary="synths",
-            production_notes=["compressed"],
-            confidence_notes=["rule"],
-        ),
-        audio_file="test.wav",
-        audio_duration_sec=180.0,
-        audio_sample_rate=44100,
-        audio_channels=2,
-        audio_format="wav",
-    )
 
 
 # ---------------------------------------------------------------------------

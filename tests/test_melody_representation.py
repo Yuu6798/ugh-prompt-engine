@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _melody_helpers import default_config as _default_config
+from _melody_helpers import note as _note
 
-from svp_rpe.melody.observability import MelodyNote
 from svp_rpe.melody.observability import _phrase_count as _obs_phrase_count
 from svp_rpe.melody.representation import (
     M3ComparisonConfig,
@@ -29,17 +30,6 @@ M3_REGISTRY_PATH = BENCH_DIR / "m3_comparison_registry.yaml"
 
 def _load_m3_mapping() -> dict:
     return yaml.safe_load(M3_REGISTRY_PATH.read_text(encoding="utf-8"))
-
-
-def _default_config() -> M3ComparisonConfig:
-    config, _ = load_m3_registry(M3_REGISTRY_PATH)
-    return config
-
-
-def _note(pitch_midi: float, start_sec: float, end_sec: float, confidence: float = 0.9) -> MelodyNote:
-    return MelodyNote(
-        start_sec=start_sec, end_sec=end_sec, pitch_midi=pitch_midi, confidence=confidence
-    )
 
 
 # --------------------------------------------------------------------------- #

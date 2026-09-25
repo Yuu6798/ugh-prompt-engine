@@ -13,18 +13,15 @@ verdict の `registry_sha256` が食い違いこのテストが赤くなる。�
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
+
+from _shared_helpers import sha256 as _sha256
 
 REPO = Path(__file__).resolve().parents[1]
 RECORD_DIR = REPO / "docs" / "measurements" / "m1real_2026-07"
 VERDICT = RECORD_DIR / "m1real_verdict.json"
 REGISTRY = REPO / "tests" / "fixtures" / "melody_bench" / "registry.yaml"
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def test_verdict_report_pins_match_committed_reports() -> None:

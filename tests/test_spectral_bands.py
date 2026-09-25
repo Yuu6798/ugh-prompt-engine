@@ -159,6 +159,7 @@ def test_hpss_ratio_for_silence_is_none() -> None:
     assert compute_hpss_ratio(np.zeros(4096, dtype=np.float32)) == (None, None)
 
 
+@pytest.mark.slow
 def test_extract_physical_new_fields_are_deterministic() -> None:
     y = _click_track(duration=6.0) + _tone(440.0, duration=6.0, amp=0.1)
     audio = _audio_data(y)

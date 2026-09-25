@@ -34,9 +34,10 @@ mir_eval/スコアラーの再実行による数値の再導出はしない（co
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
+
+from _shared_helpers import sha256 as _sha256
 
 REPO = Path(__file__).resolve().parents[1]
 RECORD_DIR = REPO / "docs" / "measurements" / "m2c_2026-07"
@@ -53,10 +54,6 @@ VERDICT_SHA256 = "806556d57feb34daadc234575e7b883e6a07f6bd4c55feb46c24e60aabc012
 # m2c_external_fixtures.yaml の事前登録時点（commit 1cbd448）の凍結 digest。
 # verdict/report が pin する値と一致するはず（下記テストで相互照合する）。
 EXTERNAL_FIXTURES_SHA256 = "91b08852dabe3584de289c5ad5d9aafd7a40c8d3c2e14b2dbd8f599acc03b92f"
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _pinned_report_paths(verdict: dict) -> list[Path]:

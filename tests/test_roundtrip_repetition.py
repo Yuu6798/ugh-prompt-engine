@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 import pytest
+from conftest import assert_no_outcome_keys as _assert_no_outcome_keys
 from typer.testing import CliRunner
 
 from svp_rpe.cli import app
@@ -34,17 +34,6 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_SCORE = ROOT / "examples" / "roundtrip" / "synth_01_source.yaml"
 
 runner = CliRunner()
-
-
-def _assert_no_outcome_keys(value: Any) -> None:
-    if isinstance(value, dict):
-        for forbidden in ("verdict", "passed", "pass", "failed", "fail", "ok", "loss"):
-            assert forbidden not in value
-        for item in value.values():
-            _assert_no_outcome_keys(item)
-    elif isinstance(value, list):
-        for item in value:
-            _assert_no_outcome_keys(item)
 
 
 def _observation(field: str, diagnosis: str) -> TakeFieldObservation:

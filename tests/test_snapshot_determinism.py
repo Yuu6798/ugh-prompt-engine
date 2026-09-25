@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from svp_rpe.eval.scorer_integrated import score_integrated
 from svp_rpe.eval.scorer_rpe import score_rpe
 from svp_rpe.eval.scorer_ugher import score_ugher
@@ -47,6 +49,7 @@ def _write_snapshot_outputs(audio_path: str, output_dir: Path) -> str:
     return digest.hexdigest()
 
 
+@pytest.mark.slow
 def test_synthetic_audio_snapshot_outputs_are_deterministic(sine_wave_mono, tmp_path):
     first_hash = _write_snapshot_outputs(sine_wave_mono, tmp_path / "run1")
     second_hash = _write_snapshot_outputs(sine_wave_mono, tmp_path / "run2")

@@ -6,27 +6,17 @@ CI 安全（重依存なし・pytest -m "not slow" に含む）: ノート層ア
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
+from _melody_helpers import default_config as _default_config
+from _melody_helpers import note as _note
 
 from svp_rpe.melody.alignment import align_intervals, align_melodies
-from svp_rpe.melody.observability import MelodyNote
 from svp_rpe.melody.representation import (
     AlignmentConfig,
     M3ComparisonConfig,
     build_sequences,
-    load_m3_registry,
     split_phrases,
 )
-
-ROOT = Path(__file__).resolve().parents[1]
-M3_REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m3_comparison_registry.yaml"
-
-
-def _default_config() -> M3ComparisonConfig:
-    config, _ = load_m3_registry(M3_REGISTRY_PATH)
-    return config
 
 
 def _with_alignment(config: M3ComparisonConfig, **overrides) -> M3ComparisonConfig:
@@ -52,8 +42,6 @@ def _with_alignment(config: M3ComparisonConfig, **overrides) -> M3ComparisonConf
     )
 
 
-def _note(pitch_midi: float, start_sec: float, end_sec: float) -> MelodyNote:
-    return MelodyNote(start_sec=start_sec, end_sec=end_sec, pitch_midi=pitch_midi, confidence=0.9)
 
 
 # --------------------------------------------------------------------------- #

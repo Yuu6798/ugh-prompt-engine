@@ -23,13 +23,13 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import build_melody_bench as bmb  # noqa: E402
+from _melody_helpers import default_config as _default_config  # noqa: E402
 
 from svp_rpe.melody.observability import MelodyNote  # noqa: E402
-from svp_rpe.melody.representation import build_sequences, load_m3_registry  # noqa: E402
+from svp_rpe.melody.representation import build_sequences  # noqa: E402
 
 BENCH_DIR = ROOT / "tests" / "fixtures" / "melody_bench"
 SPECS_V2_PATH = BENCH_DIR / "m3d_synth_specs_v2.yaml"
-M3_REGISTRY_PATH = BENCH_DIR / "m3_comparison_registry.yaml"
 
 # prereg_v2 §4 の構造下限。
 _MIN_PHRASE_COUNT = 2
@@ -48,11 +48,6 @@ _ALL_FIXTURE_IDS = (
     "m3d_synth_interval_neg2_a",
     "m3d_synth_interval_neg2_b",
 )
-
-
-def _default_config():
-    config, _ = load_m3_registry(M3_REGISTRY_PATH)
-    return config
 
 
 def _load_v2_specs() -> Dict[str, Any]:

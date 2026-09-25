@@ -125,6 +125,19 @@ Audio (WAV/MP3) → RPE Extraction → SVP Generation → Evaluation
 - Multi-file batch processing
 - Ranking, summary CSV/JSON, next_action.md generation
 
+### authoring/
+- `contract.py`: 著述契約 spec (`config/authoring_contract_l0.yaml`) の pydantic モデル + loader
+- `validate.py`: score dict → 公開スキーマ範囲チェック + canonical `CompositionScore` 検証（`svprpe validate`）
+- `trusted_axes.py`: 信頼軸表の機械導出（`config/authoring_trusted_axes_l0.yaml`）
+- `report.py`: `AuthoringDiffReport`（`report.json`）正規形の凍結スキーマ
+- 詳細は [`l0a_authoring_contract.md`](l0a_authoring_contract.md) を参照
+
+### intent/
+- `models.py`: Intent Graph v0 の 1 ノード単体で閉じた pydantic frozen スキーマ
+- `loader.py`: `docs/intent/graph.yaml` の YAML ロード + グラフ全体の整合検証（fail-fast）
+- `frontier.py`: frontier/blocked/pending の導出（純関数、`status` は書き換えない）
+- CLI は `svprpe intent-status`。詳細は [`intent_graph.md`](intent_graph.md) を参照
+
 ## Modules — Score Track (楽譜トラック)
 
 Composition Score を "楽譜"、外部生成器を "演奏者" とみなす往復ループ

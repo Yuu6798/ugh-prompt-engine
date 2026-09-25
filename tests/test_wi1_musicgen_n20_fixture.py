@@ -20,11 +20,11 @@ structure 逸脱編集分解アルゴリズム、および §5 の D-1 分類規
 """
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
-import yaml
+from _shared_helpers import load_json as _load_json
+from _shared_helpers import load_yaml as _load_yaml
 
 from svp_rpe.arrange.observe import ObservationReport
 
@@ -77,14 +77,6 @@ REORDER_TAKES = frozenset({6, 18})
 EXPECTED_OUTSIDE_TAKES = frozenset({0, 9, 11, 17, 6, 18})
 EXPECTED_WITHIN_COUNT = 14
 EXPECTED_OUTSIDE_COUNT = 6
-
-
-def _load_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _load_yaml(path: Path) -> dict:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def _observation_path(take_index: int) -> Path:

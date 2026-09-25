@@ -37,13 +37,13 @@ pin（数値が食い違ったら修正せず停止して報告する対象）:
 from __future__ import annotations
 
 import hashlib
-import json
 import random
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
+from _shared_helpers import load_json as _load_json
+from _shared_helpers import load_yaml as _load_yaml
 
 FIXTURE_DIR = Path("examples/arrangement/midnight_signal/observed/wi3_human_calibration")
 WI2_FIXTURE_DIR = Path("examples/arrangement/midnight_signal/observed/wi2_discrimination")
@@ -98,14 +98,6 @@ EXPECTED_ERROR_PAIR: dict[str, str] = {
 
 P1_PAIR_IDS: tuple[str, ...] = ("p01", "p02")
 P3_PAIR_IDS: tuple[str, ...] = ("p06", "p07", "p08")
-
-
-def _load_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _load_yaml(path: Path) -> dict:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def _normalize_verdict(value: object) -> str:

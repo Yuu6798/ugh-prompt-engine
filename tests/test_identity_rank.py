@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 import yaml
+from conftest import assert_no_outcome_keys as _assert_no_outcome_keys
 from typer.testing import CliRunner
 
 from svp_rpe.cli import app
@@ -60,17 +61,6 @@ def _fake_import_without_mir_eval(monkeypatch: pytest.MonkeyPatch) -> None:
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-
-
-def _assert_no_outcome_keys(value: Any) -> None:
-    if isinstance(value, dict):
-        for forbidden in ("verdict", "passed", "pass", "failed", "fail", "ok", "threshold"):
-            assert forbidden not in value
-        for item in value.values():
-            _assert_no_outcome_keys(item)
-    elif isinstance(value, list):
-        for item in value:
-            _assert_no_outcome_keys(item)
 
 
 def _bundle(
