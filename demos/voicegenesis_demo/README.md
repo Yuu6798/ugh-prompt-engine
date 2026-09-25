@@ -4,6 +4,9 @@
 カード上端の輪郭 = その声のスペクトル包絡（実測）。分かれる・混ざる・縮む・戻る、を1ショットで見せる。
 
 声はすべて `build_audio.py` で合成した概念用の音（Drive の実験データは参照のみ）。
+画面の「別」クリックと隅の「聴者1名・一系譜での実験」は、実験 VG-GEN2-CROSS-01
+（2026-09-25、孫↔子2・孫↔C03 とも「別個体」、聴者1名）の判定を描いたもの。動画内の声は
+その実験の音ではなくイメージ用の合成音で、この動画自体は新たな試聴結果を含まない。
 子・孫は「低域／高域を交差点 2,520 Hz で継ぐ」配合規則で親の包絡から作る。
 
 ## 作り方
@@ -13,9 +16,11 @@
 
 ```bash
 pip install imageio-ffmpeg
-npm install                                # playwright（Chromium は npx playwright install chromium）
+npm install                                # playwright
+npx playwright install chromium
 python build_audio.py                      # 声の合成・包絡実測・data.js / cue_sheet.json
 node render.mjs stills stills 0 7.2 20.5   # 静止フレーム点検
+rm -rf /tmp/vgframes                       # 前回の余りフレームを混ぜない
 node render.mjs frames /tmp/vgframes 4     # 240fps サブフレーム
 mkdir -p out
 FFMPEG=$(python -c "import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())")
