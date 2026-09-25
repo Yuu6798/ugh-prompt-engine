@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>VoiceGenesis Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@500&family=Noto+Sans+JP:wght@500&display=block" rel="stylesheet">
+<style>
+  :root { --canvas: #EDEAE5; }
+  html, body { margin: 0; background: var(--canvas); }
+  canvas { display: block; width: 1440px; height: 1440px; }
+  body.preview canvas { width: min(100vw, 100vh); height: min(100vw, 100vh); margin: 0 auto; cursor: pointer; }
+</style>
+<script src="data.js"></script>
+</head>
+<body>
+<canvas id="c" width="1440" height="1440"></canvas>
+<script>
+"use strict";
+// 見た目はすべて seek(t) の純粋関数。タイマー・CSS トランジション・フレーム間状態なし。
+const D = window.DATA;
+const cv = document.getElementById("c");
+const ctx = cv.getContext("2d");
+const W = 1440, H = 1440;
+
+const COL = {
+  bg: "#EDEAE5", card: "#FFFFFF", edge: "#DAD5CD", ink: "#1F1D1A",
+  mute: "#8B857C", off: "#C3BDB4",
+  teal: "#0E8781", amber: "#D48812", violet: "#7550CC",
+};
+const FONT = (px) => `500 ${px}px Geist, "Noto Sans JP", sans-serif`;
+
+// ------------------------------------------------------------ math
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const lerp = (a, b, u) => a + (b - a) * u;
+const smooth = (u) => { u = clamp(u, 0, 1); return u * u * (3 - 2 * u); };
+const minjerk = (u) => { u = clamp(u, 0, 1); return u * u * u * (10 - 15 * u + 6 * u * u); };
+
+// 閉形式の減衰スプリング（ステップ応答）
+function sstep(tau, om = D.spring.omega, ze = D.spring.zeta) {
+  if (tau <= 0) return 0;
+  // 減衰が 1e-3 を下回ったら厳密に着地させる（最終フレーム＝最初のフレームのため）
+  if (Math.exp(-ze * om * tau) < 1e-3) return 1;
+  const wd = om * Math.sqrt(1 - ze * ze);
+  return 1 - Math.exp(-ze * om * tau) * (Math.cos(wd * tau) + (ze * om / wd) * Math.sin(wd * tau));
+}
+const SOFT = [9, 0.9];
+
+// ターゲットが何度も変わる値 = スプリングの和
+// steps: [t, value(s), kind] kind: "s"(spring) | "j"(jump) | "soft"
+function track(t, v0, steps) {
+  const vec = Array.isArray(v0);
+  let prev = vec ? v0.slice() : v0;
+  let out = vec ? v0.slice() : v0;
+  for (const [ti, v, kind] of steps) {
+    let k;
+    if (kind === "j") k = t >= ti ? 1 : 0;
+    else if (kind === "soft") k = sstep(t - ti, SOFT[0], SOFT[1]);
+    else k = sstep(t - ti);
+    if (vec) { for (let i = 0; i < v.length; i++) out[i] += (v[i] - prev[i]) * k; prev = v; }
+    else { out += (v - prev) * k; prev = v; }
+  }
+  return out;
+}
+// 0/1 の表示状態（短いフェード）
+function vis(t, spans, d = 0.18) {
+  let a = 0;
+  for (const [t0, t1] of spans) a = Math.max(a, smooth((t - t0) / d) * (1 - smooth((t - t1) / d)));
+  return a;
+}
+function hex(c) { const n = parseInt(c.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; }
+function mixc(a, b, u) {
+  const A = hex(a), B = hex(b);
+  return `rgb(${A.map((x, i) => Math.round(lerp(x, B[i], u))).join(",")})`;
+}
+
+// ------------------------------------------------------------ data / timeline
+const C = D.clips;
+const on = (id) => C[id].onset, off = (id) => C[id].offset;
+const N = D.n, FMAX = D.fmax, XO = D.xover;
+const FREQ = Array.from({ length: N }, (_, i) => (FMAX * i) / (N - 1));
+const ENV = Object.assign({}, D.env);
+ENV.flat = new Array(N).fill(0.16);
+function splice(lo, hi, fc) {
+  return FREQ.map((f, i) => {
+    const w = 0.5 - 0.5 * Math.cos(Math.PI * clamp((f - (fc - 50)) / 100, 0, 1));
+    return (1 - w) * lo[i] + w * hi[i];
+  });
+}
+ENV.splice1 = splice(ENV["R"], ENV["Q"], XO);
+ENV.splice2 = splice(ENV["子2"], ENV["C03"], XO);
+
+function envTrack(t, e0, steps) {
+  const out = ENV[e0].slice();
+  let prev = ENV[e0];
+  for (const [ti, name] of steps) {
+    const k = sstep(t - ti, SOFT[0], SOFT[1]);
+    const e = ENV[name];
+    for (let i = 0; i < N; i++) out[i] += (e[i] - prev[i]) * k;
+    prev = e;
+  }
+  return out;
+}
+
+// ドラッグ（Python 側 handle_hz と同じ式。掃引音声の交差点と一致）
+function handleHz(t, dr) {
+  if (t < dr.t_release) {
+    const u = (t - dr.t_press) / (dr.t_release - dr.t_press);
+    return dr.f_start + (dr.f_release - dr.f_start) * minjerk(u);
+  }
+  return dr.f_release + (dr.f_snap - dr.f_release) * sstep(t - dr.t_release);
+}
+const DR1 = C.c03.drag, DR2 = C.c07.drag;
+
+// 主要時刻（音声オンセット基準）
+const T = {
+  play: on("c01") - 0.12,
+  split1: off("c02") - 0.95,
+  handle1: off("c02") - 0.5,
+  fuse1: DR1.t_release + 0.55,
+  save: off("c04") - 0.6,
+  chipClick: on("c05") - 0.24,
+  expand: on("c05") - 0.12,
+  enter: on("c06") - 0.9,
+  handle2: DR2.t_press - 1.0,
+  fuse2: DR2.t_release + 0.55,
+  judge: off("c08") - 0.4,
+  pick: on("c12") + 0.7,
+  lineage: off("c12") + 0.15,
+  fold: on("c17") + 0.12,
+};
+
+// ------------------------------------------------------------ geometry
+const G = {
+  full: [720, 610, 1000, 700],
+  top: [720, 382, 1000, 400],
+  bot: [720, 832, 1000, 400],
+  chip: [252, 1112, 240, 132],
+  offR: [2160, 382, 1000, 400],
+  judgeTop: [720, 372, 760, 380],
+  judgeL: [398, 818, 520, 300],
+  judgeR: [1042, 818, 520, 300],
+  nQ: [370, 300, 300, 170],
+  nR: [770, 300, 300, 170],
+  n2: [570, 612, 300, 170],
+  nC: [1030, 612, 300, 170],
+  nG: [800, 924, 300, 170],
+};
+const GRIP_Y = 607;
+const cardLeft = G.full[0] - G.full[2] / 2;
+const hzToX = (f) => cardLeft + (f / FMAX) * G.full[2];
+
+// ------------------------------------------------------------ cards
+function cardGeo(t, id) {
+  switch (id) {
+    case "A": return track(t, G.full, [
+      [T.split1, G.bot], [T.fuse1, G.full], [T.save, G.chip], [T.expand, G.full],
+      [T.enter, G.bot], [T.fuse2, G.full], [T.judge, G.judgeTop], [T.lineage, G.nG], [T.fold + 0.22, G.full],
+    ]);
+    case "B": return track(t, G.full, [
+      [T.split1, G.top], [T.fuse1, G.full], [T.save + 0.8, G.offR, "j"], [T.enter, G.top],
+      [T.fuse2, G.full],
+    ]);
+    case "C": return track(t, [G.judgeL[0], G.judgeL[1] + 40, 520, 300], [
+      [T.judge + 0.1, G.judgeL], [T.lineage, G.n2], [T.fold - 0.1, G.nG],
+    ]);
+    case "D": return track(t, [G.judgeR[0], G.judgeR[1] + 40, 520, 300], [
+      [T.judge + 0.18, G.judgeR], [T.lineage, G.nC], [T.fold - 0.1, G.nG],
+    ]);
+    case "E": return track(t, G.n2, [[T.lineage + 0.12, G.nQ], [T.fold - 0.1, G.nG]]);
+    case "F": return track(t, G.n2, [[T.lineage + 0.18, G.nR], [T.fold - 0.1, G.nG]]);
+  }
+}
+
+function cardAlpha(t, id) {
+  switch (id) {
+    case "A": return 1;
+    case "B": return vis(t, [[T.split1, T.fuse1 + 0.25], [T.enter, T.fuse2 + 0.25]], 0.2);
+    case "C": return vis(t, [[T.judge + 0.1, T.fold + 0.02]], 0.2) *
+      track(t, 1, [[on("c11") - 0.25, 0.38], [T.lineage, 1]]);
+    case "D": return vis(t, [[T.judge + 0.18, T.fold + 0.02]], 0.2) *
+      track(t, 0.38, [[on("c11") - 0.25, 1]]);
+    case "E": case "F": return vis(t, [[T.lineage + 0.12, T.fold - 0.02]], 0.2);
+  }
+}
+
+function cardEnv(t, id) {
+  switch (id) {
+    case "A": return envTrack(t, "flat", [
+      [on("c01"), "Q"], [on("c02"), "R"], [T.fuse1, "splice1"], [on("c04") - 0.05, "子2"],
+      [T.fuse2, "splice2"], [on("c08") - 0.05, "孫"], [T.fold + 0.22, "flat"],
+    ]);
+    case "B": return t < T.save + 0.8 ? ENV["Q"] : ENV["C03"];
+    case "C": return ENV["子2"];
+    case "D": return ENV["C03"];
+    case "E": return ENV["Q"];
+    case "F": return ENV["R"];
+  }
+}
+
+// 入れ替わる文字は独自の入退場（退場 → 間 → 入場、重ならない）
+function labelTrack(t, first, steps) {
+  let k = -1;
+  for (let i = 0; i < steps.length; i++) if (t >= steps[i][0] - 0.2) k = i;
+  if (k < 0) return { text: first, a: 1, dy: 0 };
+  const [tc, cur] = steps[k];
+  const prev = k > 0 ? steps[k - 1][1] : first;
+  if (t < tc) {
+    const u = smooth((t - (tc - 0.2)) / 0.16);
+    return { text: prev, a: 1 - u, dy: -6 * u };
+  }
+  const u = smooth((t - (tc + 0.02)) / 0.2);
+  return { text: cur, a: u, dy: 6 * (1 - u) };
+}
+function cardLabel(t, id) {
+  switch (id) {
+    case "A": return labelTrack(t, "親Q", [
+      [on("c02"), "親R"], [T.fuse1 + 0.35, "子2"], [T.fuse2 + 0.35, "孫"], [T.fold + 0.5, "親Q"],
+    ]);
+    case "B": return { text: t < T.save + 0.8 ? "親Q" : "C03", a: 1, dy: 0 };
+    case "C": return { text: "子2", a: 1, dy: 0 };
+    case "D": return { text: "C03", a: 1, dy: 0 };
+    case "E": return { text: "親Q", a: 1, dy: 0 };
+    case "F": return { text: "親R", a: 1, dy: 0 };
+  }
+}
+
+// 輪郭の色: 低域＝ティール、高域＝アンバー、第三の声＝バイオレット、他は白黒
+function phaseScheme(t, phases) {
+  let i = 0;
+  for (let k = 0; k < phases.length; k++) if (t >= phases[k][0]) i = k;
+  const p = phases[i], q = phases[Math.max(0, i - 1)];
+  const u = smooth((t - p[0]) / 0.3);
+  const fcOf = (ph) => (typeof ph[1] === "function" ? ph[1](t) : ph[1]);
+  return { fc: fcOf(p), low: mixc(q[2], p[2], u), high: mixc(q[3], p[3], u) };
+}
+const H1 = (t) => handleHz(t, DR1), H2 = (t) => handleHz(t, DR2);
+function cardScheme(t, id) {
+  switch (id) {
+    case "A": return phaseScheme(t, [
+      [0, XO, COL.ink, COL.ink],
+      [DR1.t_press - 0.1, H1, COL.teal, COL.off],
+      [T.fuse1, XO, COL.teal, COL.amber],
+      [DR2.t_press - 0.1, H2, COL.teal, COL.off],
+      [T.fuse2, XO, COL.teal, COL.violet],
+      [T.fold + 0.22, XO, COL.ink, COL.ink],
+    ]);
+    case "B":
+      if (t < T.save + 0.8) return phaseScheme(t, [
+        [0, XO, COL.ink, COL.ink], [DR1.t_press - 0.1, H1, COL.off, COL.amber],
+      ]);
+      return phaseScheme(t, [
+        [0, XO, COL.violet, COL.violet], [DR2.t_press - 0.1, H2, COL.off, COL.violet],
+      ]);
+    case "C": return { fc: XO, low: COL.teal, high: COL.amber };
+    case "D": return { fc: XO, low: COL.violet, high: COL.violet };
+    default: return { fc: XO, low: COL.ink, high: COL.ink };
+  }
+}
+
+// 再生中カード（クリップ → カード）
+const PLAYS = {
+  c01: "A", c02: "A", c03: "A", c04: "A", c05: "A", c06: "B", c07: "A", c08: "A",
+  c09: "C", c10: "A", c11: "D", c12: "A", c13: "E", c14: "F", c15: "C", c16: "D", c17: "A",
+};
+function playProgress(t, id) {
+  for (const [cid, card] of Object.entries(PLAYS)) {
+    if (card !== id) continue;
+    const a = on(cid), b = off(cid);
+    if (t >= a - 0.05 && t <= b + 0.25) {
+      return { p: clamp((t - a) / (b - a), 0, 1), a: vis(t, [[a - 0.05, b + 0.05]], 0.12) };
+    }
+  }
+  return null;
+}
+
+function drawCard(t, id) {
+  const [cx, cy, w, h] = cardGeo(t, id);
+  const alpha = cardAlpha(t, id);
+  if (alpha <= 0.002 || cx - w / 2 > W || cx + w / 2 < 0) return;
+  const env = cardEnv(t, id);
+  const sch = cardScheme(t, id);
+  const left = cx - w / 2, top = cy - h / 2, right = cx + w / 2, bottom = cy + h / 2;
+  const zoneH = 0.46 * h;
+  const r = Math.min(28, h * 0.14);
+  const ys = env.map((e) => top + zoneH * (1 - (0.06 + 0.88 * clamp(e, 0, 1))));
+  const xs = env.map((_, i) => left + (w * i) / (N - 1));
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  // 形状
+  ctx.beginPath();
+  ctx.moveTo(left, ys[0]);
+  for (let i = 1; i < N; i++) ctx.lineTo(xs[i], ys[i]);
+  ctx.lineTo(right, bottom - r);
+  ctx.arcTo(right, bottom, right - r, bottom, r);
+  ctx.lineTo(left + r, bottom);
+  ctx.arcTo(left, bottom, left, bottom - r, r);
+  ctx.closePath();
+  ctx.fillStyle = COL.card;
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = COL.edge;
+  ctx.stroke();
+
+  // 上端 = 包絡。交差点で色を分ける
+  const lw = clamp(h / 130, 2, 5.5);
+  ctx.lineWidth = lw;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  const fcx = left + (clamp(sch.fc, 0, FMAX) / FMAX) * w;
+  const yAt = (x) => {
+    const fi = ((x - left) / w) * (N - 1);
+    const i0 = clamp(Math.floor(fi), 0, N - 2);
+    return lerp(ys[i0], ys[i0 + 1], fi - i0);
+  };
+  const seg = (x0, x1, col) => {
+    if (x1 - x0 < 0.5) return;
+    ctx.beginPath();
+    ctx.moveTo(x0, yAt(x0));
+    for (let i = 0; i < N; i++) if (xs[i] > x0 && xs[i] < x1) ctx.lineTo(xs[i], ys[i]);
+    ctx.lineTo(x1, yAt(x1));
+    ctx.strokeStyle = col;
+    ctx.stroke();
+  };
+  seg(left, fcx, sch.low);
+  seg(fcx, right, sch.high);
+
+  // ラベル
+  const lab = cardLabel(t, id);
+  const fs = clamp(h * 0.075, 22, 52);
+  ctx.font = FONT(fs);
+  ctx.fillStyle = COL.ink;
+  ctx.textBaseline = "alphabetic";
+  ctx.globalAlpha = alpha * lab.a;
+  ctx.fillText(lab.text, left + Math.max(18, w * 0.05), bottom - Math.max(14, h * 0.09) + lab.dy);
+  ctx.globalAlpha = alpha;
+
+  // 再生の進み
+  const pp = playProgress(t, id);
+  if (pp) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(left, bottom - 8, w, 8);
+    ctx.clip();
+    ctx.globalAlpha = alpha * pp.a;
+    ctx.fillStyle = COL.ink;
+    const inset = r;
+    ctx.fillRect(left + inset, bottom - 5, (w - 2 * inset) * pp.p, 3);
+    ctx.restore();
+  }
+
+  // 再生ボタン（A のみ）
+  if (id === "A") {
+    const ba = vis(t, [[-1, T.split1 - 0.1], [T.fold + 0.45, 99]], 0.2);
+    if (ba > 0) {
+      const br = 38;
+      const bx = right - 72, by = bottom - 72;
+      const press = 1 - 0.07 * vis(t, [[T.play, T.play + 0.12]], 0.05);
+      ctx.globalAlpha = alpha * ba;
+      ctx.fillStyle = COL.ink;
+      ctx.beginPath();
+      ctx.arc(bx, by, br * press, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.card;
+      const playing = t >= T.play + 0.06 && t < off("c02");
+      if (playing) {
+        ctx.fillRect(bx - 11, by - 13, 8, 26);
+        ctx.fillRect(bx + 3, by - 13, 8, 26);
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(bx - 10, by - 15);
+        ctx.lineTo(bx + 16, by);
+        ctx.lineTo(bx - 10, by + 15);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+  }
+  ctx.restore();
+}
+
+// ------------------------------------------------------------ handle
+function drawHandle(t) {
+  const spans = [
+    [T.handle1, DR1, T.fuse1 - 0.05],
+    [T.handle2, DR2, T.fuse2 - 0.05],
+  ];
+  for (const [t0, dr, t1] of spans) {
+    const a = vis(t, [[t0, t1]], 0.2);
+    if (a <= 0) continue;
+    const x = hzToX(handleHz(t, dr));
+    const pressed = vis(t, [[dr.t_press - 0.02, dr.t_release]], 0.06);
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.strokeStyle = COL.ink;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x, 172);
+    ctx.lineTo(x, 1042);
+    ctx.stroke();
+    ctx.fillStyle = mixc(COL.card, COL.ink, pressed);
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(x, GRIP_Y, 20 + 3 * pressed, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ------------------------------------------------------------ judge UI
+const SEG = [
+  { text: "同じ", x0: 410, x1: 590 },
+  { text: "別", x0: 590, x1: 770 },
+  { text: "分からない", x0: 770, x1: 1030 },
+];
+const SEG_Y = 1086, SEG_H = 80;
+function drawJudge(t) {
+  const a = vis(t, [[T.judge + 0.35, T.lineage + 0.05]], 0.25);
+  if (a <= 0) return;
+  const dy = 18 * (1 - smooth((t - T.judge - 0.35) / 0.3));
+  const sel = smooth((t - T.pick - 0.03) / 0.12);
+  ctx.save();
+  ctx.globalAlpha = a;
+  const y0 = SEG_Y - SEG_H / 2 + dy;
+  ctx.beginPath();
+  ctx.roundRect(SEG[0].x0, y0, SEG[2].x1 - SEG[0].x0, SEG_H, SEG_H / 2);
+  ctx.fillStyle = COL.card;
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = COL.edge;
+  ctx.stroke();
+  // 選択
+  if (sel > 0) {
+    const s = SEG[1];
+    ctx.beginPath();
+    ctx.roundRect(s.x0 + 6, y0 + 6, s.x1 - s.x0 - 12, SEG_H - 12, (SEG_H - 12) / 2);
+    ctx.fillStyle = COL.ink;
+    ctx.globalAlpha = a * sel;
+    ctx.fill();
+    ctx.globalAlpha = a;
+  }
+  ctx.strokeStyle = COL.edge;
+  for (const x of [SEG[1].x0, SEG[2].x0]) {
+    ctx.globalAlpha = a * (1 - sel);
+    ctx.beginPath();
+    ctx.moveTo(x, y0 + 20);
+    ctx.lineTo(x, y0 + SEG_H - 20);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = a;
+  ctx.font = FONT(34);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  SEG.forEach((s, i) => {
+    ctx.fillStyle = i === 1 ? mixc(COL.ink, COL.card, sel) : COL.ink;
+    ctx.fillText(s.text, (s.x0 + s.x1) / 2, y0 + SEG_H / 2 + 1);
+  });
+  ctx.restore();
+}
+
+// ------------------------------------------------------------ lineage threads
+function drawThreads(t) {
+  const a = vis(t, [[T.lineage + 0.2, T.fold - 0.12]], 0.2);
+  if (a <= 0) return;
+  const links = [
+    ["E", "C", COL.amber, 0.25], ["F", "C", COL.teal, 0.32],
+    ["C", "A", COL.teal, 0.55], ["D", "A", COL.violet, 0.62],
+  ];
+  ctx.save();
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  for (const [p, c, col, dly] of links) {
+    const [px, py, , ph] = cardGeo(t, p);
+    const [qx, qy, , qh] = cardGeo(t, c);
+    const x0 = px, y0 = py + ph / 2, x1 = qx, y1 = qy - qh / 2;
+    const u = minjerk((t - (T.lineage + dly)) / 0.6);
+    if (u <= 0) continue;
+    const my = (y0 + y1) / 2;
+    ctx.beginPath();
+    const steps = 40;
+    for (let i = 0; i <= steps * u; i++) {
+      const s = i / steps;
+      const x = (1 - s) ** 3 * x0 + 3 * (1 - s) ** 2 * s * x0 + 3 * (1 - s) * s * s * x1 + s ** 3 * x1;
+      const y = (1 - s) ** 3 * y0 + 3 * (1 - s) ** 2 * s * my + 3 * (1 - s) * s * s * my + s ** 3 * y1;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = col;
+    ctx.globalAlpha = a;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ------------------------------------------------------------ cursor
+const REST = [1130, 1172];
+const PLAY_BTN = [G.full[0] + G.full[2] / 2 - 72, G.full[1] + G.full[3] / 2 - 72];
+const ASIDE = [1192, 1146];
+const MOVES = [
+  [0.0, T.play - 0.02, PLAY_BTN],
+  [T.play + 0.42, T.play + 1.2, ASIDE],
+  [T.handle1 - 0.2, DR1.t_press - 0.04, [hzToX(DR1.f_start), GRIP_Y]],
+  ["drag", DR1],
+  [T.fuse1 - 0.1, T.fuse1 + 0.65, ASIDE],
+  [T.save - 0.05, T.chipClick - 0.04, [G.chip[0], G.chip[1]]],
+  [T.expand + 0.25, T.expand + 1.0, ASIDE],
+  [T.handle2 - 0.1, DR2.t_press - 0.04, [hzToX(DR2.f_start), GRIP_Y]],
+  ["drag", DR2],
+  [T.fuse2 - 0.1, T.fuse2 + 0.65, ASIDE],
+  [T.pick - 0.8, T.pick - 0.04, [(SEG[1].x0 + SEG[1].x1) / 2 + 6, SEG_Y + 4]],
+  [T.pick + 0.35, T.pick + 1.35, REST],
+];
+function cursorAt(t) {
+  let pos = REST.slice();
+  for (const m of MOVES) {
+    if (m[0] === "drag") {
+      const dr = m[1];
+      if (t >= dr.t_press) {
+        const tt = Math.min(t, dr.t_release);
+        pos = [hzToX(handleHz(tt, dr)), GRIP_Y];
+      }
+      continue;
+    }
+    const [t0, t1, to] = m;
+    if (t <= t0) break;
+    const u = minjerk((t - t0) / (t1 - t0));
+    pos = [lerp(pos[0], to[0], u), lerp(pos[1], to[1], u)];
+  }
+  return pos;
+}
+function cursorPress(t) {
+  const clicks = [
+    [T.play, T.play + 0.12], [DR1.t_press - 0.02, DR1.t_release], [T.chipClick, T.chipClick + 0.12],
+    [DR2.t_press - 0.02, DR2.t_release], [T.pick, T.pick + 0.12],
+  ];
+  return vis(t, clicks, 0.05);
+}
+function drawCursor(t) {
+  const [x, y] = cursorAt(t);
+  const s = 1.25 * (1 - 0.08 * cursorPress(t));
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(s, s);
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(0, 26);
+  ctx.lineTo(6.2, 20.2);
+  ctx.lineTo(10.4, 29.4);
+  ctx.lineTo(14.4, 27.6);
+  ctx.lineTo(10.3, 18.6);
+  ctx.lineTo(18.6, 18.6);
+  ctx.closePath();
+  ctx.lineJoin = "round";
+  ctx.lineWidth = 2.4;
+  ctx.strokeStyle = COL.card;
+  ctx.stroke();
+  ctx.fillStyle = COL.ink;
+  ctx.fill();
+  ctx.restore();
+}
+
+// ------------------------------------------------------------ text
+const SUBS = [
+  [on("c01") + 0.08, off("c01") - 0.1, "この声と"],
+  [on("c02") + 0.08, T.split1 + 0.5, "この声を"],
+  [DR1.t_press + 0.05, T.fuse1 - 0.02, "低いところはR、高いところはQから"],
+  [on("c04") + 0.1, T.save - 0.08, "どっちとも違う、新しい声"],
+  [T.save + 0.12, T.enter + 0.3, "保存して、そこからまた鳴らせる"],
+  [T.enter + 0.55, DR2.t_press - 0.35, "その子が、次の親になる"],
+  [on("c08") + 0.12, T.judge - 0.05, "声が、世代をつないでいく"],
+  [T.judge + 0.6, T.lineage - 0.05, "決めるのは、耳"],
+  [T.lineage + 0.35, T.fold + 0.55, "瞬間の声から、紡ぐ声へ"],
+];
+function drawSubs(t) {
+  for (const [t0, t1, s] of SUBS) {
+    const a = vis(t, [[t0, t1]], 0.22);
+    if (a <= 0) continue;
+    const dy = 10 * (1 - smooth((t - t0) / 0.3));
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.font = FONT(50);
+    ctx.fillStyle = COL.ink;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(s, 720, 1284 + dy);
+    ctx.restore();
+  }
+  const la = vis(t, [[T.lineage + 0.3, T.fold + 0.25]], 0.3);
+  if (la > 0) {
+    ctx.save();
+    ctx.globalAlpha = la;
+    ctx.font = FONT(40);
+    ctx.fillStyle = COL.ink;
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText("VoiceGenesis", 84, 126);
+    ctx.font = FONT(24);
+    ctx.fillStyle = COL.mute;
+    ctx.textAlign = "right";
+    ctx.fillText("聴者1名・一系譜での実験", W - 72, H - 64);
+    ctx.restore();
+  }
+}
+
+// ------------------------------------------------------------ seek
+function seek(t) {
+  t = clamp(t, 0, D.total);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = COL.bg;
+  ctx.fillRect(0, 0, W, H);
+  drawThreads(t);
+  // 奥から: 判定・系譜の脇役 → 分かれたカード → 主カード
+  for (const id of ["E", "F", "C", "D", "B", "A"]) drawCard(t, id);
+  drawHandle(t);
+  drawJudge(t);
+  drawSubs(t);
+  drawCursor(t);
+}
+window.seek = seek;
+window.TIMES = T;
+
+// ------------------------------------------------------------ preview（?preview で音つき再生）
+async function boot() {
+  await document.fonts.load(FONT(50), "親Q子2孫C03VoiceGenesis瞬間の声から紡ぐへ");
+  await document.fonts.ready;
+  seek(0);
+  window.READY = true;
+  const q = new URLSearchParams(location.search);
+  if (q.has("t")) seek(parseFloat(q.get("t")));
+  if (q.has("preview")) {
+    document.body.classList.add("preview");
+    const au = new Audio("audio/mix.wav");
+    au.loop = true;
+    cv.addEventListener("click", () => (au.paused ? au.play() : au.pause()));
+    const loop = () => { seek(au.currentTime); requestAnimationFrame(loop); };
+    requestAnimationFrame(loop);
+  }
+}
+boot();
+</script>
+</body>
+</html>
