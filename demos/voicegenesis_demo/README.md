@@ -8,10 +8,16 @@
 
 ## 作り方
 
+必要なもの: Python（numpy・soundfile・imageio-ffmpeg）、Node.js、Google Fonts へのネットワーク
+（Geist / Noto Sans JP を読み込めないとレンダーは停止する）。
+
 ```bash
+pip install imageio-ffmpeg
+npm install                                # playwright（Chromium は npx playwright install chromium）
 python build_audio.py                      # 声の合成・包絡実測・data.js / cue_sheet.json
 node render.mjs stills stills 0 7.2 20.5   # 静止フレーム点検
 node render.mjs frames /tmp/vgframes 4     # 240fps サブフレーム
+mkdir -p out
 FFMPEG=$(python -c "import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())")
 $FFMPEG -framerate 240 -i /tmp/vgframes/%05d.jpg -i audio/mix.wav \
   -filter_complex "[0:v]tmix=frames=4:weights='1 1 1 1',select='eq(mod(n\,4)\,3)',setpts=N/(60*TB),format=yuv420p[v]" \

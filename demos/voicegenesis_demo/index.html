@@ -623,8 +623,13 @@ window.TIMES = T;
 
 // ------------------------------------------------------------ preview（?preview で音つき再生）
 async function boot() {
-  await document.fonts.load(FONT(50), "親Q子2孫C03VoiceGenesis瞬間の声から紡ぐへ");
+  const sample = "親Q子2孫C03VoiceGenesis瞬間の声から紡ぐへ";
+  await document.fonts.load(FONT(50), sample);
   await document.fonts.ready;
+  // Web フォントが取れずにフォールバック描画へ黙って落ちるのを防ぐ
+  for (const fam of ["Geist", "Noto Sans JP"]) {
+    if (!document.fonts.check(`500 50px "${fam}"`, sample)) throw new Error(`font not loaded: ${fam}`);
+  }
   seek(0);
   window.READY = true;
   const q = new URLSearchParams(location.search);

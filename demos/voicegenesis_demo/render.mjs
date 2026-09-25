@@ -6,8 +6,9 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// playwright は package.json で宣言（npm install）。未導入なら PLAYWRIGHT_MODULE で明示パスを渡す
 const require = createRequire(import.meta.url);
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "/opt/node22/lib/node_modules/playwright");
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const URL = "file://" + path.join(HERE, "index.html");
