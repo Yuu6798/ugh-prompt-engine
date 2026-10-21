@@ -4581,7 +4581,6 @@ beat = [
 dev = [
     { name = "hypothesis" },
     { name = "mir-eval" },
-    { name = "pip-audit" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -4613,6 +4612,14 @@ separate = [
     { name = "demucs", version = "4.1.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'darwin' or (extra == 'extra-7-svp-rpe-pitch' and extra == 'extra-7-svp-rpe-semantic-embed')" },
 ]
 
+[package.dev-dependencies]
+audit = [
+    { name = "pip-audit" },
+]
+lint = [
+    { name = "ruff" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "basic-pitch", marker = "python_full_version < '3.12' and extra == 'pitch'", specifier = "==0.4.0" },
@@ -4627,7 +4634,6 @@ requires-dist = [
     { name = "mir-eval", marker = "extra == 'dev'", specifier = ">=0.7" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "panns-inference", marker = "extra == 'learned-tags'" },
-    { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7,<3" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyloudnorm", specifier = ">=0.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
@@ -4645,6 +4651,10 @@ requires-dist = [
     { name = "typer", specifier = ">=0.9" },
 ]
 provides-extras = ["dev", "separate", "beat", "learned-tags", "pitch", "semantic-embed", "musicgen", "lyrics"]
+
+[package.metadata.requires-dev]
+audit = [{ name = "pip-audit", specifier = ">=2.7,<3" }]
+lint = [{ name = "ruff", specifier = ">=0.1" }]
 
 [[package]]
 name = "sympy"

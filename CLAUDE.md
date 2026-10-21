@@ -283,7 +283,7 @@ README の運用ルール:
 ## Commands
 
 ```bash
-python -m venv .venv && uv sync --locked --extra dev   # 推奨（uv >= 0.11）。詳細 = README Setup
+python -m venv .venv && uv sync --locked --extra dev && source .venv/bin/activate   # 推奨（uv >= 0.11）。以降の素のコマンドは venv 有効化が前提（詳細 = README Setup）
 pip install -e ".[dev]"           # 代替（lock 非使用）
 ruff check .
 pytest -q --tb=short              # 全件（音声合成+抽出を含むため数分）

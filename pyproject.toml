@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "ruff>=0.1", "mir_eval>=0.7", "hypothesis>=6.0", "pip-audit>=2.7,<3"]
+dev = ["pytest>=7.0", "ruff>=0.1", "mir_eval>=0.7", "hypothesis>=6.0"]
 separate = ["demucs>=4.0"]
 # beat_this (CPJKU) — MIT-licensed beat/downbeat detection. dbn=False is
 # enforced inside the adapter so madmom never enters the dependency tree.
@@ -280,14 +280,23 @@ select = ["E4", "E7", "E9", "F"]
 "voice_genesis/harness/measure.py" = ["F841"]
 "voice_genesis/harness/vt3_v4.py" = ["F841"]
 
+# CI 専用ツールは extra ではなく PEP 735 の dependency group に置く（配布メタデータに入らず、
+# `pip install -e ".[dev]"` の利用者環境へ混ざらない）。ジョブごとに必要な group だけを
+# `uv sync --locked --only-group <name>`（プロジェクト本体と dev を入れない）で入れる。
+#   - audit: pip-audit（ci.yml の pip-audit ジョブ）
+#   - lint: ruff（ci.yml の lint ジョブ。ruff は dev extra にも残す = lock 上は 1 解で同一版）
+[dependency-groups]
+audit = ["pip-audit>=2.7,<3"]
+lint = ["ruff>=0.1"]
+
 # uv.lock（再現可能インストール + sha256 ハッシュ + pip-audit 対象）。pip 経由の
 # `pip install -e ".[dev]"` は従来どおり動く（この節は uv 専用で pip は無視する）。
 #
 # exclude-newer = 公開 7 日未満のリリースを lock に入れない cooldown（相対指定は uv >= 0.11。
 # .github/dependabot.yml の cooldown default-days: 7 と同値に保つ）。7 日未満のリリースが
 # lock に入るのは、既知 advisory の修正版が 7 日未満のときの日付つき waiver
-# （下の [tool.uv.exclude-newer-package]）だけ。waiver は 14 日超過で
-# tests/discipline/test_uv_waivers.py が失敗する。
+# （下の [tool.uv.exclude-newer-package]）だけ。waiver の期限は [tool.dependency-waivers]
+# （超過で tests/test_dependency_policy.py が失敗する）。
 #
 # conflicts = `pitch` と `semantic-embed` は、どちらも numpy<2 を要求する重い extra。
 #   - pitch: basic-pitch==0.4.0 -> tensorflow 2.15.0 => numpy 1.26.4 / keras 2.15.0 /
@@ -302,9 +311,11 @@ select = ["E4", "E7", "E9", "F"]
 # （全更新）は core+dev の numpy も 1.26.4 に引き下げる。そうした後は
 # `uv export --frozen --extra dev --no-emit-project --no-hashes | grep numpy` が 2.x
 # であることを確認すること（`uv lock --upgrade-package <pkg>` の個別更新は保たれる）。
+# CI の dev 環境では tests/test_dependency_policy.py::test_core_numpy_is_2x も同じ退行を検知する。
 # 帰結: `uv sync --all-extras` / `uv export --all-extras` は使えない（両 extra を
-# 同時に要求するため）。全 extra の網羅監査は ci.yml の pip-audit ジョブが 2 つの
-# 衝突しない集合へ分けて行う。
+# 同時に要求するため）。ci.yml の pip-audit ジョブは lock を 2 つの衝突しない集合
+# （`--no-extra semantic-embed` / `--no-extra pitch`）へ書き出して監査する（runner の
+# プラットフォーム・Python に該当する行のみが対象。darwin / win32 / py3.13+ 限定行は対象外）。
 #
 # constraint-dependencies = semantic-embed fork が、校正・文書化済みの laion-clap 1.1.7
 # （docs/semantic_sensor_clap.md / docs/learned_models_policy.md）を lock する
@@ -320,12 +331,17 @@ conflicts = [
 # 解決する（ハッシュ検証なし）。公開直後の悪意あるリリースが CI のビルド環境に入らない
 # よう exact pin する。いずれも公開から 7 日以上経過した版。Dependabot の対象外なので
 # 更新は手動（公開から 7 日以上経った版を選ぶ）。pip は [tool.uv] を無視する。
-# sdist のみ配布の依存（demucs / progressbar / wget）が開発者環境と nightly の CLAP ジョブで
-# ビルドされるため、この pin はそこにも効く。
+# sdist のみ配布の依存は wget 3.2 / progressbar 2.5（nightly の CLAP ジョブ）と demucs 4.0.1
+# （darwin x86_64 の開発者環境のみ）で、この pin はそれらのビルドにも効く。
 build-constraint-dependencies = ["setuptools==84.0.0", "wheel==0.48.0", "packaging==26.3"]
 
 [tool.uv.exclude-newer-package]
-# certifi 2026.10.19: PYSEC-2026-4320 の修正版が公開 7 日未満のため一時 waiver。2026-10-28 以降に削除して `uv lock` を実行（tests/discipline の期限テストが 14 日超過で失敗する）
+# certifi 2026.10.19: PYSEC-2026-4320 の修正版が公開 7 日未満のため一時 waiver。期限は [tool.dependency-waivers]
 certifi = "2026-10-20T02:25:00Z"
-# pillow 13.0.0: CVE-2026-112395, CVE-2026-112397, CVE-2026-112400, CVE-2026-112404, CVE-2026-112895, CVE-2026-112896, CVE-2026-112897, CVE-2026-112899 の修正版が公開 7 日未満のため一時 waiver。2026-10-24 以降に削除して `uv lock` を実行（tests/discipline の期限テストが 14 日超過で失敗する）
+# pillow 13.0.0: CVE-2026-112395, CVE-2026-112397, CVE-2026-112400, CVE-2026-112404, CVE-2026-112895, CVE-2026-112896, CVE-2026-112897, CVE-2026-112899 の修正版が公開 7 日未満のため一時 waiver。期限は [tool.dependency-waivers]
 pillow = "2026-10-16T22:19:00Z"
+
+# tests/test_dependency_policy.py が参照。値 = この日までに waiver を削除して `uv lock`（超過で CI 赤）。削除可能日 = 修正版 upload + 7 日
+[tool.dependency-waivers]
+certifi = 2026-11-04   # 削除可能: 2026-10-28 以降
+pillow = 2026-10-31    # 削除可能: 2026-10-24 以降
