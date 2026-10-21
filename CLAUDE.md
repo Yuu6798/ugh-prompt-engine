@@ -283,7 +283,8 @@ README の運用ルール:
 ## Commands
 
 ```bash
-pip install -e ".[dev]"
+python -m venv .venv && uv sync --locked --extra dev   # 推奨（uv >= 0.11）。詳細 = README Setup
+pip install -e ".[dev]"           # 代替（lock 非使用）
 ruff check .
 pytest -q --tb=short              # 全件（音声合成+抽出を含むため数分）
 pytest -m "not slow" -q           # 日常の反復用の高速サブセット（重い統合/コーパス/property を除外）

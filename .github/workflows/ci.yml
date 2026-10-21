@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# GITHUB_TOKEN は読み取り専用に固定する（このワークフローのどのジョブも書き込み
+# 系 API / アーティファクト / コメント / ラベル操作を行わない）。
+permissions:
+  contents: read
+
 # Review loops can push many revisions while a 30-minute shard is still
 # running.  Keep only the newest run for a branch/PR instead of burning runner
 # time on results that can no longer be merged.
@@ -20,7 +25,7 @@ concurrency:
 # それらを --ignore/--deselect で除いた残り全部）=
 # カバレッジ不変・CI が slow を skip しない原則を維持したまま、壁時計を各
 # ジョブの timeout 枠に収めるためのシャーディングのみ（slow を skip せず、
-# 実行するジョブを分けるだけ）。timeout-minutes: 35 = テスト予算 30 分 + checkout/pip
+# 実行するジョブを分けるだけ）。timeout-minutes: 35 = テスト予算 30 分 + checkout/uv sync
 # セットアップ許容 5 分。テスト実測が 30 分を超えたらこの backstop の枠を
 # 広げるのではなく、シャードを再分割して対処する。
 #
@@ -51,13 +56,32 @@ concurrency:
 #
 # ruff は lint ジョブに一本化する（Python 3.11 単一・matrix 非依存の静的解析のため
 # 各 test-* ジョブ側でマトリクス分だけ重複実行する意味がない）。
+#
+# 依存導入は uv.lock + `uv sync --locked`（lock が pyproject.toml と食い違えば CI が
+# 落ちる = lock の更新漏れを検出）。Python は actions/setup-python が入れたものを
+# 使い、UV_PYTHON_DOWNLOADS=never で uv が別の Python を勝手に取得して matrix と
+# 食い違うことを禁止する（該当 Python が無ければ即エラー）。
+#
+# venv は uv ではなく標準の `python -m venv .venv` で先に作り、`uv sync` にはその
+# 既存 venv へ入れさせる。uv 自作の venv は _virtualenv.pth / _virtualenv.py を置き、
+# sys.meta_path 先頭へ `_virtualenv._Finder` を差し込む。M2 計測ハーネス
+# （scripts/run_melody_accuracy.py）は測定の再現性のため非標準の import hook を
+# fail-closed で拒否し、許可するのは `_distutils_hack.DistutilsMetaFinder` のみ
+# なので、uv 自作 venv では tests/test_m2_accuracy_harness.py の
+# test_non_standard_import_hooks_clean_in_real_environment と
+# test_reverification_refuses_when_stack_cannot_rerun が落ちる。ハーネス側の許可リスト
+# 拡張は測定器の変更になるため行わず、CI 側で標準 venv を使う（pip 時代の CI と
+# 同じ meta_path になる）。
 env:
   FOUNDRY_CORE_MANIFEST: .github/test-paths/foundry-core.txt
+  UV_PYTHON_DOWNLOADS: never
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      UV_PYTHON: "3.11"
 
     steps:
       - uses: actions/checkout@v4
@@ -66,17 +90,27 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: 'pip'
 
-      - name: Install ruff
-        run: pip install "ruff>=0.1"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: "0.11.32"
+
+      - name: Install dependencies (locked)
+        shell: bash
+        run: |
+          # 標準 venv を先に作る（理由はファイル冒頭コメント。uv に venv を作らせない）。
+          python -m venv .venv
+          uv sync --locked --extra dev
 
       - name: Lint
-        run: ruff check .
+        run: uv run --no-sync ruff check .
 
   test-m2-harness:
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     strategy:
       fail-fast: false
       matrix:
@@ -90,15 +124,24 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
 
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: "0.11.32"
+          cache-suffix: ${{ matrix.python-version }}
+
+      - name: Install dependencies (locked)
+        shell: bash
+        run: |
+          # 標準 venv を先に作る（理由はファイル冒頭コメント。uv に venv を作らせない）。
+          python -m venv .venv
+          uv sync --locked --extra dev
 
       - name: Test M2 shard ${{ matrix.shard-index }}
         shell: bash
         run: |
-          if ! collection=$(pytest --collect-only -q tests/test_m2_accuracy_harness.py); then
+          if ! collection=$(uv run --no-sync pytest --collect-only -q tests/test_m2_accuracy_harness.py); then
             echo "$collection" >&2
             exit 1
           fi
@@ -126,11 +169,13 @@ jobs:
           fi
 
           echo "Running M2 harness shard ${shard_index}: ${length}/${total} tests"
-          pytest -q --tb=short --durations=25 "${nodeids[@]:start:length}"
+          uv run --no-sync pytest -q --tb=short --durations=25 "${nodeids[@]:start:length}"
 
   test-l0b-reeval:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -142,14 +187,23 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
 
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: "0.11.32"
+          cache-suffix: ${{ matrix.python-version }}
+
+      - name: Install dependencies (locked)
+        shell: bash
+        run: |
+          # 標準 venv を先に作る（理由はファイル冒頭コメント。uv に venv を作らせない）。
+          python -m venv .venv
+          uv sync --locked --extra dev
 
       - name: Test
         run: >-
-          pytest -q --tb=short --durations=25
+          uv run --no-sync pytest -q --tb=short --durations=25
           tests/test_l0b_scripts.py::test_ledger_l0br_reports_reproduce_frozen_judge_reevaluation
           tests/test_l0b_scripts.py::test_ledger_l0br_new_search_positive_controls_reproduce_frozen_judge_reevaluation
           tests/test_l0b_scripts.py::test_ledger_l0br_v2_series_runs_reports_reproduce_frozen_judge_reevaluation
@@ -157,6 +211,8 @@ jobs:
   test-foundry-core:
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     strategy:
       fail-fast: false
       matrix:
@@ -169,10 +225,19 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
 
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: "0.11.32"
+          cache-suffix: ${{ matrix.python-version }}
+
+      - name: Install dependencies (locked)
+        shell: bash
+        run: |
+          # 標準 venv を先に作る（理由はファイル冒頭コメント。uv に venv を作らせない）。
+          python -m venv .venv
+          uv sync --locked --extra dev
 
       - name: Test Foundry core
         shell: bash
@@ -194,11 +259,13 @@ jobs:
               exit 1
             fi
           done
-          pytest -q --tb=short --durations=25 "${foundry_tests[@]}"
+          uv run --no-sync pytest -q --tb=short --durations=25 "${foundry_tests[@]}"
 
   test-calibration:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -213,10 +280,19 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
 
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: "0.11.32"
+          cache-suffix: ${{ matrix.python-version }}
+
+      - name: Install dependencies (locked)
+        shell: bash
+        run: |
+          # 標準 venv を先に作る（理由はファイル冒頭コメント。uv に venv を作らせない）。
+          python -m venv .venv
+          uv sync --locked --extra dev
 
       - name: Test calibration (shard ${{ matrix.shard }})
         shell: bash
@@ -232,18 +308,20 @@ jobs:
             voice_genesis/calibration/tests/test_c0_freeze.py
           )
           if [[ "${{ matrix.shard }}" == "0" ]]; then
-            pytest -q --tb=short -p no:cacheprovider "${shard0_files[@]}"
+            uv run --no-sync pytest -q --tb=short -p no:cacheprovider "${shard0_files[@]}"
           else
             ignore_args=()
             for f in "${shard0_files[@]}"; do
               ignore_args+=(--ignore "$f")
             done
-            pytest -q --tb=short -p no:cacheprovider "${ignore_args[@]}" voice_genesis/calibration/tests
+            uv run --no-sync pytest -q --tb=short -p no:cacheprovider "${ignore_args[@]}" voice_genesis/calibration/tests
           fi
 
   test-rest:
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -257,10 +335,19 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
 
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: "0.11.32"
+          cache-suffix: ${{ matrix.python-version }}
+
+      - name: Install dependencies (locked)
+        shell: bash
+        run: |
+          # 標準 venv を先に作る（理由はファイル冒頭コメント。uv に venv を作らせない）。
+          python -m venv .venv
+          uv sync --locked --extra dev
 
       - name: Test
         shell: bash
@@ -287,10 +374,103 @@ jobs:
             fi
             deselect_args+=("--deselect=$path")
           done
-          pytest -q --tb=short --durations=25 \
+          uv run --no-sync pytest -q --tb=short --durations=25 \
             --ignore=tests/test_m2_accuracy_harness.py \
             "${deselect_args[@]}" \
             --deselect=voice_genesis/calibration/tests \
             --deselect=tests/test_l0b_scripts.py::test_ledger_l0br_reports_reproduce_frozen_judge_reevaluation \
             --deselect=tests/test_l0b_scripts.py::test_ledger_l0br_new_search_positive_controls_reproduce_frozen_judge_reevaluation \
             --deselect=tests/test_l0b_scripts.py::test_ledger_l0br_v2_series_runs_reports_reproduce_frozen_judge_reevaluation
+
+  # uv.lock に載る全依存（dev + 全 extra。CI が実際に入れる集合ではなく lock 全体）
+  # の既知脆弱性監査。インストールはせず、lock から書き出した exact pin の
+  # requirements を pip-audit に渡す（--disable-pip = pip の依存解決を使わない
+  # 純粋な pin 照合。--no-deps だけでは pip の dry-run 解決が走り、torch /
+  # tensorflow まで引き込むため）。pip-audit 自体も lock された dev 依存（Dependabot
+  # 管理）。
+  #
+  # `pitch` と `semantic-embed` は [tool.uv] conflicts で同時指定不可のため
+  # `--all-extras` 単独では書き出せない。片方を `--no-extra` で外した 2 集合の和が
+  # lock 全体になる（将来 extra を足せば自動で両集合へ入る。新たな conflicts を
+  # 宣言すると uv export が失敗して気付ける = fail-closed）。
+  #
+  # requirements のマーカー（python_full_version など）は pip-audit が実行環境の
+  # インタプリタで評価し、不一致行は黙って監査対象から外れる。Python 分岐の取りこぼしを
+  # 防ぐため matrix で 3.11 / 3.12 の両方を回す。OS 限定の行（darwin / win32 のみ）は
+  # ubuntu runner では監査されない。
+  pip-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: "0.11.32"
+          cache-suffix: ${{ matrix.python-version }}
+
+      - name: Install dependencies (locked)
+        shell: bash
+        run: |
+          # 標準 venv を先に作る（理由はファイル冒頭コメント。uv に venv を作らせない）。
+          python -m venv .venv
+          uv sync --locked --extra dev
+
+      - name: Audit locked dependencies (all extras)
+        shell: bash
+        run: |
+          # pitch extra 限定の既知債務（basic-pitch==0.4.0 → tensorflow 2.15 固定）。pitch を差し替え/廃止するか tensorflow の pin が外れたら削除
+          # 既知・修正不能の脆弱性（2026-10-21 時点で計 14 ID。lock 全体の監査を
+          # 緑のベースラインにして、新規 ID だけを赤にするための明示 ignore）:
+          #   - keras 2.15.0 の 13 ID と protobuf 4.25.9 の 1 ID（どちらも Python 3.11 のみ。
+          #     3.12 は pitch が lock に載らず、protobuf も 7.36.2 で該当 ID なし）
+          # 原因はいずれも `pitch` extra: basic-pitch 0.4.0 -> tensorflow 2.15.0 が
+          # keras<2.16 / protobuf<5 を固定し、修正版（keras 3.x / protobuf 5.29.6+）へ
+          # lock では上げられない。CI の test ジョブは pitch を入れない（監査のみ）。
+          # 削除条件: pitch の置換・削除、または tensorflow の上限緩和で、これらの
+          # pin が uv.lock から消えたとき（ID の追加・変更は ignore せず赤のまま扱う）。
+          ignore_vulns=(
+            CVE-2025-12060
+            PYSEC-2025-76
+            PYSEC-2025-121
+            PYSEC-2026-1487
+            PYSEC-2026-1805
+            PYSEC-2026-2324
+            PYSEC-2026-2547
+            PYSEC-2026-3629
+            PYSEC-2026-3630
+            PYSEC-2026-3631
+            PYSEC-2026-3632
+            PYSEC-2026-3633
+            PYSEC-2026-3634
+            PYSEC-2026-3856
+          )
+          ignore_args=()
+          for vuln_id in "${ignore_vulns[@]}"; do
+            ignore_args+=(--ignore-vuln "$vuln_id")
+          done
+          # 先に `uv sync --locked` が lock の鮮度を保証済み（--frozen はここでは安全）。
+          status=0
+          for excluded in semantic-embed pitch; do
+            req="${RUNNER_TEMP}/audit-without-${excluded}.txt"
+            uv export --frozen --all-extras --no-extra "$excluded" \
+              --no-emit-project --no-hashes -o "$req" > /dev/null
+            echo "::group::pip-audit (uv.lock minus extra '${excluded}')"
+            uv run --no-sync pip-audit --strict --no-deps --disable-pip \
+              "${ignore_args[@]}" -r "$req" || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"
