@@ -22,15 +22,38 @@ name: Nightly (extras)
 #     切り出して *scoped に fail* させる。CLAP install が落ちれば clap ジョブだけ赤=
 #     actionable な可視シグナル（core net は緑のまま）。install できれば CLAP 回帰も検証。
 #     初回 run で clean runner の実挙動が判明する（緑→確定 / 赤→workaround か除外を実測で判断）。
+#
+# 依存導入は ci.yml と同じく uv.lock + `uv sync --locked`（sha256 ハッシュ検証つき）。
+# 以前は `pip install -e ".[...]"` で毎晩 PyPI の最新を無検証で入れており、公開直後の
+# 悪意あるリリースが最短で実行される経路だった（Dependabot の cooldown と pip-audit は
+# lock 上の版しか見ないため、nightly が実行する版と食い違う）。nightly が検出するのは
+# 「extra を入れたときの環境依存回帰」であり、未 lock の上流ドリフトではない。extra の版
+# 更新（Dependabot の lock 更新 PR）は ci.yml が extra を入れないため、マージ後の nightly か
+# workflow_dispatch で検証する。
+# ci.yml 冒頭コメントのとおり、venv は uv ではなく標準の `python -m venv .venv` で先に作る
+# （uv 自作 venv は M2 ハーネスが拒否する非標準 import hook を sys.meta_path に差す）。
+# [tool.uv] conflicts（pitch / semantic-embed）により 2 つの extra は同時に sync できない
+# ため、下記 2 系統のジョブ分離がそのまま lock の fork 分割に一致する。
 
 on:
   schedule:
     - cron: "0 18 * * *"  # 03:00 JST 毎日（低負荷帯）
   workflow_dispatch: {}
 
+# GITHUB_TOKEN は読み取り専用に固定する（checkout / uv sync / ruff / pytest のみで
+# 書き込み系 API・アーティファクト・コメント・ラベル操作は行わない）。
+permissions:
+  contents: read
+
 concurrency:
   group: nightly-extras
   cancel-in-progress: true
+
+# uv が matrix と別の Python を勝手に取得することを禁止する（ci.yml と同じ）。
+env:
+  UV_PYTHON_DOWNLOADS: never
+  # Dependabot は action タグのみ更新、uv 本体はこの変数で手動更新（ci.yml の UV_VERSION と同値に保つ）。
+  UV_VERSION: "0.11.32"
 
 jobs:
   test-extras:
@@ -39,6 +62,8 @@ jobs:
     # extra 導入で全件がさらに重くなるため 45→90（nightly は push をブロックしないため
     # ci.yml の壁時計 30 分要件の対象外・シャーディングはしない）。
     timeout-minutes: 90
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     strategy:
       fail-fast: false
       matrix:
@@ -51,25 +76,36 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: "pip"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          cache-suffix: nightly-extras-${{ matrix.python-version }}
 
       # 安定して入る extra のみ fatal で導入。`pitch`(basic-pitch) は pyproject の
       # `python_version < '3.12'` マーカーにより 3.12 では自動的に skip される
       # （3.12 でもエラーにならず、単に basic-pitch が入らない）。
-      - name: Install dependencies with core extras
-        run: pip install -e ".[dev,beat,learned-tags,pitch,musicgen,lyrics]"
+      - name: Install dependencies with core extras (locked)
+        shell: bash
+        run: |
+          # 標準 venv を先に作る（理由は ci.yml 冒頭コメント。uv に venv を作らせない）。
+          python -m venv .venv
+          uv sync --locked --extra dev --extra beat --extra learned-tags --extra pitch --extra musicgen --extra lyrics
 
       - name: Lint
-        run: ruff check .
+        run: uv run --no-sync ruff check .
 
       # 通常 CI と同一コマンド（slow 含む全件）を、extra 導入環境で回す。
       - name: Test (core extras installed)
-        run: pytest -q --tb=short --durations=25
+        run: uv run --no-sync pytest -q --tb=short --durations=25
 
   test-clap-extra:
     name: clap extra
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     strategy:
       fail-fast: false
       matrix:
@@ -82,19 +118,28 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: "pip"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          cache-suffix: nightly-clap-${{ matrix.python-version }}
 
       # semantic-embed(laion-clap) を fatal で導入。落ちればこの clap ジョブだけ赤=
       # スコープされた actionable シグナル（core net は独立に緑）。continue-on-error に
       # しないのは、install 失敗を握りつぶすと CLAP 回帰クラスが未検証のまま緑になり
       # 安全網の意味を失うため（Codex #144 P2）。
-      - name: Install dependencies with CLAP extra
-        run: pip install -e ".[dev,semantic-embed]"
+      - name: Install dependencies with CLAP extra (locked)
+        shell: bash
+        run: |
+          # 標準 venv を先に作る（理由は ci.yml 冒頭コメント。uv に venv を作らせない）。
+          python -m venv .venv
+          uv sync --locked --extra dev --extra semantic-embed
 
       # 本物の laion_clap を入れた状態で CLAP adapter 経路を回す（#138 の回帰クラス）。
       - name: Test CLAP adapter paths (real laion_clap installed)
         run: >-
-          pytest -q --tb=short --durations=25
+          uv run --no-sync pytest -q --tb=short --durations=25
           tests/test_clap_adapter.py
           tests/test_clap_similarity.py
           tests/test_collect_clap_fixture.py

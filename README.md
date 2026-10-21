@@ -44,6 +44,10 @@ legacy pipeline's validation boundary, measurement coverage, and required ground
 ## Setup
 
 ```bash
+# 推奨: uv >= 0.11（uv.lock から再現可能インストール。venv は標準 venv を先に作る: uv 自作 venv は M2 計測ハーネスが拒否）
+python -m venv .venv && uv sync --locked --extra dev
+source .venv/bin/activate   # 以降の ruff / pytest / svprpe を素のコマンドで使うため（有効化しない場合は `uv run --no-sync <cmd>`）
+# 代替（lock 非使用）:
 pip install -e ".[dev]"
 ```
 

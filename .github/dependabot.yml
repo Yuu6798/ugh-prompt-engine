@@ -1,0 +1,27 @@
+# Dependabot version updates.
+#
+# `cooldown` = 公開直後のリリースを一定期間採用しない待機期間（悪意あるリリースが
+# 公開直後に差し込まれ、数日で取り下げられる供給網攻撃への備え）。pyproject.toml の
+# [tool.uv] exclude-newer = "7 days" と同値（7）に保つこと。
+# Dependabot のセキュリティ更新は cooldown を飛ばすが、uv 側の exclude-newer (7 days) は効くため、
+# 公開 7 日未満の修正版は pyproject の exclude-newer-package waiver が必要（pyproject.toml の [tool.uv] コメント参照）
+# 待機期間を外す場合は設計判断として別途承認を取ること。
+#
+# uv ecosystem は uv.lock を pyproject.toml と一緒に更新する。[tool.uv] conflicts
+# （pitch / semantic-embed）宣言下での挙動は未検証。更新 PR の CI は
+# `uv sync --locked`（lock の鮮度）と pip-audit ジョブで検査される。
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
