@@ -391,10 +391,19 @@ jobs:
   # `uv sync --only-group audit` によりプロジェクト本体・dev extra を入れずに導入する。
   # 書き出しは `--all-groups` 付き（pip-audit 自身と推移依存の pin も監査対象に含める）。
   #
+  # 監査する集合は 3 つ（いずれも runner の Python ごとに書き出す）:
+  #   1. `--all-extras --no-extra semantic-embed`（pitch fork を含む）
+  #   2. `--all-extras --no-extra pitch`（semantic-embed fork を含む）
+  #   3. `--extra dev`（core/dev fork。test ジョブが実際に入れる集合）
   # `pitch` と `semantic-embed` は [tool.uv] conflicts で同時指定不可のため
-  # `--all-extras` 単独では書き出せない。片方を `--no-extra` で外した 2 集合の和が
+  # `--all-extras` 単独では書き出せない。片方を `--no-extra` で外した 1・2 の和が
   # lock の extra 全体になる（将来 extra を足せば自動で両集合へ入る。新たな conflicts を
   # 宣言すると uv export が失敗して気付ける = fail-closed）。
+  # ただし 1・2 はどちらも numpy<2 を要求する fork（pitch -> tensorflow /
+  # semantic-embed -> laion-clap）を含み、Linux / py3.11 では numpy 1.26.4 に解決される。
+  # core/dev fork の numpy 2.x 系（py3.11 は 2.4.6、py3.12 は 2.5.4）は py3.11 の 1・2 には
+  # 現れないため、3 を別途監査する（PR #362 Codex 指摘）。ignore リストは 1 にだけ適用し、
+  # 2・3 は ignore なしで監査する。
   #
   # 監査されるのは runner のプラットフォーム・Python に該当する行のみ。requirements の
   # マーカー（python_full_version / sys_platform など）は pip-audit が実行環境のインタプリタで
@@ -439,7 +448,8 @@ jobs:
           # 上げられない。ci.yml の test ジョブは pitch を入れない（入れるのは nightly の
           # test-extras のみ）。
           # 適用範囲は pitch を含む集合（`--no-extra semantic-embed` 側）だけ。pitch を含まない
-          # 集合は ignore なしで監査する。ID の追加・変更は ignore せず赤のまま扱う。
+          # 集合（`--no-extra pitch` 側と core/dev）は ignore なしで監査する。ID の追加・変更は
+          # ignore せず赤のまま扱う。
           # 削除条件: pitch の置換・削除、または tensorflow の上限緩和で、これらの pin が
           # uv.lock から消えたとき。
           ignore_vulns=(
@@ -477,4 +487,13 @@ jobs:
               "${audit_args[@]}" -r "$req" || status=1
             echo "::endgroup::"
           done
+          # core/dev フォーク（test ジョブが実際に入れる numpy 2.x 系）は extras 付き export には
+          # 現れないため別途 audit する（PR #362 Codex 指摘）。ignore なし。
+          core_req="${RUNNER_TEMP}/audit-core.txt"
+          uv export --frozen --extra dev --all-groups \
+            --no-emit-project --no-hashes -o "$core_req" > /dev/null
+          echo "::group::pip-audit (uv.lock core/dev fork: extra 'dev' only)"
+          uv run --no-sync pip-audit --strict --no-deps --disable-pip \
+            -r "$core_req" || status=1
+          echo "::endgroup::"
           exit "$status"

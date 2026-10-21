@@ -314,7 +314,9 @@ lint = ["ruff>=0.1"]
 # CI の dev 環境では tests/test_dependency_policy.py::test_core_numpy_is_2x も同じ退行を検知する。
 # 帰結: `uv sync --all-extras` / `uv export --all-extras` は使えない（両 extra を
 # 同時に要求するため）。ci.yml の pip-audit ジョブは lock を 2 つの衝突しない集合
-# （`--no-extra semantic-embed` / `--no-extra pitch`）へ書き出して監査する（runner の
+# （`--no-extra semantic-embed` / `--no-extra pitch`）と、core/dev fork 単独の集合
+# （`--extra dev`。上の 2 集合は py3.11 で numpy 1.26.4 fork になり core/dev の numpy 2.x 系を
+# 含まない）の計 3 つへ書き出して監査する（runner の
 # プラットフォーム・Python に該当する行のみが対象。darwin / win32 / py3.13+ 限定行は対象外）。
 #
 # constraint-dependencies = semantic-embed fork が、校正・文書化済みの laion-clap 1.1.7
