@@ -1364,6 +1364,66 @@ def detect_archive_format(path: Path) -> Optional[str]:
     return None
 
 
+def _assert_archive_member_inside(root: Path, name: str) -> None:
+    """アーカイブ member 名（zip エントリ名 / tar member 名 / リンク先）が展開先
+    `root`（resolve 済み）の外へ出ないことを検証する。絶対パス・ドライブ指定・
+    `..` 成分・正規化後の脱出をすべて拒否し、違反は StageFailure（fail-closed）。
+    `run9_success_pod_entry.sh` の `extract_zip` と同型の resolve 判定を、
+    バックスラッシュ区切り（Windows 製 zip）・ドライブ指定まで拡張したもの。
+    sha256 検証は取得物の同一性しか保証しないため、展開側でも脱出を塞ぐ
+    （P1 ハードニング・多層防御）。"""
+    normalized = name.replace("\\", "/")
+    if (
+        normalized.startswith("/")
+        or re.match(r"^[A-Za-z]:", normalized)
+        or ".." in normalized.split("/")
+    ):
+        raise StageFailure(f"archive member path escapes destination: {name!r}")
+    try:
+        target = (root / normalized).resolve()
+    except (OSError, ValueError) as exc:
+        raise StageFailure(f"archive member path is invalid: {name!r}") from exc
+    if not target.is_relative_to(root):
+        raise StageFailure(f"archive member path escapes destination: {name!r}")
+
+
+def _extract_zip_checked(z: zipfile.ZipFile, dest: Path) -> None:
+    """zip を全 member の脱出検証後に展開する（検証が 1 件でも落ちたら 1 件も
+    展開しない）。`z.infolist()` のエントリ名は metadata_encoding 適用後の
+    名前で、`extractall` が実際に使う名前と一致する。"""
+    root = dest.resolve()
+    for member in z.infolist():
+        _assert_archive_member_inside(root, member.filename)
+    z.extractall(dest)
+
+
+def _extract_tar_checked(t: tarfile.TarFile, dest: Path) -> None:
+    """tar を展開する。Python >= 3.11.4（および 3.12+）は標準の `filter="data"`
+    （`..` 脱出・展開先外へのリンク・デバイスノード等を拒否、絶対パス名は先頭
+    スラッシュを除去して展開先内へ閉じ込める）。filter 引数の無い古い 3.11.x
+    のみ、同等の最低限チェック（絶対/`..`/脱出・リンク先脱出・デバイスノード
+    拒否）を手動で行ってから展開する。機能検出は `hasattr(tarfile,
+    "data_filter")`（`TypeError` 捕捉だと展開内部の別 TypeError を握り潰す
+    ため）。"""
+    if hasattr(tarfile, "data_filter"):
+        try:
+            t.extractall(dest, filter="data")
+        except tarfile.FilterError as exc:
+            raise StageFailure(f"unsafe tar member rejected: {exc}") from exc
+        return
+    root = dest.resolve()
+    for member in t.getmembers():
+        _assert_archive_member_inside(root, member.name)
+        if member.issym():
+            _assert_archive_member_inside(
+                root, os.path.join(os.path.dirname(member.name), member.linkname))
+        elif member.islnk():
+            _assert_archive_member_inside(root, member.linkname)
+        elif member.isdev():
+            raise StageFailure(f"tar device member rejected: {member.name!r}")
+    t.extractall(dest)
+
+
 def _extract_archive(archive: Path, dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
     fmt = detect_archive_format(archive)
@@ -1376,10 +1436,10 @@ def _extract_archive(archive: Path, dest: Path) -> None:
         # ASCII 名のみの他 zip にも無害（Python 3.11+ — Pod イメージは 3.11。
         # それ未満では TypeError で fail-closed）。
         with zipfile.ZipFile(archive, metadata_encoding="cp932") as z:
-            z.extractall(dest)
+            _extract_zip_checked(z, dest)
     elif fmt == "tar":
         with tarfile.open(archive, "r:*") as t:
-            t.extractall(dest)
+            _extract_tar_checked(t, dest)
     else:
         raise StageFailure(
             f"unsupported archive format (magic-byte sniff failed): {archive}"

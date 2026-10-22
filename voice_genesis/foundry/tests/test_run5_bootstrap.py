@@ -365,6 +365,136 @@ def test_extract_archive_extracts_extensionless_zip_and_tar(tmp_path: Path) -> N
         r5b._extract_archive(junk, tmp_path / "out_junk")
 
 
+# --- アーカイブ展開のパス脱出防御（P1 ハードニング） ---------------------------
+
+
+def _make_zip(path: Path, entries: dict) -> Path:
+    import zipfile as zipfile_mod
+
+    with zipfile_mod.ZipFile(path, "w") as z:
+        for name, data in entries.items():
+            z.writestr(name, data)
+    return path
+
+
+def _make_tar(path: Path, members: list) -> Path:
+    """members = [(name, data | None, linkname | None)] — linkname 指定は symlink。"""
+    import io
+    import tarfile as tarfile_mod
+
+    with tarfile_mod.open(path, "w") as t:
+        for name, data, linkname in members:
+            info = tarfile_mod.TarInfo(name)
+            if linkname is not None:
+                info.type = tarfile_mod.SYMTYPE
+                info.linkname = linkname
+                t.addfile(info)
+            else:
+                payload = data or b""
+                info.size = len(payload)
+                info.mode = 0o755
+                t.addfile(info, io.BytesIO(payload))
+    return path
+
+
+@pytest.mark.parametrize(
+    "evil_name", ["../evil.txt", "inner/../../evil.txt", "/abs/evil.txt", "..\\evil.txt"]
+)
+def test_extract_archive_rejects_zip_member_escaping_destination(
+    tmp_path: Path, evil_name: str
+) -> None:
+    """zip の `..` 脱出・絶対パス・バックスラッシュ区切り脱出は StageFailure で
+    fail-closed し、正常 member も含め 1 件も展開しない（検証は展開前に全数）。"""
+    archive = _make_zip(tmp_path / "evil.zip", {"ok/a.txt": b"A", evil_name: b"X"})
+    dest = tmp_path / "out"
+    with pytest.raises(r5b.StageFailure, match="escapes destination"):
+        r5b._extract_archive(archive, dest)
+    assert list(dest.iterdir()) == []
+    assert not (tmp_path / "evil.txt").exists()
+    assert not Path("/abs/evil.txt").exists()
+
+
+def test_extract_archive_rejects_tar_member_escaping_destination(tmp_path: Path) -> None:
+    """tar の `..` 脱出 member は filter="data" が拒否する（StageFailure に包む）。"""
+    archive = _make_tar(tmp_path / "evil.tar", [("../evil.txt", b"X", None)])
+    dest = tmp_path / "out"
+    with pytest.raises(r5b.StageFailure, match="unsafe tar member"):
+        r5b._extract_archive(archive, dest)
+    assert not (tmp_path / "evil.txt").exists()
+
+
+def test_extract_archive_rejects_tar_symlink_escaping_destination(tmp_path: Path) -> None:
+    """展開先外（絶対パス・`..`）を指す symlink member も拒否する。"""
+    for i, target in enumerate(["/etc/passwd", "../../outside"]):
+        archive = _make_tar(tmp_path / f"link{i}.tar", [("lnk", None, target)])
+        dest = tmp_path / f"out{i}"
+        with pytest.raises(r5b.StageFailure, match="unsafe tar member"):
+            r5b._extract_archive(archive, dest)
+        assert not (dest / "lnk").is_symlink()
+
+
+def test_extract_archive_confines_absolute_tar_member_name_inside_destination(
+    tmp_path: Path,
+) -> None:
+    """filter="data" は絶対パス名の先頭スラッシュを除去して展開先内へ閉じ込める
+    （拒否ではなく無害化）。元の絶対パス位置には何も書かれない。"""
+    outside = tmp_path / "outside_dir" / "evil.txt"
+    archive = _make_tar(tmp_path / "abs.tar", [(str(outside), b"X", None)])
+    dest = tmp_path / "out"
+    r5b._extract_archive(archive, dest)
+    assert not outside.exists()
+    confined = dest / str(outside).lstrip("/")
+    assert confined.read_bytes() == b"X"
+
+
+def test_extract_archive_extracts_normal_tar_and_zip_keeping_exec_bit(
+    tmp_path: Path,
+) -> None:
+    """正常アーカイブは従来どおり展開される。tar は filter="data" 下でも所有者の
+    実行ビットが残る（ffmpeg static バイナリの実行可否を壊さない）。"""
+    import os
+
+    tar_path = _make_tar(
+        tmp_path / "ffmpeg.tar",
+        [("ffmpeg-7.0-static/ffmpeg", b"\x7fELF", None),
+         ("ffmpeg-7.0-static/readme.txt", b"hello", None)],
+    )
+    tar_dest = tmp_path / "out_tar"
+    r5b._extract_archive(tar_path, tar_dest)
+    assert (tar_dest / "ffmpeg-7.0-static" / "readme.txt").read_bytes() == b"hello"
+    assert os.access(tar_dest / "ffmpeg-7.0-static" / "ffmpeg", os.X_OK)
+
+    zip_path = _make_zip(tmp_path / "ok.zip", {"top/inner/a.wav": b"AAA", "top/b.wav": b"BBB"})
+    zip_dest = tmp_path / "out_zip"
+    r5b._extract_archive(zip_path, zip_dest)
+    assert (zip_dest / "top" / "inner" / "a.wav").read_bytes() == b"AAA"
+    assert (zip_dest / "top" / "b.wav").read_bytes() == b"BBB"
+
+
+def test_extract_archive_tar_manual_fallback_without_data_filter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """filter 引数の無い古い 3.11.x（`tarfile.data_filter` 不在）では手動チェックへ
+    フォールバックし、同じ脱出クラス（`..`・絶対パス・symlink）を拒否する。"""
+    monkeypatch.delattr(r5b.tarfile, "data_filter")
+    for i, members in enumerate([
+        [("../evil.txt", b"X", None)],
+        [("/abs/evil.txt", b"X", None)],
+        [("lnk", None, "../../outside")],
+        [("lnk", None, "/etc/passwd")],
+    ]):
+        archive = _make_tar(tmp_path / f"bad{i}.tar", members)
+        dest = tmp_path / f"out_bad{i}"
+        with pytest.raises(r5b.StageFailure, match="escapes destination"):
+            r5b._extract_archive(archive, dest)
+        assert list(dest.iterdir()) == []
+    assert not (tmp_path / "evil.txt").exists()
+
+    good = _make_tar(tmp_path / "good.tar", [("d/a.txt", b"A", None)])
+    r5b._extract_archive(good, tmp_path / "out_good")
+    assert (tmp_path / "out_good" / "d" / "a.txt").read_bytes() == b"A"
+
+
 # --- salvage 収集（review セルフレビュー #4） ---------------------------------
 
 
