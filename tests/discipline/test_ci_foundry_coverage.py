@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
+import re
 import tomllib
 
 import pytest
@@ -16,6 +17,9 @@ CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 FOUNDRY_ROOT = REPO_ROOT / "voice_genesis" / "foundry"
 CORE_MANIFEST = REPO_ROOT / ".github" / "test-paths" / "foundry-core.txt"
 OPTIONAL_MANIFEST = REPO_ROOT / ".github" / "test-paths" / "foundry-optional.txt"
+# Dependabot の Actions 更新（v4→v7 等）やコミット SHA 固定でも壊れないよう、
+# checkout step は action 名だけで識別し、ref（major タグ / semver タグ / 40 桁 SHA）は問わない。
+CHECKOUT_ACTION = re.compile(r"^actions/checkout@(?:v\d+(?:\.\d+){0,2}|[0-9a-f]{40})$")
 
 
 def _manifest_entries(path: Path, *, allow_empty: bool = False) -> list[PurePosixPath]:
@@ -56,9 +60,9 @@ def _assert_checkout_history_contract(workflow: dict) -> None:
     checkout_steps = [
         step
         for step in workflow["jobs"]["test-rest"]["steps"]
-        if step.get("uses") == "actions/checkout@v4"
+        if CHECKOUT_ACTION.fullmatch(str(step.get("uses", "")))
     ]
-    assert len(checkout_steps) == 1, "test-rest must contain one actions/checkout@v4 step"
+    assert len(checkout_steps) == 1, "test-rest must contain one actions/checkout step"
     assert checkout_steps[0].get("with", {}).get("fetch-depth") == 0, (
         "test-rest: pinned historical Git objects require fetch-depth: 0"
     )
