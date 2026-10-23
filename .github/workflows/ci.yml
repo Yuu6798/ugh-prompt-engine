@@ -78,7 +78,7 @@ env:
   FOUNDRY_CORE_MANIFEST: .github/test-paths/foundry-core.txt
   UV_PYTHON_DOWNLOADS: never
   # Dependabot は action タグのみ更新、uv 本体はこの変数で手動更新。
-  UV_VERSION: "0.11.32"
+  UV_VERSION: "0.13.5"
 
 jobs:
   lint:
