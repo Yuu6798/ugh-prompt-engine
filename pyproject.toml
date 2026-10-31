@@ -340,10 +340,7 @@ build-constraint-dependencies = ["setuptools==84.0.0", "wheel==0.48.0", "packagi
 [tool.uv.exclude-newer-package]
 # certifi 2026.10.19: PYSEC-2026-4320 の修正版が公開 7 日未満のため一時 waiver。期限は [tool.dependency-waivers]
 certifi = "2026-10-20T02:25:00Z"
-# pillow 13.0.0: CVE-2026-112395, CVE-2026-112397, CVE-2026-112400, CVE-2026-112404, CVE-2026-112895, CVE-2026-112896, CVE-2026-112897, CVE-2026-112899 の修正版が公開 7 日未満のため一時 waiver。期限は [tool.dependency-waivers]
-pillow = "2026-10-16T22:19:00Z"
 
 # tests/test_dependency_policy.py が参照。値 = この日までに waiver を削除して `uv lock`（超過で CI 赤）。削除可能日 = 修正版 upload + 7 日
 [tool.dependency-waivers]
 certifi = 2026-11-04   # 削除可能: 2026-10-28 以降
-pillow = 2026-10-31    # 削除可能: 2026-10-24 以降

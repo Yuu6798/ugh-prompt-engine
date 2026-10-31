@@ -47,7 +47,6 @@ exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
 certifi = "2026-10-20T02:25:00Z"
-pillow = "2026-10-16T22:19:00Z"
 
 [manifest]
 constraints = [{ name = "laion-clap", specifier = ">=1.1.7" }]
