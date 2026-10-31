@@ -335,15 +335,15 @@ conflicts = [
 # 更新は手動（公開から 7 日以上経った版を選ぶ）。pip は [tool.uv] を無視する。
 # sdist のみ配布の依存は wget 3.2 / progressbar 2.5（nightly の CLAP ジョブ）と demucs 4.0.1
 # （darwin x86_64 の開発者環境のみ）で、この pin はそれらのビルドにも効く。
-build-constraint-dependencies = ["setuptools==84.0.0", "wheel==0.48.0", "packaging==26.3"]
+build-constraint-dependencies = ["setuptools==84.1.0", "wheel==0.48.0", "packaging==26.3"]
 
 [tool.uv.exclude-newer-package]
 # certifi 2026.10.19: PYSEC-2026-4320 の修正版が公開 7 日未満のため一時 waiver。期限は [tool.dependency-waivers]
 certifi = "2026-10-20T02:25:00Z"
-# pillow 13.0.0: CVE-2026-112395, CVE-2026-112397, CVE-2026-112400, CVE-2026-112404, CVE-2026-112895, CVE-2026-112896, CVE-2026-112897, CVE-2026-112899 の修正版が公開 7 日未満のため一時 waiver。期限は [tool.dependency-waivers]
-pillow = "2026-10-16T22:19:00Z"
+# pyasn1 0.6.5: CVE-2026-119194〜119197 の修正版を7日cooldown前に採用する一時waiver。承認済み短縮期限は下表。
+pyasn1 = "2026-10-27T06:32:50Z"
 
 # tests/test_dependency_policy.py が参照。値 = この日までに waiver を削除して `uv lock`（超過で CI 赤）。削除可能日 = 修正版 upload + 7 日
 [tool.dependency-waivers]
 certifi = 2026-11-04   # 削除可能: 2026-10-28 以降
-pillow = 2026-10-31    # 削除可能: 2026-10-24 以降
+pyasn1 = 2026-11-03   # 削除可能: 2026-11-03 06:32:50 UTC以降。11/04 00:00 UTC前に除去・検証・merge。
