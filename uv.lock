@@ -46,7 +46,6 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-certifi = "2026-10-20T02:25:00Z"
 
 [manifest]
 constraints = [{ name = "laion-clap", specifier = ">=1.1.7" }]
